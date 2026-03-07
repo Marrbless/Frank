@@ -34,7 +34,7 @@ func (sm *SkillManager) ListSkills() ([]SkillMetadata, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	entries, err := f.ReadDir(-1)
 	if err != nil {

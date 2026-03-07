@@ -48,7 +48,7 @@ func NewRootCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cfgPath, workspacePath, err := config.Onboard()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
 				return
 			}
 			fmt.Printf("Wrote config to %s\nInitialized workspace at %s\n", cfgPath, workspacePath)
@@ -82,12 +82,12 @@ func NewRootCmd() *cobra.Command {
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 				return
 			}
 			cfgPath, _, err := config.ResolveDefaultPaths()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to resolve config path: %v\n", err)
+				_, _ = fmt.Fprintf(os.Stderr, "failed to resolve config path: %v\n", err)
 				return
 			}
 
@@ -99,7 +99,7 @@ func NewRootCmd() *cobra.Command {
 			case "3", "whatsapp":
 				setupWhatsAppInteractive(cfg, cfgPath)
 			default:
-				fmt.Fprintf(os.Stderr, "invalid choice %q — please enter 1, 2 or 3\n", choice)
+				_, _ = fmt.Fprintf(os.Stderr, "invalid choice %q — please enter 1, 2 or 3\n", choice)
 			}
 		},
 	}
@@ -207,14 +207,14 @@ func NewRootCmd() *cobra.Command {
 			// start telegram if enabled
 			if cfg.Channels.Telegram.Enabled {
 				if err := channels.StartTelegram(ctx, hub, cfg.Channels.Telegram.Token, cfg.Channels.Telegram.AllowFrom); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to start telegram: %v\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "failed to start telegram: %v\n", err)
 				}
 			}
 
 			// start discord if enabled
 			if cfg.Channels.Discord.Enabled {
 				if err := channels.StartDiscord(ctx, hub, cfg.Channels.Discord.Token, cfg.Channels.Discord.AllowFrom); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to start discord: %v\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "failed to start discord: %v\n", err)
 				}
 			}
 
@@ -230,7 +230,7 @@ func NewRootCmd() *cobra.Command {
 					dbPath = filepath.Join(home, dbPath[2:])
 				}
 				if err := channels.StartWhatsApp(ctx, hub, dbPath, cfg.Channels.WhatsApp.AllowFrom); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to start whatsapp: %v\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "failed to start whatsapp: %v\n", err)
 				}
 			}
 
@@ -294,7 +294,7 @@ func NewRootCmd() *cobra.Command {
 			target := args[0]
 			content, _ := cmd.Flags().GetString("content")
 			if content == "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), "-c content required")
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "-c content required")
 				return
 			}
 			cfg, _ := config.LoadConfig()
@@ -310,23 +310,23 @@ func NewRootCmd() *cobra.Command {
 			switch target {
 			case "today":
 				if err := mem.AppendToday(content); err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "append failed:", err)
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "append failed:", err)
 					return
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "appended to today")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "appended to today")
 			case "long":
 				lt, err := mem.ReadLongTerm()
 				if err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "append long failed:", err)
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "append long failed:", err)
 					return
 				}
 				if err := mem.WriteLongTerm(lt + "\n" + content); err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "append long failed:", err)
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "append long failed:", err)
 					return
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "appended to long-term memory")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "appended to long-term memory")
 			default:
-				fmt.Fprintln(cmd.ErrOrStderr(), "unknown target:", target)
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "unknown target:", target)
 			}
 		},
 	}
@@ -338,12 +338,12 @@ func NewRootCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			if args[0] != "long" {
-				fmt.Fprintln(os.Stderr, "write currently only supports 'long'")
+				_, _ = fmt.Fprintln(os.Stderr, "write currently only supports 'long'")
 				return
 			}
 			content, _ := cmd.Flags().GetString("content")
 			if content == "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), "-c content required")
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "-c content required")
 				return
 			}
 			cfg, _ := config.LoadConfig()
@@ -357,10 +357,10 @@ func NewRootCmd() *cobra.Command {
 			}
 			mem := memory.NewMemoryStoreWithWorkspace(ws, 100)
 			if err := mem.WriteLongTerm(content); err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "write failed:", err)
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "write failed:", err)
 				return
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "wrote long-term memory")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "wrote long-term memory")
 		},
 	}
 	writeCmd.Flags().StringP("content", "c", "", "Content to write")
@@ -381,7 +381,7 @@ func NewRootCmd() *cobra.Command {
 			}
 			mem := memory.NewMemoryStoreWithWorkspace(ws, 100)
 			out, _ := mem.GetRecentMemories(days)
-			fmt.Fprintln(cmd.OutOrStdout(), out)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), out)
 		},
 	}
 	recentCmd.Flags().IntP("days", "d", 1, "Number of days to include")
@@ -398,7 +398,7 @@ func NewRootCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			q, _ := cmd.Flags().GetString("query")
 			if q == "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), "-q query required")
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "-q query required")
 				return
 			}
 			top, _ := cmd.Flags().GetInt("top")
@@ -461,7 +461,7 @@ func NewRootCmd() *cobra.Command {
 func main() {
 	rootCmd := NewRootCmd()
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -501,7 +501,7 @@ func setupTelegramInteractive(reader *bufio.Reader, cfg config.Config, cfgPath s
 
 	token := promptLine(reader, "Bot token: ")
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
+		_, _ = fmt.Fprintln(os.Stderr, "error: token cannot be empty")
 		return
 	}
 
@@ -519,7 +519,7 @@ func setupTelegramInteractive(reader *bufio.Reader, cfg config.Config, cfgPath s
 	cfg.Channels.Telegram.AllowFrom = allowFrom
 
 	if err := config.SaveConfig(cfg, cfgPath); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
 		return
 	}
 
@@ -541,7 +541,7 @@ func setupDiscordInteractive(reader *bufio.Reader, cfg config.Config, cfgPath st
 
 	token := promptLine(reader, "Bot token: ")
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
+		_, _ = fmt.Fprintln(os.Stderr, "error: token cannot be empty")
 		return
 	}
 
@@ -559,7 +559,7 @@ func setupDiscordInteractive(reader *bufio.Reader, cfg config.Config, cfgPath st
 	cfg.Channels.Discord.AllowFrom = allowFrom
 
 	if err := config.SaveConfig(cfg, cfgPath); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
 		return
 	}
 
@@ -582,14 +582,14 @@ func setupWhatsAppInteractive(cfg config.Config, cfgPath string) {
 	}
 
 	if err := channels.SetupWhatsApp(dbPath); err != nil {
-		fmt.Fprintf(os.Stderr, "WhatsApp setup failed: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "WhatsApp setup failed: %v\n", err)
 		return
 	}
 
 	cfg.Channels.WhatsApp.Enabled = true
 	cfg.Channels.WhatsApp.DBPath = dbPath
 	if saveErr := config.SaveConfig(cfg, cfgPath); saveErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not save config: %v\n", saveErr)
+		_, _ = fmt.Fprintf(os.Stderr, "warning: could not save config: %v\n", saveErr)
 	} else {
 		fmt.Printf("Config updated: whatsapp enabled, dbPath set to %s\n", dbPath)
 	}

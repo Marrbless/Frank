@@ -123,10 +123,10 @@ func (t *CronTool) Execute(ctx context.Context, args map[string]interface{}) (st
 			return "No pending jobs.", nil
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("%d pending job(s):\n", len(jobs)))
+		fmt.Fprintf(&sb, "%d pending job(s):\n", len(jobs))
 		for _, j := range jobs {
 			remaining := time.Until(j.FireAt).Round(time.Second)
-			sb.WriteString(fmt.Sprintf("- %s (%s): %q — fires in %v\n", j.Name, j.ID, j.Message, remaining))
+			fmt.Fprintf(&sb, "- %s (%s): %q — fires in %v\n", j.Name, j.ID, j.Message, remaining)
 		}
 		return sb.String(), nil
 
