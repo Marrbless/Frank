@@ -38,7 +38,7 @@ func sendChannelNotification(hub *chat.Hub, channel, chatID, content string) {
 // isSystemChannel reports whether a channel is a background/system trigger
 // (heartbeat, cron) rather than an interactive user-facing channel.
 // Messages from system channels are processed statelessly: no session history
-// is loaded as context and nothing is written back to disk.  This prevents the
+// is loaded as context and nothing is written back to disk. This prevents the
 // heartbeat session file from growing unboundedly and keeps each invocation's
 // context window small.
 func isSystemChannel(channel string) bool {
@@ -61,6 +61,7 @@ type AgentLoop struct {
 	model         string
 	maxIterations int
 	running       bool
+	taskState     *tools.TaskState
 }
 
 // NewAgentLoop creates a new AgentLoop with the given provider.
@@ -71,8 +72,10 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	if workspace == "" {
 		workspace = "."
 	}
+
+	taskState := tools.NewTaskState()
+
 	reg := tools.NewRegistry()
-	// register default tools
 	reg.Register(tools.NewMessageTool(b))
 
 	// Open an os.Root anchored at the workspace for kernel-enforced sandboxing.
@@ -81,13 +84,13 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 		log.Fatalf("failed to open workspace root %q: %v", workspace, err)
 	}
 
-	fsTool, err := tools.NewFilesystemTool(workspace)
+	fsTool, err := tools.NewFilesystemToolWithState(workspace, taskState)
 	if err != nil {
 		log.Fatalf("failed to create filesystem tool: %v", err)
 	}
 	reg.Register(fsTool)
 
-	reg.Register(tools.NewExecTool(60))
+	reg.Register(tools.NewExecToolWithWorkspaceAndState(60, workspace, taskState))
 	reg.Register(tools.NewWebTool())
 	reg.Register(tools.NewWebSearchTool())
 	reg.Register(tools.NewSpawnTool())
@@ -98,21 +101,30 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	sm := session.NewSessionManager(workspace)
 	ctx := NewContextBuilder(workspace, memory.NewLLMRanker(provider, model), 5)
 	mem := memory.NewMemoryStoreWithWorkspace(workspace, 100)
-	// register memory tools (all share the same store instance)
+
 	reg.Register(tools.NewWriteMemoryTool(mem))
 	reg.Register(tools.NewListMemoryTool(mem))
 	reg.Register(tools.NewReadMemoryTool(mem))
 	reg.Register(tools.NewEditMemoryTool(mem))
 	reg.Register(tools.NewDeleteMemoryTool(mem))
 
-	// register skill management tools (share the same os.Root)
 	skillMgr := tools.NewSkillManager(root)
 	reg.Register(tools.NewCreateSkillTool(skillMgr))
 	reg.Register(tools.NewListSkillsTool(skillMgr))
 	reg.Register(tools.NewReadSkillTool(skillMgr))
 	reg.Register(tools.NewDeleteSkillTool(skillMgr))
 
-	return &AgentLoop{hub: b, provider: provider, tools: reg, sessions: sm, context: ctx, memory: mem, model: model, maxIterations: maxIterations}
+	return &AgentLoop{
+		hub:           b,
+		provider:      provider,
+		tools:         reg,
+		sessions:      sm,
+		context:       ctx,
+		memory:        mem,
+		model:         model,
+		maxIterations: maxIterations,
+		taskState:     taskState,
+	}
 }
 
 // Run starts processing inbound messages. This is a blocking call until context is canceled.
@@ -126,6 +138,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			log.Println("Agent loop received shutdown signal")
 			a.running = false
 			return
+
 		case msg, ok := <-a.hub.In:
 			if !ok {
 				log.Println("Inbound channel closed, stopping agent loop")
@@ -134,6 +147,10 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			}
 
 			log.Printf("Processing message from %s:%s\n", msg.Channel, msg.SenderID)
+
+			if a.taskState != nil {
+				a.taskState.BeginTask(fmt.Sprintf("%s:%s:%d", msg.Channel, msg.ChatID, time.Now().UnixNano()))
+			}
 
 			// Quick heuristic: if user asks the agent to remember something explicitly,
 			// store it in today's note and reply immediately without calling the LLM.
@@ -150,7 +167,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				default:
 					log.Println("Outbound channel full, dropping message")
 				}
-				// Only save session for interactive channels, not system triggers.
+
 				if !isSystemChannel(msg.Channel) {
 					sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
 					sess.AddMessage("user", msg.Content)
@@ -162,7 +179,6 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				continue
 			}
 
-			// Set tool context (so message tool knows channel+chat)
 			if mt := a.tools.Get("message"); mt != nil {
 				if mtool, ok := mt.(interface{ SetContext(string, string) }); ok {
 					mtool.SetContext(msg.Channel, msg.ChatID)
@@ -174,16 +190,13 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				}
 			}
 
-			// Build messages from session, long-term memory, and recent memory.
-			// System channels (heartbeat, cron) get a blank ephemeral session so
-			// their history never accumulates and bloats the context window.
 			var sess *session.Session
 			if isSystemChannel(msg.Channel) {
 				sess = &session.Session{Key: msg.Channel + ":" + msg.ChatID}
 			} else {
 				sess = a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
 			}
-			// get file-backed memory context (long-term + today)
+
 			memCtx, _ := a.memory.GetMemoryContext()
 			memories := a.memory.Recent(5)
 			messages := a.context.BuildMessages(sess.GetHistory(), msg.Content, msg.Channel, msg.ChatID, memCtx, memories)
@@ -192,8 +205,10 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			finalContent := ""
 			lastToolResult := ""
 			toolDefs := a.tools.Definitions()
+
 			for iteration < a.maxIterations {
 				iteration++
+
 				resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 				if err != nil {
 					log.Printf("provider error: %v", err)
@@ -202,9 +217,12 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				}
 
 				if resp.HasToolCalls {
-					// append assistant message with tool_calls attached
-					messages = append(messages, providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
-					// execute each tool call and return results with "tool" role
+					messages = append(messages, providers.Message{
+						Role:      "assistant",
+						Content:   resp.Content,
+						ToolCalls: resp.ToolCalls,
+					})
+
 					for _, tc := range resp.ToolCalls {
 						argsJSON, _ := json.Marshal(tc.Arguments)
 						sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
@@ -222,15 +240,19 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 								fmt.Sprintf("📢 %s done (%s)", tc.Name, elapsed))
 						}
+
 						lastToolResult = res
-						messages = append(messages, providers.Message{Role: "tool", Content: res, ToolCallID: tc.ID})
+						messages = append(messages, providers.Message{
+							Role:       "tool",
+							Content:    res,
+							ToolCallID: tc.ID,
+						})
 					}
-					// loop again
 					continue
-				} else {
-					finalContent = resp.Content
-					break
 				}
+
+				finalContent = resp.Content
+				break
 			}
 
 			if finalContent == "" && lastToolResult != "" {
@@ -239,9 +261,6 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				finalContent = "I've completed processing but have no response to give."
 			}
 
-			// Save session for interactive channels only.
-			// System channels (heartbeat, cron) are stateless triggers — their
-			// history must not be persisted, otherwise the file grows unboundedly.
 			if !isSystemChannel(msg.Channel) {
 				sess.AddMessage("user", msg.Content)
 				sess.AddMessage("assistant", finalContent)
@@ -256,8 +275,8 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			default:
 				log.Println("Outbound channel full, dropping message")
 			}
+
 		default:
-			// idle tick
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
@@ -269,8 +288,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Set tool context so message/cron tools know the originating channel,
-	// matching what Run() does for hub-based messages.
+	if a.taskState != nil {
+		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
+	}
+
 	if mt := a.tools.Get("message"); mt != nil {
 		if mtool, ok := mt.(interface{ SetContext(string, string) }); ok {
 			mtool.SetContext("cli", "direct")
@@ -282,12 +303,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 		}
 	}
 
-	// Build full context (bootstrap files, skills, memory) just like the main loop
 	memCtx, _ := a.memory.GetMemoryContext()
 	memories := a.memory.Recent(5)
 	messages := a.context.BuildMessages(nil, content, "cli", "direct", memCtx, memories)
 
-	// Support tool calling iterations (similar to main loop)
 	var lastToolResult string
 	for iteration := 0; iteration < a.maxIterations; iteration++ {
 		resp, err := a.provider.Chat(ctx, messages, a.tools.Definitions(), a.model)
@@ -296,7 +315,6 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 		}
 
 		if !resp.HasToolCalls {
-			// No tool calls, return the response (fall back to last tool result if empty)
 			if resp.Content != "" {
 				return resp.Content, nil
 			}
@@ -306,15 +324,23 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 			return resp.Content, nil
 		}
 
-		// Execute tool calls
-		messages = append(messages, providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+		messages = append(messages, providers.Message{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+
 		for _, tc := range resp.ToolCalls {
 			result, err := a.tools.Execute(ctx, tc.Name, tc.Arguments)
 			if err != nil {
 				result = "(tool error) " + err.Error()
 			}
 			lastToolResult = result
-			messages = append(messages, providers.Message{Role: "tool", Content: result, ToolCallID: tc.ID})
+			messages = append(messages, providers.Message{
+				Role:       "tool",
+				Content:    result,
+				ToolCallID: tc.ID,
+			})
 		}
 	}
 
