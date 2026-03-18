@@ -12,42 +12,66 @@ import (
 	"time"
 )
 
-// OpenAIProvider calls an OpenAI-compatible API (OpenAI, OpenRouter, or similar).
+// OpenAIProvider calls an OpenAI-compatible API.
 type OpenAIProvider struct {
-	APIKey    string
-	APIBase   string // e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1
-	MaxTokens int    // 0 means "let the API decide"
-	Client    *http.Client
+	APIKey          string
+	APIBase         string // e.g. https://api.openai.com/v1
+	MaxTokens       int    // 0 means "let the API decide"
+	UseResponses    bool
+	ReasoningEffort string
+	Client          *http.Client
 }
 
+// Backward-compatible constructor.
 func NewOpenAIProvider(apiKey, apiBase string, timeoutSecs, maxTokens int) *OpenAIProvider {
+	return NewOpenAIProviderWithOptions(apiKey, apiBase, timeoutSecs, maxTokens, false, "")
+}
+
+func NewOpenAIProviderWithOptions(apiKey, apiBase string, timeoutSecs, maxTokens int, useResponses bool, reasoningEffort string) *OpenAIProvider {
 	if apiBase == "" {
-		apiBase = "https://api.openai.com/v1" // sensible default; can be overridden
+		apiBase = "https://api.openai.com/v1"
 	}
 	if timeoutSecs <= 1 {
-		timeoutSecs = 60 // default 60 seconds
+		timeoutSecs = 60
 	}
 	return &OpenAIProvider{
-		APIKey:    apiKey,
-		APIBase:   strings.TrimRight(apiBase, "/"),
-		MaxTokens: maxTokens,
+		APIKey:          apiKey,
+		APIBase:         strings.TrimRight(apiBase, "/"),
+		MaxTokens:       maxTokens,
+		UseResponses:    useResponses,
+		ReasoningEffort: strings.TrimSpace(reasoningEffort),
 		Client: &http.Client{
 			Timeout: time.Duration(timeoutSecs) * time.Second,
 		},
 	}
 }
 
-func (p *OpenAIProvider) GetDefaultModel() string { return "gpt-4o-mini" }
+func (p *OpenAIProvider) GetDefaultModel() string {
+	return "gpt-4o-mini"
+}
 
-// Request/response shapes using the modern OpenAI "tools" format.
-type chatRequest struct {
+func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string) (LLMResponse, error) {
+	if model == "" {
+		model = p.GetDefaultModel()
+	}
+
+	if p.UseResponses {
+		return p.chatResponses(ctx, messages, tools, model)
+	}
+	return p.chatCompletions(ctx, messages, tools, model)
+}
+
+/* =========================
+   Chat Completions fallback
+   ========================= */
+
+type chatCompletionRequest struct {
 	Model     string        `json:"model"`
 	Messages  []messageJSON `json:"messages"`
 	Tools     []toolWrapper `json:"tools,omitempty"`
 	MaxTokens int           `json:"max_tokens,omitempty"`
 }
 
-// toolWrapper is the OpenAI tools array element: {"type": "function", "function": {...}}
 type toolWrapper struct {
 	Type     string      `json:"type"`
 	Function functionDef `json:"function"`
@@ -83,19 +107,19 @@ type messageResponseJSON struct {
 	ToolCalls []toolCallJSON `json:"tool_calls,omitempty"`
 }
 
-type chatResponse struct {
+type chatCompletionResponse struct {
 	Choices []struct {
 		Message messageResponseJSON `json:"message"`
 	} `json:"choices"`
 }
 
-// Chat calls an OpenAI-compatible chat completion endpoint and returns a simplified response.
-func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string) (LLMResponse, error) {
-	if model == "" {
-		model = p.GetDefaultModel()
+func (p *OpenAIProvider) chatCompletions(ctx context.Context, messages []Message, tools []ToolDefinition, model string) (LLMResponse, error) {
+	reqBody := chatCompletionRequest{
+		Model:     model,
+		Messages:  make([]messageJSON, 0, len(messages)),
+		MaxTokens: p.MaxTokens,
 	}
 
-	reqBody := chatRequest{Model: model, Messages: make([]messageJSON, 0, len(messages)), MaxTokens: p.MaxTokens}
 	for _, m := range messages {
 		mj := messageJSON{Role: m.Role, ToolCallID: m.ToolCallID}
 		if len(m.ToolCalls) > 0 && m.Content == "" {
@@ -104,7 +128,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			c := m.Content
 			mj.Content = &c
 		}
-		// Convert provider ToolCall to JSON-serializable toolCallJSON
 		for _, tc := range m.ToolCalls {
 			argsBytes, _ := json.Marshal(tc.Arguments)
 			mj.ToolCalls = append(mj.ToolCalls, toolCallJSON{
@@ -119,23 +142,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		reqBody.Messages = append(reqBody.Messages, mj)
 	}
 
-	// Include tools in modern format if provided
 	if len(tools) > 0 {
-		reqBody.Tools = make([]toolWrapper, 0, len(tools))
-		for _, t := range tools {
-			params := t.Parameters
-			if params == nil {
-				params = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-			}
-			reqBody.Tools = append(reqBody.Tools, toolWrapper{
-				Type: "function",
-				Function: functionDef{
-					Name:        t.Name,
-					Description: t.Description,
-					Parameters:  params,
-				},
-			})
-		}
+		reqBody.Tools = buildChatCompletionTools(tools)
 	}
 
 	b, err := json.Marshal(reqBody)
@@ -144,9 +152,281 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	url := fmt.Sprintf("%s/chat/completions", p.APIBase)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(b)))
+	body, err := p.doJSON(ctx, url, b)
 	if err != nil {
 		return LLMResponse{}, err
+	}
+
+	var out chatCompletionResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return LLMResponse{}, err
+	}
+	if len(out.Choices) == 0 {
+		return LLMResponse{}, errors.New("OpenAI API returned no choices")
+	}
+
+	msg := out.Choices[0].Message
+	if len(msg.ToolCalls) > 0 {
+		var tcs []ToolCall
+		for _, tc := range msg.ToolCalls {
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &parsed); err != nil {
+				continue
+			}
+			tcs = append(tcs, ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: parsed,
+			})
+		}
+		if len(tcs) > 0 {
+			return LLMResponse{
+				Content:      strings.TrimSpace(msg.Content),
+				HasToolCalls: true,
+				ToolCalls:    tcs,
+			}, nil
+		}
+	}
+
+	return LLMResponse{
+		Content:      strings.TrimSpace(msg.Content),
+		HasToolCalls: false,
+	}, nil
+}
+
+func buildChatCompletionTools(tools []ToolDefinition) []toolWrapper {
+	out := make([]toolWrapper, 0, len(tools))
+	for _, t := range tools {
+		params := t.Parameters
+		if params == nil {
+			params = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			}
+		}
+		out = append(out, toolWrapper{
+			Type: "function",
+			Function: functionDef{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  params,
+			},
+		})
+	}
+	return out
+}
+
+/* ==================
+   Responses API path
+   ================== */
+
+type responsesAPIResponse struct {
+	OutputText string            `json:"output_text"`
+	Output     []json.RawMessage `json:"output"`
+}
+
+type responsesItemType struct {
+	Type string `json:"type"`
+}
+
+type responsesFunctionCall struct {
+	ID        string      `json:"id"`
+	CallID    string      `json:"call_id"`
+	Name      string      `json:"name"`
+	Arguments interface{} `json:"arguments"`
+	Type      string      `json:"type"`
+}
+
+type responsesMessage struct {
+	Type    string                    `json:"type"`
+	Role    string                    `json:"role"`
+	Content []responsesMessageContent `json:"content"`
+}
+
+type responsesMessageContent struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+func (p *OpenAIProvider) chatResponses(ctx context.Context, messages []Message, tools []ToolDefinition, model string) (LLMResponse, error) {
+	reqBody := map[string]interface{}{
+		"model": model,
+		"input": buildResponsesInput(messages),
+	}
+
+	if len(tools) > 0 {
+		reqBody["tools"] = buildResponsesTools(tools)
+	}
+	if p.MaxTokens > 0 {
+		reqBody["max_output_tokens"] = p.MaxTokens
+	}
+	if p.ReasoningEffort != "" {
+		reqBody["reasoning"] = map[string]interface{}{
+			"effort": p.ReasoningEffort,
+		}
+	}
+
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return LLMResponse{}, err
+	}
+
+	url := fmt.Sprintf("%s/responses", p.APIBase)
+	body, err := p.doJSON(ctx, url, b)
+	if err != nil {
+		return LLMResponse{}, err
+	}
+
+	var out responsesAPIResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return LLMResponse{}, err
+	}
+
+	var finalText strings.Builder
+	var tcs []ToolCall
+
+	for _, raw := range out.Output {
+		var kind responsesItemType
+		if err := json.Unmarshal(raw, &kind); err != nil {
+			continue
+		}
+
+		switch kind.Type {
+		case "function_call":
+			var fc responsesFunctionCall
+			if err := json.Unmarshal(raw, &fc); err != nil {
+				continue
+			}
+			args := map[string]interface{}{}
+			switch v := fc.Arguments.(type) {
+			case string:
+				_ = json.Unmarshal([]byte(v), &args)
+			case map[string]interface{}:
+				args = v
+			}
+			id := fc.CallID
+			if id == "" {
+				id = fc.ID
+			}
+			tcs = append(tcs, ToolCall{
+				ID:        id,
+				Name:      fc.Name,
+				Arguments: args,
+			})
+
+		case "message":
+			var msg responsesMessage
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				continue
+			}
+			for _, c := range msg.Content {
+				if strings.TrimSpace(c.Text) == "" {
+					continue
+				}
+				if finalText.Len() > 0 {
+					finalText.WriteString("\n")
+				}
+				finalText.WriteString(c.Text)
+			}
+		}
+	}
+
+	if len(tcs) > 0 {
+		content := strings.TrimSpace(out.OutputText)
+		if content == "" {
+			content = strings.TrimSpace(finalText.String())
+		}
+		return LLMResponse{
+			Content:      content,
+			HasToolCalls: true,
+			ToolCalls:    tcs,
+		}, nil
+	}
+
+	content := strings.TrimSpace(out.OutputText)
+	if content == "" {
+		content = strings.TrimSpace(finalText.String())
+	}
+	return LLMResponse{
+		Content:      content,
+		HasToolCalls: false,
+	}, nil
+}
+
+func buildResponsesTools(tools []ToolDefinition) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(tools))
+	for _, t := range tools {
+		params := t.Parameters
+		if params == nil {
+			params = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			}
+		}
+		out = append(out, map[string]interface{}{
+			"type":        "function",
+			"name":        t.Name,
+			"description": t.Description,
+			"parameters":  params,
+		})
+	}
+	return out
+}
+
+func buildResponsesInput(messages []Message) []map[string]interface{} {
+	input := make([]map[string]interface{}, 0, len(messages)*2)
+
+	for _, m := range messages {
+		if m.Role == "tool" {
+			if m.ToolCallID == "" {
+				continue
+			}
+			input = append(input, map[string]interface{}{
+				"type":    "function_call_output",
+				"call_id": m.ToolCallID,
+				"output":  m.Content,
+			})
+			continue
+		}
+
+		if len(m.ToolCalls) > 0 {
+			if strings.TrimSpace(m.Content) != "" {
+				input = append(input, map[string]interface{}{
+					"type":    "message",
+					"role":    m.Role,
+					"content": m.Content,
+				})
+			}
+			for _, tc := range m.ToolCalls {
+				argsBytes, _ := json.Marshal(tc.Arguments)
+				input = append(input, map[string]interface{}{
+					"type":      "function_call",
+					"call_id":   tc.ID,
+					"name":      tc.Name,
+					"arguments": string(argsBytes),
+				})
+			}
+			continue
+		}
+
+		input = append(input, map[string]interface{}{
+			"type":    "message",
+			"role":    m.Role,
+			"content": m.Content,
+		})
+	}
+
+	return input
+}
+
+/* ===========
+   HTTP helper
+   =========== */
+
+func (p *OpenAIProvider) doJSON(ctx context.Context, url string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if p.APIKey != "" {
@@ -155,47 +435,18 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return LLMResponse{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// attempt to read response body for more details (do not expose API key)
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		body := strings.TrimSpace(string(bodyBytes))
-		log.Printf("OpenAI API non-2xx: %s body=%q", resp.Status, body)
-		if body == "" {
-			return LLMResponse{}, fmt.Errorf("OpenAI API error: %s", resp.Status)
+		bodyText := strings.TrimSpace(string(respBody))
+		log.Printf("OpenAI API non-2xx: %s body=%q", resp.Status, bodyText)
+		if bodyText == "" {
+			return nil, fmt.Errorf("OpenAI API error: %s", resp.Status)
 		}
-		return LLMResponse{}, fmt.Errorf("OpenAI API error: %s - %s", resp.Status, body)
+		return nil, fmt.Errorf("OpenAI API error: %s - %s", resp.Status, bodyText)
 	}
-
-	var out chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return LLMResponse{}, err
-	}
-
-	if len(out.Choices) == 0 {
-		return LLMResponse{}, errors.New("OpenAI API returned no choices")
-	}
-
-	msg := out.Choices[0].Message
-	// If the model requested tool calls, parse them
-	if len(msg.ToolCalls) > 0 {
-		var tcs []ToolCall
-		for _, tc := range msg.ToolCalls {
-			var parsed map[string]interface{}
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &parsed); err != nil {
-				// skip unparseable tool calls
-				continue
-			}
-			tcs = append(tcs, ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: parsed})
-		}
-		if len(tcs) > 0 {
-			return LLMResponse{Content: strings.TrimSpace(msg.Content), HasToolCalls: true, ToolCalls: tcs}, nil
-		}
-	}
-
-	// No tool calls
-	return LLMResponse{Content: strings.TrimSpace(msg.Content), HasToolCalls: false}, nil
+	return respBody, nil
 }
