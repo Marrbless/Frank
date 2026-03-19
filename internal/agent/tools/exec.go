@@ -80,11 +80,41 @@ var dangerous = map[string]struct{}{
 	"reboot":   {},
 }
 
+var shellInterpreters = map[string]struct{}{
+	"sh":      {},
+	"bash":    {},
+	"zsh":     {},
+	"dash":    {},
+	"ash":     {},
+	"fish":    {},
+	"busybox": {},
+}
+
 func isDangerousProg(prog string) bool {
 	base := filepath.Base(prog)
 	base = strings.ToLower(base)
 	_, ok := dangerous[base]
 	return ok
+}
+
+func isShellInterpreter(prog string) bool {
+	base := filepath.Base(prog)
+	base = strings.ToLower(base)
+	_, ok := shellInterpreters[base]
+	return ok
+}
+
+func hasDisallowedPythonInline(prog string, args []string) bool {
+	base := strings.ToLower(filepath.Base(prog))
+	if base != "python" && base != "python3" {
+		return false
+	}
+	for _, a := range args {
+		if a == "-c" {
+			return true
+		}
+	}
+	return false
 }
 
 func hasUnsafeArg(s string) bool {
@@ -568,6 +598,14 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (st
 	prog := argv[0]
 	if isFrankHelper(prog) {
 		return t.executeFrankHelper(cctx, prog, argv[1:])
+	}
+
+	if isShellInterpreter(prog) {
+		return "", fmt.Errorf("exec: shell interpreters are disallowed; use direct argv execution, filesystem, or frank_* helpers")
+	}
+
+	if hasDisallowedPythonInline(prog, argv[1:]) {
+		return "", fmt.Errorf("exec: python -c is disallowed; write a file and run it directly, or use filesystem/frank_* helpers")
 	}
 
 	if isDangerousProg(prog) {
