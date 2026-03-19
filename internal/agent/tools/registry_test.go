@@ -43,6 +43,7 @@ func TestRegistryExecuteWithoutGuardPreservesBehavior(t *testing.T) {
 	t.Parallel()
 
 	reg := NewRegistry()
+	reg.SetMissionRequired(false)
 	tool := &stubTool{name: "stub", result: "ok"}
 	reg.Register(tool)
 
@@ -57,6 +58,10 @@ func TestRegistryExecuteWithoutGuardPreservesBehavior(t *testing.T) {
 
 	if tool.executeCalls != 1 {
 		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 1)
+	}
+
+	if reg.MissionRequired() {
+		t.Fatal("MissionRequired() = true, want false")
 	}
 }
 
@@ -308,6 +313,52 @@ func TestRegistryExecuteWithoutExecutionContextPreservesAuditBehavior(t *testing
 
 	if strings.Contains(logs, "[tool] audit") {
 		t.Fatalf("expected no audit log without execution context, got %q", logs)
+	}
+}
+
+func TestRegistryDefinitionsMissionRequiredWithoutExecutionContextReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	reg := NewRegistry()
+	reg.Register(&stubTool{name: "alpha"})
+	reg.Register(&stubTool{name: "beta"})
+	reg.SetMissionRequired(true)
+
+	got := definitionNames(reg.DefinitionsForExecutionContext(nil))
+	if len(got) != 0 {
+		t.Fatalf("DefinitionsForExecutionContext(nil) = %#v, want empty list", got)
+	}
+}
+
+func TestRegistryExecuteMissionRequiredWithoutExecutionContextRejectsAndLogsAudit(t *testing.T) {
+	reg := NewRegistry()
+	reg.SetMissionRequired(true)
+	tool := &stubTool{name: "stub", result: "ok"}
+	reg.Register(tool)
+
+	var err error
+	logs := captureRegistryLogs(t, func() {
+		_, err = reg.Execute(context.Background(), "stub", map[string]interface{}{"x": 1})
+	})
+
+	if err == nil {
+		t.Fatal("Execute() error = nil, want mission context rejection")
+	}
+
+	if tool.executeCalls != 0 {
+		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 0)
+	}
+
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissionContextRequired)) {
+		t.Fatalf("error %q does not contain mission_context_required", err)
+	}
+
+	if !strings.Contains(err.Error(), "active mission step is required") {
+		t.Fatalf("error %q does not contain clear reason", err)
+	}
+
+	if !strings.Contains(logs, "[tool] audit job= step= tool=stub allowed=false code=mission_context_required reason=active mission step is required") {
+		t.Fatalf("expected mission-required audit log, got %q", logs)
 	}
 }
 

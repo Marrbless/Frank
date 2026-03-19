@@ -5,9 +5,10 @@ import "time"
 type RejectionCode string
 
 const (
-	RejectionCodeApprovalRequired  RejectionCode = "approval_required"
-	RejectionCodeAuthorityExceeded RejectionCode = "authority_exceeded"
-	RejectionCodeToolNotAllowed    RejectionCode = "tool_not_allowed"
+	RejectionCodeApprovalRequired       RejectionCode = "approval_required"
+	RejectionCodeAuthorityExceeded      RejectionCode = "authority_exceeded"
+	RejectionCodeToolNotAllowed         RejectionCode = "tool_not_allowed"
+	RejectionCodeMissionContextRequired RejectionCode = "mission_context_required"
 )
 
 type AuditEvent struct {

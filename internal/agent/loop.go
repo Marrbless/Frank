@@ -159,6 +159,20 @@ func (a *AgentLoop) ActiveMissionStep() (missioncontrol.ExecutionContext, bool) 
 	return a.taskState.ExecutionContext()
 }
 
+func (a *AgentLoop) SetMissionRequired(required bool) {
+	if a == nil || a.tools == nil {
+		return
+	}
+	a.tools.SetMissionRequired(required)
+}
+
+func (a *AgentLoop) MissionRequired() bool {
+	if a == nil || a.tools == nil {
+		return false
+	}
+	return a.tools.MissionRequired()
+}
+
 // Run starts processing inbound messages. This is a blocking call until context is canceled.
 func (a *AgentLoop) Run(ctx context.Context) {
 	a.running = true

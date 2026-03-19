@@ -26,9 +26,10 @@ type Tool interface {
 
 // Registry holds registered tools.
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
-	guard missioncontrol.ToolGuard
+	mu              sync.RWMutex
+	tools           map[string]Tool
+	guard           missioncontrol.ToolGuard
+	missionRequired bool
 }
 
 // NewRegistry constructs a new tool registry.
@@ -50,6 +51,18 @@ func (r *Registry) SetGuard(g missioncontrol.ToolGuard) {
 	r.guard = g
 }
 
+func (r *Registry) SetMissionRequired(required bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.missionRequired = required
+}
+
+func (r *Registry) MissionRequired() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.missionRequired
+}
+
 // Get returns a tool by name (or nil if not found).
 func (r *Registry) Get(name string) Tool {
 	r.mu.RLock()
@@ -66,6 +79,10 @@ func (r *Registry) Definitions() []providers.ToolDefinition {
 func (r *Registry) DefinitionsForExecutionContext(ec *missioncontrol.ExecutionContext) []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	if ec == nil && r.missionRequired {
+		return []providers.ToolDefinition{}
+	}
 
 	allowed := allowedToolSetForExecutionContext(ec)
 	names := make([]string, 0, len(r.tools))
@@ -124,15 +141,30 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	guard := r.guard
+	missionRequired := r.missionRequired
 	r.mu.RUnlock()
 	if !ok {
 		return "", errors.New("tool not found")
 	}
 
+	if missionRequired {
+		if _, ok := missioncontrol.ExecutionContextFromContext(ctx); !ok {
+			event := missioncontrol.AuditEvent{
+				ToolName:  name,
+				Allowed:   false,
+				Code:      missioncontrol.RejectionCodeMissionContextRequired,
+				Reason:    "active mission step is required",
+				Timestamp: time.Now(),
+			}
+			logAuditEvent(event)
+			return "", fmt.Errorf("tool rejected: %s: %s", missioncontrol.RejectionCodeMissionContextRequired, "active mission step is required")
+		}
+	}
+
 	if guard != nil {
 		if ec, ok := missioncontrol.ExecutionContextFromContext(ctx); ok {
 			decision := guard.EvaluateTool(ctx, ec, name, args)
-			log.Printf("[tool] audit job=%s step=%s tool=%s allowed=%t code=%s reason=%s timestamp=%s", decision.Event.JobID, decision.Event.StepID, decision.Event.ToolName, decision.Event.Allowed, decision.Event.Code, decision.Event.Reason, decision.Event.Timestamp.Format(time.RFC3339Nano))
+			logAuditEvent(decision.Event)
 			if !decision.Allowed {
 				log.Printf("[tool] ! %s denied: code=%s reason=%s event=%+v", name, decision.Code, decision.Reason, decision.Event)
 				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)
@@ -155,4 +187,8 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 
 	log.Printf("[tool] ✓ %s completed in %s (%d bytes)", name, elapsed, len(result))
 	return result, nil
+}
+
+func logAuditEvent(event missioncontrol.AuditEvent) {
+	log.Printf("[tool] audit job=%s step=%s tool=%s allowed=%t code=%s reason=%s timestamp=%s", event.JobID, event.StepID, event.ToolName, event.Allowed, event.Code, event.Reason, event.Timestamp.Format(time.RFC3339Nano))
 }

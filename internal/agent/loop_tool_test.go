@@ -46,6 +46,10 @@ func TestAgentExecutesToolCall(t *testing.T) {
 		t.Fatal("taskState.ExecutionContext() ok = true, want false")
 	}
 
+	if ag.MissionRequired() {
+		t.Fatal("MissionRequired() = true, want false")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go ag.Run(ctx)
@@ -71,6 +75,45 @@ func TestAgentExecutesToolCall(t *testing.T) {
 				return
 			}
 			// otherwise continue waiting until timeout
+		case <-deadline:
+			t.Fatalf("timeout waiting for final outbound message")
+		}
+	}
+}
+
+func TestAgentLoopMissionRequiredWithoutContextProviderSeesNoTools(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRequired(true)
+
+	if !ag.MissionRequired() {
+		t.Fatal("MissionRequired() = false, want true")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go ag.Run(ctx)
+
+	in := chat.Inbound{Channel: "cli", SenderID: "user", ChatID: "one", Content: "trigger"}
+	select {
+	case b.In <- in:
+	default:
+		t.Fatalf("couldn't send inbound")
+	}
+
+	deadline := time.After(1 * time.Second)
+	for {
+		select {
+		case out := <-b.Out:
+			if out.Content == "All done!" {
+				if len(p.firstToolNames) != 0 {
+					t.Fatalf("provider tools = %#v, want empty list", p.firstToolNames)
+				}
+				return
+			}
 		case <-deadline:
 			t.Fatalf("timeout waiting for final outbound message")
 		}

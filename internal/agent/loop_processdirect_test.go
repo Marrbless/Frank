@@ -44,6 +44,10 @@ func TestProcessDirectExecutesToolCall(t *testing.T) {
 	prov := &writeMemoryCallingProvider{}
 	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
 
+	if ag.MissionRequired() {
+		t.Fatal("MissionRequired() = true, want false")
+	}
+
 	resp, err := ag.ProcessDirect("please remember Test note", 2*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -113,6 +117,63 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 	case out := <-b.Out:
 		t.Fatalf("message tool should not have run, but outbound message was published: %#v", out)
 	default:
+	}
+}
+
+func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &deniedMessageToolProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
+	ag.SetMissionRequired(true)
+
+	resp, err := ag.ProcessDirect("try to send a message", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(resp, string(missioncontrol.RejectionCodeMissionContextRequired)) {
+		t.Fatalf("expected mission_context_required in response, got %q", resp)
+	}
+
+	if !strings.Contains(resp, "active mission step is required") {
+		t.Fatalf("expected clear mission-required reason in response, got %q", resp)
+	}
+
+	select {
+	case out := <-b.Out:
+		t.Fatalf("message tool should not have run, but outbound message was published: %#v", out)
+	default:
+	}
+}
+
+func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &writeMemoryCallingProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"write_memory"}, []string{"write_memory"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("please remember Test note", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp != "Done" {
+		t.Fatalf("expected final response 'Done', got %q", resp)
+	}
+
+	td, err := ag.memory.ReadToday()
+	if err != nil {
+		t.Fatalf("reading today failed: %v", err)
+	}
+	if td == "" || !contains(td, "Test note") {
+		t.Fatalf("expected today's note to contain Test note, got: %s", td)
 	}
 }
 
