@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/local/picobot/internal/agent/memory"
 	"github.com/local/picobot/internal/agent/skills"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -29,7 +31,7 @@ func NewContextBuilder(workspace string, r memory.Ranker, topK int) *ContextBuil
 	}
 }
 
-func (cb *ContextBuilder) BuildMessages(history []string, currentMessage string, channel, chatID string, memoryContext string, memories []memory.MemoryItem) []providers.Message {
+func (cb *ContextBuilder) BuildMessages(history []string, currentMessage string, channel, chatID string, memoryContext string, memories []memory.MemoryItem, activeStep *missioncontrol.ExecutionContext, toolDefs []providers.ToolDefinition) []providers.Message {
 	msgs := make([]providers.Message, 0, len(history)+2)
 
 	// Combine all system instructions into one message at position 0 to avoid errors in strict chat templates (e.g. llama.cpp)
@@ -55,6 +57,22 @@ func (cb *ContextBuilder) BuildMessages(history []string, currentMessage string,
 	sysParts = append(sysParts, fmt.Sprintf(
 		"You are operating on channel=%q chatID=%q. Tool use is constrained by the current job, step, and policy. Always use your tools when the user asks you to perform actions (file operations, shell commands, web fetches, etc.) when those actions are allowed. If an action is blocked or requires approval, explain that to the user. Do not route around a blocked tool by choosing another tool or shell path.",
 		channel, chatID))
+	if activeStep != nil && activeStep.Step != nil {
+		exposedToolNames := make([]string, 0, len(toolDefs))
+		for _, toolDef := range toolDefs {
+			exposedToolNames = append(exposedToolNames, toolDef.Name)
+		}
+		sort.Strings(exposedToolNames)
+		if len(exposedToolNames) == 0 {
+			sysParts = append(sysParts, fmt.Sprintf(
+				"An active mission step is in effect: step=%q. Tool use is limited to the currently exposed tool set for this mission step. No tools are available in the current mission step. Do not claim that you can create files, run commands, browse, write memory, or initiate projects. Do not simulate tool invocations or print raw tool or command names as if they executed. If the user asks for an action that would require tools, say plainly that you cannot perform that action in the current mission.",
+				activeStep.Step.ID))
+		} else {
+			sysParts = append(sysParts, fmt.Sprintf(
+				"An active mission step is in effect: step=%q. Tool use is limited to the currently exposed tool set for this mission step. Only the following tools are available in the current mission step: %s. Do not claim access to any other tools.",
+				activeStep.Step.ID, strings.Join(exposedToolNames, ", ")))
+		}
+	}
 
 	// Memory tool instruction
 	sysParts = append(sysParts, "If you decide something should be remembered, call the tool 'write_memory' with JSON arguments: {\"target\": \"today\"|\"long\", \"content\": \"...\", \"append\": true|false}. Use a tool call rather than plain chat text when writing memory.")

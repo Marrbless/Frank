@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/local/picobot/internal/agent/memory"
+	"github.com/local/picobot/internal/missioncontrol"
+	"github.com/local/picobot/internal/providers"
 )
 
 func TestBuildMessagesIncludesMemories(t *testing.T) {
@@ -12,7 +14,7 @@ func TestBuildMessagesIncludesMemories(t *testing.T) {
 	history := []string{"user: hi"}
 	mems := []memory.MemoryItem{{Kind: "short", Text: "remember this"}, {Kind: "long", Text: "big fact"}}
 	memCtx := "Long-term memory: important fact"
-	msgs := cb.BuildMessages(history, "hello", "telegram", "123", memCtx, mems)
+	msgs := cb.BuildMessages(history, "hello", "telegram", "123", memCtx, mems, nil, nil)
 
 	// Expect at least 1 system message + 1 user history + 1 current user message
 	if len(msgs) < 3 {
@@ -37,5 +39,74 @@ func TestBuildMessagesIncludesMemories(t *testing.T) {
 	}
 	if !foundSummary {
 		t.Fatalf("expected memory summary to be present in messages: %v", msgs)
+	}
+}
+
+func TestBuildMessagesWithoutActiveMissionStepPreservesCurrentBehavior(t *testing.T) {
+	cb := NewContextBuilder(".", memory.NewSimpleRanker(), 5)
+
+	msgs := cb.BuildMessages(nil, "hello", "telegram", "123", "", nil, nil, []providers.ToolDefinition{{Name: "write_memory"}})
+
+	if len(msgs) == 0 || msgs[0].Role != "system" {
+		t.Fatalf("expected first message to be system prompt, got %#v", msgs)
+	}
+
+	sys := msgs[0].Content
+	if !strings.Contains(sys, `You are operating on channel="telegram" chatID="123". Tool use is constrained by the current job, step, and policy.`) {
+		t.Fatalf("expected base tool policy text in system prompt, got %q", sys)
+	}
+	if strings.Contains(sys, "An active mission step is in effect") {
+		t.Fatalf("did not expect mission-step restriction text without active step, got %q", sys)
+	}
+}
+
+func TestBuildMessagesWithActiveMissionStepAndNoToolsIncludesNoToolsRestriction(t *testing.T) {
+	cb := NewContextBuilder(".", memory.NewSimpleRanker(), 5)
+	ec := missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "build"},
+	}
+
+	msgs := cb.BuildMessages(nil, "hello", "telegram", "123", "", nil, &ec, nil)
+	sys := msgs[0].Content
+
+	for _, want := range []string{
+		`An active mission step is in effect: step="build".`,
+		"Tool use is limited to the currently exposed tool set for this mission step.",
+		"No tools are available in the current mission step.",
+		"Do not claim that you can create files, run commands, browse, write memory, or initiate projects.",
+		"Do not simulate tool invocations or print raw tool or command names as if they executed.",
+		"say plainly that you cannot perform that action in the current mission",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("expected system prompt to contain %q, got %q", want, sys)
+		}
+	}
+}
+
+func TestBuildMessagesWithActiveMissionStepRestrictsToExposedTools(t *testing.T) {
+	cb := NewContextBuilder(".", memory.NewSimpleRanker(), 5)
+	ec := missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "build"},
+	}
+
+	msgs := cb.BuildMessages(nil, "hello", "telegram", "123", "", nil, &ec, []providers.ToolDefinition{
+		{Name: "read_memory"},
+		{Name: "write_memory"},
+	})
+	sys := msgs[0].Content
+
+	if !strings.Contains(sys, "Tool use is limited to the currently exposed tool set for this mission step.") {
+		t.Fatalf("expected restricted-tool text in system prompt, got %q", sys)
+	}
+	if !strings.Contains(sys, "Only the following tools are available in the current mission step: read_memory, write_memory.") {
+		t.Fatalf("expected exposed tool list in system prompt, got %q", sys)
+	}
+	if !strings.Contains(sys, "Do not claim access to any other tools.") {
+		t.Fatalf("expected no-other-tools instruction in system prompt, got %q", sys)
+	}
+	if strings.Contains(sys, "No tools are available in the current mission step.") {
+		t.Fatalf("did not expect no-tools text in system prompt, got %q", sys)
 	}
 }

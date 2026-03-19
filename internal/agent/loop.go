@@ -245,12 +245,18 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			memCtx, _ := a.memory.GetMemoryContext()
 			memories := a.memory.Recent(5)
-			messages := a.context.BuildMessages(sess.GetHistory(), msg.Content, msg.Channel, msg.ChatID, memCtx, memories)
+			toolDefs := activeToolDefinitions(a.tools, a.taskState)
+			var activeStep *missioncontrol.ExecutionContext
+			if a.taskState != nil {
+				if ec, ok := a.taskState.ExecutionContext(); ok {
+					activeStep = &ec
+				}
+			}
+			messages := a.context.BuildMessages(sess.GetHistory(), msg.Content, msg.Channel, msg.ChatID, memCtx, memories, activeStep, toolDefs)
 
 			iteration := 0
 			finalContent := ""
 			lastToolResult := ""
-			toolDefs := activeToolDefinitions(a.tools, a.taskState)
 
 			for iteration < a.maxIterations {
 				iteration++
@@ -357,11 +363,18 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	memCtx, _ := a.memory.GetMemoryContext()
 	memories := a.memory.Recent(5)
-	messages := a.context.BuildMessages(nil, content, "cli", "direct", memCtx, memories)
+	toolDefs := activeToolDefinitions(a.tools, a.taskState)
+	var activeStep *missioncontrol.ExecutionContext
+	if a.taskState != nil {
+		if ec, ok := a.taskState.ExecutionContext(); ok {
+			activeStep = &ec
+		}
+	}
+	messages := a.context.BuildMessages(nil, content, "cli", "direct", memCtx, memories, activeStep, toolDefs)
 
 	var lastToolResult string
 	for iteration := 0; iteration < a.maxIterations; iteration++ {
-		resp, err := a.provider.Chat(ctx, messages, activeToolDefinitions(a.tools, a.taskState), a.model)
+		resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 		if err != nil {
 			return "", err
 		}
