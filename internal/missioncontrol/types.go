@@ -1,1 +1,85 @@
 package missioncontrol
+
+import "fmt"
+
+type JobState string
+
+const (
+	JobStatePending   JobState = "pending"
+	JobStateRunning   JobState = "running"
+	JobStateCompleted JobState = "completed"
+	JobStateRejected  JobState = "rejected"
+)
+
+type StepType string
+
+const (
+	StepTypeDiscussion     StepType = "discussion"
+	StepTypeStaticArtifact StepType = "static_artifact"
+	StepTypeOneShotCode    StepType = "one_shot_code"
+	StepTypeFinalResponse  StepType = "final_response"
+)
+
+type AuthorityTier string
+
+const (
+	AuthorityTierLow    AuthorityTier = "low"
+	AuthorityTierMedium AuthorityTier = "medium"
+	AuthorityTierHigh   AuthorityTier = "high"
+)
+
+type Job struct {
+	ID           string        `json:"id"`
+	State        JobState      `json:"state"`
+	MaxAuthority AuthorityTier `json:"max_authority"`
+	AllowedTools []string      `json:"allowed_tools"`
+	Plan         Plan          `json:"plan"`
+}
+
+type Plan struct {
+	ID    string `json:"id"`
+	Steps []Step `json:"steps"`
+}
+
+type Step struct {
+	ID                string        `json:"id"`
+	Type              StepType      `json:"type"`
+	DependsOn         []string      `json:"depends_on"`
+	RequiredAuthority AuthorityTier `json:"required_authority"`
+	AllowedTools      []string      `json:"allowed_tools"`
+	RequiresApproval  bool          `json:"requires_approval"`
+	SuccessCriteria   []string      `json:"success_criteria"`
+}
+
+type ApprovalRequest struct {
+	JobID  string `json:"job_id"`
+	StepID string `json:"step_id"`
+	Reason string `json:"reason"`
+}
+
+type ValidationError struct {
+	Code    RejectionCode `json:"code"`
+	StepID  string        `json:"step_id"`
+	Message string        `json:"message"`
+}
+
+func (e ValidationError) Error() string {
+	switch {
+	case e.Code != "" && e.StepID != "" && e.Message != "":
+		return fmt.Sprintf("%s for step %s: %s", e.Code, e.StepID, e.Message)
+	case e.StepID != "" && e.Message != "":
+		return fmt.Sprintf("step %s: %s", e.StepID, e.Message)
+	case e.Code != "" && e.Message != "":
+		return fmt.Sprintf("%s: %s", e.Code, e.Message)
+	case e.Message != "":
+		return e.Message
+	case e.Code != "" && e.StepID != "":
+		return fmt.Sprintf("%s for step %s", e.Code, e.StepID)
+	case e.Code != "":
+		return string(e.Code)
+	case e.StepID != "":
+		return fmt.Sprintf("validation error for step %s", e.StepID)
+	default:
+		return "validation error"
+	}
+}
