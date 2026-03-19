@@ -53,7 +53,7 @@ func (cb *ContextBuilder) BuildMessages(history []string, currentMessage string,
 
 	// Channel context and tool availability
 	sysParts = append(sysParts, fmt.Sprintf(
-		"You are operating on channel=%q chatID=%q. You have full access to all registered tools regardless of the channel. Always use your tools when the user asks you to perform actions (file operations, shell commands, web fetches, etc.).",
+		"You are operating on channel=%q chatID=%q. Tool use is constrained by the current job, step, and policy. Always use your tools when the user asks you to perform actions (file operations, shell commands, web fetches, etc.) when those actions are allowed. If an action is blocked or requires approval, explain that to the user. Do not route around a blocked tool by choosing another tool or shell path.",
 		channel, chatID))
 
 	// Memory tool instruction
