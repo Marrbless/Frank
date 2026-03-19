@@ -166,7 +166,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 			decision := guard.EvaluateTool(ctx, ec, name, args)
 			logAuditEvent(decision.Event)
 			if !decision.Allowed {
-				log.Printf("[tool] ! %s denied: code=%s reason=%s event=%+v", name, decision.Code, decision.Reason, decision.Event)
+				log.Printf("[tool] ! %s denied: code=%s reason=%s", name, decision.Code, decision.Reason)
 				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)
 			}
 		}

@@ -236,6 +236,14 @@ func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
 	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=false code=tool_not_allowed reason=tool is outside the step scope") {
 		t.Fatalf("expected denied audit log, got %q", logs)
 	}
+
+	if got := countAuditLogLines(logs); got != 1 {
+		t.Fatalf("audit log line count = %d, want %d in logs %q", got, 1, logs)
+	}
+
+	if strings.Contains(logs, "event={") {
+		t.Fatalf("expected denied log not to repeat audit event payload, got %q", logs)
+	}
 }
 
 func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
@@ -277,6 +285,10 @@ func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
 
 	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=true") {
 		t.Fatalf("expected allowed audit log, got %q", logs)
+	}
+
+	if got := countAuditLogLines(logs); got != 1 {
+		t.Fatalf("audit log line count = %d, want %d in logs %q", got, 1, logs)
 	}
 }
 
@@ -359,6 +371,10 @@ func TestRegistryExecuteMissionRequiredWithoutExecutionContextRejectsAndLogsAudi
 
 	if !strings.Contains(logs, "[tool] audit job= step= tool=stub allowed=false code=mission_context_required reason=active mission step is required") {
 		t.Fatalf("expected mission-required audit log, got %q", logs)
+	}
+
+	if got := countAuditLogLines(logs); got != 1 {
+		t.Fatalf("audit log line count = %d, want %d in logs %q", got, 1, logs)
 	}
 }
 
@@ -484,4 +500,14 @@ func captureRegistryLogs(t *testing.T, fn func()) string {
 
 	fn()
 	return buf.String()
+}
+
+func countAuditLogLines(logs string) int {
+	count := 0
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "[tool] audit ") {
+			count++
+		}
+	}
+	return count
 }
