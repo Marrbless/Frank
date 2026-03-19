@@ -64,7 +64,7 @@ func TestTaskStateActivateStepInvalidPlanDoesNotOverwriteExistingContext(t *test
 		t.Fatal("ExecutionContext() ok = false, want true")
 	}
 
-	if got.Job != original.Job || got.Step != original.Step {
+	if !reflect.DeepEqual(got, original) {
 		t.Fatalf("ExecutionContext() = %#v, want original %#v", got, original)
 	}
 }
@@ -98,8 +98,43 @@ func TestTaskStateActivateStepUnknownStepDoesNotOverwriteExistingContext(t *test
 		t.Fatal("ExecutionContext() ok = false, want true")
 	}
 
-	if got.Job != original.Job || got.Step != original.Step {
+	if !reflect.DeepEqual(got, original) {
 		t.Fatalf("ExecutionContext() = %#v, want original %#v", got, original)
+	}
+}
+
+func TestTaskStateExecutionContextReturnsIndependentSnapshot(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+
+	ec.Job.AllowedTools[0] = "mutated-job-tool"
+	ec.Job.Plan.Steps[0].AllowedTools[0] = "mutated-plan-step-tool"
+	ec.Step.AllowedTools[0] = "mutated-step-tool"
+
+	stored, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+
+	if stored.Job.AllowedTools[0] != "read" {
+		t.Fatalf("stored Job.AllowedTools[0] = %q, want %q", stored.Job.AllowedTools[0], "read")
+	}
+
+	if stored.Job.Plan.Steps[0].AllowedTools[0] != "read" {
+		t.Fatalf("stored Job.Plan.Steps[0].AllowedTools[0] = %q, want %q", stored.Job.Plan.Steps[0].AllowedTools[0], "read")
+	}
+
+	if stored.Step.AllowedTools[0] != "read" {
+		t.Fatalf("stored Step.AllowedTools[0] = %q, want %q", stored.Step.AllowedTools[0], "read")
 	}
 }
 

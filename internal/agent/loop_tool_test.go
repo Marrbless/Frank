@@ -161,6 +161,22 @@ func TestAgentLoopActivateMissionStepAndActiveMissionStep(t *testing.T) {
 	if ec.Step.RequiredAuthority != missioncontrol.AuthorityTierLow {
 		t.Fatalf("ActiveMissionStep().Step.RequiredAuthority = %q, want %q", ec.Step.RequiredAuthority, missioncontrol.AuthorityTierLow)
 	}
+
+	ec.Job.AllowedTools[0] = "mutated-from-snapshot"
+	ec.Step.AllowedTools[0] = "mutated-step-tool"
+
+	stored, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false on second read, want true")
+	}
+
+	if stored.Job.AllowedTools[0] != "read" {
+		t.Fatalf("stored ActiveMissionStep().Job.AllowedTools[0] = %q, want %q", stored.Job.AllowedTools[0], "read")
+	}
+
+	if stored.Step.AllowedTools[0] != "read" {
+		t.Fatalf("stored ActiveMissionStep().Step.AllowedTools[0] = %q, want %q", stored.Step.AllowedTools[0], "read")
+	}
 }
 
 func toolDefinitionNames(defs []providers.ToolDefinition) []string {

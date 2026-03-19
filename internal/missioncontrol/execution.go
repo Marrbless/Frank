@@ -4,6 +4,19 @@ import "fmt"
 
 const RejectionCodeUnknownStep RejectionCode = "unknown_step"
 
+func CloneExecutionContext(ec ExecutionContext) ExecutionContext {
+	var cloned ExecutionContext
+	if ec.Job != nil {
+		jobCopy := copyJob(*ec.Job)
+		cloned.Job = &jobCopy
+	}
+	if ec.Step != nil {
+		stepCopy := copyStep(*ec.Step)
+		cloned.Step = &stepCopy
+	}
+	return cloned
+}
+
 func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
 	if validationErrors := ValidatePlan(job); len(validationErrors) > 0 {
 		return ExecutionContext{}, validationErrors[0]
@@ -26,21 +39,22 @@ func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
 	}
 
 	jobCopy := copyJob(job)
+	stepCopy := copyStep(jobCopy.Plan.Steps[stepIndex])
 	return ExecutionContext{
 		Job:  &jobCopy,
-		Step: &jobCopy.Plan.Steps[stepIndex],
+		Step: &stepCopy,
 	}, nil
 }
 
 func copyJob(job Job) Job {
 	jobCopy := job
 	jobCopy.AllowedTools = append([]string(nil), job.AllowedTools...)
-	jobCopy.Plan = Plan{
-		ID:    job.Plan.ID,
-		Steps: make([]Step, len(job.Plan.Steps)),
-	}
-	for i, step := range job.Plan.Steps {
-		jobCopy.Plan.Steps[i] = copyStep(step)
+	jobCopy.Plan = Plan{ID: job.Plan.ID}
+	if job.Plan.Steps != nil {
+		jobCopy.Plan.Steps = make([]Step, len(job.Plan.Steps))
+		for i, step := range job.Plan.Steps {
+			jobCopy.Plan.Steps[i] = copyStep(step)
+		}
 	}
 	return jobCopy
 }

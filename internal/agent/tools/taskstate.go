@@ -68,7 +68,7 @@ func (s *TaskState) ExecutionContext() (missioncontrol.ExecutionContext, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.executionContext, s.hasExecutionContext
+	return missioncontrol.CloneExecutionContext(s.executionContext), s.hasExecutionContext
 }
 
 func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {

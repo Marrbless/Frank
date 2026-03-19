@@ -5,6 +5,75 @@ import (
 	"testing"
 )
 
+func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
+	t.Parallel()
+
+	original := ExecutionContext{
+		Job: &Job{
+			ID:           "job-1",
+			MaxAuthority: AuthorityTierHigh,
+			AllowedTools: []string{"read", "write"},
+			Plan: Plan{
+				ID: "plan-1",
+				Steps: []Step{
+					{
+						ID:                "build",
+						Type:              StepTypeOneShotCode,
+						DependsOn:         []string{"prep"},
+						RequiredAuthority: AuthorityTierMedium,
+						AllowedTools:      []string{"read"},
+						RequiresApproval:  true,
+						SuccessCriteria:   []string{"produce code"},
+					},
+				},
+			},
+		},
+		Step: &Step{
+			ID:                "build",
+			Type:              StepTypeOneShotCode,
+			DependsOn:         []string{"prep"},
+			RequiredAuthority: AuthorityTierMedium,
+			AllowedTools:      []string{"read"},
+			RequiresApproval:  true,
+			SuccessCriteria:   []string{"produce code"},
+		},
+	}
+
+	cloned := CloneExecutionContext(original)
+	if !reflect.DeepEqual(cloned, original) {
+		t.Fatalf("CloneExecutionContext() = %#v, want %#v", cloned, original)
+	}
+
+	cloned.Job.AllowedTools[0] = "mutated-job-tool"
+	cloned.Job.Plan.Steps[0].DependsOn[0] = "mutated-dependency"
+	cloned.Job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
+	cloned.Step.SuccessCriteria[0] = "mutated-success"
+
+	if original.Job.AllowedTools[0] != "read" {
+		t.Fatalf("original Job.AllowedTools[0] = %q, want %q", original.Job.AllowedTools[0], "read")
+	}
+
+	if original.Job.Plan.Steps[0].DependsOn[0] != "prep" {
+		t.Fatalf("original Job.Plan.Steps[0].DependsOn[0] = %q, want %q", original.Job.Plan.Steps[0].DependsOn[0], "prep")
+	}
+
+	if original.Job.Plan.Steps[0].AllowedTools[0] != "read" {
+		t.Fatalf("original Job.Plan.Steps[0].AllowedTools[0] = %q, want %q", original.Job.Plan.Steps[0].AllowedTools[0], "read")
+	}
+
+	if original.Step.SuccessCriteria[0] != "produce code" {
+		t.Fatalf("original Step.SuccessCriteria[0] = %q, want %q", original.Step.SuccessCriteria[0], "produce code")
+	}
+}
+
+func TestCloneExecutionContextZeroValue(t *testing.T) {
+	t.Parallel()
+
+	if got := CloneExecutionContext(ExecutionContext{}); !reflect.DeepEqual(got, ExecutionContext{}) {
+		t.Fatalf("CloneExecutionContext() = %#v, want zero value", got)
+	}
+}
+
 func TestResolveExecutionContextValidPlan(t *testing.T) {
 	t.Parallel()
 
