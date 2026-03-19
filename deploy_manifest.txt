@@ -1,0 +1,4 @@
+picobot -> deploy
+picobot-shell-hardening -> install selected wrappers/configs only
+picobot_prompt_lab -> desktop only
+picobot-responses -> runtime output directory, not source
