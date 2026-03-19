@@ -2,13 +2,20 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
+	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/agent/memory"
+	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/config"
+	"github.com/local/picobot/internal/missioncontrol"
+	"github.com/local/picobot/internal/providers"
 )
 
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
@@ -146,5 +153,180 @@ func TestAgentCLI_ModelFlag(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "(stub) Echo") {
 		t.Fatalf("expected stub echo output, got: %q", out)
+	}
+}
+
+func TestConfigureMissionBootstrapDefaultUnchanged(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	if ag.MissionRequired() {
+		t.Fatal("MissionRequired() = true, want false")
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false")
+	}
+}
+
+func TestConfigureMissionBootstrapMissionRequiredEnablesMode(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-required", "true"); err != nil {
+		t.Fatalf("Flags().Set() error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	if !ag.MissionRequired() {
+		t.Fatal("MissionRequired() = false, want true")
+	}
+}
+
+func TestConfigureMissionBootstrapMissionFileActivatesStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+
+	if ec.Job == nil || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want non-nil job and step", ec)
+	}
+
+	if ec.Job.ID != "job-1" {
+		t.Fatalf("ActiveMissionStep().Job.ID = %q, want %q", ec.Job.ID, "job-1")
+	}
+
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+}
+
+func TestConfigureMissionBootstrapInvalidMissionFileFailsStartup(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := filepath.Join(t.TempDir(), "mission.json")
+	if err := os.WriteFile(missionFile, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want decode error")
+	}
+
+	if !strings.Contains(err.Error(), "failed to decode mission file") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want decode failure", err)
+	}
+}
+
+func TestConfigureMissionBootstrapMissionFileRequiresMissionStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want missing mission-step error")
+	}
+
+	if !strings.Contains(err.Error(), "--mission-file requires --mission-step") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want missing mission-step message", err)
+	}
+}
+
+func TestConfigureMissionBootstrapMissionStepRequiresMissionFile(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want missing mission-file error")
+	}
+
+	if !strings.Contains(err.Error(), "--mission-step requires --mission-file") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want missing mission-file message", err)
+	}
+}
+
+func newMissionBootstrapTestCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "test"}
+	addMissionBootstrapFlags(cmd)
+	return cmd
+}
+
+func newMissionBootstrapTestLoop() *agent.AgentLoop {
+	hub := chat.NewHub(10)
+	provider := providers.NewStubProvider()
+	return agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+}
+
+func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "mission.json")
+	data, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
+func testMissionBootstrapJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"github.com/local/picobot/internal/config"
 	"github.com/local/picobot/internal/cron"
 	"github.com/local/picobot/internal/heartbeat"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -113,12 +115,12 @@ func NewRootCmd() *cobra.Command {
 	agentCmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Run a single-shot agent query (use -m)",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			msg, _ := cmd.Flags().GetString("message")
 			modelFlag, _ := cmd.Flags().GetString("model")
 			if msg == "" {
 				fmt.Println("Specify a message with -m \"your message\"")
-				return
+				return nil
 			}
 
 			hub := chat.NewHub(100)
@@ -139,23 +141,28 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil)
+			if err := configureMissionBootstrap(cmd, ag); err != nil {
+				return err
+			}
 
 			resp, err := ag.ProcessDirect(msg, 60*time.Second)
 			if err != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), "error:", err)
-				return
+				return nil
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), resp)
+			return nil
 		},
 	}
 	agentCmd.Flags().StringP("message", "m", "", "Message to send to the agent")
 	agentCmd.Flags().StringP("model", "M", "", "Model to use (overrides config/provider default)")
+	addMissionBootstrapFlags(agentCmd)
 	rootCmd.AddCommand(agentCmd)
 
 	gatewayCmd := &cobra.Command{
 		Use:   "gateway",
 		Short: "Start long-running gateway (agent, channels, heartbeat)",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			hub := chat.NewHub(200)
 			cfg, _ := config.LoadConfig()
 			provider := providers.NewProviderFromConfig(cfg)
@@ -186,6 +193,9 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
+			if err := configureMissionBootstrap(cmd, ag); err != nil {
+				return err
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -251,9 +261,11 @@ func NewRootCmd() *cobra.Command {
 			<-sigCh
 			fmt.Println("shutting down gateway")
 			cancel()
+			return nil
 		},
 	}
 	gatewayCmd.Flags().StringP("model", "M", "", "Model to use (overrides model in config.json)")
+	addMissionBootstrapFlags(gatewayCmd)
 	rootCmd.AddCommand(gatewayCmd)
 
 	// memory subcommands: read, append, write, recent
@@ -461,6 +473,50 @@ func NewRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(memoryCmd)
 	return rootCmd
+}
+
+func addMissionBootstrapFlags(cmd *cobra.Command) {
+	cmd.Flags().Bool("mission-required", false, "Require an active mission step before tool execution")
+	cmd.Flags().String("mission-file", "", "Path to a mission job JSON file to activate at startup")
+	cmd.Flags().String("mission-step", "", "Mission step ID to activate from the mission file")
+}
+
+func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
+	missionRequired, _ := cmd.Flags().GetBool("mission-required")
+	missionFile, _ := cmd.Flags().GetString("mission-file")
+	missionStep, _ := cmd.Flags().GetString("mission-step")
+
+	if missionRequired {
+		ag.SetMissionRequired(true)
+	}
+
+	if missionStep != "" && missionFile == "" {
+		return fmt.Errorf("--mission-step requires --mission-file")
+	}
+
+	if missionFile == "" {
+		return nil
+	}
+
+	if missionStep == "" {
+		return fmt.Errorf("--mission-file requires --mission-step")
+	}
+
+	data, err := os.ReadFile(missionFile)
+	if err != nil {
+		return fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
+	}
+
+	var job missioncontrol.Job
+	if err := json.Unmarshal(data, &job); err != nil {
+		return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
+	}
+
+	if err := ag.ActivateMissionStep(job, missionStep); err != nil {
+		return fmt.Errorf("failed to activate mission step %q from %q: %w", missionStep, missionFile, err)
+	}
+
+	return nil
 }
 
 func main() {
