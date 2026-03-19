@@ -71,6 +71,23 @@ func (s *TaskState) ExecutionContext() (missioncontrol.ExecutionContext, bool) {
 	return s.executionContext, s.hasExecutionContext
 }
 
+func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionContext = ec
+	s.hasExecutionContext = true
+	return nil
+}
+
 func (s *TaskState) ClearExecutionContext() {
 	if s == nil {
 		return
