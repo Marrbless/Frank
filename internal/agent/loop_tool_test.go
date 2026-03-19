@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,11 +12,18 @@ import (
 
 // Fake provider that returns a tool call on first chat, then returns a final message on second chat.
 type FakeProvider struct {
-	count int
+	count          int
+	firstToolNames []string
 }
 
 func (f *FakeProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
 	f.count++
+	if f.count == 1 {
+		f.firstToolNames = make([]string, 0, len(tools))
+		for _, tool := range tools {
+			f.firstToolNames = append(f.firstToolNames, tool.Name)
+		}
+	}
 	if f.count == 1 {
 		// request message tool
 		return providers.LLMResponse{
@@ -55,6 +63,10 @@ func TestAgentExecutesToolCall(t *testing.T) {
 		select {
 		case out := <-b.Out:
 			if out.Content == "All done!" {
+				wantTools := toolDefinitionNames(ag.tools.Definitions())
+				if !reflect.DeepEqual(p.firstToolNames, wantTools) {
+					t.Fatalf("provider tools = %#v, want %#v", p.firstToolNames, wantTools)
+				}
 				return
 			}
 			// otherwise continue waiting until timeout
@@ -62,4 +74,12 @@ func TestAgentExecutesToolCall(t *testing.T) {
 			t.Fatalf("timeout waiting for final outbound message")
 		}
 	}
+}
+
+func toolDefinitionNames(defs []providers.ToolDefinition) []string {
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		names = append(names, def.Name)
+	}
+	return names
 }

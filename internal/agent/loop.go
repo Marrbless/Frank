@@ -51,6 +51,15 @@ func isSystemChannel(channel string) bool {
 	}
 }
 
+func activeToolDefinitions(reg *tools.Registry, taskState *tools.TaskState) []providers.ToolDefinition {
+	if taskState != nil {
+		if ec, ok := taskState.ExecutionContext(); ok {
+			return reg.DefinitionsForExecutionContext(&ec)
+		}
+	}
+	return reg.Definitions()
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub           *chat.Hub
@@ -206,7 +215,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			iteration := 0
 			finalContent := ""
 			lastToolResult := ""
-			toolDefs := a.tools.Definitions()
+			toolDefs := activeToolDefinitions(a.tools, a.taskState)
 
 			for iteration < a.maxIterations {
 				iteration++
@@ -317,7 +326,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	var lastToolResult string
 	for iteration := 0; iteration < a.maxIterations; iteration++ {
-		resp, err := a.provider.Chat(ctx, messages, a.tools.Definitions(), a.model)
+		resp, err := a.provider.Chat(ctx, messages, activeToolDefinitions(a.tools, a.taskState), a.model)
 		if err != nil {
 			return "", err
 		}

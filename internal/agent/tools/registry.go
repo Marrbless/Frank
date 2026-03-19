@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -58,10 +59,29 @@ func (r *Registry) Get(name string) Tool {
 
 // Definitions returns the list of tool definitions to expose to the model.
 func (r *Registry) Definitions() []providers.ToolDefinition {
+	return r.DefinitionsForExecutionContext(nil)
+}
+
+// DefinitionsForExecutionContext returns tool definitions filtered by an optional execution context.
+func (r *Registry) DefinitionsForExecutionContext(ec *missioncontrol.ExecutionContext) []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	defs := make([]providers.ToolDefinition, 0, len(r.tools))
-	for _, t := range r.tools {
+
+	allowed := allowedToolSetForExecutionContext(ec)
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		if allowed != nil {
+			if _, ok := allowed[name]; !ok {
+				continue
+			}
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	defs := make([]providers.ToolDefinition, 0, len(names))
+	for _, name := range names {
+		t := r.tools[name]
 		defs = append(defs, providers.ToolDefinition{
 			Name:        t.Name(),
 			Description: t.Description(),
@@ -69,6 +89,31 @@ func (r *Registry) Definitions() []providers.ToolDefinition {
 		})
 	}
 	return defs
+}
+
+func allowedToolSetForExecutionContext(ec *missioncontrol.ExecutionContext) map[string]struct{} {
+	if ec == nil {
+		return nil
+	}
+
+	allowed := make(map[string]struct{})
+	if ec.Job != nil {
+		for _, toolName := range ec.Job.AllowedTools {
+			allowed[toolName] = struct{}{}
+		}
+	}
+
+	if ec.Step == nil || len(ec.Step.AllowedTools) == 0 {
+		return allowed
+	}
+
+	filtered := make(map[string]struct{})
+	for _, toolName := range ec.Step.AllowedTools {
+		if _, ok := allowed[toolName]; ok {
+			filtered[toolName] = struct{}{}
+		}
+	}
+	return filtered
 }
 
 // Execute executes a registered tool by name with args and returns result or error.

@@ -2,12 +2,14 @@ package tools
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/missioncontrol"
+	"github.com/local/picobot/internal/providers"
 )
 
 func TestMessageToolPublishesOutbound(t *testing.T) {
@@ -189,6 +191,70 @@ func TestRegistryExecuteWithoutExecutionContextSkipsGuard(t *testing.T) {
 	}
 }
 
+func TestRegistryDefinitionsWithoutExecutionContextReturnsFullToolSet(t *testing.T) {
+	t.Parallel()
+
+	reg := NewRegistry()
+	reg.Register(&stubTool{name: "zeta"})
+	reg.Register(&stubTool{name: "alpha"})
+	reg.Register(&stubTool{name: "beta"})
+
+	got := definitionNames(reg.DefinitionsForExecutionContext(nil))
+	want := []string{"alpha", "beta", "zeta"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefinitionsForExecutionContext(nil) = %#v, want %#v", got, want)
+	}
+
+	if !reflect.DeepEqual(definitionNames(reg.Definitions()), want) {
+		t.Fatalf("Definitions() did not preserve full tool set")
+	}
+}
+
+func TestRegistryDefinitionsJobLevelFiltering(t *testing.T) {
+	t.Parallel()
+
+	reg := NewRegistry()
+	reg.Register(&stubTool{name: "alpha"})
+	reg.Register(&stubTool{name: "beta"})
+	reg.Register(&stubTool{name: "zeta"})
+
+	ec := &missioncontrol.ExecutionContext{
+		Job: &missioncontrol.Job{
+			AllowedTools: []string{"zeta", "alpha"},
+		},
+	}
+
+	got := definitionNames(reg.DefinitionsForExecutionContext(ec))
+	want := []string{"alpha", "zeta"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefinitionsForExecutionContext(job) = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegistryDefinitionsStepLevelIntersectionFiltering(t *testing.T) {
+	t.Parallel()
+
+	reg := NewRegistry()
+	reg.Register(&stubTool{name: "alpha"})
+	reg.Register(&stubTool{name: "beta"})
+	reg.Register(&stubTool{name: "zeta"})
+
+	ec := &missioncontrol.ExecutionContext{
+		Job: &missioncontrol.Job{
+			AllowedTools: []string{"alpha", "beta"},
+		},
+		Step: &missioncontrol.Step{
+			AllowedTools: []string{"beta", "zeta"},
+		},
+	}
+
+	got := definitionNames(reg.DefinitionsForExecutionContext(ec))
+	want := []string{"beta"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefinitionsForExecutionContext(job+step) = %#v, want %#v", got, want)
+	}
+}
+
 type stubTool struct {
 	name         string
 	result       string
@@ -227,4 +293,12 @@ func (g *stubGuard) EvaluateTool(ctx context.Context, ec missioncontrol.Executio
 	g.lastToolName = toolName
 	g.lastArgs = args
 	return g.decision
+}
+
+func definitionNames(defs []providers.ToolDefinition) []string {
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		names = append(names, def.Name)
+	}
+	return names
 }
