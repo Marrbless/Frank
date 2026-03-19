@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"log"
+	"sort"
 
 	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/agent/memory"
@@ -144,6 +145,9 @@ func NewRootCmd() *cobra.Command {
 			if err := configureMissionBootstrap(cmd, ag); err != nil {
 				return err
 			}
+			if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
+				return err
+			}
 
 			resp, err := ag.ProcessDirect(msg, 60*time.Second)
 			if err != nil {
@@ -162,7 +166,7 @@ func NewRootCmd() *cobra.Command {
 	gatewayCmd := &cobra.Command{
 		Use:   "gateway",
 		Short: "Start long-running gateway (agent, channels, heartbeat)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			hub := chat.NewHub(200)
 			cfg, _ := config.LoadConfig()
 			provider := providers.NewProviderFromConfig(cfg)
@@ -195,6 +199,17 @@ func NewRootCmd() *cobra.Command {
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
 			if err := configureMissionBootstrap(cmd, ag); err != nil {
 				return err
+			}
+			statusFile, _ := cmd.Flags().GetString("mission-status-file")
+			if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
+				return err
+			}
+			if statusFile != "" {
+				defer func() {
+					if err == nil {
+						err = removeMissionStatusSnapshot(statusFile)
+					}
+				}()
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -479,6 +494,7 @@ func addMissionBootstrapFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("mission-required", false, "Require an active mission step before tool execution")
 	cmd.Flags().String("mission-file", "", "Path to a mission job JSON file to activate at startup")
 	cmd.Flags().String("mission-step", "", "Mission step ID to activate from the mission file")
+	cmd.Flags().String("mission-status-file", "", "Path to write a mission status snapshot after startup")
 }
 
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
@@ -516,6 +532,106 @@ func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
 		return fmt.Errorf("failed to activate mission step %q from %q: %w", missionStep, missionFile, err)
 	}
 
+	return nil
+}
+
+type missionStatusSnapshot struct {
+	MissionRequired bool     `json:"mission_required"`
+	Active          bool     `json:"active"`
+	MissionFile     string   `json:"mission_file"`
+	JobID           string   `json:"job_id"`
+	StepID          string   `json:"step_id"`
+	StepType        string   `json:"step_type"`
+	AllowedTools    []string `json:"allowed_tools"`
+	UpdatedAt       string   `json:"updated_at"`
+}
+
+func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLoop, now time.Time) error {
+	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	return writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, now)
+}
+
+func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
+	missionFile, _ := cmd.Flags().GetString("mission-file")
+	return missionFile
+}
+
+func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.AgentLoop, now time.Time) error {
+	if path == "" {
+		return nil
+	}
+
+	snapshot := missionStatusSnapshot{
+		MissionRequired: ag.MissionRequired(),
+		MissionFile:     missionFile,
+		JobID:           "",
+		StepID:          "",
+		StepType:        "",
+		AllowedTools:    []string{},
+		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
+	}
+
+	if ec, ok := ag.ActiveMissionStep(); ok {
+		snapshot.Active = true
+		if ec.Job != nil {
+			snapshot.JobID = ec.Job.ID
+		}
+		if ec.Step != nil {
+			snapshot.StepID = ec.Step.ID
+			snapshot.StepType = string(ec.Step.Type)
+		}
+		snapshot.AllowedTools = intersectAllowedTools(ec)
+	}
+
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode mission status snapshot %q: %w", path, err)
+	}
+	data = append(data, '\n')
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write mission status snapshot %q: %w", path, err)
+	}
+
+	return nil
+}
+
+func intersectAllowedTools(ec missioncontrol.ExecutionContext) []string {
+	if ec.Job == nil {
+		return []string{}
+	}
+
+	jobTools := make(map[string]struct{}, len(ec.Job.AllowedTools))
+	for _, toolName := range ec.Job.AllowedTools {
+		jobTools[toolName] = struct{}{}
+	}
+
+	allowed := make([]string, 0, len(jobTools))
+	if ec.Step == nil || len(ec.Step.AllowedTools) == 0 {
+		for toolName := range jobTools {
+			allowed = append(allowed, toolName)
+		}
+		sort.Strings(allowed)
+		return allowed
+	}
+
+	for _, toolName := range ec.Step.AllowedTools {
+		if _, ok := jobTools[toolName]; ok {
+			allowed = append(allowed, toolName)
+			delete(jobTools, toolName)
+		}
+	}
+	sort.Strings(allowed)
+	return allowed
+}
+
+func removeMissionStatusSnapshot(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove mission status snapshot %q: %w", path, err)
+	}
 	return nil
 }
 

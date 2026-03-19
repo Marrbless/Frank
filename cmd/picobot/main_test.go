@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -281,6 +283,170 @@ func TestConfigureMissionBootstrapMissionStepRequiresMissionFile(t *testing.T) {
 	}
 }
 
+func TestWriteMissionStatusSnapshotFromCommandDefaultPathUnchanged(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(missionFile))
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(missionFile) {
+		t.Fatalf("ReadDir() = %v, want only %q", entries, filepath.Base(missionFile))
+	}
+}
+
+func TestWriteMissionStatusSnapshotNoActiveMissionWritesInactiveSnapshot(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	path := filepath.Join(t.TempDir(), "status.json")
+	now := time.Date(2026, 3, 19, 12, 0, 0, 123, time.UTC)
+
+	if err := writeMissionStatusSnapshot(path, "", ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshot() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	if got.MissionRequired {
+		t.Fatal("MissionRequired = true, want false")
+	}
+	if got.Active {
+		t.Fatal("Active = true, want false")
+	}
+	if got.MissionFile != "" {
+		t.Fatalf("MissionFile = %q, want empty", got.MissionFile)
+	}
+	if got.JobID != "" || got.StepID != "" || got.StepType != "" {
+		t.Fatalf("snapshot IDs = (%q, %q, %q), want empty strings", got.JobID, got.StepID, got.StepType)
+	}
+	if len(got.AllowedTools) != 0 {
+		t.Fatalf("AllowedTools = %v, want empty", got.AllowedTools)
+	}
+	if got.UpdatedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("UpdatedAt = %q, want %q", got.UpdatedAt, now.Format(time.RFC3339Nano))
+	}
+}
+
+func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	path := filepath.Join(t.TempDir(), "status.json")
+	now := time.Date(2026, 3, 19, 12, 0, 0, 456, time.UTC)
+
+	if err := cmd.Flags().Set("mission-required", "true"); err != nil {
+		t.Fatalf("Flags().Set(mission-required) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", path); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	if !got.MissionRequired {
+		t.Fatal("MissionRequired = false, want true")
+	}
+	if !got.Active {
+		t.Fatal("Active = false, want true")
+	}
+	if got.MissionFile != missionFile {
+		t.Fatalf("MissionFile = %q, want %q", got.MissionFile, missionFile)
+	}
+	if got.JobID != "job-1" {
+		t.Fatalf("JobID = %q, want %q", got.JobID, "job-1")
+	}
+	if got.StepID != "build" {
+		t.Fatalf("StepID = %q, want %q", got.StepID, "build")
+	}
+	if got.StepType != string(missioncontrol.StepTypeOneShotCode) {
+		t.Fatalf("StepType = %q, want %q", got.StepType, missioncontrol.StepTypeOneShotCode)
+	}
+}
+
+func TestWriteMissionStatusSnapshotAllowedToolsIntersectedAndSorted(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		AllowedTools: []string{"zeta", "alpha", "beta"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:           "build",
+					Type:         missioncontrol.StepTypeOneShotCode,
+					AllowedTools: []string{"zeta", "beta", "beta", "missing"},
+				},
+			},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "status.json")
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if err := writeMissionStatusSnapshot(path, "mission.json", ag, time.Date(2026, 3, 19, 12, 0, 0, 789, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshot() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	want := []string{"beta", "zeta"}
+	if !reflect.DeepEqual(got.AllowedTools, want) {
+		t.Fatalf("AllowedTools = %v, want %v", got.AllowedTools, want)
+	}
+}
+
+func TestWriteMissionStatusSnapshotInvalidOutputPathReturnsError(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	err := writeMissionStatusSnapshot(t.TempDir(), "", ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("writeMissionStatusSnapshot() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to write mission status snapshot") {
+		t.Fatalf("writeMissionStatusSnapshot() error = %q, want write failure", err)
+	}
+}
+
+func TestRemoveMissionStatusSnapshotRemovesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := removeMissionStatusSnapshot(path); err != nil {
+		t.Fatalf("removeMissionStatusSnapshot() error = %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Stat() error = %v, want not exists", err)
+	}
+}
+
 func newMissionBootstrapTestCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "test"}
 	addMissionBootstrapFlags(cmd)
@@ -329,4 +495,20 @@ func testMissionBootstrapJob() missioncontrol.Job {
 			},
 		},
 	}
+}
+
+func readMissionStatusSnapshotFile(t *testing.T, path string) missionStatusSnapshot {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var snapshot missionStatusSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	return snapshot
 }
