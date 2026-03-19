@@ -92,17 +92,9 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 	b := chat.NewHub(10)
 	prov := &deniedMessageToolProvider{}
 	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
-	ag.taskState.SetExecutionContext(missioncontrol.ExecutionContext{
-		Job: &missioncontrol.Job{
-			ID:           "job-1",
-			MaxAuthority: missioncontrol.AuthorityTierHigh,
-			AllowedTools: []string{"write_memory"},
-		},
-		Step: &missioncontrol.Step{
-			ID:                "step-1",
-			RequiredAuthority: missioncontrol.AuthorityTierLow,
-		},
-	})
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"write_memory"}, []string{"write_memory"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
 
 	resp, err := ag.ProcessDirect("try to send a message", 2*time.Second)
 	if err != nil {
@@ -124,4 +116,65 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 	}
 }
 
+func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &deniedMessageToolProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"write_memory"}, []string{"write_memory"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after clear")
+	}
+
+	resp, err := ag.ProcessDirect("try to send a message", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp != "sent" {
+		t.Fatalf("expected tool result 'sent', got %q", resp)
+	}
+
+	select {
+	case out := <-b.Out:
+		if out.Content != "should not send" {
+			t.Fatalf("unexpected outbound content: %q", out.Content)
+		}
+	default:
+		t.Fatal("expected message tool to run after ClearMissionStep()")
+	}
+}
+
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+func testMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: append([]string(nil), jobAllowedTools...),
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      append([]string(nil), stepAllowedTools...),
+					SuccessCriteria:   []string{"produce code"},
+				},
+				{
+					ID:           "final",
+					Type:         missioncontrol.StepTypeFinalResponse,
+					DependsOn:    []string{"build"},
+					AllowedTools: append([]string(nil), stepAllowedTools...),
+				},
+			},
+		},
+	}
+}

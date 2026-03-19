@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/local/picobot/internal/chat"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -41,7 +42,7 @@ func TestAgentExecutesToolCall(t *testing.T) {
 	p := &FakeProvider{}
 	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
 
-	if _, ok := ag.taskState.ExecutionContext(); ok {
+	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("taskState.ExecutionContext() ok = true, want false")
 	}
 
@@ -73,6 +74,49 @@ func TestAgentExecutesToolCall(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timeout waiting for final outbound message")
 		}
+	}
+}
+
+func TestAgentLoopActivateMissionStepAndActiveMissionStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+
+	if ec.Job == nil {
+		t.Fatal("ActiveMissionStep().Job = nil, want non-nil")
+	}
+
+	if ec.Step == nil {
+		t.Fatal("ActiveMissionStep().Step = nil, want non-nil")
+	}
+
+	if ec.Job.ID != job.ID {
+		t.Fatalf("ActiveMissionStep().Job.ID = %q, want %q", ec.Job.ID, job.ID)
+	}
+
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+
+	job.AllowedTools[0] = "mutated"
+	if ec.Job.AllowedTools[0] != "read" {
+		t.Fatalf("ActiveMissionStep().Job.AllowedTools[0] = %q, want %q", ec.Job.AllowedTools[0], "read")
+	}
+
+	if ec.Step.RequiredAuthority != missioncontrol.AuthorityTierLow {
+		t.Fatalf("ActiveMissionStep().Step.RequiredAuthority = %q, want %q", ec.Step.RequiredAuthority, missioncontrol.AuthorityTierLow)
 	}
 }
 

@@ -138,6 +138,27 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	}
 }
 
+func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) error {
+	if a == nil || a.taskState == nil {
+		return nil
+	}
+	return a.taskState.ActivateStep(job, stepID)
+}
+
+func (a *AgentLoop) ClearMissionStep() {
+	if a == nil || a.taskState == nil {
+		return
+	}
+	a.taskState.ClearExecutionContext()
+}
+
+func (a *AgentLoop) ActiveMissionStep() (missioncontrol.ExecutionContext, bool) {
+	if a == nil || a.taskState == nil {
+		return missioncontrol.ExecutionContext{}, false
+	}
+	return a.taskState.ExecutionContext()
+}
+
 // Run starts processing inbound messages. This is a blocking call until context is canceled.
 func (a *AgentLoop) Run(ctx context.Context) {
 	a.running = true
