@@ -132,6 +132,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	if guard != nil {
 		if ec, ok := missioncontrol.ExecutionContextFromContext(ctx); ok {
 			decision := guard.EvaluateTool(ctx, ec, name, args)
+			log.Printf("[tool] audit job=%s step=%s tool=%s allowed=%t code=%s reason=%s timestamp=%s", decision.Event.JobID, decision.Event.StepID, decision.Event.ToolName, decision.Event.Allowed, decision.Event.Code, decision.Event.Reason, decision.Event.Timestamp.Format(time.RFC3339Nano))
 			if !decision.Allowed {
 				log.Printf("[tool] ! %s denied: code=%s reason=%s event=%+v", name, decision.Code, decision.Reason, decision.Event)
 				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)

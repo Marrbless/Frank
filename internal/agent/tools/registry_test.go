@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"reflect"
 	"strings"
 	"testing"
@@ -191,6 +193,124 @@ func TestRegistryExecuteWithoutExecutionContextSkipsGuard(t *testing.T) {
 	}
 }
 
+func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
+	reg := NewRegistry()
+	tool := &stubTool{name: "stub", result: "ok"}
+	guard := &stubGuard{
+		decision: missioncontrol.GuardDecision{
+			Allowed: false,
+			Code:    missioncontrol.RejectionCodeToolNotAllowed,
+			Reason:  "tool is outside the step scope",
+			Event: missioncontrol.AuditEvent{
+				JobID:     "job-1",
+				StepID:    "step-1",
+				ToolName:  "stub",
+				Allowed:   false,
+				Code:      missioncontrol.RejectionCodeToolNotAllowed,
+				Reason:    "tool is outside the step scope",
+				Timestamp: time.Unix(123, 0).UTC(),
+			},
+		},
+	}
+	reg.Register(tool)
+	reg.SetGuard(guard)
+
+	ctx := missioncontrol.WithExecutionContext(context.Background(), missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "step-1"},
+	})
+
+	logs := captureRegistryLogs(t, func() {
+		_, _ = reg.Execute(ctx, "stub", map[string]interface{}{"x": 1})
+	})
+
+	if tool.executeCalls != 0 {
+		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 0)
+	}
+
+	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=false code=tool_not_allowed reason=tool is outside the step scope") {
+		t.Fatalf("expected denied audit log, got %q", logs)
+	}
+}
+
+func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
+	reg := NewRegistry()
+	tool := &stubTool{name: "stub", result: "ok"}
+	guard := &stubGuard{
+		decision: missioncontrol.GuardDecision{
+			Allowed: true,
+			Event: missioncontrol.AuditEvent{
+				JobID:     "job-1",
+				StepID:    "step-1",
+				ToolName:  "stub",
+				Allowed:   true,
+				Timestamp: time.Unix(456, 0).UTC(),
+			},
+		},
+	}
+	reg.Register(tool)
+	reg.SetGuard(guard)
+
+	ctx := missioncontrol.WithExecutionContext(context.Background(), missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "step-1"},
+	})
+
+	logs := captureRegistryLogs(t, func() {
+		result, err := reg.Execute(ctx, "stub", map[string]interface{}{"x": 1})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if result != "ok" {
+			t.Fatalf("Execute() result = %q, want %q", result, "ok")
+		}
+	})
+
+	if tool.executeCalls != 1 {
+		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 1)
+	}
+
+	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=true") {
+		t.Fatalf("expected allowed audit log, got %q", logs)
+	}
+}
+
+func TestRegistryExecuteWithoutExecutionContextPreservesAuditBehavior(t *testing.T) {
+	reg := NewRegistry()
+	tool := &stubTool{name: "stub", result: "ok"}
+	guard := &stubGuard{
+		decision: missioncontrol.GuardDecision{
+			Allowed: false,
+			Code:    missioncontrol.RejectionCodeToolNotAllowed,
+			Reason:  "should not be used",
+		},
+	}
+	reg.Register(tool)
+	reg.SetGuard(guard)
+
+	logs := captureRegistryLogs(t, func() {
+		result, err := reg.Execute(context.Background(), "stub", map[string]interface{}{"x": 1})
+		if err != nil {
+			t.Fatalf("Execute() error = %v, want nil", err)
+		}
+		if result != "ok" {
+			t.Fatalf("Execute() result = %q, want %q", result, "ok")
+		}
+	})
+
+	if tool.executeCalls != 1 {
+		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 1)
+	}
+
+	if guard.calls != 0 {
+		t.Fatalf("guard calls = %d, want %d", guard.calls, 0)
+	}
+
+	if strings.Contains(logs, "[tool] audit") {
+		t.Fatalf("expected no audit log without execution context, got %q", logs)
+	}
+}
+
 func TestRegistryDefinitionsWithoutExecutionContextReturnsFullToolSet(t *testing.T) {
 	t.Parallel()
 
@@ -301,4 +421,16 @@ func definitionNames(defs []providers.ToolDefinition) []string {
 		names = append(names, def.Name)
 	}
 	return names
+}
+
+func captureRegistryLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previousWriter)
+
+	fn()
+	return buf.String()
 }
