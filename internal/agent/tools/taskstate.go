@@ -1,14 +1,20 @@
 package tools
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/local/picobot/internal/missioncontrol"
+)
 
 // TaskState tracks per-message execution state shared across tools.
 // The main use right now is enforcing that a new deliverable task must
 // initialize projects/current via frank_new_project before writing there.
 type TaskState struct {
-	mu                 sync.Mutex
-	currentTaskID      string
-	projectInitialized bool
+	mu                  sync.Mutex
+	currentTaskID       string
+	projectInitialized  bool
+	executionContext    missioncontrol.ExecutionContext
+	hasExecutionContext bool
 }
 
 func NewTaskState() *TaskState {
@@ -44,4 +50,33 @@ func (s *TaskState) ProjectInitialized() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.projectInitialized
+}
+
+func (s *TaskState) SetExecutionContext(ec missioncontrol.ExecutionContext) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionContext = ec
+	s.hasExecutionContext = true
+}
+
+func (s *TaskState) ExecutionContext() (missioncontrol.ExecutionContext, bool) {
+	if s == nil {
+		return missioncontrol.ExecutionContext{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.executionContext, s.hasExecutionContext
+}
+
+func (s *TaskState) ClearExecutionContext() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.executionContext = missioncontrol.ExecutionContext{}
+	s.hasExecutionContext = false
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/local/picobot/internal/agent/tools"
 	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/cron"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 	"github.com/local/picobot/internal/session"
 )
@@ -76,6 +77,7 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	taskState := tools.NewTaskState()
 
 	reg := tools.NewRegistry()
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
 	reg.Register(tools.NewMessageTool(b))
 
 	// Open an os.Root anchored at the workspace for kernel-enforced sandboxing.
@@ -229,7 +231,13 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							fmt.Sprintf("🤖 Running: %s %s", tc.Name, argsJSON))
 
 						start := time.Now()
-						res, err := a.tools.Execute(ctx, tc.Name, tc.Arguments)
+						execCtx := ctx
+						if a.taskState != nil {
+							if ec, ok := a.taskState.ExecutionContext(); ok {
+								execCtx = missioncontrol.WithExecutionContext(ctx, ec)
+							}
+						}
+						res, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
 						elapsed := time.Since(start).Round(time.Millisecond)
 
 						if err != nil {
@@ -331,7 +339,13 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 		})
 
 		for _, tc := range resp.ToolCalls {
-			result, err := a.tools.Execute(ctx, tc.Name, tc.Arguments)
+			execCtx := ctx
+			if a.taskState != nil {
+				if ec, ok := a.taskState.ExecutionContext(); ok {
+					execCtx = missioncontrol.WithExecutionContext(ctx, ec)
+				}
+			}
+			result, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
 			if err != nil {
 				result = "(tool error) " + err.Error()
 			}

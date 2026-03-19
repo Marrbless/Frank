@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/local/picobot/internal/chat"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -59,6 +60,67 @@ func TestProcessDirectExecutesToolCall(t *testing.T) {
 	}
 	if td == "" || !contains(td, "Test note") {
 		t.Fatalf("expected today's note to contain Test note, got: %s", td)
+	}
+}
+
+type deniedMessageToolProvider struct {
+	calls int
+}
+
+func (p *deniedMessageToolProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return providers.LLMResponse{
+			HasToolCalls: true,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:        "1",
+					Name:      "message",
+					Arguments: map[string]interface{}{"content": "should not send"},
+				},
+			},
+		}, nil
+	}
+	return providers.LLMResponse{}, nil
+}
+
+func (p *deniedMessageToolProvider) GetDefaultModel() string { return "test" }
+
+func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &deniedMessageToolProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
+	ag.taskState.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job: &missioncontrol.Job{
+			ID:           "job-1",
+			MaxAuthority: missioncontrol.AuthorityTierHigh,
+			AllowedTools: []string{"write_memory"},
+		},
+		Step: &missioncontrol.Step{
+			ID:                "step-1",
+			RequiredAuthority: missioncontrol.AuthorityTierLow,
+		},
+	})
+
+	resp, err := ag.ProcessDirect("try to send a message", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(resp, string(missioncontrol.RejectionCodeToolNotAllowed)) {
+		t.Fatalf("expected rejection code in response, got %q", resp)
+	}
+
+	if !strings.Contains(resp, "tool is not allowed by job tool scope") {
+		t.Fatalf("expected rejection reason in response, got %q", resp)
+	}
+
+	select {
+	case out := <-b.Out:
+		t.Fatalf("message tool should not have run, but outbound message was published: %#v", out)
+	default:
 	}
 }
 

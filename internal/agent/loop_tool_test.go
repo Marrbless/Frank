@@ -33,6 +33,10 @@ func TestAgentExecutesToolCall(t *testing.T) {
 	p := &FakeProvider{}
 	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
 
+	if _, ok := ag.taskState.ExecutionContext(); ok {
+		t.Fatal("taskState.ExecutionContext() ok = true, want false")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go ag.Run(ctx)
