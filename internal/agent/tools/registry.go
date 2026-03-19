@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -25,6 +27,7 @@ type Tool interface {
 type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
+	guard missioncontrol.ToolGuard
 }
 
 // NewRegistry constructs a new tool registry.
@@ -37,6 +40,13 @@ func (r *Registry) Register(t Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[t.Name()] = t
+}
+
+// SetGuard attaches an optional tool guard.
+func (r *Registry) SetGuard(g missioncontrol.ToolGuard) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guard = g
 }
 
 // Get returns a tool by name (or nil if not found).
@@ -68,9 +78,20 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	}
 	r.mu.RLock()
 	t, ok := r.tools[name]
+	guard := r.guard
 	r.mu.RUnlock()
 	if !ok {
 		return "", errors.New("tool not found")
+	}
+
+	if guard != nil {
+		if ec, ok := missioncontrol.ExecutionContextFromContext(ctx); ok {
+			decision := guard.EvaluateTool(ctx, ec, name, args)
+			if !decision.Allowed {
+				log.Printf("[tool] ! %s denied: code=%s reason=%s event=%+v", name, decision.Code, decision.Reason, decision.Event)
+				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)
+			}
+		}
 	}
 
 	// Log tool execution start
