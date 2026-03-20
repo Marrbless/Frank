@@ -460,6 +460,55 @@ func TestMissionSetStepCommandWithStatusFileWaitsWhenMatchingSnapshotUpdatedAtIs
 	}
 }
 
+func TestMissionSetStepCommandWithStatusFileWithoutMissionFilePreservesCurrentBehavior(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "other-job",
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:00Z",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "250ms",
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before fresh status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "different-job",
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:01Z",
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after fresh status update")
+	}
+}
+
 func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotChangesBeforeTimeout(t *testing.T) {
 	controlPath := filepath.Join(t.TempDir(), "control.json")
 	statusPath := filepath.Join(t.TempDir(), "status.json")
@@ -505,6 +554,160 @@ func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotChangesBeforeTim
 	control := readMissionStepControlFile(t, controlPath)
 	if control.StepID != "final" {
 		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnapshotMatchesStepAndJob(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	job := testMissionBootstrapJob()
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "other-job",
+		StepID:    "build",
+		UpdatedAt: "2026-03-20T12:00:00Z",
+	})
+
+	done := make(chan error, 1)
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+		"--status-file", statusPath,
+		"--wait-timeout", "250ms",
+	})
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before matching status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     job.ID,
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:01Z",
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after matching status update")
+	}
+}
+
+func TestMissionSetStepCommandWithMissionFileAndStatusFileWaitsWhenStepMatchesButJobDoesNot(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	job := testMissionBootstrapJob()
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "other-job",
+		StepID:    "build",
+		UpdatedAt: "2026-03-20T12:00:00Z",
+	})
+
+	done := make(chan error, 1)
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+		"--status-file", statusPath,
+		"--wait-timeout", "250ms",
+	})
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "other-job",
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:01Z",
+	})
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned while job_id was still mismatched: %v", err)
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     job.ID,
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:02Z",
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after matching job_id update")
+	}
+}
+
+func TestMissionSetStepCommandWithMissionFileAndStatusFileTimesOutWhenJobIDNeverMatches(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	job := testMissionBootstrapJob()
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "other-job",
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:00Z",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting") {
+		t.Fatalf("Execute() error = %q, want timeout message", err)
+	}
+	if !strings.Contains(err.Error(), `job_id="other-job"`) {
+		t.Fatalf("Execute() error = %q, want observed job_id", err)
+	}
+	if !strings.Contains(err.Error(), `job_id="job-1"`) {
+		t.Fatalf("Execute() error = %q, want expected job_id", err)
 	}
 }
 

@@ -386,6 +386,7 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			missionFile, _ := cmd.Flags().GetString("mission-file")
+			var expectedJobID string
 			if missionFile != "" {
 				data, err := os.ReadFile(missionFile)
 				if err != nil {
@@ -400,6 +401,8 @@ func NewRootCmd() *cobra.Command {
 				if err := validateMissionStepSelection(job, stepID); err != nil {
 					return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 				}
+
+				expectedJobID = job.ID
 			}
 
 			statusFile, _ := cmd.Flags().GetString("status-file")
@@ -434,7 +437,7 @@ func NewRootCmd() *cobra.Command {
 				waitTimeout = 5 * time.Second
 			}
 
-			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, previousStatusUpdatedAt, waitTimeout); err != nil {
+			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, expectedJobID, previousStatusUpdatedAt, waitTimeout); err != nil {
 				return err
 			}
 
@@ -879,7 +882,7 @@ func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
 	return missionFile
 }
 
-func waitForMissionStatusStepConfirmation(path string, stepID string, previousUpdatedAt string, timeout time.Duration) error {
+func waitForMissionStatusStepConfirmation(path string, stepID string, expectedJobID string, previousUpdatedAt string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 
@@ -889,10 +892,16 @@ func waitForMissionStatusStepConfirmation(path string, stepID string, previousUp
 			lastErr = err
 		} else if !snapshot.Active || snapshot.StepID != stepID {
 			lastErr = fmt.Errorf("mission status file %q has active=%t step_id=%q, want active=true step_id=%q", path, snapshot.Active, snapshot.StepID, stepID)
+		} else if expectedJobID != "" && snapshot.JobID != expectedJobID {
+			lastErr = fmt.Errorf("mission status file %q has active=true step_id=%q job_id=%q, want active=true step_id=%q job_id=%q", path, snapshot.StepID, snapshot.JobID, stepID, expectedJobID)
 		} else if previousUpdatedAt == "" || snapshot.UpdatedAt != previousUpdatedAt {
 			return nil
 		} else {
-			lastErr = fmt.Errorf("mission status file %q has active=true step_id=%q updated_at=%q, want a fresh matching update with updated_at different from %q", path, snapshot.StepID, snapshot.UpdatedAt, previousUpdatedAt)
+			if expectedJobID != "" {
+				lastErr = fmt.Errorf("mission status file %q has active=true step_id=%q job_id=%q updated_at=%q, want a fresh matching update with job_id=%q and updated_at different from %q", path, snapshot.StepID, snapshot.JobID, snapshot.UpdatedAt, expectedJobID, previousUpdatedAt)
+			} else {
+				lastErr = fmt.Errorf("mission status file %q has active=true step_id=%q updated_at=%q, want a fresh matching update with updated_at different from %q", path, snapshot.StepID, snapshot.UpdatedAt, previousUpdatedAt)
+			}
 		}
 
 		if remaining := time.Until(deadline); remaining <= 0 {
