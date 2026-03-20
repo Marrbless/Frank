@@ -291,6 +291,82 @@ func NewRootCmd() *cobra.Command {
 	gatewayCmd.Flags().String("mission-step-control-file", "", "Path to a mission step control JSON file for gateway step switching")
 	rootCmd.AddCommand(gatewayCmd)
 
+	missionCmd := &cobra.Command{
+		Use:   "mission",
+		Short: "Read mission status and switch mission steps",
+	}
+
+	missionStatusCmd := &cobra.Command{
+		Use:          "status",
+		Short:        "Print a mission status snapshot JSON file",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			statusFile, _ := cmd.Flags().GetString("status-file")
+			if statusFile == "" {
+				return fmt.Errorf("--status-file is required")
+			}
+
+			data, err := os.ReadFile(statusFile)
+			if err != nil {
+				return fmt.Errorf("failed to read mission status file %q: %w", statusFile, err)
+			}
+
+			var snapshot any
+			if err := json.Unmarshal(data, &snapshot); err != nil {
+				return fmt.Errorf("failed to decode mission status file %q: %w", statusFile, err)
+			}
+
+			if _, err := cmd.OutOrStdout().Write(data); err != nil {
+				return fmt.Errorf("failed to write mission status output: %w", err)
+			}
+
+			return nil
+		},
+	}
+	missionStatusCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
+
+	missionSetStepCmd := &cobra.Command{
+		Use:          "set-step",
+		Short:        "Write a mission step control JSON file",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			controlFile, _ := cmd.Flags().GetString("control-file")
+			if controlFile == "" {
+				return fmt.Errorf("--control-file is required")
+			}
+
+			stepID, _ := cmd.Flags().GetString("step-id")
+			if stepID == "" {
+				return fmt.Errorf("--step-id is required")
+			}
+
+			control := missionStepControlFile{
+				StepID:    stepID,
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			}
+
+			data, err := json.MarshalIndent(control, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode mission step control file %q: %w", controlFile, err)
+			}
+			data = append(data, '\n')
+
+			if err := os.WriteFile(controlFile, data, 0o644); err != nil {
+				return fmt.Errorf("failed to write mission step control file %q: %w", controlFile, err)
+			}
+
+			return nil
+		},
+	}
+	missionSetStepCmd.Flags().String("control-file", "", "Path to write a mission step control JSON file")
+	missionSetStepCmd.Flags().String("step-id", "", "Mission step ID to activate")
+
+	missionCmd.AddCommand(missionStatusCmd)
+	missionCmd.AddCommand(missionSetStepCmd)
+	rootCmd.AddCommand(missionCmd)
+
 	// memory subcommands: read, append, write, recent
 	memoryCmd := &cobra.Command{
 		Use:   "memory",
