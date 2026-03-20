@@ -200,8 +200,9 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var missionStepControlBaseline []byte
 			if bootstrappedJob != nil {
-				restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
+				missionStepControlBaseline = restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
 			}
 			statusFile, _ := cmd.Flags().GetString("mission-status-file")
 			if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
@@ -223,7 +224,7 @@ func NewRootCmd() *cobra.Command {
 			if bootstrappedJob != nil {
 				controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
 				if controlFile != "" {
-					go watchMissionStepControlFile(ctx, cmd, ag, *bootstrappedJob, controlFile, 500*time.Millisecond)
+					go watchMissionStepControlFile(ctx, cmd, ag, *bootstrappedJob, controlFile, 500*time.Millisecond, missionStepControlBaseline)
 				}
 			}
 
@@ -815,20 +816,29 @@ func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.
 	return control.StepID, true, nil
 }
 
-func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job) {
+func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job) []byte {
 	controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
 	if controlFile == "" {
-		return
+		return nil
+	}
+
+	data, err := os.ReadFile(controlFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("mission step control startup apply failed for %q: failed to read mission step control file %q: %v", controlFile, controlFile, err)
+		}
+		return nil
 	}
 
 	stepID, changed, err := activateMissionStepFromControlFile(ag, job, controlFile)
 	if err != nil {
 		log.Printf("mission step control startup apply failed for %q: %v", controlFile, err)
-		return
+		return nil
 	}
 	if changed {
 		log.Printf("mission step control startup apply succeeded job_id=%q step_id=%q control_file=%q", job.ID, stepID, controlFile)
 	}
+	return data
 }
 
 func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
@@ -844,11 +854,11 @@ func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job mi
 	return stepID, true, nil
 }
 
-func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string, interval time.Duration) {
+func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string, interval time.Duration, baseline []byte) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	var lastContent []byte
+	lastContent := append([]byte(nil), baseline...)
 	for {
 		select {
 		case <-ctx.Done():
