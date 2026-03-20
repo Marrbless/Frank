@@ -408,12 +408,13 @@ func TestMissionSetStepCommandWritesUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotAlreadyMatches(t *testing.T) {
+func TestMissionSetStepCommandWithStatusFileWaitsWhenMatchingSnapshotUpdatedAtIsUnchanged(t *testing.T) {
 	controlPath := filepath.Join(t.TempDir(), "control.json")
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active: true,
-		StepID: "final",
+		Active:    true,
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:00Z",
 	})
 
 	cmd := NewRootCmd()
@@ -424,11 +425,33 @@ func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotAlreadyMatches(t
 		"--control-file", controlPath,
 		"--step-id", "final",
 		"--status-file", statusPath,
-		"--wait-timeout", "75ms",
+		"--wait-timeout", "250ms",
 	})
 
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before fresh status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:01Z",
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after fresh status update")
 	}
 
 	control := readMissionStepControlFile(t, controlPath)
@@ -441,16 +464,18 @@ func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotChangesBeforeTim
 	controlPath := filepath.Join(t.TempDir(), "control.json")
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active: true,
-		StepID: "build",
+		Active:    true,
+		StepID:    "build",
+		UpdatedAt: "2026-03-20T12:00:00Z",
 	})
 
 	errCh := make(chan error, 1)
 	go func() {
 		time.Sleep(25 * time.Millisecond)
 		data, err := json.Marshal(missionStatusSnapshot{
-			Active: true,
-			StepID: "final",
+			Active:    true,
+			StepID:    "final",
+			UpdatedAt: "2026-03-20T12:00:01Z",
 		})
 		if err != nil {
 			errCh <- err
@@ -487,8 +512,9 @@ func TestMissionSetStepCommandWithStatusFileTimesOutWhenStepNeverMatches(t *test
 	controlPath := filepath.Join(t.TempDir(), "control.json")
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active: true,
-		StepID: "build",
+		Active:    true,
+		StepID:    "build",
+		UpdatedAt: "2026-03-20T12:00:00Z",
 	})
 
 	cmd := NewRootCmd()
@@ -511,6 +537,43 @@ func TestMissionSetStepCommandWithStatusFileTimesOutWhenStepNeverMatches(t *test
 	}
 	if !strings.Contains(err.Error(), `want active=true step_id="final"`) {
 		t.Fatalf("Execute() error = %q, want requested step confirmation message", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandWithStatusFileTimesOutWhenMatchingSnapshotIsNotFresh(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		StepID:    "final",
+		UpdatedAt: "2026-03-20T12:00:00Z",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting") {
+		t.Fatalf("Execute() error = %q, want timeout message", err)
+	}
+	if !strings.Contains(err.Error(), "fresh matching update") {
+		t.Fatalf("Execute() error = %q, want freshness message", err)
 	}
 
 	control := readMissionStepControlFile(t, controlPath)
@@ -546,6 +609,52 @@ func TestMissionSetStepCommandWithInvalidStatusJSONReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to decode mission status file") {
 		t.Fatalf("Execute() error = %q, want status decode failure", err)
+	}
+}
+
+func TestMissionSetStepCommandWithNoPriorValidStatusSnapshotSucceedsWhenMatchingSnapshotAppears(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(statusPath, []byte("{"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		data, err := json.Marshal(missionStatusSnapshot{
+			Active:    true,
+			StepID:    "final",
+			UpdatedAt: "2026-03-20T12:00:01Z",
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- os.WriteFile(statusPath, data, 0o644)
+	}()
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "250ms",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("status update error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
 	}
 }
 

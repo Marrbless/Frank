@@ -402,6 +402,14 @@ func NewRootCmd() *cobra.Command {
 				}
 			}
 
+			statusFile, _ := cmd.Flags().GetString("status-file")
+			var previousStatusUpdatedAt string
+			if statusFile != "" {
+				if snapshot, err := loadMissionStatusSnapshot(statusFile); err == nil {
+					previousStatusUpdatedAt = snapshot.UpdatedAt
+				}
+			}
+
 			control := missionStepControlFile{
 				StepID:    stepID,
 				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
@@ -417,7 +425,6 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("failed to write mission step control file %q: %w", controlFile, err)
 			}
 
-			statusFile, _ := cmd.Flags().GetString("status-file")
 			if statusFile == "" {
 				return nil
 			}
@@ -427,7 +434,7 @@ func NewRootCmd() *cobra.Command {
 				waitTimeout = 5 * time.Second
 			}
 
-			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, waitTimeout); err != nil {
+			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, previousStatusUpdatedAt, waitTimeout); err != nil {
 				return err
 			}
 
@@ -872,7 +879,7 @@ func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
 	return missionFile
 }
 
-func waitForMissionStatusStepConfirmation(path string, stepID string, timeout time.Duration) error {
+func waitForMissionStatusStepConfirmation(path string, stepID string, previousUpdatedAt string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 
@@ -880,10 +887,12 @@ func waitForMissionStatusStepConfirmation(path string, stepID string, timeout ti
 		snapshot, err := loadMissionStatusSnapshot(path)
 		if err != nil {
 			lastErr = err
-		} else if snapshot.Active && snapshot.StepID == stepID {
+		} else if !snapshot.Active || snapshot.StepID != stepID {
+			lastErr = fmt.Errorf("mission status file %q has active=%t step_id=%q, want active=true step_id=%q", path, snapshot.Active, snapshot.StepID, stepID)
+		} else if previousUpdatedAt == "" || snapshot.UpdatedAt != previousUpdatedAt {
 			return nil
 		} else {
-			lastErr = fmt.Errorf("mission status file %q has active=%t step_id=%q, want active=true step_id=%q", path, snapshot.Active, snapshot.StepID, stepID)
+			lastErr = fmt.Errorf("mission status file %q has active=true step_id=%q updated_at=%q, want a fresh matching update with updated_at different from %q", path, snapshot.StepID, snapshot.UpdatedAt, previousUpdatedAt)
 		}
 
 		if remaining := time.Until(deadline); remaining <= 0 {
