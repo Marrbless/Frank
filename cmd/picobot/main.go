@@ -2,21 +2,20 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"path/filepath"
-	"strings"
-
-	"log"
-	"sort"
 
 	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/agent/memory"
@@ -197,7 +196,8 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
-			if err := configureMissionBootstrap(cmd, ag); err != nil {
+			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
+			if err != nil {
 				return err
 			}
 			statusFile, _ := cmd.Flags().GetString("mission-status-file")
@@ -216,6 +216,13 @@ func NewRootCmd() *cobra.Command {
 
 			// start agent loop
 			go ag.Run(ctx)
+
+			if bootstrappedJob != nil {
+				controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
+				if controlFile != "" {
+					go watchMissionStepControlFile(ctx, cmd, ag, *bootstrappedJob, controlFile, 500*time.Millisecond)
+				}
+			}
 
 			// start cron scheduler
 			go scheduler.Start(ctx.Done())
@@ -281,6 +288,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	gatewayCmd.Flags().StringP("model", "M", "", "Model to use (overrides model in config.json)")
 	addMissionBootstrapFlags(gatewayCmd)
+	gatewayCmd.Flags().String("mission-step-control-file", "", "Path to a mission step control JSON file for gateway step switching")
 	rootCmd.AddCommand(gatewayCmd)
 
 	// memory subcommands: read, append, write, recent
@@ -498,6 +506,11 @@ func addMissionBootstrapFlags(cmd *cobra.Command) {
 }
 
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
+	_, err := configureMissionBootstrapJob(cmd, ag)
+	return err
+}
+
+func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*missioncontrol.Job, error) {
 	missionRequired, _ := cmd.Flags().GetBool("mission-required")
 	missionFile, _ := cmd.Flags().GetString("mission-file")
 	missionStep, _ := cmd.Flags().GetString("mission-step")
@@ -507,32 +520,37 @@ func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
 	}
 
 	if missionStep != "" && missionFile == "" {
-		return fmt.Errorf("--mission-step requires --mission-file")
+		return nil, fmt.Errorf("--mission-step requires --mission-file")
+	}
+
+	controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
+	if controlFile != "" && missionFile == "" {
+		return nil, fmt.Errorf("--mission-step-control-file requires --mission-file")
 	}
 
 	if missionFile == "" {
-		return nil
+		return nil, nil
 	}
 
 	if missionStep == "" {
-		return fmt.Errorf("--mission-file requires --mission-step")
+		return nil, fmt.Errorf("--mission-file requires --mission-step")
 	}
 
 	data, err := os.ReadFile(missionFile)
 	if err != nil {
-		return fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
+		return nil, fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
 	}
 
 	var job missioncontrol.Job
 	if err := json.Unmarshal(data, &job); err != nil {
-		return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
+		return nil, fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
 	}
 
 	if err := ag.ActivateMissionStep(job, missionStep); err != nil {
-		return fmt.Errorf("failed to activate mission step %q from %q: %w", missionStep, missionFile, err)
+		return nil, fmt.Errorf("failed to activate mission step %q from %q: %w", missionStep, missionFile, err)
 	}
 
-	return nil
+	return &job, nil
 }
 
 type missionStatusSnapshot struct {
@@ -544,6 +562,68 @@ type missionStatusSnapshot struct {
 	StepType        string   `json:"step_type"`
 	AllowedTools    []string `json:"allowed_tools"`
 	UpdatedAt       string   `json:"updated_at"`
+}
+
+type missionStepControlFile struct {
+	StepID    string `json:"step_id"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to read mission step control file %q: %w", path, err)
+	}
+
+	var control missionStepControlFile
+	if err := json.Unmarshal(data, &control); err != nil {
+		return false, fmt.Errorf("failed to decode mission step control file %q: %w", path, err)
+	}
+	if control.StepID == "" {
+		return false, fmt.Errorf("mission step control file %q is missing step_id", path)
+	}
+
+	if err := ag.ActivateMissionStep(job, control.StepID); err != nil {
+		return false, fmt.Errorf("failed to activate mission step %q from control file %q: %w", control.StepID, path, err)
+	}
+
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastContent []byte
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					log.Printf("mission step control watch failed for %q: %v", path, err)
+				}
+				lastContent = nil
+				continue
+			}
+			if bytes.Equal(lastContent, data) {
+				continue
+			}
+			lastContent = append(lastContent[:0], data...)
+			if _, err := applyMissionStepControlFile(cmd, ag, job, path); err != nil {
+				log.Printf("mission step control apply failed for %q: %v", path, err)
+			}
+		}
+	}
 }
 
 func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLoop, now time.Time) error {

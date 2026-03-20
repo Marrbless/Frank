@@ -283,6 +283,23 @@ func TestConfigureMissionBootstrapMissionStepRequiresMissionFile(t *testing.T) {
 	}
 }
 
+func TestConfigureMissionBootstrapMissionStepControlFileRequiresMissionFile(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-step-control-file", filepath.Join(t.TempDir(), "control.json")); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want missing mission-file error")
+	}
+
+	if !strings.Contains(err.Error(), "--mission-step-control-file requires --mission-file") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want missing mission-file message", err)
+	}
+}
+
 func TestWriteMissionStatusSnapshotFromCommandDefaultPathUnchanged(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
@@ -437,6 +454,133 @@ func TestWriteMissionStatusSnapshotInvalidOutputPathReturnsError(t *testing.T) {
 	}
 }
 
+func TestApplyMissionStepControlFileSwitchesActiveStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final", UpdatedAt: "2026-03-19T12:00:00Z"})
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	if err != nil {
+		t.Fatalf("applyMissionStepControlFile() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("applyMissionStepControlFile() changed = false, want true")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "final" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+}
+
+func TestApplyMissionStepControlFileInvalidStepPreservesActiveStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "missing"})
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	if err == nil {
+		t.Fatal("applyMissionStepControlFile() error = nil, want invalid step error")
+	}
+	if changed {
+		t.Fatal("applyMissionStepControlFile() changed = true, want false")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+}
+
+func TestApplyMissionStepControlFileRewritesStatusSnapshotOnSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final"})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	before := readMissionStatusSnapshotFile(t, statusFile)
+	if before.StepID != "build" {
+		t.Fatalf("initial snapshot StepID = %q, want %q", before.StepID, "build")
+	}
+
+	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	if err != nil {
+		t.Fatalf("applyMissionStepControlFile() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("applyMissionStepControlFile() changed = false, want true")
+	}
+
+	after := readMissionStatusSnapshotFile(t, statusFile)
+	if after.StepID != "final" {
+		t.Fatalf("rewritten snapshot StepID = %q, want %q", after.StepID, "final")
+	}
+	if after.UpdatedAt == before.UpdatedAt {
+		t.Fatalf("rewritten snapshot UpdatedAt = %q, want changed timestamp", after.UpdatedAt)
+	}
+}
+
+func TestApplyMissionStepControlFileAbsentFileIsNoOp(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	changed, err := applyMissionStepControlFile(cmd, ag, job, filepath.Join(t.TempDir(), "missing.json"))
+	if err != nil {
+		t.Fatalf("applyMissionStepControlFile() error = %v", err)
+	}
+	if changed {
+		t.Fatal("applyMissionStepControlFile() changed = true, want false")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+}
+
 func TestRemoveMissionStatusSnapshotRemovesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
@@ -455,6 +599,7 @@ func TestRemoveMissionStatusSnapshotRemovesFile(t *testing.T) {
 func newMissionBootstrapTestCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "test"}
 	addMissionBootstrapFlags(cmd)
+	cmd.Flags().String("mission-step-control-file", "", "")
 	return cmd
 }
 
@@ -469,6 +614,20 @@ func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {
 
 	path := filepath.Join(t.TempDir(), "mission.json")
 	data, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
+func writeMissionStepControlFile(t *testing.T, control missionStepControlFile) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "control.json")
+	data, err := json.Marshal(control)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
