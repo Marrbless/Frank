@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -604,6 +605,8 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnaps
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	job := testMissionBootstrapJob()
 	missionPath := writeMissionBootstrapJobFile(t, job)
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
 		Active:    true,
 		JobID:     "other-job",
@@ -647,6 +650,23 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnaps
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Execute() did not return after matching status update")
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "mission set-step status confirmation succeeded") {
+		t.Fatalf("log output = %q, want set-step success log", logOutput)
+	}
+	if !strings.Contains(logOutput, `job_id="`+job.ID+`"`) {
+		t.Fatalf("log output = %q, want job_id", logOutput)
+	}
+	if !strings.Contains(logOutput, `step_id="final"`) {
+		t.Fatalf("log output = %q, want step_id", logOutput)
+	}
+	if !strings.Contains(logOutput, `control_file="`+controlPath+`"`) {
+		t.Fatalf("log output = %q, want control file path", logOutput)
+	}
+	if !strings.Contains(logOutput, `status_file="`+statusPath+`"`) {
+		t.Fatalf("log output = %q, want status file path", logOutput)
 	}
 }
 
@@ -1453,12 +1473,15 @@ func TestApplyMissionStepControlFileSwitchesActiveStep(t *testing.T) {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
 
-	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	stepID, changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
 	if err != nil {
 		t.Fatalf("applyMissionStepControlFile() error = %v", err)
 	}
 	if !changed {
 		t.Fatal("applyMissionStepControlFile() changed = false, want true")
+	}
+	if stepID != "final" {
+		t.Fatalf("applyMissionStepControlFile() stepID = %q, want %q", stepID, "final")
 	}
 
 	ec, ok := ag.ActiveMissionStep()
@@ -1480,12 +1503,15 @@ func TestApplyMissionStepControlFileInvalidStepPreservesActiveStep(t *testing.T)
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
 
-	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	stepID, changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
 	if err == nil {
 		t.Fatal("applyMissionStepControlFile() error = nil, want invalid step error")
 	}
 	if changed {
 		t.Fatal("applyMissionStepControlFile() changed = true, want false")
+	}
+	if stepID != "" {
+		t.Fatalf("applyMissionStepControlFile() stepID = %q, want empty", stepID)
 	}
 
 	ec, ok := ag.ActiveMissionStep()
@@ -1527,12 +1553,15 @@ func TestApplyMissionStepControlFileRewritesStatusSnapshotOnSuccess(t *testing.T
 		t.Fatalf("initial snapshot StepID = %q, want %q", before.StepID, "build")
 	}
 
-	changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
+	stepID, changed, err := applyMissionStepControlFile(cmd, ag, job, controlFile)
 	if err != nil {
 		t.Fatalf("applyMissionStepControlFile() error = %v", err)
 	}
 	if !changed {
 		t.Fatal("applyMissionStepControlFile() changed = false, want true")
+	}
+	if stepID != "final" {
+		t.Fatalf("applyMissionStepControlFile() stepID = %q, want %q", stepID, "final")
 	}
 
 	after := readMissionStatusSnapshotFile(t, statusFile)
@@ -1553,12 +1582,15 @@ func TestApplyMissionStepControlFileAbsentFileIsNoOp(t *testing.T) {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
 
-	changed, err := applyMissionStepControlFile(cmd, ag, job, filepath.Join(t.TempDir(), "missing.json"))
+	stepID, changed, err := applyMissionStepControlFile(cmd, ag, job, filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil {
 		t.Fatalf("applyMissionStepControlFile() error = %v", err)
 	}
 	if changed {
 		t.Fatal("applyMissionStepControlFile() changed = true, want false")
+	}
+	if stepID != "" {
+		t.Fatalf("applyMissionStepControlFile() stepID = %q, want empty", stepID)
 	}
 
 	ec, ok := ag.ActiveMissionStep()
@@ -1602,6 +1634,8 @@ func TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedSte
 	cmd := newMissionBootstrapTestCommand()
 	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
 	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final", UpdatedAt: "2026-03-19T12:00:00Z"})
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
 
 	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
 		t.Fatalf("Flags().Set(mission-file) error = %v", err)
@@ -1622,6 +1656,69 @@ func TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedSte
 	}
 	if ec.Step.ID != "final" {
 		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "mission step control startup apply succeeded") {
+		t.Fatalf("log output = %q, want startup apply success", logOutput)
+	}
+	if !strings.Contains(logOutput, `job_id="job-1"`) {
+		t.Fatalf("log output = %q, want job_id", logOutput)
+	}
+	if !strings.Contains(logOutput, `step_id="final"`) {
+		t.Fatalf("log output = %q, want step_id", logOutput)
+	}
+	if !strings.Contains(logOutput, `control_file="`+controlFile+`"`) {
+		t.Fatalf("log output = %q, want control file path", logOutput)
+	}
+}
+
+func TestWatchMissionStepControlFileLogsSuccessOnApply(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final", UpdatedAt: "2026-03-19T12:00:00Z"})
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchMissionStepControlFile(ctx, cmd, ag, job, controlFile, 5*time.Millisecond)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		ec, ok := ag.ActiveMissionStep()
+		if ok && ec.Step != nil && ec.Step.ID == "final" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ActiveMissionStep() did not update to final")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for {
+		logOutput := logBuf.String()
+		if strings.Contains(logOutput, "mission step control apply succeeded") {
+			if !strings.Contains(logOutput, `job_id="`+job.ID+`"`) {
+				t.Fatalf("log output = %q, want job_id", logOutput)
+			}
+			if !strings.Contains(logOutput, `step_id="final"`) {
+				t.Fatalf("log output = %q, want step_id", logOutput)
+			}
+			if !strings.Contains(logOutput, `control_file="`+controlFile+`"`) {
+				t.Fatalf("log output = %q, want control file path", logOutput)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("log output = %q, want watcher apply success", logOutput)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -1865,5 +1962,23 @@ func assertNoAtomicTempFiles(t *testing.T, dir string, targetBase string) {
 		if strings.HasPrefix(entry.Name(), prefix) {
 			t.Fatalf("unexpected temp file %q left in %q", entry.Name(), dir)
 		}
+	}
+}
+
+func captureStandardLogger(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+
+	logBuf := &bytes.Buffer{}
+	logWriter := log.Writer()
+	logFlags := log.Flags()
+	logPrefix := log.Prefix()
+	log.SetOutput(logBuf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+
+	return logBuf, func() {
+		log.SetOutput(logWriter)
+		log.SetFlags(logFlags)
+		log.SetPrefix(logPrefix)
 	}
 }

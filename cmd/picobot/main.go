@@ -435,6 +435,8 @@ func NewRootCmd() *cobra.Command {
 				return err
 			}
 
+			log.Printf("mission set-step status confirmation succeeded job_id=%q step_id=%q control_file=%q status_file=%q", expectedJobID, stepID, controlFile, statusFile)
+
 			return nil
 		},
 	}
@@ -789,28 +791,28 @@ func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
 	}
 }
 
-func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
+func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, fmt.Errorf("failed to read mission step control file %q: %w", path, err)
+		return "", false, fmt.Errorf("failed to read mission step control file %q: %w", path, err)
 	}
 
 	var control missionStepControlFile
 	if err := json.Unmarshal(data, &control); err != nil {
-		return false, fmt.Errorf("failed to decode mission step control file %q: %w", path, err)
+		return "", false, fmt.Errorf("failed to decode mission step control file %q: %w", path, err)
 	}
 	if control.StepID == "" {
-		return false, fmt.Errorf("mission step control file %q is missing step_id", path)
+		return "", false, fmt.Errorf("mission step control file %q is missing step_id", path)
 	}
 
 	if err := ag.ActivateMissionStep(job, control.StepID); err != nil {
-		return false, fmt.Errorf("failed to activate mission step %q from control file %q: %w", control.StepID, path, err)
+		return "", false, fmt.Errorf("failed to activate mission step %q from control file %q: %w", control.StepID, path, err)
 	}
 
-	return true, nil
+	return control.StepID, true, nil
 }
 
 func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job) {
@@ -819,22 +821,27 @@ func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentL
 		return
 	}
 
-	if _, err := activateMissionStepFromControlFile(ag, job, controlFile); err != nil {
+	stepID, changed, err := activateMissionStepFromControlFile(ag, job, controlFile)
+	if err != nil {
 		log.Printf("mission step control startup apply failed for %q: %v", controlFile, err)
+		return
+	}
+	if changed {
+		log.Printf("mission step control startup apply succeeded job_id=%q step_id=%q control_file=%q", job.ID, stepID, controlFile)
 	}
 }
 
-func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
-	changed, err := activateMissionStepFromControlFile(ag, job, path)
+func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
+	stepID, changed, err := activateMissionStepFromControlFile(ag, job, path)
 	if err != nil || !changed {
-		return changed, err
+		return stepID, changed, err
 	}
 
 	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
-		return false, err
+		return "", false, err
 	}
 
-	return true, nil
+	return stepID, true, nil
 }
 
 func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string, interval time.Duration) {
@@ -859,8 +866,13 @@ func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *ag
 				continue
 			}
 			lastContent = append(lastContent[:0], data...)
-			if _, err := applyMissionStepControlFile(cmd, ag, job, path); err != nil {
+			stepID, changed, err := applyMissionStepControlFile(cmd, ag, job, path)
+			if err != nil {
 				log.Printf("mission step control apply failed for %q: %v", path, err)
+				continue
+			}
+			if changed {
+				log.Printf("mission step control apply succeeded job_id=%q step_id=%q control_file=%q", job.ID, stepID, path)
 			}
 		}
 	}
