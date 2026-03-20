@@ -200,6 +200,9 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if bootstrappedJob != nil {
+				restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
+			}
 			statusFile, _ := cmd.Flags().GetString("mission-status-file")
 			if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
 				return err
@@ -645,7 +648,7 @@ type missionStepControlFile struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
+func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -664,6 +667,26 @@ func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job mi
 
 	if err := ag.ActivateMissionStep(job, control.StepID); err != nil {
 		return false, fmt.Errorf("failed to activate mission step %q from control file %q: %w", control.StepID, path, err)
+	}
+
+	return true, nil
+}
+
+func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job) {
+	controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
+	if controlFile == "" {
+		return
+	}
+
+	if _, err := activateMissionStepFromControlFile(ag, job, controlFile); err != nil {
+		log.Printf("mission step control startup apply failed for %q: %v", controlFile, err)
+	}
+}
+
+func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
+	changed, err := activateMissionStepFromControlFile(ag, job, path)
+	if err != nil || !changed {
+		return changed, err
 	}
 
 	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {

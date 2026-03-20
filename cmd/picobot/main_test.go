@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -728,6 +729,137 @@ func TestApplyMissionStepControlFileAbsentFileIsNoOp(t *testing.T) {
 	}
 }
 
+func TestRestoreMissionStepControlFileOnStartupAbsentFileIsNoOp(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", filepath.Join(t.TempDir(), "missing.json")); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	job := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	restoreMissionStepControlFileOnStartup(cmd, ag, job)
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+}
+
+func TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final", UpdatedAt: "2026-03-19T12:00:00Z"})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	job := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	restoreMissionStepControlFileOnStartup(cmd, ag, job)
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "final" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+}
+
+func TestRestoreMissionStepControlFileOnStartupInvalidFilePreservesBootstrappedStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "missing"})
+	logBuf := &bytes.Buffer{}
+	logWriter := log.Writer()
+	logFlags := log.Flags()
+	logPrefix := log.Prefix()
+	log.SetOutput(logBuf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	defer func() {
+		log.SetOutput(logWriter)
+		log.SetFlags(logFlags)
+		log.SetPrefix(logPrefix)
+	}()
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	job := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	restoreMissionStepControlFileOnStartup(cmd, ag, job)
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+	if !strings.Contains(logBuf.String(), "mission step control startup apply failed") {
+		t.Fatalf("log output = %q, want startup apply failure", logBuf.String())
+	}
+}
+
+func TestRestoreMissionStepControlFileOnStartupInitialSnapshotReflectsRestoredStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "final", UpdatedAt: "2026-03-19T12:00:00Z"})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	restoreMissionStepControlFileOnStartup(cmd, ag, bootstrappedJob)
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.StepID != "final" {
+		t.Fatalf("initial snapshot StepID = %q, want %q", snapshot.StepID, "final")
+	}
+}
+
 func TestRemoveMissionStatusSnapshotRemovesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
@@ -754,6 +886,20 @@ func newMissionBootstrapTestLoop() *agent.AgentLoop {
 	hub := chat.NewHub(10)
 	provider := providers.NewStubProvider()
 	return agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+}
+
+func configureMissionBootstrapJobForStartupTest(t *testing.T, cmd *cobra.Command, ag *agent.AgentLoop) missioncontrol.Job {
+	t.Helper()
+
+	job, err := configureMissionBootstrapJob(cmd, ag)
+	if err != nil {
+		t.Fatalf("configureMissionBootstrapJob() error = %v", err)
+	}
+	if job == nil {
+		t.Fatal("configureMissionBootstrapJob() job = nil, want bootstrapped job")
+	}
+
+	return *job
 }
 
 func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {
