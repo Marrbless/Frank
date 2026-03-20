@@ -400,7 +400,12 @@ func TestWriteMissionStatusSnapshotAllowedToolsIntersectedAndSorted(t *testing.T
 				{
 					ID:           "build",
 					Type:         missioncontrol.StepTypeOneShotCode,
-					AllowedTools: []string{"zeta", "beta", "beta", "missing"},
+					AllowedTools: []string{"zeta", "beta", "beta"},
+				},
+				{
+					ID:        "respond",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
 				},
 			},
 		},
