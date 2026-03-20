@@ -392,6 +392,14 @@ func NewRootCmd() *cobra.Command {
 				active, _ := cmd.Flags().GetBool("active")
 				expected.Active = &active
 			}
+			if cmd.Flags().Changed("step-type") {
+				expected.StepType = valueOrNilString(cmd.Flags().Lookup("step-type").Value.String())
+			}
+			expected.NoTools, _ = cmd.Flags().GetBool("no-tools")
+			expected.HasTools, _ = cmd.Flags().GetStringArray("has-tool")
+			if expected.NoTools && len(expected.HasTools) > 0 {
+				return fmt.Errorf("--no-tools and --has-tool cannot be used together")
+			}
 
 			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
 			if waitTimeout <= 0 {
@@ -404,6 +412,9 @@ func NewRootCmd() *cobra.Command {
 	missionAssertCmd.Flags().String("job-id", "", "Expected mission job ID")
 	missionAssertCmd.Flags().String("step-id", "", "Expected mission step ID")
 	missionAssertCmd.Flags().Bool("active", false, "Expected mission active state")
+	missionAssertCmd.Flags().String("step-type", "", "Expected mission step type")
+	missionAssertCmd.Flags().Bool("no-tools", false, "Require allowed_tools to be empty")
+	missionAssertCmd.Flags().StringArray("has-tool", nil, "Require a named tool to appear in allowed_tools; repeat to require multiple tools")
 	missionAssertCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status assertion success")
 
 	missionSetStepCmd := &cobra.Command{
@@ -768,9 +779,12 @@ type missionStepControlFile struct {
 }
 
 type missionStatusAssertionExpectation struct {
-	JobID  *string
-	StepID *string
-	Active *bool
+	JobID    *string
+	StepID   *string
+	Active   *bool
+	StepType *string
+	NoTools  bool
+	HasTools []string
 }
 
 type missionInspectSummary struct {
@@ -1019,6 +1033,17 @@ func checkMissionStatusAssertion(path string, snapshot missionStatusSnapshot, ex
 	if expected.Active != nil && snapshot.Active != *expected.Active {
 		return fmt.Errorf("mission status file %q has job_id=%q step_id=%q active=%t, want active=%t", path, snapshot.JobID, snapshot.StepID, snapshot.Active, *expected.Active)
 	}
+	if expected.StepType != nil && snapshot.StepType != *expected.StepType {
+		return fmt.Errorf("mission status file %q has step_type=%q, want step_type=%q", path, snapshot.StepType, *expected.StepType)
+	}
+	if expected.NoTools && len(snapshot.AllowedTools) != 0 {
+		return fmt.Errorf("mission status file %q has allowed_tools=%q, want allowed_tools=[]", path, snapshot.AllowedTools)
+	}
+	for _, toolName := range expected.HasTools {
+		if !containsString(snapshot.AllowedTools, toolName) {
+			return fmt.Errorf("mission status file %q has allowed_tools=%q, want allowed_tools to include %q", path, snapshot.AllowedTools, toolName)
+		}
+	}
 	return nil
 }
 
@@ -1041,6 +1066,15 @@ func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
 
 func valueOrNilString(value string) *string {
 	return &value
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
