@@ -195,6 +195,140 @@ func TestMissionStatusCommandWithValidFilePrintsExpectedJSON(t *testing.T) {
 	}
 }
 
+func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write", "write"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "draft",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"read", "read"},
+					RequiresApproval:  true,
+				},
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					DependsOn:         []string{"draft", "draft"},
+					RequiredAuthority: missioncontrol.AuthorityTierMedium,
+					AllowedTools:      []string{"write", "write"},
+				},
+				{
+					ID:                "final",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					DependsOn:         []string{"build"},
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.JobID != job.ID {
+		t.Fatalf("JobID = %q, want %q", got.JobID, job.ID)
+	}
+	if got.MaxAuthority != job.MaxAuthority {
+		t.Fatalf("MaxAuthority = %q, want %q", got.MaxAuthority, job.MaxAuthority)
+	}
+	if !reflect.DeepEqual(got.AllowedTools, job.AllowedTools) {
+		t.Fatalf("AllowedTools = %v, want %v", got.AllowedTools, job.AllowedTools)
+	}
+	if len(got.Steps) != len(job.Plan.Steps) {
+		t.Fatalf("len(Steps) = %d, want %d", len(got.Steps), len(job.Plan.Steps))
+	}
+	if got.Steps[0].StepID != "draft" || got.Steps[1].StepID != "build" || got.Steps[2].StepID != "final" {
+		t.Fatalf("step order = %#v, want draft/build/final", got.Steps)
+	}
+	if !reflect.DeepEqual(got.Steps[1].DependsOn, []string{"draft", "draft"}) {
+		t.Fatalf("build DependsOn = %v, want duplicate-preserving slice", got.Steps[1].DependsOn)
+	}
+	if !reflect.DeepEqual(got.Steps[1].AllowedTools, []string{"write", "write"}) {
+		t.Fatalf("build AllowedTools = %v, want duplicate-preserving slice", got.Steps[1].AllowedTools)
+	}
+	if !got.Steps[0].RequiresApproval {
+		t.Fatal("draft RequiresApproval = false, want true")
+	}
+}
+
+func TestMissionInspectCommandWithMissingFileReturnsError(t *testing.T) {
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", filepath.Join(t.TempDir(), "missing.json")})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read mission file") {
+		t.Fatalf("Execute() error = %q, want missing file message", err)
+	}
+}
+
+func TestMissionInspectCommandWithInvalidJSONReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mission.json")
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to decode mission file") {
+		t.Fatalf("Execute() error = %q, want decode failure", err)
+	}
+}
+
+func TestMissionInspectCommandWithInvalidMissionReturnsValidationError(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan:         missioncontrol.Plan{ID: "plan-1"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file") {
+		t.Fatalf("Execute() error = %q, want validation failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+		t.Fatalf("Execute() error = %q, want validation error code", err)
+	}
+}
+
 func TestMissionStatusCommandWithMissingFileReturnsError(t *testing.T) {
 	cmd := NewRootCmd()
 	cmd.SetOut(&bytes.Buffer{})

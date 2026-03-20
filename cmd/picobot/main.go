@@ -329,6 +329,46 @@ func NewRootCmd() *cobra.Command {
 	}
 	missionStatusCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
 
+	missionInspectCmd := &cobra.Command{
+		Use:          "inspect",
+		Short:        "Inspect a mission JSON file and list valid steps",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			missionFile, _ := cmd.Flags().GetString("mission-file")
+			if missionFile == "" {
+				return fmt.Errorf("--mission-file is required")
+			}
+
+			data, err := os.ReadFile(missionFile)
+			if err != nil {
+				return fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
+			}
+
+			var job missioncontrol.Job
+			if err := json.Unmarshal(data, &job); err != nil {
+				return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
+			}
+
+			if err := validateMissionJob(job); err != nil {
+				return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
+			}
+
+			summaryData, err := json.MarshalIndent(newMissionInspectSummary(job), "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode mission inspection output: %w", err)
+			}
+			summaryData = append(summaryData, '\n')
+
+			if _, err := cmd.OutOrStdout().Write(summaryData); err != nil {
+				return fmt.Errorf("failed to write mission inspection output: %w", err)
+			}
+
+			return nil
+		},
+	}
+	missionInspectCmd.Flags().String("mission-file", "", "Path to a mission job JSON file")
+
 	missionSetStepCmd := &cobra.Command{
 		Use:          "set-step",
 		Short:        "Write a mission step control JSON file",
@@ -367,6 +407,7 @@ func NewRootCmd() *cobra.Command {
 	missionSetStepCmd.Flags().String("step-id", "", "Mission step ID to activate")
 
 	missionCmd.AddCommand(missionStatusCmd)
+	missionCmd.AddCommand(missionInspectCmd)
 	missionCmd.AddCommand(missionSetStepCmd)
 	rootCmd.AddCommand(missionCmd)
 
@@ -646,6 +687,50 @@ type missionStatusSnapshot struct {
 type missionStepControlFile struct {
 	StepID    string `json:"step_id"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+type missionInspectSummary struct {
+	JobID        string                       `json:"job_id"`
+	MaxAuthority missioncontrol.AuthorityTier `json:"max_authority"`
+	AllowedTools []string                     `json:"allowed_tools"`
+	Steps        []missionInspectStepSummary  `json:"steps"`
+}
+
+type missionInspectStepSummary struct {
+	StepID            string                       `json:"step_id"`
+	StepType          missioncontrol.StepType      `json:"step_type"`
+	DependsOn         []string                     `json:"depends_on"`
+	RequiredAuthority missioncontrol.AuthorityTier `json:"required_authority"`
+	AllowedTools      []string                     `json:"allowed_tools"`
+	RequiresApproval  bool                         `json:"requires_approval"`
+}
+
+func validateMissionJob(job missioncontrol.Job) error {
+	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
+		return validationErrors[0]
+	}
+	return nil
+}
+
+func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
+	steps := make([]missionInspectStepSummary, 0, len(job.Plan.Steps))
+	for _, step := range job.Plan.Steps {
+		steps = append(steps, missionInspectStepSummary{
+			StepID:            step.ID,
+			StepType:          step.Type,
+			DependsOn:         append([]string(nil), step.DependsOn...),
+			RequiredAuthority: step.RequiredAuthority,
+			AllowedTools:      append([]string(nil), step.AllowedTools...),
+			RequiresApproval:  step.RequiresApproval,
+		})
+	}
+
+	return missionInspectSummary{
+		JobID:        job.ID,
+		MaxAuthority: job.MaxAuthority,
+		AllowedTools: append([]string(nil), job.AllowedTools...),
+		Steps:        steps,
+	}
 }
 
 func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (bool, error) {
