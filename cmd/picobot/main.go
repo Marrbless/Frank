@@ -792,15 +792,7 @@ func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
 	}
 }
 
-func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("failed to read mission step control file %q: %w", path, err)
-	}
-
+func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.Job, path string, data []byte) (string, bool, error) {
 	var control missionStepControlFile
 	if err := json.Unmarshal(data, &control); err != nil {
 		return "", false, fmt.Errorf("failed to decode mission step control file %q: %w", path, err)
@@ -814,6 +806,18 @@ func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.
 	}
 
 	return control.StepID, true, nil
+}
+
+func activateMissionStepFromControlFile(ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("failed to read mission step control file %q: %w", path, err)
+	}
+
+	return activateMissionStepFromControlData(ag, job, path, data)
 }
 
 func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job) []byte {
@@ -830,7 +834,7 @@ func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentL
 		return nil
 	}
 
-	stepID, changed, err := activateMissionStepFromControlFile(ag, job, controlFile)
+	stepID, changed, err := activateMissionStepFromControlData(ag, job, controlFile, data)
 	if err != nil {
 		log.Printf("mission step control startup apply failed for %q: %v", controlFile, err)
 		return nil

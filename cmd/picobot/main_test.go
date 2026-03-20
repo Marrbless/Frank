@@ -1632,6 +1632,43 @@ func TestRestoreMissionStepControlFileOnStartupAbsentFileIsNoOp(t *testing.T) {
 	}
 }
 
+func TestRestoreMissionStepControlFileOnStartupAbsentFileLeavesWatcherBaselineAsNoOp(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	controlFile := filepath.Join(t.TempDir(), "missing.json")
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	baseline := restoreMissionStepControlFileOnStartup(cmd, ag, job)
+	if baseline != nil {
+		t.Fatalf("restoreMissionStepControlFileOnStartup() baseline = %q, want nil", string(baseline))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go watchMissionStepControlFile(ctx, cmd, ag, job, controlFile, 5*time.Millisecond, baseline)
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+	if strings.Contains(logBuf.String(), "mission step control apply succeeded") {
+		t.Fatalf("log output = %q, want no watcher apply success", logBuf.String())
+	}
+}
+
 func TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedStep(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
