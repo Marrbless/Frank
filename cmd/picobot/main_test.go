@@ -365,6 +365,196 @@ func TestMissionStatusCommandWithInvalidFileReturnsError(t *testing.T) {
 	}
 }
 
+func TestMissionAssertCommandWithValidStatusFileAndNoConditionsSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:  true,
+		JobID:   "job-1",
+		StepID:  "build",
+		StepType: string(missioncontrol.StepTypeOneShotCode),
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotJobIDMatchSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--job-id", "job-1"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotStepIDMismatchFailsClearly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--step-id", "final"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has job_id="job-1" step_id="build" active=true, want step_id="final"`) {
+		t.Fatalf("Execute() error = %q, want clear step_id mismatch", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotActiveMismatchFailsClearly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: false,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--active=true"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has job_id="job-1" step_id="build" active=false, want active=true`) {
+		t.Fatalf("Execute() error = %q, want clear active mismatch", err)
+	}
+}
+
+func TestMissionAssertCommandWaitSucceedsWhenStatusFileChangesBeforeTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	done := make(chan error, 1)
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "assert",
+		"--status-file", path,
+		"--step-id", "final",
+		"--wait-timeout", "250ms",
+	})
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before matching status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "final",
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after matching status update")
+	}
+}
+
+func TestMissionAssertCommandWaitTimesOutWhenValuesNeverMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "assert",
+		"--status-file", path,
+		"--step-id", "final",
+		"--wait-timeout", "75ms",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting up to 75ms") {
+		t.Fatalf("Execute() error = %q, want timeout error", err)
+	}
+	if !strings.Contains(err.Error(), `has job_id="job-1" step_id="build" active=true, want step_id="final"`) {
+		t.Fatalf("Execute() error = %q, want observed and expected values", err)
+	}
+}
+
+func TestMissionAssertCommandWithMissingStatusFileReturnsClearError(t *testing.T) {
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", filepath.Join(t.TempDir(), "missing.json")})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "mission status file") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Execute() error = %q, want missing file message", err)
+	}
+}
+
+func TestMissionAssertCommandWithInvalidJSONReturnsClearError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to decode mission status file") {
+		t.Fatalf("Execute() error = %q, want decode failure", err)
+	}
+}
+
 func TestMissionSetStepCommandInvalidControlPathReturnsClearError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "control-dir")

@@ -370,6 +370,42 @@ func NewRootCmd() *cobra.Command {
 	}
 	missionInspectCmd.Flags().String("mission-file", "", "Path to a mission job JSON file")
 
+	missionAssertCmd := &cobra.Command{
+		Use:          "assert",
+		Short:        "Assert mission status conditions from a snapshot JSON file",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			statusFile, _ := cmd.Flags().GetString("status-file")
+			if statusFile == "" {
+				return fmt.Errorf("--status-file is required")
+			}
+
+			expected := missionStatusAssertionExpectation{}
+			if cmd.Flags().Changed("job-id") {
+				expected.JobID = valueOrNilString(cmd.Flags().Lookup("job-id").Value.String())
+			}
+			if cmd.Flags().Changed("step-id") {
+				expected.StepID = valueOrNilString(cmd.Flags().Lookup("step-id").Value.String())
+			}
+			if cmd.Flags().Changed("active") {
+				active, _ := cmd.Flags().GetBool("active")
+				expected.Active = &active
+			}
+
+			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
+			if waitTimeout <= 0 {
+				return assertMissionStatusSnapshot(statusFile, expected)
+			}
+			return waitForMissionStatusAssertion(statusFile, expected, waitTimeout)
+		},
+	}
+	missionAssertCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
+	missionAssertCmd.Flags().String("job-id", "", "Expected mission job ID")
+	missionAssertCmd.Flags().String("step-id", "", "Expected mission step ID")
+	missionAssertCmd.Flags().Bool("active", false, "Expected mission active state")
+	missionAssertCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status assertion success")
+
 	missionSetStepCmd := &cobra.Command{
 		Use:          "set-step",
 		Short:        "Write a mission step control JSON file",
@@ -449,6 +485,7 @@ func NewRootCmd() *cobra.Command {
 
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
+	missionCmd.AddCommand(missionAssertCmd)
 	missionCmd.AddCommand(missionSetStepCmd)
 	rootCmd.AddCommand(missionCmd)
 
@@ -730,6 +767,12 @@ type missionStepControlFile struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+type missionStatusAssertionExpectation struct {
+	JobID  *string
+	StepID *string
+	Active *bool
+}
+
 type missionInspectSummary struct {
 	JobID        string                       `json:"job_id"`
 	MaxAuthority missioncontrol.AuthorityTier `json:"max_authority"`
@@ -936,6 +979,49 @@ func waitForMissionStatusStepConfirmation(path string, stepID string, expectedJo
 	}
 }
 
+func assertMissionStatusSnapshot(path string, expected missionStatusAssertionExpectation) error {
+	snapshot, err := loadMissionStatusSnapshot(path)
+	if err != nil {
+		return err
+	}
+	return checkMissionStatusAssertion(path, snapshot, expected)
+}
+
+func waitForMissionStatusAssertion(path string, expected missionStatusAssertionExpectation, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		lastErr = assertMissionStatusSnapshot(path, expected)
+		if lastErr == nil {
+			return nil
+		}
+
+		if remaining := time.Until(deadline); remaining <= 0 {
+			return fmt.Errorf("timed out waiting up to %s for mission status file %q to satisfy assertion: %w", timeout, path, lastErr)
+		} else {
+			sleep := 100 * time.Millisecond
+			if remaining < sleep {
+				sleep = remaining
+			}
+			time.Sleep(sleep)
+		}
+	}
+}
+
+func checkMissionStatusAssertion(path string, snapshot missionStatusSnapshot, expected missionStatusAssertionExpectation) error {
+	if expected.JobID != nil && snapshot.JobID != *expected.JobID {
+		return fmt.Errorf("mission status file %q has job_id=%q step_id=%q active=%t, want job_id=%q", path, snapshot.JobID, snapshot.StepID, snapshot.Active, *expected.JobID)
+	}
+	if expected.StepID != nil && snapshot.StepID != *expected.StepID {
+		return fmt.Errorf("mission status file %q has job_id=%q step_id=%q active=%t, want step_id=%q", path, snapshot.JobID, snapshot.StepID, snapshot.Active, *expected.StepID)
+	}
+	if expected.Active != nil && snapshot.Active != *expected.Active {
+		return fmt.Errorf("mission status file %q has job_id=%q step_id=%q active=%t, want active=%t", path, snapshot.JobID, snapshot.StepID, snapshot.Active, *expected.Active)
+	}
+	return nil
+}
+
 func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -951,6 +1037,10 @@ func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
 	}
 
 	return snapshot, nil
+}
+
+func valueOrNilString(value string) *string {
+	return &value
 }
 
 func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
