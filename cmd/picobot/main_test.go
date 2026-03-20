@@ -364,7 +364,7 @@ func TestMissionStatusCommandWithInvalidFileReturnsError(t *testing.T) {
 	}
 }
 
-func TestMissionSetStepCommandWritesRequestedStepID(t *testing.T) {
+func TestMissionSetStepCommandWithoutStatusFilePreservesCurrentBehavior(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.json")
 
 	cmd := NewRootCmd()
@@ -405,6 +405,184 @@ func TestMissionSetStepCommandWritesUpdatedAt(t *testing.T) {
 	}
 	if _, offset := parsed.Zone(); offset != 0 {
 		t.Fatalf("UpdatedAt offset = %d, want 0", offset)
+	}
+}
+
+func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotAlreadyMatches(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active: true,
+		StepID: "final",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotChangesBeforeTimeout(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active: true,
+		StepID: "build",
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		data, err := json.Marshal(missionStatusSnapshot{
+			Active: true,
+			StepID: "final",
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- os.WriteFile(statusPath, data, 0o644)
+	}()
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "250ms",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("status update error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandWithStatusFileTimesOutWhenStepNeverMatches(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active: true,
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting") {
+		t.Fatalf("Execute() error = %q, want timeout message", err)
+	}
+	if !strings.Contains(err.Error(), `want active=true step_id="final"`) {
+		t.Fatalf("Execute() error = %q, want requested step confirmation message", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandWithInvalidStatusJSONReturnsError(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(statusPath, []byte("{"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting") {
+		t.Fatalf("Execute() error = %q, want timeout message", err)
+	}
+	if !strings.Contains(err.Error(), "failed to decode mission status file") {
+		t.Fatalf("Execute() error = %q, want status decode failure", err)
+	}
+}
+
+func TestMissionSetStepCommandWithMissingStatusFileReturnsErrorAfterWaiting(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	statusPath := filepath.Join(t.TempDir(), "missing-status.json")
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", statusPath,
+		"--wait-timeout", "75ms",
+	})
+
+	start := time.Now()
+	err := cmd.Execute()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting") {
+		t.Fatalf("Execute() error = %q, want timeout message", err)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("Execute() error = %q, want missing status file message", err)
+	}
+	if elapsed < 50*time.Millisecond {
+		t.Fatalf("Execute() elapsed = %v, want wait before timeout", elapsed)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
 	}
 }
 
@@ -1213,6 +1391,18 @@ func writeMissionStepControlFile(t *testing.T, control missionStepControlFile) s
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return path
+}
+
+func writeMissionStatusSnapshotFile(t *testing.T, path string, snapshot missionStatusSnapshot) {
+	t.Helper()
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 }
 
 func testMissionBootstrapJob() missioncontrol.Job {

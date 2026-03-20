@@ -417,12 +417,28 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("failed to write mission step control file %q: %w", controlFile, err)
 			}
 
+			statusFile, _ := cmd.Flags().GetString("status-file")
+			if statusFile == "" {
+				return nil
+			}
+
+			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
+			if !cmd.Flags().Changed("wait-timeout") {
+				waitTimeout = 5 * time.Second
+			}
+
+			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, waitTimeout); err != nil {
+				return err
+			}
+
 			return nil
 		},
 	}
 	missionSetStepCmd.Flags().String("control-file", "", "Path to write a mission step control JSON file")
 	missionSetStepCmd.Flags().String("step-id", "", "Mission step ID to activate")
 	missionSetStepCmd.Flags().String("mission-file", "", "Path to a mission job JSON file to validate before writing the mission step control file")
+	missionSetStepCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file to confirm after writing the mission step control file")
+	missionSetStepCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status confirmation after writing the mission step control file")
 
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
@@ -854,6 +870,49 @@ func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLo
 func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
 	missionFile, _ := cmd.Flags().GetString("mission-file")
 	return missionFile
+}
+
+func waitForMissionStatusStepConfirmation(path string, stepID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		snapshot, err := loadMissionStatusSnapshot(path)
+		if err != nil {
+			lastErr = err
+		} else if snapshot.Active && snapshot.StepID == stepID {
+			return nil
+		} else {
+			lastErr = fmt.Errorf("mission status file %q has active=%t step_id=%q, want active=true step_id=%q", path, snapshot.Active, snapshot.StepID, stepID)
+		}
+
+		if remaining := time.Until(deadline); remaining <= 0 {
+			return fmt.Errorf("timed out waiting up to %s for mission status file %q to confirm step %q: %w", timeout, path, stepID, lastErr)
+		} else {
+			sleep := 100 * time.Millisecond
+			if remaining < sleep {
+				sleep = remaining
+			}
+			time.Sleep(sleep)
+		}
+	}
+}
+
+func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return missionStatusSnapshot{}, fmt.Errorf("mission status file %q not found", path)
+		}
+		return missionStatusSnapshot{}, fmt.Errorf("failed to read mission status file %q: %w", path, err)
+	}
+
+	var snapshot missionStatusSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return missionStatusSnapshot{}, fmt.Errorf("failed to decode mission status file %q: %w", path, err)
+	}
+
+	return snapshot, nil
 }
 
 func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.AgentLoop, now time.Time) error {
