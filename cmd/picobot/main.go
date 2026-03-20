@@ -418,14 +418,8 @@ func NewRootCmd() *cobra.Command {
 				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			}
 
-			data, err := json.MarshalIndent(control, "", "  ")
-			if err != nil {
-				return fmt.Errorf("failed to encode mission step control file %q: %w", controlFile, err)
-			}
-			data = append(data, '\n')
-
-			if err := os.WriteFile(controlFile, data, 0o644); err != nil {
-				return fmt.Errorf("failed to write mission step control file %q: %w", controlFile, err)
+			if err := writeJSONAtomic(controlFile, control, "failed to encode mission step control file", "failed to write mission step control file"); err != nil {
+				return err
 			}
 
 			if statusFile == "" {
@@ -933,6 +927,51 @@ func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
 	return snapshot, nil
 }
 
+func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", encodeErrPrefix, path, err)
+	}
+	data = append(data, '\n')
+
+	if err := writeJSONBytesAtomic(path, data); err != nil {
+		return fmt.Errorf("%s %q: %w", writeErrPrefix, path, err)
+	}
+
+	return nil
+}
+
+func writeJSONBytesAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+
+	tempPath := tempFile.Name()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := tempFile.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		_ = os.Remove(tempPath)
+	}()
+
+	if _, err = tempFile.Write(data); err != nil {
+		return err
+	}
+	if err = tempFile.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tempPath, path); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.AgentLoop, now time.Time) error {
 	if path == "" {
 		return nil
@@ -960,17 +999,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		snapshot.AllowedTools = intersectAllowedTools(ec)
 	}
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to encode mission status snapshot %q: %w", path, err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("failed to write mission status snapshot %q: %w", path, err)
-	}
-
-	return nil
+	return writeJSONAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
 }
 
 func intersectAllowedTools(ec missioncontrol.ExecutionContext) []string {

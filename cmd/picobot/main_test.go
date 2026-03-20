@@ -364,6 +364,28 @@ func TestMissionStatusCommandWithInvalidFileReturnsError(t *testing.T) {
 	}
 }
 
+func TestMissionSetStepCommandInvalidControlPathReturnsClearError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control-dir")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "set-step", "--control-file", path, "--step-id", "final"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to write mission step control file") {
+		t.Fatalf("Execute() error = %q, want write failure", err)
+	}
+	assertNoAtomicTempFiles(t, dir, filepath.Base(path))
+}
+
 func TestMissionSetStepCommandWithoutStatusFilePreservesCurrentBehavior(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control.json")
 
@@ -380,6 +402,26 @@ func TestMissionSetStepCommandWithoutStatusFilePreservesCurrentBehavior(t *testi
 	if control.StepID != "final" {
 		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
 	}
+}
+
+func TestMissionSetStepCommandLeavesNoTempFileOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "control.json")
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "set-step", "--control-file", path, "--step-id", "final"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, path)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+	assertNoAtomicTempFiles(t, dir, filepath.Base(path))
 }
 
 func TestMissionSetStepCommandWritesUpdatedAt(t *testing.T) {
@@ -1329,6 +1371,23 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 }
 
+func TestWriteMissionStatusSnapshotLeavesNoTempFileOnSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status.json")
+	now := time.Date(2026, 3, 19, 12, 0, 0, 456, time.UTC)
+
+	if err := writeMissionStatusSnapshot(path, "", ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshot() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	if got.UpdatedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("UpdatedAt = %q, want %q", got.UpdatedAt, now.Format(time.RFC3339Nano))
+	}
+	assertNoAtomicTempFiles(t, dir, filepath.Base(path))
+}
+
 func TestWriteMissionStatusSnapshotAllowedToolsIntersectedAndSorted(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	job := missioncontrol.Job{
@@ -1368,13 +1427,20 @@ func TestWriteMissionStatusSnapshotAllowedToolsIntersectedAndSorted(t *testing.T
 
 func TestWriteMissionStatusSnapshotInvalidOutputPathReturnsError(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
-	err := writeMissionStatusSnapshot(t.TempDir(), "", ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "status-dir")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	err := writeMissionStatusSnapshot(path, "", ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatal("writeMissionStatusSnapshot() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "failed to write mission status snapshot") {
 		t.Fatalf("writeMissionStatusSnapshot() error = %q, want write failure", err)
 	}
+	assertNoAtomicTempFiles(t, dir, filepath.Base(path))
 }
 
 func TestApplyMissionStepControlFileSwitchesActiveStep(t *testing.T) {
@@ -1784,4 +1850,20 @@ func assertMissionStepControlFileMissing(t *testing.T, path string) {
 		t.Fatalf("Stat() error = %v, want os.ErrNotExist", err)
 	}
 	t.Fatalf("Stat() error = nil, want os.ErrNotExist for %q", path)
+}
+
+func assertNoAtomicTempFiles(t *testing.T, dir string, targetBase string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+
+	prefix := targetBase + ".tmp-"
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			t.Fatalf("unexpected temp file %q left in %q", entry.Name(), dir)
+		}
+	}
 }
