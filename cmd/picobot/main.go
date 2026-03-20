@@ -385,6 +385,23 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("--step-id is required")
 			}
 
+			missionFile, _ := cmd.Flags().GetString("mission-file")
+			if missionFile != "" {
+				data, err := os.ReadFile(missionFile)
+				if err != nil {
+					return fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
+				}
+
+				var job missioncontrol.Job
+				if err := json.Unmarshal(data, &job); err != nil {
+					return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
+				}
+
+				if err := validateMissionStepSelection(job, stepID); err != nil {
+					return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
+				}
+			}
+
 			control := missionStepControlFile{
 				StepID:    stepID,
 				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
@@ -405,6 +422,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	missionSetStepCmd.Flags().String("control-file", "", "Path to write a mission step control JSON file")
 	missionSetStepCmd.Flags().String("step-id", "", "Mission step ID to activate")
+	missionSetStepCmd.Flags().String("mission-file", "", "Path to a mission job JSON file to validate before writing the mission step control file")
 
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
@@ -710,6 +728,24 @@ func validateMissionJob(job missioncontrol.Job) error {
 		return validationErrors[0]
 	}
 	return nil
+}
+
+func validateMissionStepSelection(job missioncontrol.Job, stepID string) error {
+	if err := validateMissionJob(job); err != nil {
+		return err
+	}
+
+	for _, step := range job.Plan.Steps {
+		if step.ID == stepID {
+			return nil
+		}
+	}
+
+	return missioncontrol.ValidationError{
+		Code:    missioncontrol.RejectionCodeUnknownStep,
+		StepID:  stepID,
+		Message: fmt.Sprintf(`step %q not found in plan`, stepID),
+	}
 }
 
 func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {

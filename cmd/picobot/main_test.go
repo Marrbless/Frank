@@ -408,6 +408,157 @@ func TestMissionSetStepCommandWritesUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestMissionSetStepCommandWithMissionFileWritesControlFile(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	missionPath := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+	if control.UpdatedAt == "" {
+		t.Fatal("UpdatedAt = empty string, want RFC3339Nano timestamp")
+	}
+}
+
+func TestMissionSetStepCommandWithMissingMissionFileReturnsError(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	missionPath := filepath.Join(t.TempDir(), "missing-mission.json")
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read mission file") {
+		t.Fatalf("Execute() error = %q, want mission read failure", err)
+	}
+
+	assertMissionStepControlFileMissing(t, controlPath)
+}
+
+func TestMissionSetStepCommandWithInvalidMissionJSONReturnsError(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	missionPath := filepath.Join(t.TempDir(), "mission.json")
+	if err := os.WriteFile(missionPath, []byte("{"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--mission-file", missionPath,
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to decode mission file") {
+		t.Fatalf("Execute() error = %q, want mission decode failure", err)
+	}
+
+	assertMissionStepControlFileMissing(t, controlPath)
+}
+
+func TestMissionSetStepCommandWithInvalidMissionReturnsError(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	missionPath := writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "draft",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+				},
+			},
+		},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "draft",
+		"--mission-file", missionPath,
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file") {
+		t.Fatalf("Execute() error = %q, want mission validation failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+		t.Fatalf("Execute() error = %q, want validation error code", err)
+	}
+
+	assertMissionStepControlFileMissing(t, controlPath)
+}
+
+func TestMissionSetStepCommandWithUnknownMissionStepReturnsError(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	missionPath := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "missing",
+		"--mission-file", missionPath,
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file") {
+		t.Fatalf("Execute() error = %q, want mission validation failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+		t.Fatalf("Execute() error = %q, want unknown step error code", err)
+	}
+
+	assertMissionStepControlFileMissing(t, controlPath)
+}
+
 func TestMissionSetStepCommandWithoutRequiredFlagsReturnsError(t *testing.T) {
 	t.Run("missing control file", func(t *testing.T) {
 		cmd := NewRootCmd()
@@ -1118,4 +1269,17 @@ func readMissionStepControlFile(t *testing.T, path string) missionStepControlFil
 	}
 
 	return control
+}
+
+func assertMissionStepControlFileMissing(t *testing.T, path string) {
+	t.Helper()
+
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("Stat() error = %v, want os.ErrNotExist", err)
+	}
+	t.Fatalf("Stat() error = nil, want os.ErrNotExist for %q", path)
 }
