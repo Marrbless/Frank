@@ -265,8 +265,63 @@ func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	if !reflect.DeepEqual(got.Steps[1].AllowedTools, []string{"write", "write"}) {
 		t.Fatalf("build AllowedTools = %v, want duplicate-preserving slice", got.Steps[1].AllowedTools)
 	}
+	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"read"}) {
+		t.Fatalf("draft EffectiveAllowedTools = %v, want [read]", got.Steps[0].EffectiveAllowedTools)
+	}
+	if !reflect.DeepEqual(got.Steps[1].EffectiveAllowedTools, []string{"write"}) {
+		t.Fatalf("build EffectiveAllowedTools = %v, want [write]", got.Steps[1].EffectiveAllowedTools)
+	}
+	if !reflect.DeepEqual(got.Steps[2].EffectiveAllowedTools, []string{"read", "write"}) {
+		t.Fatalf("final EffectiveAllowedTools = %v, want [read write]", got.Steps[2].EffectiveAllowedTools)
+	}
 	if !got.Steps[0].RequiresApproval {
 		t.Fatal("draft RequiresApproval = false, want true")
+	}
+}
+
+func TestMissionInspectCommandWithZeroToolStepPrintsEmptyEffectiveAllowedTools(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: []string{},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "discuss",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"discuss"},
+				},
+			},
+		},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{}) {
+		t.Fatalf("discuss EffectiveAllowedTools = %v, want empty slice", got.Steps[0].EffectiveAllowedTools)
+	}
+	if !reflect.DeepEqual(got.Steps[1].EffectiveAllowedTools, []string{}) {
+		t.Fatalf("final EffectiveAllowedTools = %v, want empty slice", got.Steps[1].EffectiveAllowedTools)
 	}
 }
 

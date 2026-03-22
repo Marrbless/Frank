@@ -350,7 +350,12 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 			}
 
-			summaryData, err := json.MarshalIndent(newMissionInspectSummary(job), "", "  ")
+			summary, err := newMissionInspectSummary(job)
+			if err != nil {
+				return fmt.Errorf("failed to resolve mission inspection summary for %q: %w", missionFile, err)
+			}
+
+			summaryData, err := json.MarshalIndent(summary, "", "  ")
 			if err != nil {
 				return fmt.Errorf("failed to encode mission inspection output: %w", err)
 			}
@@ -831,12 +836,13 @@ type missionInspectSummary struct {
 }
 
 type missionInspectStepSummary struct {
-	StepID            string                       `json:"step_id"`
-	StepType          missioncontrol.StepType      `json:"step_type"`
-	DependsOn         []string                     `json:"depends_on"`
-	RequiredAuthority missioncontrol.AuthorityTier `json:"required_authority"`
-	AllowedTools      []string                     `json:"allowed_tools"`
-	RequiresApproval  bool                         `json:"requires_approval"`
+	StepID                string                       `json:"step_id"`
+	StepType              missioncontrol.StepType      `json:"step_type"`
+	DependsOn             []string                     `json:"depends_on"`
+	RequiredAuthority     missioncontrol.AuthorityTier `json:"required_authority"`
+	AllowedTools          []string                     `json:"allowed_tools"`
+	EffectiveAllowedTools []string                     `json:"effective_allowed_tools"`
+	RequiresApproval      bool                         `json:"requires_approval"`
 }
 
 func validateMissionJob(job missioncontrol.Job) error {
@@ -878,16 +884,22 @@ func loadMissionJobFile(path string) (missioncontrol.Job, error) {
 	return job, nil
 }
 
-func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
+func newMissionInspectSummary(job missioncontrol.Job) (missionInspectSummary, error) {
 	steps := make([]missionInspectStepSummary, 0, len(job.Plan.Steps))
 	for _, step := range job.Plan.Steps {
+		ec, err := missioncontrol.ResolveExecutionContext(job, step.ID)
+		if err != nil {
+			return missionInspectSummary{}, err
+		}
+
 		steps = append(steps, missionInspectStepSummary{
-			StepID:            step.ID,
-			StepType:          step.Type,
-			DependsOn:         append([]string(nil), step.DependsOn...),
-			RequiredAuthority: step.RequiredAuthority,
-			AllowedTools:      append([]string(nil), step.AllowedTools...),
-			RequiresApproval:  step.RequiresApproval,
+			StepID:                step.ID,
+			StepType:              step.Type,
+			DependsOn:             append([]string(nil), step.DependsOn...),
+			RequiredAuthority:     step.RequiredAuthority,
+			AllowedTools:          append([]string(nil), step.AllowedTools...),
+			EffectiveAllowedTools: intersectAllowedTools(ec),
+			RequiresApproval:      step.RequiresApproval,
 		})
 	}
 
@@ -896,7 +908,7 @@ func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
 		MaxAuthority: job.MaxAuthority,
 		AllowedTools: append([]string(nil), job.AllowedTools...),
 		Steps:        steps,
-	}
+	}, nil
 }
 
 func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.Job, path string, data []byte) (string, bool, error) {
