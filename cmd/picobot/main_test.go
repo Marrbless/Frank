@@ -279,6 +279,168 @@ func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	}
 }
 
+func TestMissionInspectCommandWithStepIDReturnsExactlyOneResolvedStep(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write", "search"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "draft",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+				},
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					DependsOn:         []string{"draft", "draft"},
+					RequiredAuthority: missioncontrol.AuthorityTierMedium,
+					AllowedTools:      []string{"write", "write"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.JobID != job.ID {
+		t.Fatalf("JobID = %q, want %q", got.JobID, job.ID)
+	}
+	if got.MaxAuthority != job.MaxAuthority {
+		t.Fatalf("MaxAuthority = %q, want %q", got.MaxAuthority, job.MaxAuthority)
+	}
+	if !reflect.DeepEqual(got.AllowedTools, job.AllowedTools) {
+		t.Fatalf("AllowedTools = %v, want %v", got.AllowedTools, job.AllowedTools)
+	}
+	if len(got.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(got.Steps))
+	}
+	if got.Steps[0].StepID != "build" {
+		t.Fatalf("StepID = %q, want %q", got.Steps[0].StepID, "build")
+	}
+	if !reflect.DeepEqual(got.Steps[0].DependsOn, []string{"draft", "draft"}) {
+		t.Fatalf("DependsOn = %v, want duplicate-preserving slice", got.Steps[0].DependsOn)
+	}
+}
+
+func TestMissionInspectCommandWithStepIDIncludesResolvedEffectiveAllowedTools(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write", "search"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierMedium,
+					AllowedTools:      []string{"write", "write"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"write"}) {
+		t.Fatalf("EffectiveAllowedTools = %v, want [write]", got.Steps[0].EffectiveAllowedTools)
+	}
+}
+
+func TestMissionInspectCommandWithUnknownStepReturnsClearError(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--step-id", "missing"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve mission inspection summary") {
+		t.Fatalf("Execute() error = %q, want clear inspect summary failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+		t.Fatalf("Execute() error = %q, want unknown_step code", err)
+	}
+	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
+		t.Fatalf("Execute() error = %q, want missing step message", err)
+	}
+}
+
+func TestMissionInspectCommandWithoutStepIDPreservesExistingBehavior(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.JobID != "job-1" {
+		t.Fatalf("JobID = %q, want %q", got.JobID, "job-1")
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("len(Steps) = %d, want 2", len(got.Steps))
+	}
+	if got.Steps[0].StepID != "build" || got.Steps[1].StepID != "final" {
+		t.Fatalf("step order = %#v, want build/final", got.Steps)
+	}
+}
+
 func TestMissionInspectCommandWithZeroToolStepPrintsEmptyEffectiveAllowedTools(t *testing.T) {
 	job := missioncontrol.Job{
 		ID:           "job-1",
