@@ -627,6 +627,48 @@ func TestMissionAssertCommandOneShotHasToolFailsClearlyWhenToolIsAbsent(t *testi
 	}
 }
 
+func TestMissionAssertCommandOneShotExactToolSucceedsWhenAllowedToolsExactlyMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read", "write"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--exact-tool", "read", "--exact-tool", "write"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotExactToolFailsClearlyWhenAllowedToolsDoNotExactlyMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--exact-tool", "read", "--exact-tool", "write"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has allowed_tools=["read"], want allowed_tools=["read" "write"]`) {
+		t.Fatalf("Execute() error = %q, want clear exact allowed_tools mismatch", err)
+	}
+}
+
 func TestMissionAssertCommandWaitSucceedsWhenStatusFileChangesBeforeTimeout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
@@ -688,6 +730,53 @@ func TestMissionAssertCommandWaitSucceedsWhenAllowedToolsChangeBeforeTimeout(t *
 		"mission", "assert",
 		"--status-file", path,
 		"--has-tool", "write",
+		"--wait-timeout", "250ms",
+	})
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before matching status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read", "write"},
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after matching status update")
+	}
+}
+
+func TestMissionAssertCommandWaitSucceedsWhenAllowedToolsExactlyMatchBeforeTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read"},
+	})
+
+	done := make(chan error, 1)
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "assert",
+		"--status-file", path,
+		"--exact-tool", "read",
+		"--exact-tool", "write",
 		"--wait-timeout", "250ms",
 	})
 	go func() {
@@ -801,6 +890,52 @@ func TestMissionAssertCommandNoToolsAndHasToolReturnsClearArgumentError(t *testi
 		t.Fatal("Execute() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "--no-tools and --has-tool cannot be used together") {
+		t.Fatalf("Execute() error = %q, want clear argument error", err)
+	}
+}
+
+func TestMissionAssertCommandNoToolsAndExactToolReturnsClearArgumentError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--no-tools", "--exact-tool", "read"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "--no-tools and --exact-tool cannot be used together") {
+		t.Fatalf("Execute() error = %q, want clear argument error", err)
+	}
+}
+
+func TestMissionAssertCommandHasToolAndExactToolReturnsClearArgumentError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		AllowedTools: []string{"read"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--has-tool", "read", "--exact-tool", "read"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "--has-tool and --exact-tool cannot be used together") {
 		t.Fatalf("Execute() error = %q, want clear argument error", err)
 	}
 }

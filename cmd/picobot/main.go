@@ -397,8 +397,18 @@ func NewRootCmd() *cobra.Command {
 			}
 			expected.NoTools, _ = cmd.Flags().GetBool("no-tools")
 			expected.HasTools, _ = cmd.Flags().GetStringArray("has-tool")
+			if cmd.Flags().Changed("exact-tool") {
+				expected.ExactAllowedTools, _ = cmd.Flags().GetStringArray("exact-tool")
+				expected.CheckExactAllowedTools = true
+			}
 			if expected.NoTools && len(expected.HasTools) > 0 {
 				return fmt.Errorf("--no-tools and --has-tool cannot be used together")
+			}
+			if expected.NoTools && expected.CheckExactAllowedTools {
+				return fmt.Errorf("--no-tools and --exact-tool cannot be used together")
+			}
+			if len(expected.HasTools) > 0 && expected.CheckExactAllowedTools {
+				return fmt.Errorf("--has-tool and --exact-tool cannot be used together")
 			}
 
 			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
@@ -415,6 +425,7 @@ func NewRootCmd() *cobra.Command {
 	missionAssertCmd.Flags().String("step-type", "", "Expected mission step type")
 	missionAssertCmd.Flags().Bool("no-tools", false, "Require allowed_tools to be empty")
 	missionAssertCmd.Flags().StringArray("has-tool", nil, "Require a named tool to appear in allowed_tools; repeat to require multiple tools")
+	missionAssertCmd.Flags().StringArray("exact-tool", nil, "Require allowed_tools to exactly match the named tools in order; repeat to require multiple tools")
 	missionAssertCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status assertion success")
 
 	missionAssertStepCmd := &cobra.Command{
