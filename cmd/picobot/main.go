@@ -855,6 +855,7 @@ type missionInspectStepSummary struct {
 	DependsOn             []string                     `json:"depends_on"`
 	RequiredAuthority     missioncontrol.AuthorityTier `json:"required_authority"`
 	AllowedTools          []string                     `json:"allowed_tools"`
+	SuccessCriteria       []string                     `json:"success_criteria"`
 	EffectiveAllowedTools []string                     `json:"effective_allowed_tools"`
 	RequiresApproval      bool                         `json:"requires_approval"`
 }
@@ -935,6 +936,7 @@ func newMissionInspectStepSummary(step missioncontrol.Step, ec missioncontrol.Ex
 		DependsOn:             append([]string(nil), step.DependsOn...),
 		RequiredAuthority:     step.RequiredAuthority,
 		AllowedTools:          append([]string(nil), step.AllowedTools...),
+		SuccessCriteria:       append([]string(nil), step.SuccessCriteria...),
 		EffectiveAllowedTools: intersectAllowedTools(ec),
 		RequiresApproval:      step.RequiresApproval,
 	}

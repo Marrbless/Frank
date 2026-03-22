@@ -210,6 +210,7 @@ func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 					RequiredAuthority: missioncontrol.AuthorityTierLow,
 					AllowedTools:      []string{"read", "read"},
 					RequiresApproval:  true,
+					SuccessCriteria:   []string{"share a concise plan"},
 				},
 				{
 					ID:                "build",
@@ -217,6 +218,7 @@ func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 					DependsOn:         []string{"draft", "draft"},
 					RequiredAuthority: missioncontrol.AuthorityTierMedium,
 					AllowedTools:      []string{"write", "write"},
+					SuccessCriteria:   []string{"produce code"},
 				},
 				{
 					ID:                "final",
@@ -265,6 +267,12 @@ func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	if !reflect.DeepEqual(got.Steps[1].AllowedTools, []string{"write", "write"}) {
 		t.Fatalf("build AllowedTools = %v, want duplicate-preserving slice", got.Steps[1].AllowedTools)
 	}
+	if !reflect.DeepEqual(got.Steps[0].SuccessCriteria, []string{"share a concise plan"}) {
+		t.Fatalf("draft SuccessCriteria = %v, want [share a concise plan]", got.Steps[0].SuccessCriteria)
+	}
+	if !reflect.DeepEqual(got.Steps[1].SuccessCriteria, []string{"produce code"}) {
+		t.Fatalf("build SuccessCriteria = %v, want [produce code]", got.Steps[1].SuccessCriteria)
+	}
 	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"read"}) {
 		t.Fatalf("draft EffectiveAllowedTools = %v, want [read]", got.Steps[0].EffectiveAllowedTools)
 	}
@@ -299,6 +307,7 @@ func TestMissionInspectCommandWithStepIDReturnsExactlyOneResolvedStep(t *testing
 					DependsOn:         []string{"draft", "draft"},
 					RequiredAuthority: missioncontrol.AuthorityTierMedium,
 					AllowedTools:      []string{"write", "write"},
+					SuccessCriteria:   []string{"produce code"},
 				},
 				{
 					ID:        "final",
@@ -342,6 +351,9 @@ func TestMissionInspectCommandWithStepIDReturnsExactlyOneResolvedStep(t *testing
 	}
 	if !reflect.DeepEqual(got.Steps[0].DependsOn, []string{"draft", "draft"}) {
 		t.Fatalf("DependsOn = %v, want duplicate-preserving slice", got.Steps[0].DependsOn)
+	}
+	if !reflect.DeepEqual(got.Steps[0].SuccessCriteria, []string{"produce code"}) {
+		t.Fatalf("SuccessCriteria = %v, want [produce code]", got.Steps[0].SuccessCriteria)
 	}
 }
 
@@ -438,6 +450,61 @@ func TestMissionInspectCommandWithoutStepIDPreservesExistingBehavior(t *testing.
 	}
 	if got.Steps[0].StepID != "build" || got.Steps[1].StepID != "final" {
 		t.Fatalf("step order = %#v, want build/final", got.Steps)
+	}
+}
+
+func TestMissionInspectCommandSuccessCriteriaZeroValuePreservesExistingBehavior(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "draft",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					SuccessCriteria:   []string{},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if got.Steps[0].SuccessCriteria != nil {
+		t.Fatalf("draft SuccessCriteria = %v, want nil", got.Steps[0].SuccessCriteria)
+	}
+	if got.Steps[1].SuccessCriteria != nil {
+		t.Fatalf("build SuccessCriteria = %v, want nil", got.Steps[1].SuccessCriteria)
+	}
+	if got.Steps[2].SuccessCriteria != nil {
+		t.Fatalf("final SuccessCriteria = %v, want nil", got.Steps[2].SuccessCriteria)
 	}
 }
 
