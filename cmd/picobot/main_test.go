@@ -368,9 +368,9 @@ func TestMissionStatusCommandWithInvalidFileReturnsError(t *testing.T) {
 func TestMissionAssertCommandWithValidStatusFileAndNoConditionsSucceeds(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
-		Active:  true,
-		JobID:   "job-1",
-		StepID:  "build",
+		Active:   true,
+		JobID:    "job-1",
+		StepID:   "build",
 		StepType: string(missioncontrol.StepTypeOneShotCode),
 	})
 
@@ -747,6 +747,266 @@ func TestMissionAssertCommandNoToolsAndHasToolReturnsClearArgumentError(t *testi
 	}
 	if !strings.Contains(err.Error(), "--no-tools and --has-tool cannot be used together") {
 		t.Fatalf("Execute() error = %q, want clear argument error", err)
+	}
+}
+
+func TestMissionAssertStepCommandSucceedsWhenStatusMatchesMissionStep(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"write", "read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read", "write"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", statusPath, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertStepCommandSucceedsForZeroToolStepWhenStatusAllowedToolsIsNil(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "phone-discussion-v1",
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: []string{},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "discuss",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"discuss"},
+				},
+			},
+		},
+	}
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:    true,
+		JobID:     "phone-discussion-v1",
+		StepID:    "discuss",
+		StepType:  string(missioncontrol.StepTypeDiscussion),
+		UpdatedAt: "2026-03-21T10:00:00Z",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", statusPath, "--step-id", "discuss"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertStepCommandFailsClearlyWhenAllowedToolsDoNotExactlyMatch(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"write", "read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", statusPath, "--step-id", "build"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has allowed_tools=["read"], want allowed_tools=["read" "write"]`) {
+		t.Fatalf("Execute() error = %q, want exact allowed_tools mismatch", err)
+	}
+}
+
+func TestMissionAssertStepCommandUnknownStepReturnsClearError(t *testing.T) {
+	missionPath := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", statusPath, "--step-id", "missing"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file") {
+		t.Fatalf("Execute() error = %q, want validation failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+		t.Fatalf("Execute() error = %q, want unknown_step code", err)
+	}
+	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
+		t.Fatalf("Execute() error = %q, want missing step message", err)
+	}
+}
+
+func TestMissionAssertStepCommandWaitSucceedsWhenStatusChangesBeforeTimeout(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{"write", "read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionPath := writeMissionBootstrapJobFile(t, job)
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+	})
+
+	done := make(chan error, 1)
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "assert-step",
+		"--mission-file", missionPath,
+		"--status-file", statusPath,
+		"--step-id", "build",
+		"--wait-timeout", "250ms",
+	})
+	go func() {
+		done <- cmd.Execute()
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Execute() returned before matching status update: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active:       true,
+		JobID:        "job-1",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read", "write"},
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Execute() did not return after matching status update")
+	}
+}
+
+func TestMissionAssertStepCommandWithInvalidMissionReturnsValidationError(t *testing.T) {
+	missionPath := writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan:         missioncontrol.Plan{ID: "plan-1"},
+	})
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", statusPath, "--step-id", "build"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file") {
+		t.Fatalf("Execute() error = %q, want validation failure", err)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+		t.Fatalf("Execute() error = %q, want validation error code", err)
 	}
 }
 

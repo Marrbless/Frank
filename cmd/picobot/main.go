@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -341,16 +342,10 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("--mission-file is required")
 			}
 
-			data, err := os.ReadFile(missionFile)
+			job, err := loadMissionJobFile(missionFile)
 			if err != nil {
-				return fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
+				return err
 			}
-
-			var job missioncontrol.Job
-			if err := json.Unmarshal(data, &job); err != nil {
-				return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
-			}
-
 			if err := validateMissionJob(job); err != nil {
 				return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 			}
@@ -416,6 +411,49 @@ func NewRootCmd() *cobra.Command {
 	missionAssertCmd.Flags().Bool("no-tools", false, "Require allowed_tools to be empty")
 	missionAssertCmd.Flags().StringArray("has-tool", nil, "Require a named tool to appear in allowed_tools; repeat to require multiple tools")
 	missionAssertCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status assertion success")
+
+	missionAssertStepCmd := &cobra.Command{
+		Use:          "assert-step",
+		Short:        "Assert mission status matches a specific step from a mission JSON file",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			statusFile, _ := cmd.Flags().GetString("status-file")
+			if statusFile == "" {
+				return fmt.Errorf("--status-file is required")
+			}
+
+			missionFile, _ := cmd.Flags().GetString("mission-file")
+			if missionFile == "" {
+				return fmt.Errorf("--mission-file is required")
+			}
+
+			stepID, _ := cmd.Flags().GetString("step-id")
+			if stepID == "" {
+				return fmt.Errorf("--step-id is required")
+			}
+
+			job, err := loadMissionJobFile(missionFile)
+			if err != nil {
+				return err
+			}
+
+			expected, err := newMissionStatusAssertionForStep(job, stepID)
+			if err != nil {
+				return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
+			}
+
+			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
+			if waitTimeout <= 0 {
+				return assertMissionStatusSnapshot(statusFile, expected)
+			}
+			return waitForMissionStatusAssertion(statusFile, expected, waitTimeout)
+		},
+	}
+	missionAssertStepCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
+	missionAssertStepCmd.Flags().String("mission-file", "", "Path to a mission job JSON file")
+	missionAssertStepCmd.Flags().String("step-id", "", "Mission step ID to assert against the live status snapshot")
+	missionAssertStepCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status to match the mission step")
 
 	missionSetStepCmd := &cobra.Command{
 		Use:          "set-step",
@@ -497,6 +535,7 @@ func NewRootCmd() *cobra.Command {
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
 	missionCmd.AddCommand(missionAssertCmd)
+	missionCmd.AddCommand(missionAssertStepCmd)
 	missionCmd.AddCommand(missionSetStepCmd)
 	rootCmd.AddCommand(missionCmd)
 
@@ -745,14 +784,9 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 		return nil, fmt.Errorf("--mission-file requires --mission-step")
 	}
 
-	data, err := os.ReadFile(missionFile)
+	job, err := loadMissionJobFile(missionFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read mission file %q: %w", missionFile, err)
-	}
-
-	var job missioncontrol.Job
-	if err := json.Unmarshal(data, &job); err != nil {
-		return nil, fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
+		return nil, err
 	}
 
 	if err := ag.ActivateMissionStep(job, missionStep); err != nil {
@@ -779,12 +813,14 @@ type missionStepControlFile struct {
 }
 
 type missionStatusAssertionExpectation struct {
-	JobID    *string
-	StepID   *string
-	Active   *bool
-	StepType *string
-	NoTools  bool
-	HasTools []string
+	JobID                  *string
+	StepID                 *string
+	Active                 *bool
+	StepType               *string
+	NoTools                bool
+	HasTools               []string
+	ExactAllowedTools      []string
+	CheckExactAllowedTools bool
 }
 
 type missionInspectSummary struct {
@@ -826,6 +862,20 @@ func validateMissionStepSelection(job missioncontrol.Job, stepID string) error {
 		StepID:  stepID,
 		Message: fmt.Sprintf(`step %q not found in plan`, stepID),
 	}
+}
+
+func loadMissionJobFile(path string) (missioncontrol.Job, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return missioncontrol.Job{}, fmt.Errorf("failed to read mission file %q: %w", path, err)
+	}
+
+	var job missioncontrol.Job
+	if err := json.Unmarshal(data, &job); err != nil {
+		return missioncontrol.Job{}, fmt.Errorf("failed to decode mission file %q: %w", path, err)
+	}
+
+	return job, nil
 }
 
 func newMissionInspectSummary(job missioncontrol.Job) missionInspectSummary {
@@ -1023,6 +1073,30 @@ func waitForMissionStatusAssertion(path string, expected missionStatusAssertionE
 	}
 }
 
+func newMissionStatusAssertionForStep(job missioncontrol.Job, stepID string) (missionStatusAssertionExpectation, error) {
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return missionStatusAssertionExpectation{}, err
+	}
+
+	expected := missionStatusAssertionExpectation{
+		ExactAllowedTools:      intersectAllowedTools(ec),
+		CheckExactAllowedTools: true,
+	}
+	if ec.Job != nil {
+		expected.JobID = valueOrNilString(ec.Job.ID)
+	}
+	if ec.Step != nil {
+		expected.StepID = valueOrNilString(ec.Step.ID)
+		stepType := string(ec.Step.Type)
+		expected.StepType = &stepType
+	}
+	active := true
+	expected.Active = &active
+
+	return expected, nil
+}
+
 func checkMissionStatusAssertion(path string, snapshot missionStatusSnapshot, expected missionStatusAssertionExpectation) error {
 	if expected.JobID != nil && snapshot.JobID != *expected.JobID {
 		return fmt.Errorf("mission status file %q has job_id=%q step_id=%q active=%t, want job_id=%q", path, snapshot.JobID, snapshot.StepID, snapshot.Active, *expected.JobID)
@@ -1044,7 +1118,17 @@ func checkMissionStatusAssertion(path string, snapshot missionStatusSnapshot, ex
 			return fmt.Errorf("mission status file %q has allowed_tools=%q, want allowed_tools to include %q", path, snapshot.AllowedTools, toolName)
 		}
 	}
+	if expected.CheckExactAllowedTools && !equalAllowedToolsExact(snapshot.AllowedTools, expected.ExactAllowedTools) {
+		return fmt.Errorf("mission status file %q has allowed_tools=%q, want allowed_tools=%q", path, snapshot.AllowedTools, expected.ExactAllowedTools)
+	}
 	return nil
+}
+
+func equalAllowedToolsExact(got []string, want []string) bool {
+	if len(got) == 0 && len(want) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(got, want)
 }
 
 func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
