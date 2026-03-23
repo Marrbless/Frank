@@ -317,6 +317,33 @@ func assertAuditEvent(t *testing.T, event missioncontrol.AuditEvent, wantJobID, 
 	}
 }
 
+func assertMissionRuntimeCompletedWithSteps(t *testing.T, ag *AgentLoop, wantCompleted []string) {
+	t.Helper()
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after final completion")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateCompleted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateCompleted)
+	}
+	if runtime.ActiveStepID != "" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want empty", runtime.ActiveStepID)
+	}
+	if len(runtime.CompletedSteps) != len(wantCompleted) {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want %d completed steps", runtime.CompletedSteps, len(wantCompleted))
+	}
+	for i, want := range wantCompleted {
+		if runtime.CompletedSteps[i].StepID != want {
+			t.Fatalf("MissionRuntimeState().CompletedSteps[%d].StepID = %q, want %q", i, runtime.CompletedSteps[i].StepID, want)
+		}
+	}
+}
+
 func TestProcessDirectOneShotCodeWithArtifactAndVerificationEvidencePausesStep(t *testing.T) {
 	t.Parallel()
 
@@ -383,6 +410,104 @@ func TestProcessDirectStaticArtifactWithStructureValidationPausesStep(t *testing
 	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("ActiveMissionStep() ok = true, want false after validated static_artifact completion")
 	}
+}
+
+func TestProcessDirectOneShotCodeThenFinalResponseCompletesJob(t *testing.T) {
+	t.Parallel()
+
+	job := testFilesystemMissionJob()
+
+	b := chat.NewHub(10)
+	buildProv := &filesystemArtifactProvider{}
+	ag := NewAgentLoop(b, buildProv, buildProv.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("make the file", 2*time.Second)
+	if err != nil {
+		t.Fatalf("build ProcessDirect() error = %v", err)
+	}
+	if resp != "Created result.txt and verified it exists." {
+		t.Fatalf("build ProcessDirect() response = %q, want verified artifact response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false after build, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State after build = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps after build = %#v, want build completion", runtime.CompletedSteps)
+	}
+
+	finalProv := &finalResponseProvider{content: "Here is the final answer with the requested artifact completed."}
+	ag.provider = finalProv
+	if err := ag.ActivateMissionStep(job, "final"); err != nil {
+		t.Fatalf("ActivateMissionStep(final) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("final ProcessDirect() error = %v", err)
+	}
+	if resp != finalProv.content {
+		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, finalProv.content)
+	}
+
+	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
+}
+
+func TestProcessDirectStaticArtifactThenFinalResponseCompletesJob(t *testing.T) {
+	t.Parallel()
+
+	job := testStaticArtifactMissionJob()
+
+	b := chat.NewHub(10)
+	buildProv := &filesystemStaticArtifactProvider{}
+	ag := NewAgentLoop(b, buildProv, buildProv.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("make the artifact", 2*time.Second)
+	if err != nil {
+		t.Fatalf("build ProcessDirect() error = %v", err)
+	}
+	if resp != "Created report.json and verified the JSON structure." {
+		t.Fatalf("build ProcessDirect() response = %q, want verified static artifact response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false after build, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State after build = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps after build = %#v, want build completion", runtime.CompletedSteps)
+	}
+
+	finalProv := &finalResponseProvider{content: "Here is the final answer with the requested report delivered."}
+	ag.provider = finalProv
+	if err := ag.ActivateMissionStep(job, "final"); err != nil {
+		t.Fatalf("ActivateMissionStep(final) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("final ProcessDirect() error = %v", err)
+	}
+	if resp != finalProv.content {
+		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, finalProv.content)
+	}
+
+	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
 }
 
 func TestProcessDirectDiscussionSubtypeTransitionsToWaitingUser(t *testing.T) {
