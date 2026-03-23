@@ -6,8 +6,9 @@ import (
 )
 
 type ExecutionContext struct {
-	Job  *Job
-	Step *Step
+	Job     *Job
+	Step    *Step
+	Runtime *JobRuntimeState
 }
 
 type executionContextKey struct{}
@@ -48,6 +49,13 @@ func NewDefaultToolGuard() ToolGuard {
 func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, toolName string, args map[string]interface{}) GuardDecision {
 	if ec.Job == nil || ec.Step == nil {
 		return newGuardDecision(ec, toolName, false, RejectionCodeToolNotAllowed, "missing job or step context")
+	}
+	if err := ValidateRuntimeExecution(ec); err != nil {
+		validationErr, ok := err.(ValidationError)
+		if !ok {
+			return newGuardDecision(ec, toolName, false, RejectionCodeInvalidRuntimeState, err.Error())
+		}
+		return newGuardDecision(ec, toolName, false, validationErr.Code, validationErr.Message)
 	}
 
 	if ec.Step.RequiresApproval {

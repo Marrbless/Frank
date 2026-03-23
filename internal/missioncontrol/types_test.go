@@ -12,6 +12,15 @@ func TestEnumValues(t *testing.T) {
 	if JobStateRunning != "running" {
 		t.Fatalf("JobStateRunning = %q, want %q", JobStateRunning, "running")
 	}
+	if JobStateWaitingUser != "waiting_user" {
+		t.Fatalf("JobStateWaitingUser = %q, want %q", JobStateWaitingUser, "waiting_user")
+	}
+	if JobStatePaused != "paused" {
+		t.Fatalf("JobStatePaused = %q, want %q", JobStatePaused, "paused")
+	}
+	if JobStateFailed != "failed" {
+		t.Fatalf("JobStateFailed = %q, want %q", JobStateFailed, "failed")
+	}
 
 	if StepTypeDiscussion != "discussion" {
 		t.Fatalf("StepTypeDiscussion = %q, want %q", StepTypeDiscussion, "discussion")
@@ -35,6 +44,9 @@ func TestEnumValues(t *testing.T) {
 
 	if RejectionCodeApprovalRequired != "approval_required" {
 		t.Fatalf("RejectionCodeApprovalRequired = %q, want %q", RejectionCodeApprovalRequired, "approval_required")
+	}
+	if RejectionCodeWaitingUser != "waiting_user" {
+		t.Fatalf("RejectionCodeWaitingUser = %q, want %q", RejectionCodeWaitingUser, "waiting_user")
 	}
 }
 

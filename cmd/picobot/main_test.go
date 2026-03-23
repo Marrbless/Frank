@@ -2636,6 +2636,15 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	if !got.RequiresApproval {
 		t.Fatal("RequiresApproval = false, want true")
 	}
+	if got.Runtime == nil {
+		t.Fatal("Runtime = nil, want non-nil")
+	}
+	if got.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("Runtime.State = %q, want %q", got.Runtime.State, missioncontrol.JobStateRunning)
+	}
+	if got.Runtime.ActiveStepID != "build" {
+		t.Fatalf("Runtime.ActiveStepID = %q, want %q", got.Runtime.ActiveStepID, "build")
+	}
 }
 
 func TestWriteMissionStatusSnapshotLeavesNoTempFileOnSuccess(t *testing.T) {
@@ -3083,6 +3092,99 @@ func TestRestoreMissionStepControlFileOnStartupInitialSnapshotReflectsRestoredSt
 	snapshot := readMissionStatusSnapshotFile(t, statusFile)
 	if snapshot.StepID != "final" {
 		t.Fatalf("initial snapshot StepID = %q, want %q", snapshot.StepID, "final")
+	}
+	if snapshot.Runtime == nil {
+		t.Fatal("initial snapshot Runtime = nil, want non-nil")
+	}
+	if snapshot.Runtime.ActiveStepID != "final" {
+		t.Fatalf("initial snapshot Runtime.ActiveStepID = %q, want %q", snapshot.Runtime.ActiveStepID, "final")
+	}
+}
+
+func TestMissionStatusBootstrapRequiresResumeApprovalAfterReboot(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStateRunning,
+			ActiveStepID: "build",
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want resume approval failure")
+	}
+	if !strings.Contains(err.Error(), "--mission-resume-approved") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want resume approval message", err)
+	}
+}
+
+func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:          job.ID,
+			State:          missioncontrol.JobStateWaitingUser,
+			ActiveStepID:   "build",
+			WaitingReason:  "awaiting operator confirmation",
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{{StepID: "draft", At: time.Date(2026, 3, 23, 10, 0, 0, 0, time.UTC)}},
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-resume-approved", "true"); err != nil {
+		t.Fatalf("Flags().Set(mission-resume-approved) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+	if len(ec.Runtime.CompletedSteps) != 1 || ec.Runtime.CompletedSteps[0].StepID != "draft" {
+		t.Fatalf("ActiveMissionStep().Runtime.CompletedSteps = %#v, want preserved draft completion", ec.Runtime.CompletedSteps)
 	}
 }
 

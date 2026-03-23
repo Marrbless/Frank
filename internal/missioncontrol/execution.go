@@ -14,6 +14,7 @@ func CloneExecutionContext(ec ExecutionContext) ExecutionContext {
 		stepCopy := copyStep(*ec.Step)
 		cloned.Step = &stepCopy
 	}
+	cloned.Runtime = CloneJobRuntimeState(ec.Runtime)
 	return cloned
 }
 

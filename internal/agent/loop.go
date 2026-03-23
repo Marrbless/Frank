@@ -159,6 +159,20 @@ func (a *AgentLoop) ActiveMissionStep() (missioncontrol.ExecutionContext, bool) 
 	return a.taskState.ExecutionContext()
 }
 
+func (a *AgentLoop) MissionRuntimeState() (missioncontrol.JobRuntimeState, bool) {
+	if a == nil || a.taskState == nil {
+		return missioncontrol.JobRuntimeState{}, false
+	}
+	return a.taskState.MissionRuntimeState()
+}
+
+func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, resumeApproved bool) error {
+	if a == nil || a.taskState == nil {
+		return nil
+	}
+	return a.taskState.ResumeRuntime(job, runtimeState, resumeApproved)
+}
+
 func (a *AgentLoop) SetMissionRequired(required bool) {
 	if a == nil || a.tools == nil {
 		return

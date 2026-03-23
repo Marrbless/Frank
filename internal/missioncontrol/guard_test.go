@@ -110,6 +110,21 @@ func TestDefaultToolGuardMissingJobOrStepContext(t *testing.T) {
 	assertDenied(t, decision, RejectionCodeToolNotAllowed, "missing job or step context")
 }
 
+func TestDefaultToolGuardWaitingUserDenied(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Runtime = &JobRuntimeState{
+		JobID:        ec.Job.ID,
+		State:        JobStateWaitingUser,
+		ActiveStepID: ec.Step.ID,
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeWaitingUser, "job is waiting for user input")
+}
+
 func TestDefaultToolGuardEventFieldsPopulated(t *testing.T) {
 	t.Parallel()
 
@@ -186,5 +201,10 @@ func testExecutionContext() ExecutionContext {
 	return ExecutionContext{
 		Job:  job,
 		Step: step,
+		Runtime: &JobRuntimeState{
+			JobID:        job.ID,
+			State:        JobStateRunning,
+			ActiveStepID: step.ID,
+		},
 	}
 }

@@ -788,6 +788,7 @@ func addMissionBootstrapFlags(cmd *cobra.Command) {
 	cmd.Flags().String("mission-file", "", "Path to a mission job JSON file to activate at startup")
 	cmd.Flags().String("mission-step", "", "Mission step ID to activate from the mission file")
 	cmd.Flags().String("mission-status-file", "", "Path to write a mission status snapshot after startup")
+	cmd.Flags().Bool("mission-resume-approved", false, "Approve resuming a persisted mission runtime after reboot")
 }
 
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
@@ -821,9 +822,29 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 		return nil, fmt.Errorf("--mission-file requires --mission-step")
 	}
 
+	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	resumeApproved, _ := cmd.Flags().GetBool("mission-resume-approved")
 	job, err := loadMissionJobFile(missionFile)
 	if err != nil {
 		return nil, err
+	}
+
+	if runtimeState, ok, err := loadPersistedMissionRuntime(statusFile, job); err != nil {
+		return nil, err
+	} else if ok {
+		if runtimeState.ActiveStepID != "" && runtimeState.ActiveStepID != missionStep {
+			return nil, fmt.Errorf("persisted mission runtime step %q does not match --mission-step %q", runtimeState.ActiveStepID, missionStep)
+		}
+		if !resumeApproved {
+			return nil, missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeResumeApprovalRequired,
+				Message: "persisted mission runtime requires --mission-resume-approved before resuming after reboot",
+			}
+		}
+		if err := ag.ResumeMissionRuntime(job, runtimeState, true); err != nil {
+			return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", statusFile, err)
+		}
+		return &job, nil
 	}
 
 	if err := ag.ActivateMissionStep(job, missionStep); err != nil {
@@ -834,16 +855,17 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 }
 
 type missionStatusSnapshot struct {
-	MissionRequired   bool                         `json:"mission_required"`
-	Active            bool                         `json:"active"`
-	MissionFile       string                       `json:"mission_file"`
-	JobID             string                       `json:"job_id"`
-	StepID            string                       `json:"step_id"`
-	StepType          string                       `json:"step_type"`
-	RequiredAuthority missioncontrol.AuthorityTier `json:"required_authority"`
-	RequiresApproval  bool                         `json:"requires_approval"`
-	AllowedTools      []string                     `json:"allowed_tools"`
-	UpdatedAt         string                       `json:"updated_at"`
+	MissionRequired   bool                            `json:"mission_required"`
+	Active            bool                            `json:"active"`
+	MissionFile       string                          `json:"mission_file"`
+	JobID             string                          `json:"job_id"`
+	StepID            string                          `json:"step_id"`
+	StepType          string                          `json:"step_type"`
+	RequiredAuthority missioncontrol.AuthorityTier    `json:"required_authority"`
+	RequiresApproval  bool                            `json:"requires_approval"`
+	AllowedTools      []string                        `json:"allowed_tools"`
+	Runtime           *missioncontrol.JobRuntimeState `json:"runtime,omitempty"`
+	UpdatedAt         string                          `json:"updated_at"`
 }
 
 type missionStepControlFile struct {
@@ -919,6 +941,30 @@ func loadMissionJobFile(path string) (missioncontrol.Job, error) {
 	}
 
 	return job, nil
+}
+
+func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, bool, error) {
+	if path == "" {
+		return missioncontrol.JobRuntimeState{}, false, nil
+	}
+
+	snapshot, err := loadMissionStatusSnapshot(path)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return missioncontrol.JobRuntimeState{}, false, nil
+		}
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	if snapshot.Runtime == nil {
+		return missioncontrol.JobRuntimeState{}, false, nil
+	}
+	if snapshot.Runtime.JobID != "" && snapshot.Runtime.JobID != job.ID {
+		return missioncontrol.JobRuntimeState{}, false, nil
+	}
+	if missioncontrol.IsTerminalJobState(snapshot.Runtime.State) {
+		return missioncontrol.JobRuntimeState{}, false, nil
+	}
+	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), true, nil
 }
 
 func newMissionInspectSummary(job missioncontrol.Job, stepID string) (missionInspectSummary, error) {
@@ -1282,6 +1328,11 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		return nil
 	}
 
+	var runtimeState *missioncontrol.JobRuntimeState
+	if currentRuntime, ok := ag.MissionRuntimeState(); ok {
+		runtimeState = missioncontrol.CloneJobRuntimeState(&currentRuntime)
+	}
+
 	snapshot := missionStatusSnapshot{
 		MissionRequired: ag.MissionRequired(),
 		MissionFile:     missionFile,
@@ -1289,6 +1340,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		StepID:          "",
 		StepType:        "",
 		AllowedTools:    []string{},
+		Runtime:         runtimeState,
 		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
 	}
 
@@ -1304,6 +1356,9 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 			snapshot.RequiresApproval = ec.Step.RequiresApproval
 		}
 		snapshot.AllowedTools = intersectAllowedTools(ec)
+	} else if runtimeState != nil {
+		snapshot.JobID = runtimeState.JobID
+		snapshot.StepID = runtimeState.ActiveStepID
 	}
 
 	return writeJSONAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")

@@ -37,6 +37,15 @@ func TestTaskStateActivateStepStoresValidExecutionContext(t *testing.T) {
 	if ec.Step.ID != "build" {
 		t.Fatalf("ExecutionContext().Step.ID = %q, want %q", ec.Step.ID, "build")
 	}
+	if ec.Runtime == nil {
+		t.Fatal("ExecutionContext().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ExecutionContext().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+	if ec.Runtime.ActiveStepID != "build" {
+		t.Fatalf("ExecutionContext().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
+	}
 }
 
 func TestTaskStateActivateStepInvalidPlanDoesNotOverwriteExistingContext(t *testing.T) {
@@ -119,6 +128,7 @@ func TestTaskStateExecutionContextReturnsIndependentSnapshot(t *testing.T) {
 	ec.Job.AllowedTools[0] = "mutated-job-tool"
 	ec.Job.Plan.Steps[0].AllowedTools[0] = "mutated-plan-step-tool"
 	ec.Step.AllowedTools[0] = "mutated-step-tool"
+	ec.Runtime.ActiveStepID = "mutated-runtime-step"
 
 	stored, ok := state.ExecutionContext()
 	if !ok {
@@ -135,6 +145,12 @@ func TestTaskStateExecutionContextReturnsIndependentSnapshot(t *testing.T) {
 
 	if stored.Step.AllowedTools[0] != "read" {
 		t.Fatalf("stored Step.AllowedTools[0] = %q, want %q", stored.Step.AllowedTools[0], "read")
+	}
+	if stored.Runtime == nil {
+		t.Fatal("stored Runtime = nil, want non-nil")
+	}
+	if stored.Runtime.ActiveStepID != "build" {
+		t.Fatalf("stored Runtime.ActiveStepID = %q, want %q", stored.Runtime.ActiveStepID, "build")
 	}
 }
 
@@ -155,6 +171,36 @@ func TestTaskStateClearExecutionContextRemovesActiveContext(t *testing.T) {
 
 	if !reflect.DeepEqual(got, missioncontrol.ExecutionContext{}) {
 		t.Fatalf("ExecutionContext() = %#v, want zero value", got)
+	}
+	if _, ok := state.MissionRuntimeState(); ok {
+		t.Fatal("MissionRuntimeState() ok = true, want false after clear")
+	}
+}
+
+func TestTaskStateResumeRuntimeStoresExecutionContext(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+	}
+
+	if err := state.ResumeRuntime(job, runtimeState, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ExecutionContext().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.ActiveStepID != "build" {
+		t.Fatalf("ExecutionContext().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
 	}
 }
 
