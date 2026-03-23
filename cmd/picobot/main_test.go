@@ -162,15 +162,39 @@ func TestAgentCLI_ModelFlag(t *testing.T) {
 
 func TestMissionStatusCommandWithValidFilePrintsExpectedJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
+	want := []byte("{\n  \"mission_required\": true,\n  \"active\": true,\n  \"mission_file\": \"mission.json\",\n  \"job_id\": \"job-1\",\n  \"step_id\": \"build\",\n  \"step_type\": \"one_shot_code\",\n  \"allowed_tools\": [\n    \"read\"\n  ],\n  \"updated_at\": \"2026-03-20T12:00:00Z\"\n}\n")
+	if err := os.WriteFile(path, want, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "status", "--status-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if out.String() != string(want) {
+		t.Fatalf("stdout = %q, want %q", out.String(), string(want))
+	}
+}
+
+func TestMissionStatusCommandWithActiveStepFieldsPrintsExpectedJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
 	wantSnapshot := missionStatusSnapshot{
-		MissionRequired: true,
-		Active:          true,
-		MissionFile:     "mission.json",
-		JobID:           "job-1",
-		StepID:          "build",
-		StepType:        string(missioncontrol.StepTypeOneShotCode),
-		AllowedTools:    []string{"read"},
-		UpdatedAt:       "2026-03-20T12:00:00Z",
+		MissionRequired:   true,
+		Active:            true,
+		MissionFile:       "mission.json",
+		JobID:             "job-1",
+		StepID:            "build",
+		StepType:          string(missioncontrol.StepTypeOneShotCode),
+		RequiredAuthority: missioncontrol.AuthorityTierMedium,
+		RequiresApproval:  true,
+		AllowedTools:      []string{"read"},
+		UpdatedAt:         "2026-03-20T12:00:00Z",
 	}
 	want, err := json.MarshalIndent(wantSnapshot, "", "  ")
 	if err != nil {
@@ -772,6 +796,109 @@ func TestMissionAssertCommandOneShotStepTypeMismatchFailsClearly(t *testing.T) {
 	}
 }
 
+func TestMissionAssertCommandOneShotRequiredAuthorityMatchSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:            true,
+		JobID:             "job-1",
+		StepID:            "build",
+		RequiredAuthority: missioncontrol.AuthorityTierMedium,
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--required-authority", string(missioncontrol.AuthorityTierMedium)})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotRequiredAuthorityMismatchFailsClearly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:            true,
+		JobID:             "job-1",
+		StepID:            "build",
+		RequiredAuthority: missioncontrol.AuthorityTierLow,
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--required-authority", string(missioncontrol.AuthorityTierMedium)})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has required_authority="low", want required_authority="medium"`) {
+		t.Fatalf("Execute() error = %q, want clear required_authority mismatch", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotRequiresApprovalSucceedsWhenTrue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:           true,
+		JobID:            "job-1",
+		StepID:           "build",
+		RequiresApproval: true,
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--requires-approval"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotRequiresApprovalFailsClearlyWhenFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:           true,
+		JobID:            "job-1",
+		StepID:           "build",
+		RequiresApproval: false,
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--requires-approval"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), `has requires_approval=false, want requires_approval=true`) {
+		t.Fatalf("Execute() error = %q, want clear requires_approval mismatch", err)
+	}
+}
+
+func TestMissionAssertCommandOneShotNoRequiresApprovalSucceedsWhenFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active:           true,
+		JobID:            "job-1",
+		StepID:           "build",
+		RequiresApproval: false,
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--no-requires-approval"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
 func TestMissionAssertCommandOneShotNoToolsSucceedsForEmptyAllowedTools(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
@@ -1165,6 +1292,28 @@ func TestMissionAssertCommandHasToolAndExactToolReturnsClearArgumentError(t *tes
 		t.Fatal("Execute() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), "--has-tool and --exact-tool cannot be used together") {
+		t.Fatalf("Execute() error = %q, want clear argument error", err)
+	}
+}
+
+func TestMissionAssertCommandRequiresApprovalAndNoRequiresApprovalReturnsClearArgumentError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
+		Active: true,
+		JobID:  "job-1",
+		StepID: "build",
+	})
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", path, "--requires-approval", "--no-requires-approval"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "--requires-approval and --no-requires-approval cannot be used together") {
 		t.Fatalf("Execute() error = %q, want clear argument error", err)
 	}
 }
@@ -2399,6 +2548,12 @@ func TestWriteMissionStatusSnapshotNoActiveMissionWritesInactiveSnapshot(t *test
 	if got.JobID != "" || got.StepID != "" || got.StepType != "" {
 		t.Fatalf("snapshot IDs = (%q, %q, %q), want empty strings", got.JobID, got.StepID, got.StepType)
 	}
+	if got.RequiredAuthority != "" {
+		t.Fatalf("RequiredAuthority = %q, want empty", got.RequiredAuthority)
+	}
+	if got.RequiresApproval {
+		t.Fatal("RequiresApproval = true, want false")
+	}
 	if len(got.AllowedTools) != 0 {
 		t.Fatalf("AllowedTools = %v, want empty", got.AllowedTools)
 	}
@@ -2410,7 +2565,29 @@ func TestWriteMissionStatusSnapshotNoActiveMissionWritesInactiveSnapshot(t *test
 func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
-	missionFile := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierMedium,
+					RequiresApproval:  true,
+					AllowedTools:      []string{"read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
 	path := filepath.Join(t.TempDir(), "status.json")
 	now := time.Date(2026, 3, 19, 12, 0, 0, 456, time.UTC)
 
@@ -2452,6 +2629,12 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 	if got.StepType != string(missioncontrol.StepTypeOneShotCode) {
 		t.Fatalf("StepType = %q, want %q", got.StepType, missioncontrol.StepTypeOneShotCode)
+	}
+	if got.RequiredAuthority != missioncontrol.AuthorityTierMedium {
+		t.Fatalf("RequiredAuthority = %q, want %q", got.RequiredAuthority, missioncontrol.AuthorityTierMedium)
+	}
+	if !got.RequiresApproval {
+		t.Fatal("RequiresApproval = false, want true")
 	}
 }
 

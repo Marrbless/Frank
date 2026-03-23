@@ -398,11 +398,26 @@ func NewRootCmd() *cobra.Command {
 			if cmd.Flags().Changed("step-type") {
 				expected.StepType = valueOrNilString(cmd.Flags().Lookup("step-type").Value.String())
 			}
+			if cmd.Flags().Changed("required-authority") {
+				requiredAuthority := missioncontrol.AuthorityTier(cmd.Flags().Lookup("required-authority").Value.String())
+				expected.RequiredAuthority = &requiredAuthority
+			}
+			if cmd.Flags().Changed("requires-approval") {
+				requiresApproval := true
+				expected.RequiresApproval = &requiresApproval
+			}
+			if cmd.Flags().Changed("no-requires-approval") {
+				requiresApproval := false
+				expected.RequiresApproval = &requiresApproval
+			}
 			expected.NoTools, _ = cmd.Flags().GetBool("no-tools")
 			expected.HasTools, _ = cmd.Flags().GetStringArray("has-tool")
 			if cmd.Flags().Changed("exact-tool") {
 				expected.ExactAllowedTools, _ = cmd.Flags().GetStringArray("exact-tool")
 				expected.CheckExactAllowedTools = true
+			}
+			if cmd.Flags().Changed("requires-approval") && cmd.Flags().Changed("no-requires-approval") {
+				return fmt.Errorf("--requires-approval and --no-requires-approval cannot be used together")
 			}
 			if expected.NoTools && len(expected.HasTools) > 0 {
 				return fmt.Errorf("--no-tools and --has-tool cannot be used together")
@@ -426,6 +441,9 @@ func NewRootCmd() *cobra.Command {
 	missionAssertCmd.Flags().String("step-id", "", "Expected mission step ID")
 	missionAssertCmd.Flags().Bool("active", false, "Expected mission active state")
 	missionAssertCmd.Flags().String("step-type", "", "Expected mission step type")
+	missionAssertCmd.Flags().String("required-authority", "", "Expected mission required authority tier")
+	missionAssertCmd.Flags().Bool("requires-approval", false, "Require mission requires_approval=true")
+	missionAssertCmd.Flags().Bool("no-requires-approval", false, "Require mission requires_approval=false")
 	missionAssertCmd.Flags().Bool("no-tools", false, "Require allowed_tools to be empty")
 	missionAssertCmd.Flags().StringArray("has-tool", nil, "Require a named tool to appear in allowed_tools; repeat to require multiple tools")
 	missionAssertCmd.Flags().StringArray("exact-tool", nil, "Require allowed_tools to exactly match the named tools in order; repeat to require multiple tools")
@@ -816,14 +834,16 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 }
 
 type missionStatusSnapshot struct {
-	MissionRequired bool     `json:"mission_required"`
-	Active          bool     `json:"active"`
-	MissionFile     string   `json:"mission_file"`
-	JobID           string   `json:"job_id"`
-	StepID          string   `json:"step_id"`
-	StepType        string   `json:"step_type"`
-	AllowedTools    []string `json:"allowed_tools"`
-	UpdatedAt       string   `json:"updated_at"`
+	MissionRequired   bool                         `json:"mission_required"`
+	Active            bool                         `json:"active"`
+	MissionFile       string                       `json:"mission_file"`
+	JobID             string                       `json:"job_id"`
+	StepID            string                       `json:"step_id"`
+	StepType          string                       `json:"step_type"`
+	RequiredAuthority missioncontrol.AuthorityTier `json:"required_authority"`
+	RequiresApproval  bool                         `json:"requires_approval"`
+	AllowedTools      []string                     `json:"allowed_tools"`
+	UpdatedAt         string                       `json:"updated_at"`
 }
 
 type missionStepControlFile struct {
@@ -836,6 +856,8 @@ type missionStatusAssertionExpectation struct {
 	StepID                 *string
 	Active                 *bool
 	StepType               *string
+	RequiredAuthority      *missioncontrol.AuthorityTier
+	RequiresApproval       *bool
 	NoTools                bool
 	HasTools               []string
 	ExactAllowedTools      []string
@@ -1153,6 +1175,12 @@ func checkMissionStatusAssertion(path string, snapshot missionStatusSnapshot, ex
 	if expected.StepType != nil && snapshot.StepType != *expected.StepType {
 		return fmt.Errorf("mission status file %q has step_type=%q, want step_type=%q", path, snapshot.StepType, *expected.StepType)
 	}
+	if expected.RequiredAuthority != nil && snapshot.RequiredAuthority != *expected.RequiredAuthority {
+		return fmt.Errorf("mission status file %q has required_authority=%q, want required_authority=%q", path, snapshot.RequiredAuthority, *expected.RequiredAuthority)
+	}
+	if expected.RequiresApproval != nil && snapshot.RequiresApproval != *expected.RequiresApproval {
+		return fmt.Errorf("mission status file %q has requires_approval=%t, want requires_approval=%t", path, snapshot.RequiresApproval, *expected.RequiresApproval)
+	}
 	if expected.NoTools && len(snapshot.AllowedTools) != 0 {
 		return fmt.Errorf("mission status file %q has allowed_tools=%q, want allowed_tools=[]", path, snapshot.AllowedTools)
 	}
@@ -1272,6 +1300,8 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		if ec.Step != nil {
 			snapshot.StepID = ec.Step.ID
 			snapshot.StepType = string(ec.Step.Type)
+			snapshot.RequiredAuthority = ec.Step.RequiredAuthority
+			snapshot.RequiresApproval = ec.Step.RequiresApproval
 		}
 		snapshot.AllowedTools = intersectAllowedTools(ec)
 	}
