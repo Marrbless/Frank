@@ -206,6 +206,12 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 		t.Fatalf("message tool should not have run, but outbound message was published: %#v", out)
 	default:
 	}
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) != 1 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	}
+	assertAuditEvent(t, audits[0], "job-1", "build", "message", false, missioncontrol.RejectionCodeToolNotAllowed)
 }
 
 func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *testing.T) {
@@ -234,6 +240,12 @@ func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *t
 		t.Fatalf("message tool should not have run, but outbound message was published: %#v", out)
 	default:
 	}
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) != 1 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	}
+	assertAuditEvent(t, audits[0], "", "", "message", false, missioncontrol.RejectionCodeMissionContextRequired)
 }
 
 func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.T) {
@@ -273,6 +285,35 @@ func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.
 	}
 	if ec.Runtime.State != missioncontrol.JobStateRunning {
 		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) != 1 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	}
+	assertAuditEvent(t, audits[0], "job-1", "build", "write_memory", true, "")
+}
+
+func assertAuditEvent(t *testing.T, event missioncontrol.AuditEvent, wantJobID, wantStepID, wantAction string, wantAllowed bool, wantCode missioncontrol.RejectionCode) {
+	t.Helper()
+
+	if event.JobID != wantJobID {
+		t.Fatalf("AuditEvent.JobID = %q, want %q", event.JobID, wantJobID)
+	}
+	if event.StepID != wantStepID {
+		t.Fatalf("AuditEvent.StepID = %q, want %q", event.StepID, wantStepID)
+	}
+	if event.ToolName != wantAction {
+		t.Fatalf("AuditEvent.ToolName = %q, want %q", event.ToolName, wantAction)
+	}
+	if event.Allowed != wantAllowed {
+		t.Fatalf("AuditEvent.Allowed = %t, want %t", event.Allowed, wantAllowed)
+	}
+	if event.Code != wantCode {
+		t.Fatalf("AuditEvent.Code = %q, want %q", event.Code, wantCode)
+	}
+	if event.Timestamp.IsZero() {
+		t.Fatal("AuditEvent.Timestamp is zero")
 	}
 }
 

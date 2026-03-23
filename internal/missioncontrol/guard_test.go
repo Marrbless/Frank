@@ -2,6 +2,8 @@ package missioncontrol
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -168,6 +170,29 @@ func TestDefaultToolGuardEventTimestampNonZero(t *testing.T) {
 
 	if decision.Event.Timestamp.After(time.Now().Add(time.Second)) {
 		t.Fatalf("Event.Timestamp = %v, looks invalid", decision.Event.Timestamp)
+	}
+}
+
+func TestAuditEventJSONUsesRequiredFieldNames(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(AuditEvent{
+		JobID:     "job-1",
+		StepID:    "step-1",
+		ToolName:  "read",
+		Allowed:   false,
+		Code:      RejectionCodeToolNotAllowed,
+		Timestamp: time.Unix(789, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	got := string(payload)
+	for _, want := range []string{`"job_id":"job-1"`, `"step_id":"step-1"`, `"proposed_action":"read"`, `"allowed":false`, `"error_code":"tool_not_allowed"`, `"timestamp":"1970-01-01T00:13:09Z"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("audit JSON %s missing %s", got, want)
+		}
 	}
 }
 

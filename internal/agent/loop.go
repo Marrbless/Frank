@@ -87,6 +87,7 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 
 	reg := tools.NewRegistry()
 	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+	reg.SetAuditEmitter(taskState)
 	reg.Register(tools.NewMessageTool(b))
 
 	// Open an os.Root anchored at the workspace for kernel-enforced sandboxing.

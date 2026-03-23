@@ -201,6 +201,7 @@ func TestRegistryExecuteWithoutExecutionContextSkipsGuard(t *testing.T) {
 func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
 	reg := NewRegistry()
 	tool := &stubTool{name: "stub", result: "ok"}
+	audits := &stubAuditEmitter{}
 	guard := &stubGuard{
 		decision: missioncontrol.GuardDecision{
 			Allowed: false,
@@ -219,6 +220,7 @@ func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
 	}
 	reg.Register(tool)
 	reg.SetGuard(guard)
+	reg.SetAuditEmitter(audits)
 
 	ctx := missioncontrol.WithExecutionContext(context.Background(), missioncontrol.ExecutionContext{
 		Job:  &missioncontrol.Job{ID: "job-1"},
@@ -231,6 +233,14 @@ func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
 
 	if tool.executeCalls != 0 {
 		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 0)
+	}
+
+	if len(audits.events) != 1 {
+		t.Fatalf("audit event count = %d, want %d", len(audits.events), 1)
+	}
+
+	if !reflect.DeepEqual(audits.events[0], guard.decision.Event) {
+		t.Fatalf("emitted audit event = %#v, want %#v", audits.events[0], guard.decision.Event)
 	}
 
 	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=false code=tool_not_allowed reason=tool is outside the step scope") {
@@ -249,6 +259,7 @@ func TestRegistryExecuteGuardDeniesEmitsAuditEvent(t *testing.T) {
 func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
 	reg := NewRegistry()
 	tool := &stubTool{name: "stub", result: "ok"}
+	audits := &stubAuditEmitter{}
 	guard := &stubGuard{
 		decision: missioncontrol.GuardDecision{
 			Allowed: true,
@@ -263,6 +274,7 @@ func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
 	}
 	reg.Register(tool)
 	reg.SetGuard(guard)
+	reg.SetAuditEmitter(audits)
 
 	ctx := missioncontrol.WithExecutionContext(context.Background(), missioncontrol.ExecutionContext{
 		Job:  &missioncontrol.Job{ID: "job-1"},
@@ -281,6 +293,14 @@ func TestRegistryExecuteGuardAllowsEmitsAuditEvent(t *testing.T) {
 
 	if tool.executeCalls != 1 {
 		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 1)
+	}
+
+	if len(audits.events) != 1 {
+		t.Fatalf("audit event count = %d, want %d", len(audits.events), 1)
+	}
+
+	if !reflect.DeepEqual(audits.events[0], guard.decision.Event) {
+		t.Fatalf("emitted audit event = %#v, want %#v", audits.events[0], guard.decision.Event)
 	}
 
 	if !strings.Contains(logs, "[tool] audit job=job-1 step=step-1 tool=stub allowed=true") {
@@ -345,8 +365,10 @@ func TestRegistryDefinitionsMissionRequiredWithoutExecutionContextReturnsEmpty(t
 func TestRegistryExecuteMissionRequiredWithoutExecutionContextRejectsAndLogsAudit(t *testing.T) {
 	reg := NewRegistry()
 	reg.SetMissionRequired(true)
+	audits := &stubAuditEmitter{}
 	tool := &stubTool{name: "stub", result: "ok"}
 	reg.Register(tool)
+	reg.SetAuditEmitter(audits)
 
 	var err error
 	logs := captureRegistryLogs(t, func() {
@@ -375,6 +397,22 @@ func TestRegistryExecuteMissionRequiredWithoutExecutionContextRejectsAndLogsAudi
 
 	if got := countAuditLogLines(logs); got != 1 {
 		t.Fatalf("audit log line count = %d, want %d in logs %q", got, 1, logs)
+	}
+
+	if len(audits.events) != 1 {
+		t.Fatalf("audit event count = %d, want %d", len(audits.events), 1)
+	}
+
+	if audits.events[0].ToolName != "stub" {
+		t.Fatalf("AuditEvent.ToolName = %q, want %q", audits.events[0].ToolName, "stub")
+	}
+
+	if audits.events[0].Code != missioncontrol.RejectionCodeMissionContextRequired {
+		t.Fatalf("AuditEvent.Code = %q, want %q", audits.events[0].Code, missioncontrol.RejectionCodeMissionContextRequired)
+	}
+
+	if audits.events[0].Timestamp.IsZero() {
+		t.Fatal("AuditEvent.Timestamp is zero")
 	}
 }
 
@@ -480,6 +518,14 @@ func (g *stubGuard) EvaluateTool(ctx context.Context, ec missioncontrol.Executio
 	g.lastToolName = toolName
 	g.lastArgs = args
 	return g.decision
+}
+
+type stubAuditEmitter struct {
+	events []missioncontrol.AuditEvent
+}
+
+func (s *stubAuditEmitter) EmitAuditEvent(event missioncontrol.AuditEvent) {
+	s.events = append(s.events, event)
 }
 
 func definitionNames(defs []providers.ToolDefinition) []string {

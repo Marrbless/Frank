@@ -14,9 +14,13 @@ const (
 type AuditEvent struct {
 	JobID     string        `json:"job_id"`
 	StepID    string        `json:"step_id"`
-	ToolName  string        `json:"tool_name"`
+	ToolName  string        `json:"proposed_action"`
 	Allowed   bool          `json:"allowed"`
-	Code      RejectionCode `json:"code"`
-	Reason    string        `json:"reason"`
+	Code      RejectionCode `json:"error_code,omitempty"`
+	Reason    string        `json:"reason,omitempty"`
 	Timestamp time.Time     `json:"timestamp"`
+}
+
+type AuditEmitter interface {
+	EmitAuditEvent(event AuditEvent)
 }

@@ -18,6 +18,7 @@ type TaskState struct {
 	hasExecutionContext bool
 	runtimeState        missioncontrol.JobRuntimeState
 	hasRuntimeState     bool
+	auditEvents         []missioncontrol.AuditEvent
 }
 
 func NewTaskState() *TaskState {
@@ -91,6 +92,24 @@ func (s *TaskState) MissionRuntimeState() (missioncontrol.JobRuntimeState, bool)
 		return missioncontrol.JobRuntimeState{}, false
 	}
 	return *missioncontrol.CloneJobRuntimeState(&s.runtimeState), true
+}
+
+func (s *TaskState) EmitAuditEvent(event missioncontrol.AuditEvent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auditEvents = append(s.auditEvents, event)
+}
+
+func (s *TaskState) AuditEvents() []missioncontrol.AuditEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]missioncontrol.AuditEvent(nil), s.auditEvents...)
 }
 
 func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
@@ -201,6 +220,7 @@ func (s *TaskState) ClearExecutionContext() {
 	s.hasExecutionContext = false
 	s.runtimeState = missioncontrol.JobRuntimeState{}
 	s.hasRuntimeState = false
+	s.auditEvents = nil
 }
 
 func (s *TaskState) storeRuntimeStateLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {

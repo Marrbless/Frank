@@ -29,6 +29,7 @@ type Registry struct {
 	mu              sync.RWMutex
 	tools           map[string]Tool
 	guard           missioncontrol.ToolGuard
+	auditEmitter    missioncontrol.AuditEmitter
 	missionRequired bool
 }
 
@@ -49,6 +50,12 @@ func (r *Registry) SetGuard(g missioncontrol.ToolGuard) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = g
+}
+
+func (r *Registry) SetAuditEmitter(emitter missioncontrol.AuditEmitter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.auditEmitter = emitter
 }
 
 func (r *Registry) SetMissionRequired(required bool) {
@@ -141,6 +148,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	guard := r.guard
+	auditEmitter := r.auditEmitter
 	missionRequired := r.missionRequired
 	r.mu.RUnlock()
 	if !ok {
@@ -156,7 +164,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 				Reason:    "active mission step is required",
 				Timestamp: time.Now(),
 			}
-			logAuditEvent(event)
+			emitAuditEvent(auditEmitter, event)
 			return "", fmt.Errorf("tool rejected: %s: %s", missioncontrol.RejectionCodeMissionContextRequired, "active mission step is required")
 		}
 	}
@@ -164,7 +172,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 	if guard != nil {
 		if ec, ok := missioncontrol.ExecutionContextFromContext(ctx); ok {
 			decision := guard.EvaluateTool(ctx, ec, name, args)
-			logAuditEvent(decision.Event)
+			emitAuditEvent(auditEmitter, decision.Event)
 			if !decision.Allowed {
 				log.Printf("[tool] ! %s denied: code=%s reason=%s", name, decision.Code, decision.Reason)
 				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)
@@ -191,4 +199,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 
 func logAuditEvent(event missioncontrol.AuditEvent) {
 	log.Printf("[tool] audit job=%s step=%s tool=%s allowed=%t code=%s reason=%s timestamp=%s", event.JobID, event.StepID, event.ToolName, event.Allowed, event.Code, event.Reason, event.Timestamp.Format(time.RFC3339Nano))
+}
+
+func emitAuditEvent(emitter missioncontrol.AuditEmitter, event missioncontrol.AuditEvent) {
+	if emitter != nil {
+		emitter.EmitAuditEvent(event)
+	}
+	logAuditEvent(event)
 }
