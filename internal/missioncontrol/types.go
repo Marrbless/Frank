@@ -20,6 +20,14 @@ const (
 	StepTypeFinalResponse  StepType = "final_response"
 )
 
+type StepSubtype string
+
+const (
+	StepSubtypeBlocker       StepSubtype = "blocker"
+	StepSubtypeAuthorization StepSubtype = "authorization"
+	StepSubtypeDefinition    StepSubtype = "definition"
+)
+
 type AuthorityTier string
 
 const (
@@ -44,6 +52,7 @@ type Plan struct {
 type Step struct {
 	ID                string        `json:"id"`
 	Type              StepType      `json:"type"`
+	Subtype           StepSubtype   `json:"subtype,omitempty"`
 	DependsOn         []string      `json:"depends_on"`
 	RequiredAuthority AuthorityTier `json:"required_authority"`
 	AllowedTools      []string      `json:"allowed_tools"`

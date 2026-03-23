@@ -210,6 +210,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			if a.taskState != nil {
 				a.taskState.BeginTask(fmt.Sprintf("%s:%s:%d", msg.Channel, msg.ChatID, time.Now().UnixNano()))
+				if inputKind, err := a.taskState.ApplyWaitingUserInput(msg.Content); err != nil {
+					log.Printf("mission runtime waiting_user input validation failed: %v", err)
+				} else if inputKind != missioncontrol.WaitingUserInputNone {
+					log.Printf("mission runtime waiting_user input accepted: kind=%s", inputKind)
+				}
 			}
 
 			// Quick heuristic: if user asks the agent to remember something explicitly,
@@ -271,6 +276,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			iteration := 0
 			finalContent := ""
 			lastToolResult := ""
+			successfulTools := make([]missioncontrol.RuntimeToolCallEvidence, 0)
 
 			for iteration < a.maxIterations {
 				iteration++
@@ -309,6 +315,10 @@ func (a *AgentLoop) Run(ctx context.Context) {
 								fmt.Sprintf("📢 %s failed (%s): %v", tc.Name, elapsed, err))
 							res = "(tool error) " + err.Error()
 						} else {
+							successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
+								ToolName:  tc.Name,
+								Arguments: cloneToolArguments(tc.Arguments),
+							})
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 								fmt.Sprintf("📢 %s done (%s)", tc.Name, elapsed))
 						}
@@ -331,6 +341,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				finalContent = lastToolResult
 			} else if finalContent == "" {
 				finalContent = "I've completed processing but have no response to give."
+			}
+			if a.taskState != nil {
+				if err := a.taskState.ApplyStepOutput(finalContent, successfulTools); err != nil {
+					log.Printf("mission runtime step completion validation failed: %v", err)
+				}
 			}
 
 			if !isSystemChannel(msg.Channel) {
@@ -362,6 +377,11 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
+		if inputKind, err := a.taskState.ApplyWaitingUserInput(content); err != nil {
+			log.Printf("mission runtime waiting_user input validation failed: %v", err)
+		} else if inputKind != missioncontrol.WaitingUserInputNone {
+			log.Printf("mission runtime waiting_user input accepted: kind=%s", inputKind)
+		}
 	}
 
 	if mt := a.tools.Get("message"); mt != nil {
@@ -387,6 +407,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	messages := a.context.BuildMessages(nil, content, "cli", "direct", memCtx, memories, activeStep, toolDefs)
 
 	var lastToolResult string
+	successfulTools := make([]missioncontrol.RuntimeToolCallEvidence, 0)
 	for iteration := 0; iteration < a.maxIterations; iteration++ {
 		resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 		if err != nil {
@@ -395,9 +416,19 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 		if !resp.HasToolCalls {
 			if resp.Content != "" {
+				if a.taskState != nil {
+					if err := a.taskState.ApplyStepOutput(resp.Content, successfulTools); err != nil {
+						log.Printf("mission runtime step completion validation failed: %v", err)
+					}
+				}
 				return resp.Content, nil
 			}
 			if lastToolResult != "" {
+				if a.taskState != nil {
+					if err := a.taskState.ApplyStepOutput(lastToolResult, successfulTools); err != nil {
+						log.Printf("mission runtime step completion validation failed: %v", err)
+					}
+				}
 				return lastToolResult, nil
 			}
 			return resp.Content, nil
@@ -419,6 +450,11 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 			result, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
 			if err != nil {
 				result = "(tool error) " + err.Error()
+			} else {
+				successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
+					ToolName:  tc.Name,
+					Arguments: cloneToolArguments(tc.Arguments),
+				})
 			}
 			lastToolResult = result
 			messages = append(messages, providers.Message{
@@ -430,4 +466,16 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	}
 
 	return "Max iterations reached without final response", nil
+}
+
+func cloneToolArguments(args map[string]interface{}) map[string]interface{} {
+	if args == nil {
+		return nil
+	}
+
+	cloned := make(map[string]interface{}, len(args))
+	for key, value := range args {
+		cloned[key] = value
+	}
+	return cloned
 }

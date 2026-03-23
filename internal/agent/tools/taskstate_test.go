@@ -204,6 +204,119 @@ func TestTaskStateResumeRuntimeStoresExecutionContext(t *testing.T) {
 	}
 }
 
+func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if err := state.ApplyStepOutput("Implemented the change.", []missioncontrol.RuntimeToolCallEvidence{
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "result.txt"}},
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "result.txt"}},
+	}); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after completed step pause")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
+func TestTaskStateApplyStepOutputTransitionsDiscussionSubtypeToWaitingUser(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if err := state.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ExecutionContext().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ExecutionContext().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+}
+
+func TestTaskStateApplyWaitingUserInputPausesCompletedStep(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	inputKind, err := state.ApplyWaitingUserInput("approved")
+	if err != nil {
+		t.Fatalf("ApplyWaitingUserInput() error = %v", err)
+	}
+	if inputKind != missioncontrol.WaitingUserInputApproval {
+		t.Fatalf("ApplyWaitingUserInput() kind = %q, want %q", inputKind, missioncontrol.WaitingUserInputApproval)
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after approval completion")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
 func testTaskStateJob() missioncontrol.Job {
 	return missioncontrol.Job{
 		ID:           "job-1",

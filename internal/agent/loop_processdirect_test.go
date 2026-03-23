@@ -90,6 +90,51 @@ func (p *deniedMessageToolProvider) Chat(ctx context.Context, messages []provide
 
 func (p *deniedMessageToolProvider) GetDefaultModel() string { return "test" }
 
+type finalResponseProvider struct {
+	content string
+}
+
+func (p *finalResponseProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	return providers.LLMResponse{Content: p.content}, nil
+}
+
+func (p *finalResponseProvider) GetDefaultModel() string { return "test" }
+
+type filesystemArtifactProvider struct {
+	calls int
+}
+
+func (p *filesystemArtifactProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return providers.LLMResponse{
+			HasToolCalls: true,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "1",
+					Name: "filesystem",
+					Arguments: map[string]interface{}{
+						"action":  "write",
+						"path":    "result.txt",
+						"content": "artifact",
+					},
+				},
+				{
+					ID:   "2",
+					Name: "filesystem",
+					Arguments: map[string]interface{}{
+						"action": "stat",
+						"path":   "result.txt",
+					},
+				},
+			},
+		}, nil
+	}
+	return providers.LLMResponse{Content: "Created result.txt and verified it exists."}, nil
+}
+
+func (p *filesystemArtifactProvider) GetDefaultModel() string { return "test" }
+
 func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testing.T) {
 	t.Parallel()
 
@@ -175,6 +220,117 @@ func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.
 	if td == "" || !contains(td, "Test note") {
 		t.Fatalf("expected today's note to contain Test note, got: %s", td)
 	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+}
+
+func TestProcessDirectOneShotCodeWithArtifactAndVerificationEvidencePausesStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &filesystemArtifactProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(testFilesystemMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("make the file", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Created result.txt and verified it exists." {
+		t.Fatalf("ProcessDirect() response = %q, want verified artifact response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after validated one_shot_code completion")
+	}
+}
+
+func TestProcessDirectDiscussionSubtypeTransitionsToWaitingUser(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Need approval before continuing." {
+		t.Fatalf("ProcessDirect() response = %q, want discussion response", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if ec.Runtime.WaitingReason != "discussion_authorization" {
+		t.Fatalf("ActiveMissionStep().Runtime.WaitingReason = %q, want %q", ec.Runtime.WaitingReason, "discussion_authorization")
+	}
+}
+
+func TestProcessDirectFinalResponseFalseCompletionClaimLeavesRuntimeRunning(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Done"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testFinalMissionJob(), "final"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Done" {
+		t.Fatalf("ProcessDirect() response = %q, want %q", resp, "Done")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Step == nil || ec.Step.ID != "final" {
+		t.Fatalf("ActiveMissionStep().Step = %#v, want final step", ec.Step)
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
 }
 
 func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
@@ -234,6 +390,74 @@ func testMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.J
 					Type:         missioncontrol.StepTypeFinalResponse,
 					DependsOn:    []string{"build"},
 					AllowedTools: append([]string(nil), stepAllowedTools...),
+				},
+			},
+		},
+	}
+}
+
+func testDiscussionMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"write_memory"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testFinalMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"write_memory"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:   "build",
+					Type: missioncontrol.StepTypeOneShotCode,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testFilesystemMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"filesystem"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:           "build",
+					Type:         missioncontrol.StepTypeOneShotCode,
+					AllowedTools: []string{"filesystem"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
 				},
 			},
 		},

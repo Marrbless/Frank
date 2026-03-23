@@ -111,27 +111,13 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 
-	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(job, runtimeState)
-	if err != nil {
-		return err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.executionContext = ec
-	s.hasExecutionContext = true
-	s.runtimeState = runtimeState
-	s.hasRuntimeState = true
-	return nil
+	return s.storeRuntimeStateLocked(job, runtimeState)
 }
 
 func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, resumeApproved bool) error {
 	nextRuntime, err := missioncontrol.ResumeJobRuntimeAfterBoot(runtimeState, time.Now(), resumeApproved)
-	if err != nil {
-		return err
-	}
-
-	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(job, nextRuntime)
 	if err != nil {
 		return err
 	}
@@ -142,11 +128,67 @@ func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missionco
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.executionContext = ec
-	s.hasExecutionContext = true
-	s.runtimeState = nextRuntime
-	s.hasRuntimeState = true
-	return nil
+	return s.storeRuntimeStateLocked(job, nextRuntime)
+}
+
+func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return nil
+	}
+
+	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, time.Now(), missioncontrol.StepValidationInput{
+		FinalResponse:   finalContent,
+		SuccessfulTools: successfulTools,
+	})
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+}
+
+func (s *TaskState) ApplyWaitingUserInput(input string) (missioncontrol.WaitingUserInputKind, error) {
+	if s == nil {
+		return missioncontrol.WaitingUserInputNone, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		return missioncontrol.WaitingUserInputNone, nil
+	}
+
+	inputKind := missioncontrol.ClassifyWaitingUserInput(input)
+	if inputKind == missioncontrol.WaitingUserInputNone {
+		return inputKind, nil
+	}
+
+	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, time.Now(), missioncontrol.StepValidationInput{
+		UserInput:     input,
+		UserInputKind: inputKind,
+	})
+	if err != nil {
+		return missioncontrol.WaitingUserInputNone, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.storeRuntimeStateLocked(*ec.Job, nextRuntime); err != nil {
+		return missioncontrol.WaitingUserInputNone, err
+	}
+	return inputKind, nil
 }
 
 func (s *TaskState) ClearExecutionContext() {
@@ -159,4 +201,24 @@ func (s *TaskState) ClearExecutionContext() {
 	s.hasExecutionContext = false
 	s.runtimeState = missioncontrol.JobRuntimeState{}
 	s.hasRuntimeState = false
+}
+
+func (s *TaskState) storeRuntimeStateLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+	s.runtimeState = runtimeState
+	s.hasRuntimeState = true
+
+	if runtimeState.ActiveStepID == "" {
+		s.executionContext = missioncontrol.ExecutionContext{}
+		s.hasExecutionContext = false
+		return nil
+	}
+
+	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(job, runtimeState)
+	if err != nil {
+		return err
+	}
+
+	s.executionContext = ec
+	s.hasExecutionContext = true
+	return nil
 }

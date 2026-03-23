@@ -38,6 +38,16 @@ func TestEnumValues(t *testing.T) {
 		t.Fatalf("StepTypeFinalResponse = %q, want %q", StepTypeFinalResponse, "final_response")
 	}
 
+	if StepSubtypeBlocker != "blocker" {
+		t.Fatalf("StepSubtypeBlocker = %q, want %q", StepSubtypeBlocker, "blocker")
+	}
+	if StepSubtypeAuthorization != "authorization" {
+		t.Fatalf("StepSubtypeAuthorization = %q, want %q", StepSubtypeAuthorization, "authorization")
+	}
+	if StepSubtypeDefinition != "definition" {
+		t.Fatalf("StepSubtypeDefinition = %q, want %q", StepSubtypeDefinition, "definition")
+	}
+
 	if AuthorityTierHigh != "high" {
 		t.Fatalf("AuthorityTierHigh = %q, want %q", AuthorityTierHigh, "high")
 	}

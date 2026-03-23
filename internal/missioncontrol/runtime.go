@@ -47,7 +47,7 @@ type RuntimeTransitionOptions struct {
 	WaitingReason    string
 	PausedReason     string
 	FailureReason    string
-	ValidationPassed bool
+	validationResult *stepValidationResult
 }
 
 func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
@@ -262,8 +262,22 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.PausedAt = now
 		next.WaitingReason = ""
 		next.WaitingAt = time.Time{}
+		if opts.validationResult != nil && opts.validationResult.recordCompletion {
+			if next.ActiveStepID == "" {
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeInvalidRuntimeState,
+					Message: "paused state requires an active step to record completion",
+				}
+			}
+			next.CompletedSteps = append(next.CompletedSteps, RuntimeStepRecord{
+				StepID: next.ActiveStepID,
+				At:     now,
+			})
+			next.ActiveStepID = ""
+			next.ActiveStepAt = time.Time{}
+		}
 	case JobStateCompleted:
-		if !opts.ValidationPassed {
+		if opts.validationResult == nil || !opts.validationResult.recordCompletion {
 			return JobRuntimeState{}, ValidationError{
 				Code:    RejectionCodeValidationRequired,
 				Message: "completing a job runtime requires validation",
@@ -281,6 +295,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		})
 		next.CompletedAt = now
 		next.ActiveStepID = ""
+		next.ActiveStepAt = time.Time{}
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.WaitingAt = time.Time{}
