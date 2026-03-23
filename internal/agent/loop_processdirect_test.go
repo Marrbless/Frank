@@ -135,6 +135,49 @@ func (p *filesystemArtifactProvider) Chat(ctx context.Context, messages []provid
 
 func (p *filesystemArtifactProvider) GetDefaultModel() string { return "test" }
 
+type filesystemStaticArtifactProvider struct {
+	calls int
+}
+
+func (p *filesystemStaticArtifactProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return providers.LLMResponse{
+			HasToolCalls: true,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "1",
+					Name: "filesystem",
+					Arguments: map[string]interface{}{
+						"action":  "write",
+						"path":    "report.json",
+						"content": "{\n  \"ok\": true\n}\n",
+					},
+				},
+				{
+					ID:   "2",
+					Name: "filesystem",
+					Arguments: map[string]interface{}{
+						"action": "stat",
+						"path":   "report.json",
+					},
+				},
+				{
+					ID:   "3",
+					Name: "filesystem",
+					Arguments: map[string]interface{}{
+						"action": "read",
+						"path":   "report.json",
+					},
+				},
+			},
+		}, nil
+	}
+	return providers.LLMResponse{Content: "Created report.json and verified the JSON structure."}, nil
+}
+
+func (p *filesystemStaticArtifactProvider) GetDefaultModel() string { return "test" }
+
 func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testing.T) {
 	t.Parallel()
 
@@ -264,6 +307,40 @@ func TestProcessDirectOneShotCodeWithArtifactAndVerificationEvidencePausesStep(t
 	}
 	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("ActiveMissionStep() ok = true, want false after validated one_shot_code completion")
+	}
+}
+
+func TestProcessDirectStaticArtifactWithStructureValidationPausesStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &filesystemStaticArtifactProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(testStaticArtifactMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("make the artifact", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Created report.json and verified the JSON structure." {
+		t.Fatalf("ProcessDirect() response = %q, want verified static artifact response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after validated static_artifact completion")
 	}
 }
 
@@ -453,6 +530,30 @@ func testFilesystemMissionJob() missioncontrol.Job {
 					ID:           "build",
 					Type:         missioncontrol.StepTypeOneShotCode,
 					AllowedTools: []string{"filesystem"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testStaticArtifactMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"filesystem"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:              "build",
+					Type:            missioncontrol.StepTypeStaticArtifact,
+					AllowedTools:    []string{"filesystem"},
+					SuccessCriteria: []string{"Write `report.json` as valid JSON."},
 				},
 				{
 					ID:        "final",

@@ -101,6 +101,79 @@ func TestCompleteRuntimeStepOneShotCodePausesAndRecordsCompletion(t *testing.T) 
 	}
 }
 
+func TestCompleteRuntimeStepStaticArtifactPausesWhenExactFileAndStructureAreValidated(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:              "artifact",
+		Type:            StepTypeStaticArtifact,
+		SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 5, 30, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "Created the artifact.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "report.json"}, Result: "written"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "report.json"}, Result: "exists=true\nkind=file\nname=report.json\nsize=17\n"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "read", "path": "report.json"}, Result: "{\n  \"ok\": true\n}\n"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "artifact" {
+		t.Fatalf("CompletedSteps = %#v, want artifact completion", runtime.CompletedSteps)
+	}
+}
+
+func TestCompleteRuntimeStepStaticArtifactRequiresStructureCheck(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:              "artifact",
+		Type:            StepTypeStaticArtifact,
+		SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+	}, JobStateRunning)
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 5, 45, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Created the artifact.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "report.json"}, Result: "written"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "report.json"}, Result: "exists=true\nkind=file\nname=report.json\nsize=17\n"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want missing structure check rejection")
+	}
+}
+
+func TestCompleteRuntimeStepStaticArtifactRejectsInvalidStructure(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:              "artifact",
+		Type:            StepTypeStaticArtifact,
+		SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+	}, JobStateRunning)
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 6, 0, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Created the artifact.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "report.json"}, Result: "written"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "report.json"}, Result: "exists=true\nkind=file\nname=report.json\nsize=12\n"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "read", "path": "report.json"}, Result: "{not-json}\n"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want invalid structure rejection")
+	}
+}
+
 func TestCompleteRuntimeStepOneShotCodeRequiresVerificationEvidence(t *testing.T) {
 	t.Parallel()
 

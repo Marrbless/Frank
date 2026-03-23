@@ -318,6 +318,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
 								ToolName:  tc.Name,
 								Arguments: cloneToolArguments(tc.Arguments),
+								Result:    res,
 							})
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 								fmt.Sprintf("📢 %s done (%s)", tc.Name, elapsed))
@@ -454,6 +455,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 				successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
 					ToolName:  tc.Name,
 					Arguments: cloneToolArguments(tc.Arguments),
+					Result:    result,
 				})
 			}
 			lastToolResult = result

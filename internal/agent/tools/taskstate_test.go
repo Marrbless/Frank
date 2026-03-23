@@ -235,6 +235,47 @@ func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	}
 }
 
+func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.AllowedTools = []string{"filesystem", "read"}
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:              "build",
+		Type:            missioncontrol.StepTypeStaticArtifact,
+		AllowedTools:    []string{"filesystem"},
+		SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if err := state.ApplyStepOutput("Created report.json.", []missioncontrol.RuntimeToolCallEvidence{
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "report.json"}, Result: "written"},
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "report.json"}, Result: "exists=true\nkind=file\nname=report.json\nsize=17\n"},
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "read", "path": "report.json"}, Result: "{\n  \"ok\": true\n}\n"},
+	}); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after completed static_artifact pause")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
 func TestTaskStateApplyStepOutputTransitionsDiscussionSubtypeToWaitingUser(t *testing.T) {
 	t.Parallel()
 

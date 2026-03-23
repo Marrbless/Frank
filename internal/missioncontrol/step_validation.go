@@ -1,7 +1,10 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -27,8 +30,9 @@ const (
 type StepValidatorKind string
 
 const (
-	StepValidatorKindDiscussion  StepValidatorKind = "discussion"
-	StepValidatorKindOneShotCode StepValidatorKind = "one_shot_code"
+	StepValidatorKindDiscussion     StepValidatorKind = "discussion"
+	StepValidatorKindStaticArtifact StepValidatorKind = "static_artifact"
+	StepValidatorKindOneShotCode    StepValidatorKind = "one_shot_code"
 	// The Frank spec names the validator contract wait_user; the runtime state remains waiting_user.
 	StepValidatorKindWaitUser      StepValidatorKind = "wait_user"
 	StepValidatorKindFinalResponse StepValidatorKind = "final_response"
@@ -37,6 +41,7 @@ const (
 type RuntimeToolCallEvidence struct {
 	ToolName  string
 	Arguments map[string]interface{}
+	Result    string
 }
 
 type StepValidationInput struct {
@@ -75,6 +80,8 @@ func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidatio
 		return completeRunningStep(ec, now, input)
 	case StepValidatorKindWaitUser:
 		return completeWaitUserStep(ec, now, input)
+	case StepValidatorKindStaticArtifact:
+		return completeRunningStep(ec, now, input)
 	case StepValidatorKindOneShotCode:
 		return completeRunningStep(ec, now, input)
 	case StepValidatorKindFinalResponse:
@@ -117,6 +124,11 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 	switch ec.Step.Type {
 	case StepTypeDiscussion:
 		return completeDiscussionStep(ec, now, input)
+	case StepTypeStaticArtifact:
+		if err := validateStaticArtifactCompletion(*ec.Step, input.SuccessfulTools); err != nil {
+			return JobRuntimeState{}, err
+		}
+		return pauseAfterValidatedCompletion(ec, now)
 	case StepTypeOneShotCode:
 		if !hasOneShotCodeArtifactEvidence(input.SuccessfulTools) {
 			return JobRuntimeState{}, ValidationError{
@@ -301,6 +313,8 @@ func stepValidatorKind(ec ExecutionContext) StepValidatorKind {
 	switch ec.Step.Type {
 	case StepTypeDiscussion:
 		return StepValidatorKindDiscussion
+	case StepTypeStaticArtifact:
+		return StepValidatorKindStaticArtifact
 	case StepTypeOneShotCode:
 		return StepValidatorKindOneShotCode
 	case StepTypeFinalResponse:
@@ -360,6 +374,270 @@ func hasOneShotCodeVerificationEvidence(tools []RuntimeToolCallEvidence) bool {
 		}
 	}
 	return false
+}
+
+type staticArtifactSpec struct {
+	path   string
+	format string
+}
+
+func validateStaticArtifactCompletion(step Step, tools []RuntimeToolCallEvidence) error {
+	spec := inferStaticArtifactSpec(step, tools)
+	if spec.path == "" {
+		return ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  step.ID,
+			Message: "static_artifact completion requires an exact artifact file path",
+		}
+	}
+	if !hasExactArtifactWrite(tools, spec.path) {
+		return ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  step.ID,
+			Message: fmt.Sprintf("static_artifact completion requires writing %q", spec.path),
+		}
+	}
+	if !hasExactArtifactExistenceEvidence(tools, spec.path) {
+		return ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  step.ID,
+			Message: fmt.Sprintf("static_artifact completion requires proving %q exists", spec.path),
+		}
+	}
+
+	readResult, ok := exactArtifactReadResult(tools, spec.path)
+	if !ok {
+		return ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  step.ID,
+			Message: fmt.Sprintf("static_artifact completion requires a successful structure check for %q", spec.path),
+		}
+	}
+	if !matchesArtifactStructure(spec.format, readResult) {
+		return ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  step.ID,
+			Message: fmt.Sprintf("static_artifact completion requires %q to match the expected %s structure", spec.path, spec.format),
+		}
+	}
+	return nil
+}
+
+func inferStaticArtifactSpec(step Step, tools []RuntimeToolCallEvidence) staticArtifactSpec {
+	path := extractExpectedArtifactPath(step.SuccessCriteria)
+	if path == "" {
+		path = singleArtifactPath(tools)
+	}
+
+	format := inferArtifactFormat(path, step.SuccessCriteria)
+	if format == "" {
+		format = "text"
+	}
+	return staticArtifactSpec{path: path, format: format}
+}
+
+func extractExpectedArtifactPath(criteria []string) string {
+	pathRE := regexp.MustCompile("`([^`]+)`|\"([^\"]+)\"|'([^']+)'|\\b[[:alnum:]_./-]+\\.[[:alnum:]]+\\b")
+	for _, criterion := range criteria {
+		matches := pathRE.FindStringSubmatch(criterion)
+		if len(matches) == 0 {
+			continue
+		}
+		for _, match := range matches[1:] {
+			if strings.TrimSpace(match) != "" {
+				return filepath.Clean(strings.TrimSpace(match))
+			}
+		}
+		if strings.TrimSpace(matches[0]) != "" {
+			return filepath.Clean(strings.Trim(matches[0], "`\"'"))
+		}
+	}
+	return ""
+}
+
+func singleArtifactPath(tools []RuntimeToolCallEvidence) string {
+	seen := map[string]struct{}{}
+	ordered := make([]string, 0, 1)
+	for _, tool := range tools {
+		path := artifactPathForTool(tool)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		ordered = append(ordered, path)
+	}
+	if len(ordered) != 1 {
+		return ""
+	}
+	return ordered[0]
+}
+
+func artifactPathForTool(tool RuntimeToolCallEvidence) string {
+	switch tool.ToolName {
+	case "filesystem":
+		return cleanedArtifactPath(toolArgString(tool.Arguments, "path"))
+	case "exec":
+		cmd := toolArgStringSlice(tool.Arguments, "cmd")
+		if len(cmd) < 2 {
+			return ""
+		}
+		switch filepathBase(cmd[0]) {
+		case "frank_finish", "frank_py_finish", "frank_py_run":
+			return cleanedArtifactPath(cmd[1])
+		}
+	}
+	return ""
+}
+
+func cleanedArtifactPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(path))
+}
+
+func inferArtifactFormat(path string, criteria []string) string {
+	text := strings.ToLower(strings.Join(criteria, " "))
+	switch {
+	case strings.Contains(text, "json"):
+		return "json"
+	case strings.Contains(text, "yaml"), strings.Contains(text, "yml"):
+		return "yaml"
+	case strings.Contains(text, "markdown"), strings.Contains(text, ".md"):
+		return "markdown"
+	}
+
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		return "json"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".md", ".markdown":
+		return "markdown"
+	default:
+		return "text"
+	}
+}
+
+func hasExactArtifactWrite(tools []RuntimeToolCallEvidence, path string) bool {
+	for _, tool := range tools {
+		switch tool.ToolName {
+		case "filesystem":
+			if toolArgString(tool.Arguments, "action") == "write" && artifactPathForTool(tool) == path {
+				return true
+			}
+		case "exec":
+			cmd := toolArgStringSlice(tool.Arguments, "cmd")
+			if len(cmd) >= 2 && artifactPathForTool(tool) == path {
+				switch filepathBase(cmd[0]) {
+				case "frank_finish", "frank_py_finish":
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasExactArtifactExistenceEvidence(tools []RuntimeToolCallEvidence, path string) bool {
+	for _, tool := range tools {
+		switch tool.ToolName {
+		case "filesystem":
+			if artifactPathForTool(tool) != path {
+				continue
+			}
+			switch toolArgString(tool.Arguments, "action") {
+			case "read":
+				if strings.TrimSpace(tool.Result) != "" {
+					return true
+				}
+			case "stat":
+				if strings.Contains(tool.Result, "exists=true") && strings.Contains(tool.Result, "kind=file") {
+					return true
+				}
+			}
+		case "exec":
+			cmd := toolArgStringSlice(tool.Arguments, "cmd")
+			if len(cmd) >= 2 && artifactPathForTool(tool) == path {
+				switch filepathBase(cmd[0]) {
+				case "frank_finish", "frank_py_finish", "frank_py_run":
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func exactArtifactReadResult(tools []RuntimeToolCallEvidence, path string) (string, bool) {
+	for _, tool := range tools {
+		switch tool.ToolName {
+		case "filesystem":
+			if toolArgString(tool.Arguments, "action") == "read" && artifactPathForTool(tool) == path {
+				if strings.TrimSpace(tool.Result) != "" {
+					return tool.Result, true
+				}
+			}
+		case "exec":
+			cmd := toolArgStringSlice(tool.Arguments, "cmd")
+			if len(cmd) >= 2 && artifactPathForTool(tool) == path && filepathBase(cmd[0]) == "frank_py_run" {
+				if strings.TrimSpace(tool.Result) != "" {
+					return tool.Result, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func matchesArtifactStructure(format, content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+
+	switch format {
+	case "json":
+		if !json.Valid([]byte(trimmed)) {
+			return false
+		}
+		var decoded interface{}
+		if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+			return false
+		}
+		switch decoded.(type) {
+		case map[string]interface{}, []interface{}:
+			return true
+		default:
+			return false
+		}
+	case "yaml":
+		lines := strings.Split(trimmed, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.Contains(line, ":") || strings.HasPrefix(line, "- ") {
+				return true
+			}
+		}
+		return false
+	case "markdown":
+		lines := strings.Split(trimmed, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+				return true
+			}
+		}
+		return len(normalizedWords(trimmed)) >= 5
+	default:
+		return len(normalizedWords(trimmed)) > 0
+	}
 }
 
 func isVerificationCommand(cmd []string) bool {
