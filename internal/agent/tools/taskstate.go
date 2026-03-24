@@ -205,9 +205,18 @@ func (s *TaskState) HydrateRuntimeControl(job missioncontrol.Job, runtimeState m
 		}
 	}
 
+	normalizedRuntime, changed := missioncontrol.NormalizeHydratedApprovalRequests(runtimeState, time.Now())
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.hydrateRuntimeControlLocked(job, runtimeState, control)
+	err := s.hydrateRuntimeControlLocked(job, normalizedRuntime, control)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if changed {
+		s.notifyRuntimeChanged()
+	}
+	return nil
 }
 
 func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) error {

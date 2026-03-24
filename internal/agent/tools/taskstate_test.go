@@ -1240,6 +1240,144 @@ func TestTaskStateApplyNaturalApprovalDecisionRejectsTerminalPersistedRuntime(t 
 	}
 }
 
+func TestTaskStateHydrateRuntimeControlExpiresElapsedApprovalImmediately(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	hookCalls := 0
+	state.SetRuntimeChangeHook(func() {
+		hookCalls++
+	})
+
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	if err := state.HydrateRuntimeControl(missioncontrol.Job{ID: "job-1"}, missioncontrol.JobRuntimeState{
+		JobID:         "job-1",
+		State:         missioncontrol.JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "awaiting operator input",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				State:           missioncontrol.ApprovalStatePending,
+				RequestedAt:     expiredAt.Add(-1 * time.Minute),
+				ExpiresAt:       expiredAt,
+			},
+		},
+	}, &missioncontrol.RuntimeControlContext{
+		JobID: "job-1",
+		Step: missioncontrol.Step{
+			ID:      "build",
+			Type:    missioncontrol.StepTypeDiscussion,
+			Subtype: missioncontrol.StepSubtypeAuthorization,
+		},
+	}); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].ResolvedAt != expiredAt {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0].ResolvedAt = %v, want %v", runtime.ApprovalRequests[0].ResolvedAt, expiredAt)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("runtime change hook calls = %d, want 1", hookCalls)
+	}
+}
+
+func TestTaskStateHydrateRuntimeControlLeavesTerminalRuntimeUnchanged(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	hookCalls := 0
+	state.SetRuntimeChangeHook(func() {
+		hookCalls++
+	})
+
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	if err := state.HydrateRuntimeControl(missioncontrol.Job{ID: "job-1"}, missioncontrol.JobRuntimeState{
+		JobID: "job-1",
+		State: missioncontrol.JobStateCompleted,
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				State:           missioncontrol.ApprovalStatePending,
+				ExpiresAt:       expiredAt,
+			},
+		},
+	}, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want unchanged terminal approval request", runtime.ApprovalRequests)
+	}
+	if hookCalls != 0 {
+		t.Fatalf("runtime change hook calls = %d, want 0", hookCalls)
+	}
+}
+
+func TestTaskStateHydrateRuntimeControlApplyApprovalDecisionRejectsExpiredRequest(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	if err := state.HydrateRuntimeControl(missioncontrol.Job{ID: "job-1"}, missioncontrol.JobRuntimeState{
+		JobID:         "job-1",
+		State:         missioncontrol.JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "awaiting operator input",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				State:           missioncontrol.ApprovalStatePending,
+				ExpiresAt:       expiredAt,
+			},
+		},
+	}, &missioncontrol.RuntimeControlContext{
+		JobID: "job-1",
+		Step: missioncontrol.Step{
+			ID:      "build",
+			Type:    missioncontrol.StepTypeDiscussion,
+			Subtype: missioncontrol.StepSubtypeAuthorization,
+		},
+	}); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand)
+	if err == nil {
+		t.Fatal("ApplyApprovalDecision() error = nil, want expired approval failure")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+}
+
 func TestTaskStateApplyApprovalDecisionDenyAfterExecutionContextTeardownBlocksLaterFreeFormInput(t *testing.T) {
 	t.Parallel()
 

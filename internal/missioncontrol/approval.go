@@ -161,6 +161,13 @@ func RefreshApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntime
 	return next, changed
 }
 
+func NormalizeHydratedApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntimeState, bool) {
+	if current.State != JobStateWaitingUser {
+		return *CloneJobRuntimeState(&current), false
+	}
+	return RefreshApprovalRequests(current, now)
+}
+
 func ExpireActiveApprovalRequest(current JobRuntimeState, now time.Time, jobID, stepID, requestedAction, scope string) (JobRuntimeState, bool) {
 	next, _ := RefreshApprovalRequests(current, now)
 	requestIndex, ok := findPendingApprovalRequest(next.ApprovalRequests, jobID, stepID, requestedAction, scope)

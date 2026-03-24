@@ -3105,8 +3105,17 @@ func TestMissionStatusBootstrapRehydratedYesDoesNotBindExpiredApproval(t *testin
 	}
 
 	ag := newMissionBootstrapTestLoop()
+	installMissionRuntimeChangeHook(cmd, ag)
 	if err := configureMissionBootstrap(cmd, ag); err != nil {
 		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if len(snapshot.Runtime.ApprovalRequests) != 1 || snapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want one expired approval immediately after bootstrap", snapshot.Runtime.ApprovalRequests)
 	}
 
 	resp, err := ag.ProcessDirect("yes", 2*time.Second)
@@ -3115,6 +3124,103 @@ func TestMissionStatusBootstrapRehydratedYesDoesNotBindExpiredApproval(t *testin
 	}
 	if !strings.Contains(resp, "(stub) Echo") {
 		t.Fatalf("ProcessDirect(yes) response = %q, want provider fallback", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+
+	snapshot = readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if len(snapshot.Runtime.ApprovalRequests) != 1 || snapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want one expired approval", snapshot.Runtime.ApprovalRequests)
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedApproveDoesNotBindExpiredApproval(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+					ExpiresAt:       expiredAt,
+				},
+			},
+			UpdatedAt: expiredAt.Add(-1 * time.Minute),
+		},
+		RuntimeControl: &missioncontrol.RuntimeControlContext{
+			JobID: job.ID,
+			Step: missioncontrol.Step{
+				ID:      "build",
+				Type:    missioncontrol.StepTypeDiscussion,
+				Subtype: missioncontrol.StepSubtypeAuthorization,
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	installMissionRuntimeChangeHook(cmd, ag)
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	_, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(APPROVE) error = nil, want expired approval rejection")
+	}
+	if !strings.Contains(err.Error(), "no pending approval request matches the active job and step") {
+		t.Fatalf("ProcessDirect(APPROVE) error = %q, want expired approval rejection", err)
 	}
 
 	runtime, ok := ag.MissionRuntimeState()
