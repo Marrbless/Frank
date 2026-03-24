@@ -60,12 +60,6 @@ type Step struct {
 	SuccessCriteria   []string      `json:"success_criteria"`
 }
 
-type ApprovalRequest struct {
-	JobID  string `json:"job_id"`
-	StepID string `json:"step_id"`
-	Reason string `json:"reason"`
-}
-
 type ValidationError struct {
 	Code    RejectionCode `json:"code"`
 	StepID  string        `json:"step_id"`

@@ -58,6 +58,21 @@ func TestEnumValues(t *testing.T) {
 	if RejectionCodeWaitingUser != "waiting_user" {
 		t.Fatalf("RejectionCodeWaitingUser = %q, want %q", RejectionCodeWaitingUser, "waiting_user")
 	}
+	if ApprovalStatePending != "pending" {
+		t.Fatalf("ApprovalStatePending = %q, want %q", ApprovalStatePending, "pending")
+	}
+	if ApprovalStateGranted != "granted" {
+		t.Fatalf("ApprovalStateGranted = %q, want %q", ApprovalStateGranted, "granted")
+	}
+	if ApprovalStateDenied != "denied" {
+		t.Fatalf("ApprovalStateDenied = %q, want %q", ApprovalStateDenied, "denied")
+	}
+	if ApprovalStateExpired != "expired" {
+		t.Fatalf("ApprovalStateExpired = %q, want %q", ApprovalStateExpired, "expired")
+	}
+	if ApprovalStateRevoked != "revoked" {
+		t.Fatalf("ApprovalStateRevoked = %q, want %q", ApprovalStateRevoked, "revoked")
+	}
 }
 
 func TestJobJSONRoundTrip(t *testing.T) {

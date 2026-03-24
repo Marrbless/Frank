@@ -112,6 +112,28 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 		CompletedSteps: []RuntimeStepRecord{
 			{StepID: "draft", At: time.Date(2026, 3, 23, 11, 0, 0, 0, time.UTC)},
 		},
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				State:           ApprovalStatePending,
+				RequestedAt:     time.Date(2026, 3, 23, 11, 30, 0, 0, time.UTC),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "draft",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       time.Date(2026, 3, 23, 11, 45, 0, 0, time.UTC),
+			},
+		},
 	}
 
 	ec, err := ResolveExecutionContextWithRuntime(job, runtime)
@@ -127,7 +149,15 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 	}
 
 	ec.Runtime.CompletedSteps[0].StepID = "mutated"
+	ec.Runtime.ApprovalRequests[0].StepID = "mutated-request"
+	ec.Runtime.ApprovalGrants[0].StepID = "mutated-grant"
 	if runtime.CompletedSteps[0].StepID != "draft" {
 		t.Fatalf("original runtime step = %q, want %q", runtime.CompletedSteps[0].StepID, "draft")
+	}
+	if runtime.ApprovalRequests[0].StepID != "build" {
+		t.Fatalf("original approval request step = %q, want %q", runtime.ApprovalRequests[0].StepID, "build")
+	}
+	if runtime.ApprovalGrants[0].StepID != "draft" {
+		t.Fatalf("original approval grant step = %q, want %q", runtime.ApprovalGrants[0].StepID, "draft")
 	}
 }

@@ -142,6 +142,7 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil)
+			installMissionRuntimeChangeHook(cmd, ag)
 			if err := configureMissionBootstrap(cmd, ag); err != nil {
 				return err
 			}
@@ -197,6 +198,7 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
+			installMissionRuntimeChangeHook(cmd, ag)
 			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
 			if err != nil {
 				return err
@@ -789,6 +791,23 @@ func addMissionBootstrapFlags(cmd *cobra.Command) {
 	cmd.Flags().String("mission-step", "", "Mission step ID to activate from the mission file")
 	cmd.Flags().String("mission-status-file", "", "Path to write a mission status snapshot after startup")
 	cmd.Flags().Bool("mission-resume-approved", false, "Approve resuming a persisted mission runtime after reboot")
+}
+
+func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
+	if cmd == nil || ag == nil {
+		return
+	}
+
+	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	if statusFile == "" {
+		return
+	}
+
+	ag.SetMissionRuntimeChangeHook(func() {
+		if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
+			log.Printf("mission runtime status snapshot update failed for %q: %v", statusFile, err)
+		}
+	})
 }
 
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {

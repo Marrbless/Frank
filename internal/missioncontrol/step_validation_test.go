@@ -29,8 +29,47 @@ func TestCompleteRuntimeStepDiscussionSubtypeTransitionsToWaitingUser(t *testing
 	if runtime.WaitingReason != "discussion_blocker" {
 		t.Fatalf("WaitingReason = %q, want %q", runtime.WaitingReason, "discussion_blocker")
 	}
+	if len(runtime.ApprovalRequests) != 0 {
+		t.Fatalf("ApprovalRequests = %#v, want empty for blocker discussion", runtime.ApprovalRequests)
+	}
 	if len(runtime.CompletedSteps) != 0 {
 		t.Fatalf("CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationTransitionsToWaitingUserWithPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 0, 30, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if len(runtime.ApprovalRequests) != 1 {
+		t.Fatalf("ApprovalRequests = %#v, want one pending request", runtime.ApprovalRequests)
+	}
+	request := runtime.ApprovalRequests[0]
+	if request.State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", request.State, ApprovalStatePending)
+	}
+	if request.JobID != "job-1" || request.StepID != "discuss" {
+		t.Fatalf("ApprovalRequests[0] binding = (%q, %q), want (job-1, discuss)", request.JobID, request.StepID)
+	}
+	if request.RequestedAction != ApprovalRequestedActionStepComplete {
+		t.Fatalf("ApprovalRequests[0].RequestedAction = %q, want %q", request.RequestedAction, ApprovalRequestedActionStepComplete)
+	}
+	if request.Scope != ApprovalScopeMissionStep {
+		t.Fatalf("ApprovalRequests[0].Scope = %q, want %q", request.Scope, ApprovalScopeMissionStep)
+	}
+	if request.RequestedVia != ApprovalRequestedViaRuntime {
+		t.Fatalf("ApprovalRequests[0].RequestedVia = %q, want %q", request.RequestedVia, ApprovalRequestedViaRuntime)
 	}
 }
 
@@ -226,8 +265,23 @@ func TestCompleteRuntimeStepWaitingUserApprovalPausesAndRecordsCompletion(t *tes
 		Subtype: StepSubtypeAuthorization,
 	}, JobStateWaitingUser)
 	now := time.Date(2026, 3, 23, 12, 11, 0, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+		},
+	}
 
-	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{UserInput: "approved"})
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		UserInput:     "APPROVE job-1 discuss",
+		UserInputKind: WaitingUserInputApproval,
+		ApprovalVia:   ApprovalGrantedViaOperatorCommand,
+	})
 	if err != nil {
 		t.Fatalf("CompleteRuntimeStep() error = %v", err)
 	}
@@ -240,6 +294,155 @@ func TestCompleteRuntimeStepWaitingUserApprovalPausesAndRecordsCompletion(t *tes
 	}
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "discuss" {
 		t.Fatalf("CompletedSteps = %#v, want discuss completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalRequests = %#v, want granted request", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].GrantedVia != ApprovalGrantedViaOperatorCommand {
+		t.Fatalf("ApprovalRequests[0].GrantedVia = %q, want %q", runtime.ApprovalRequests[0].GrantedVia, ApprovalGrantedViaOperatorCommand)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalGrants = %#v, want one granted record", runtime.ApprovalGrants)
+	}
+}
+
+func TestCompleteRuntimeStepWaitingUserPendingApprovalRejectsFreeFormApproval(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+		},
+	}
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 11, 15, 0, time.UTC), StepValidationInput{
+		UserInput:     "approved",
+		UserInputKind: WaitingUserInputApproval,
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want explicit operator command failure")
+	}
+}
+
+func TestCompleteRuntimeStepWaitingUserPendingApprovalDoesNotLeakAcrossSteps(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "other-step",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 11, 30, 0, time.UTC), StepValidationInput{
+		UserInput: "approved",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+}
+
+func TestCompleteRuntimeStepWaitingUserDenyRecordsDeniedApproval(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	now := time.Date(2026, 3, 23, 12, 11, 45, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		UserInput:     "DENY job-1 discuss",
+		UserInputKind: WaitingUserInputRejection,
+		ApprovalVia:   ApprovalGrantedViaOperatorCommand,
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != ApprovalStateDenied {
+		t.Fatalf("ApprovalRequests = %#v, want denied request", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 0 {
+		t.Fatalf("ApprovalGrants = %#v, want empty", runtime.ApprovalGrants)
+	}
+}
+
+func TestCompleteRuntimeStepWaitingUserDeniedApprovalRejectsLaterFreeFormInput(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStateDenied,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+			ResolvedAt:      time.Date(2026, 3, 23, 12, 11, 45, 0, time.UTC),
+		},
+	}
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 12, 0, 0, time.UTC), StepValidationInput{
+		UserInput: "go ahead",
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want denied approval failure")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("CompleteRuntimeStep() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeStepValidationFailed {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
 	}
 }
 

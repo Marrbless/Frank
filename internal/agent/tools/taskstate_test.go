@@ -312,7 +312,7 @@ func TestTaskStateApplyStepOutputTransitionsDiscussionSubtypeToWaitingUser(t *te
 	}
 }
 
-func TestTaskStateApplyWaitingUserInputPausesCompletedStep(t *testing.T) {
+func TestTaskStateApplyApprovalDecisionPausesCompletedStep(t *testing.T) {
 	t.Parallel()
 
 	state := NewTaskState()
@@ -335,12 +335,15 @@ func TestTaskStateApplyWaitingUserInputPausesCompletedStep(t *testing.T) {
 		t.Fatalf("ApplyStepOutput() error = %v", err)
 	}
 
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
 	inputKind, err := state.ApplyWaitingUserInput("approved")
 	if err != nil {
 		t.Fatalf("ApplyWaitingUserInput() error = %v", err)
 	}
-	if inputKind != missioncontrol.WaitingUserInputApproval {
-		t.Fatalf("ApplyWaitingUserInput() kind = %q, want %q", inputKind, missioncontrol.WaitingUserInputApproval)
+	if inputKind != missioncontrol.WaitingUserInputNone {
+		t.Fatalf("ApplyWaitingUserInput() kind = %q, want %q after approval completion", inputKind, missioncontrol.WaitingUserInputNone)
 	}
 	if _, ok := state.ExecutionContext(); ok {
 		t.Fatal("ExecutionContext() ok = true, want false after approval completion")
@@ -355,6 +358,95 @@ func TestTaskStateApplyWaitingUserInputPausesCompletedStep(t *testing.T) {
 	}
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
 		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one granted approval", runtime.ApprovalGrants)
+	}
+}
+
+func TestTaskStateApplyWaitingUserInputDoesNotBindPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	_, err := state.ApplyWaitingUserInput("approved")
+	if err == nil {
+		t.Fatal("ApplyWaitingUserInput() error = nil, want explicit operator approval failure")
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want waiting execution context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want waiting_user runtime", ec.Runtime)
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyWaitingUserInputDoesNotCompleteDeniedApproval(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionDeny, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	_, err := state.ApplyWaitingUserInput("go ahead")
+	if err == nil {
+		t.Fatal("ApplyWaitingUserInput() error = nil, want denied approval failure")
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want waiting execution context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want waiting_user runtime", ec.Runtime)
+	}
+	if len(ec.Runtime.CompletedSteps) != 0 {
+		t.Fatalf("ExecutionContext().Runtime.CompletedSteps = %#v, want empty", ec.Runtime.CompletedSteps)
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one denied approval", ec.Runtime.ApprovalRequests)
 	}
 }
 

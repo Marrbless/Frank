@@ -2647,6 +2647,76 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 }
 
+func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "Need approval before continuing."}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	waitingSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if waitingSnapshot.Runtime == nil {
+		t.Fatal("waitingSnapshot.Runtime = nil, want non-nil")
+	}
+	if waitingSnapshot.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("waitingSnapshot.Runtime.State = %q, want %q", waitingSnapshot.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(waitingSnapshot.Runtime.ApprovalRequests) != 1 || waitingSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("waitingSnapshot.Runtime.ApprovalRequests = %#v, want one pending approval", waitingSnapshot.Runtime.ApprovalRequests)
+	}
+
+	if _, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+
+	approvedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if approvedSnapshot.Runtime == nil {
+		t.Fatal("approvedSnapshot.Runtime = nil, want non-nil")
+	}
+	if approvedSnapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("approvedSnapshot.Runtime.State = %q, want %q", approvedSnapshot.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(approvedSnapshot.Runtime.CompletedSteps) != 1 || approvedSnapshot.Runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("approvedSnapshot.Runtime.CompletedSteps = %#v, want build completion", approvedSnapshot.Runtime.CompletedSteps)
+	}
+	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one granted approval", approvedSnapshot.Runtime.ApprovalGrants)
+	}
+}
+
 func TestWriteMissionStatusSnapshotLeavesNoTempFileOnSuccess(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	dir := t.TempDir()
@@ -3285,6 +3355,18 @@ func configureMissionBootstrapJobForStartupTest(t *testing.T, cmd *cobra.Command
 	}
 
 	return *job
+}
+
+type missionStatusFixedResponseProvider struct {
+	content string
+}
+
+func (p *missionStatusFixedResponseProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	return providers.LLMResponse{Content: p.content}, nil
+}
+
+func (p *missionStatusFixedResponseProvider) GetDefaultModel() string {
+	return "stub"
 }
 
 func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {

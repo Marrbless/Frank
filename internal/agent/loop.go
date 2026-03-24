@@ -20,6 +20,7 @@ import (
 )
 
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
+var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
 
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
@@ -174,6 +175,13 @@ func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState mi
 	return a.taskState.ResumeRuntime(job, runtimeState, resumeApproved)
 }
 
+func (a *AgentLoop) SetMissionRuntimeChangeHook(hook func()) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+	a.taskState.SetRuntimeChangeHook(hook)
+}
+
 func (a *AgentLoop) SetMissionRequired(required bool) {
 	if a == nil || a.tools == nil {
 		return
@@ -211,6 +219,26 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			if a.taskState != nil {
 				a.taskState.BeginTask(fmt.Sprintf("%s:%s:%d", msg.Channel, msg.ChatID, time.Now().UnixNano()))
+				if handled, content, err := a.processApprovalCommand(msg.Content); handled {
+					if err != nil {
+						content = err.Error()
+					}
+					if !isSystemChannel(msg.Channel) {
+						sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
+						sess.AddMessage("user", msg.Content)
+						sess.AddMessage("assistant", content)
+						if saveErr := a.sessions.Save(sess); saveErr != nil {
+							log.Printf("error saving session: %v", saveErr)
+						}
+					}
+					out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: content}
+					select {
+					case a.hub.Out <- out:
+					default:
+						log.Println("Outbound channel full, dropping message")
+					}
+					continue
+				}
 				if inputKind, err := a.taskState.ApplyWaitingUserInput(msg.Content); err != nil {
 					log.Printf("mission runtime waiting_user input validation failed: %v", err)
 				} else if inputKind != missioncontrol.WaitingUserInputNone {
@@ -379,6 +407,9 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
+		if handled, response, err := a.processApprovalCommand(content); handled {
+			return response, err
+		}
 		if inputKind, err := a.taskState.ApplyWaitingUserInput(content); err != nil {
 			log.Printf("mission runtime waiting_user input validation failed: %v", err)
 		} else if inputKind != missioncontrol.WaitingUserInputNone {
@@ -469,6 +500,30 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	}
 
 	return "Max iterations reached without final response", nil
+}
+
+func (a *AgentLoop) processApprovalCommand(content string) (bool, string, error) {
+	if a == nil || a.taskState == nil {
+		return false, "", nil
+	}
+
+	matches := approvalCommandRE.FindStringSubmatch(strings.TrimSpace(content))
+	if len(matches) != 4 {
+		return false, "", nil
+	}
+
+	decision := missioncontrol.ApprovalDecision(strings.ToLower(matches[1]))
+	jobID := matches[2]
+	stepID := matches[3]
+	if err := a.taskState.ApplyApprovalDecision(jobID, stepID, decision, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		return true, "", err
+	}
+
+	verb := "Approved"
+	if decision == missioncontrol.ApprovalDecisionDeny {
+		verb = "Denied"
+	}
+	return true, fmt.Sprintf("%s job=%s step=%s.", verb, jobID, stepID), nil
 }
 
 func cloneToolArguments(args map[string]interface{}) map[string]interface{} {

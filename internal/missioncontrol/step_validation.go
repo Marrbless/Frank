@@ -48,6 +48,7 @@ type StepValidationInput struct {
 	FinalResponse   string
 	UserInput       string
 	UserInputKind   WaitingUserInputKind
+	ApprovalVia     string
 	SuccessfulTools []RuntimeToolCallEvidence
 }
 
@@ -198,7 +199,19 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 	}
 
 	if waitingReason, ok := discussionWaitingReason(ec.Step.Subtype); ok {
-		return TransitionJobRuntime(*CloneJobRuntimeState(ec.Runtime), JobStateWaitingUser, now, RuntimeTransitionOptions{
+		nextRuntime := *CloneJobRuntimeState(ec.Runtime)
+		if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
+			nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
+				JobID:           ec.Job.ID,
+				StepID:          ec.Step.ID,
+				RequestedAction: requestedAction,
+				Scope:           scope,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				Reason:          waitingReason,
+			})
+		}
+
+		return TransitionJobRuntime(nextRuntime, JobStateWaitingUser, now, RuntimeTransitionOptions{
 			StepID:        ec.Step.ID,
 			WaitingReason: waitingReason,
 		})
@@ -225,6 +238,44 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  ec.Step.ID,
 			Message: "waiting_user completion requires approval, rejection, clarification, or timeout input",
+		}
+	}
+
+	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval && hasPendingApprovalRequest(ec.Runtime, ec.Job.ID, ec.Step.ID, requestedAction, scope) {
+		switch inputKind {
+		case WaitingUserInputApproval:
+			if input.ApprovalVia == "" {
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeStepValidationFailed,
+					StepID:  ec.Step.ID,
+					Message: "pending approval requires explicit operator approve command",
+				}
+			}
+			return ApplyApprovalDecision(ec, now, ApprovalDecisionApprove, input.ApprovalVia)
+		case WaitingUserInputRejection:
+			if input.ApprovalVia == "" {
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeStepValidationFailed,
+					StepID:  ec.Step.ID,
+					Message: "pending approval requires explicit operator deny command",
+				}
+			}
+			return ApplyApprovalDecision(ec, now, ApprovalDecisionDeny, input.ApprovalVia)
+		default:
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				StepID:  ec.Step.ID,
+				Message: "pending approval requires explicit operator approve or deny command",
+			}
+		}
+	}
+	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
+		if requestIndex, ok := findLatestApprovalRequest(ec.Runtime.ApprovalRequests, ec.Job.ID, ec.Step.ID, requestedAction, scope); ok && ec.Runtime.ApprovalRequests[requestIndex].State == ApprovalStateDenied {
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				StepID:  ec.Step.ID,
+				Message: "denied approval requires a new approval request before the step can complete",
+			}
 		}
 	}
 

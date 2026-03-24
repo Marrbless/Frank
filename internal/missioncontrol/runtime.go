@@ -25,21 +25,23 @@ type RuntimeStepRecord struct {
 }
 
 type JobRuntimeState struct {
-	JobID          string              `json:"job_id"`
-	State          JobState            `json:"state"`
-	ActiveStepID   string              `json:"active_step_id,omitempty"`
-	CompletedSteps []RuntimeStepRecord `json:"completed_steps,omitempty"`
-	FailedSteps    []RuntimeStepRecord `json:"failed_steps,omitempty"`
-	WaitingReason  string              `json:"waiting_reason,omitempty"`
-	PausedReason   string              `json:"paused_reason,omitempty"`
-	CreatedAt      time.Time           `json:"created_at,omitempty"`
-	UpdatedAt      time.Time           `json:"updated_at,omitempty"`
-	StartedAt      time.Time           `json:"started_at,omitempty"`
-	ActiveStepAt   time.Time           `json:"active_step_at,omitempty"`
-	WaitingAt      time.Time           `json:"waiting_at,omitempty"`
-	PausedAt       time.Time           `json:"paused_at,omitempty"`
-	CompletedAt    time.Time           `json:"completed_at,omitempty"`
-	FailedAt       time.Time           `json:"failed_at,omitempty"`
+	JobID            string              `json:"job_id"`
+	State            JobState            `json:"state"`
+	ActiveStepID     string              `json:"active_step_id,omitempty"`
+	CompletedSteps   []RuntimeStepRecord `json:"completed_steps,omitempty"`
+	FailedSteps      []RuntimeStepRecord `json:"failed_steps,omitempty"`
+	ApprovalRequests []ApprovalRequest   `json:"approval_requests,omitempty"`
+	ApprovalGrants   []ApprovalGrant     `json:"approval_grants,omitempty"`
+	WaitingReason    string              `json:"waiting_reason,omitempty"`
+	PausedReason     string              `json:"paused_reason,omitempty"`
+	CreatedAt        time.Time           `json:"created_at,omitempty"`
+	UpdatedAt        time.Time           `json:"updated_at,omitempty"`
+	StartedAt        time.Time           `json:"started_at,omitempty"`
+	ActiveStepAt     time.Time           `json:"active_step_at,omitempty"`
+	WaitingAt        time.Time           `json:"waiting_at,omitempty"`
+	PausedAt         time.Time           `json:"paused_at,omitempty"`
+	CompletedAt      time.Time           `json:"completed_at,omitempty"`
+	FailedAt         time.Time           `json:"failed_at,omitempty"`
 }
 
 type RuntimeTransitionOptions struct {
@@ -58,6 +60,8 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	cloned := *runtime
 	cloned.CompletedSteps = append([]RuntimeStepRecord(nil), runtime.CompletedSteps...)
 	cloned.FailedSteps = append([]RuntimeStepRecord(nil), runtime.FailedSteps...)
+	cloned.ApprovalRequests = append([]ApprovalRequest(nil), runtime.ApprovalRequests...)
+	cloned.ApprovalGrants = append([]ApprovalGrant(nil), runtime.ApprovalGrants...)
 	return &cloned
 }
 
