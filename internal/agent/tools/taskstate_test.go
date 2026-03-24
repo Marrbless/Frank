@@ -195,7 +195,7 @@ func TestTaskStateResumeRuntimeStoresExecutionContext(t *testing.T) {
 		ActiveStepID: "build",
 	}
 
-	if err := state.ResumeRuntime(job, runtimeState, true); err != nil {
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
 		t.Fatalf("ResumeRuntime() error = %v", err)
 	}
 
@@ -418,7 +418,7 @@ func TestTaskStateHydrateRuntimeControlResumesPausedRuntimeAfterRehydration(t *t
 		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
 	}
 
-	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 		t.Fatalf("HydrateRuntimeControl() error = %v", err)
 	}
 	if _, ok := state.ExecutionContext(); ok {
@@ -601,7 +601,7 @@ func TestTaskStateHydrateRuntimeControlWrongJobDoesNotBindAfterRehydration(t *te
 		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
 	}
 
-	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 		t.Fatalf("HydrateRuntimeControl() error = %v", err)
 	}
 
@@ -676,7 +676,7 @@ func TestTaskStateHydrateRuntimeControlAbortsWaitingUserRuntimeAfterRehydration(
 		},
 	}
 
-	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 		t.Fatalf("HydrateRuntimeControl() error = %v", err)
 	}
 	if err := state.AbortRuntime("job-1"); err != nil {
@@ -753,7 +753,7 @@ func TestTaskStateHydrateRuntimeControlRejectsTerminalOperatorCommands(t *testin
 				State: stateValue,
 			}
 
-			if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+			if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 				t.Fatalf("HydrateRuntimeControl() error = %v", err)
 			}
 

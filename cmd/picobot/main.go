@@ -848,26 +848,26 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 		return nil, err
 	}
 
-	if runtimeState, ok, err := loadPersistedMissionRuntime(statusFile, job); err != nil {
+	if runtimeState, runtimeControl, ok, err := loadPersistedMissionRuntime(statusFile, job); err != nil {
 		return nil, err
 	} else if ok {
 		if runtimeState.ActiveStepID != "" && runtimeState.ActiveStepID != missionStep {
 			return nil, fmt.Errorf("persisted mission runtime step %q does not match --mission-step %q", runtimeState.ActiveStepID, missionStep)
 		}
 		if resumeApproved {
-			if err := ag.ResumeMissionRuntime(job, runtimeState, true); err != nil {
+			if err := ag.ResumeMissionRuntime(job, runtimeState, runtimeControl, true); err != nil {
 				return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", statusFile, err)
 			}
 			return &job, nil
 		}
 		switch runtimeState.State {
 		case missioncontrol.JobStatePaused, missioncontrol.JobStateWaitingUser:
-			if err := ag.HydrateMissionRuntimeControl(job, runtimeState); err != nil {
+			if err := ag.HydrateMissionRuntimeControl(job, runtimeState, runtimeControl); err != nil {
 				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime control from %q: %w", statusFile, err)
 			}
 			return &job, nil
 		case missioncontrol.JobStateCompleted, missioncontrol.JobStateFailed, missioncontrol.JobStateRejected, missioncontrol.JobStateAborted:
-			if err := ag.HydrateMissionRuntimeControl(job, runtimeState); err != nil {
+			if err := ag.HydrateMissionRuntimeControl(job, runtimeState, runtimeControl); err != nil {
 				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime terminal state from %q: %w", statusFile, err)
 			}
 			return &job, nil
@@ -887,17 +887,18 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 }
 
 type missionStatusSnapshot struct {
-	MissionRequired   bool                            `json:"mission_required"`
-	Active            bool                            `json:"active"`
-	MissionFile       string                          `json:"mission_file"`
-	JobID             string                          `json:"job_id"`
-	StepID            string                          `json:"step_id"`
-	StepType          string                          `json:"step_type"`
-	RequiredAuthority missioncontrol.AuthorityTier    `json:"required_authority"`
-	RequiresApproval  bool                            `json:"requires_approval"`
-	AllowedTools      []string                        `json:"allowed_tools"`
-	Runtime           *missioncontrol.JobRuntimeState `json:"runtime,omitempty"`
-	UpdatedAt         string                          `json:"updated_at"`
+	MissionRequired   bool                                  `json:"mission_required"`
+	Active            bool                                  `json:"active"`
+	MissionFile       string                                `json:"mission_file"`
+	JobID             string                                `json:"job_id"`
+	StepID            string                                `json:"step_id"`
+	StepType          string                                `json:"step_type"`
+	RequiredAuthority missioncontrol.AuthorityTier          `json:"required_authority"`
+	RequiresApproval  bool                                  `json:"requires_approval"`
+	AllowedTools      []string                              `json:"allowed_tools"`
+	Runtime           *missioncontrol.JobRuntimeState       `json:"runtime,omitempty"`
+	RuntimeControl    *missioncontrol.RuntimeControlContext `json:"runtime_control,omitempty"`
+	UpdatedAt         string                                `json:"updated_at"`
 }
 
 type missionStepControlFile struct {
@@ -975,25 +976,32 @@ func loadMissionJobFile(path string) (missioncontrol.Job, error) {
 	return job, nil
 }
 
-func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, bool, error) {
+func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, bool, error) {
 	if path == "" {
-		return missioncontrol.JobRuntimeState{}, false, nil
+		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
 
 	snapshot, err := loadMissionStatusSnapshot(path)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return missioncontrol.JobRuntimeState{}, false, nil
+			return missioncontrol.JobRuntimeState{}, nil, false, nil
 		}
-		return missioncontrol.JobRuntimeState{}, false, err
+		return missioncontrol.JobRuntimeState{}, nil, false, err
 	}
 	if snapshot.Runtime == nil {
-		return missioncontrol.JobRuntimeState{}, false, nil
+		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
 	if snapshot.Runtime.JobID != "" && snapshot.Runtime.JobID != job.ID {
-		return missioncontrol.JobRuntimeState{}, false, nil
+		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
-	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), true, nil
+	var runtimeControl *missioncontrol.RuntimeControlContext
+	if snapshot.RuntimeControl != nil {
+		if snapshot.RuntimeControl.JobID != "" && snapshot.RuntimeControl.JobID != job.ID {
+			return missioncontrol.JobRuntimeState{}, nil, false, nil
+		}
+		runtimeControl = missioncontrol.CloneRuntimeControlContext(snapshot.RuntimeControl)
+	}
+	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), runtimeControl, true, nil
 }
 
 func newMissionInspectSummary(job missioncontrol.Job, stepID string) (missionInspectSummary, error) {
@@ -1361,6 +1369,10 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 	if currentRuntime, ok := ag.MissionRuntimeState(); ok {
 		runtimeState = missioncontrol.CloneJobRuntimeState(&currentRuntime)
 	}
+	var runtimeControl *missioncontrol.RuntimeControlContext
+	if currentControl, ok := ag.MissionRuntimeControl(); ok {
+		runtimeControl = missioncontrol.CloneRuntimeControlContext(&currentControl)
+	}
 
 	snapshot := missionStatusSnapshot{
 		MissionRequired: ag.MissionRequired(),
@@ -1370,6 +1382,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		StepType:        "",
 		AllowedTools:    []string{},
 		Runtime:         runtimeState,
+		RuntimeControl:  runtimeControl,
 		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
 	}
 

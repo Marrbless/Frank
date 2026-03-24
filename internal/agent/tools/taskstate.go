@@ -109,6 +109,18 @@ func (s *TaskState) MissionRuntimeState() (missioncontrol.JobRuntimeState, bool)
 	return *missioncontrol.CloneJobRuntimeState(&s.runtimeState), true
 }
 
+func (s *TaskState) MissionRuntimeControl() (missioncontrol.RuntimeControlContext, bool) {
+	if s == nil {
+		return missioncontrol.RuntimeControlContext{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasRuntimeControl {
+		return missioncontrol.RuntimeControlContext{}, false
+	}
+	return *missioncontrol.CloneRuntimeControlContext(&s.runtimeControl), true
+}
+
 func (s *TaskState) SetRuntimeChangeHook(hook func()) {
 	if s == nil {
 		return
@@ -155,7 +167,7 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(job, runtimeState)
+	err = s.storeRuntimeStateLocked(&job, runtimeState, nil)
 	s.mu.Unlock()
 	if err == nil {
 		s.notifyRuntimeChanged()
@@ -163,7 +175,7 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	return err
 }
 
-func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, resumeApproved bool) error {
+func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {
 	nextRuntime, err := missioncontrol.ResumeJobRuntimeAfterBoot(runtimeState, time.Now(), resumeApproved)
 	if err != nil {
 		return err
@@ -174,7 +186,7 @@ func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missionco
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(job, nextRuntime)
+	err = s.storeRuntimeStateLocked(&job, nextRuntime, control)
 	s.mu.Unlock()
 	if err == nil {
 		s.notifyRuntimeChanged()
@@ -182,7 +194,7 @@ func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missionco
 	return err
 }
 
-func (s *TaskState) HydrateRuntimeControl(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+func (s *TaskState) HydrateRuntimeControl(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 	if s == nil {
 		return nil
 	}
@@ -195,7 +207,7 @@ func (s *TaskState) HydrateRuntimeControl(job missioncontrol.Job, runtimeState m
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.hydrateRuntimeControlLocked(job, runtimeState)
+	return s.hydrateRuntimeControlLocked(job, runtimeState, control)
 }
 
 func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) error {
@@ -220,7 +232,7 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 	s.mu.Unlock()
 	if err == nil {
 		s.notifyRuntimeChanged()
@@ -255,7 +267,7 @@ func (s *TaskState) ApplyWaitingUserInput(input string) (missioncontrol.WaitingU
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 	s.mu.Unlock()
 	if err != nil {
 		return missioncontrol.WaitingUserInputNone, err
@@ -293,7 +305,7 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 	s.mu.Unlock()
 	if err == nil {
 		s.notifyRuntimeChanged()
@@ -325,17 +337,31 @@ func (s *TaskState) ClearExecutionContext() {
 	s.notifyRuntimeChanged()
 }
 
-func (s *TaskState) storeRuntimeStateLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 	s.runtimeState = runtimeState
 	s.hasRuntimeState = true
 
 	if runtimeState.ActiveStepID != "" {
-		control, err := missioncontrol.BuildRuntimeControlContext(job, runtimeState.ActiveStepID)
-		if err != nil {
-			return err
+		if control != nil {
+			if _, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, runtimeState); err != nil {
+				return err
+			}
+			s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(control)
+			s.hasRuntimeControl = true
+		} else {
+			if job == nil {
+				return missioncontrol.ValidationError{
+					Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+					Message: "runtime control requires a mission job or persisted control context",
+				}
+			}
+			builtControl, err := missioncontrol.BuildRuntimeControlContext(*job, runtimeState.ActiveStepID)
+			if err != nil {
+				return err
+			}
+			s.runtimeControl = builtControl
+			s.hasRuntimeControl = true
 		}
-		s.runtimeControl = control
-		s.hasRuntimeControl = true
 	} else {
 		s.runtimeControl = missioncontrol.RuntimeControlContext{}
 		s.hasRuntimeControl = false
@@ -347,17 +373,31 @@ func (s *TaskState) storeRuntimeStateLocked(job missioncontrol.Job, runtimeState
 		return nil
 	}
 
-	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(job, runtimeState)
+	if control != nil {
+		ec, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, runtimeState)
+		if err != nil {
+			return err
+		}
+		s.executionContext = ec
+		s.hasExecutionContext = true
+		return nil
+	}
+	if job == nil {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "runtime execution requires a mission job or persisted control context",
+		}
+	}
+	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(*job, runtimeState)
 	if err != nil {
 		return err
 	}
-
 	s.executionContext = ec
 	s.hasExecutionContext = true
 	return nil
 }
 
-func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 	s.runtimeState = *missioncontrol.CloneJobRuntimeState(&runtimeState)
 	s.hasRuntimeState = true
 	s.executionContext = missioncontrol.ExecutionContext{}
@@ -377,11 +417,20 @@ func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeS
 		}
 	}
 
-	control, err := missioncontrol.BuildRuntimeControlContext(job, runtimeState.ActiveStepID)
+	if control != nil {
+		if _, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, runtimeState); err != nil {
+			return err
+		}
+		s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(control)
+		s.hasRuntimeControl = true
+		return nil
+	}
+
+	builtControl, err := missioncontrol.BuildRuntimeControlContext(job, runtimeState.ActiveStepID)
 	if err != nil {
 		return err
 	}
-	s.runtimeControl = control
+	s.runtimeControl = builtControl
 	s.hasRuntimeControl = true
 	return nil
 }
@@ -474,7 +523,7 @@ func (s *TaskState) applyRuntimeControl(jobID string, action string, apply func(
 				}
 			}
 		} else {
-			err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime)
+			err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, nil)
 		}
 		s.mu.Unlock()
 		if err != nil {
@@ -511,7 +560,7 @@ func (s *TaskState) applyRuntimeControl(jobID string, action string, apply func(
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 	s.mu.Unlock()
 	if err != nil {
 		s.emitRuntimeControlAuditEvent(ec, action, err)

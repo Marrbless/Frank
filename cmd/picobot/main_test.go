@@ -2645,6 +2645,18 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	if got.Runtime.ActiveStepID != "build" {
 		t.Fatalf("Runtime.ActiveStepID = %q, want %q", got.Runtime.ActiveStepID, "build")
 	}
+	if got.RuntimeControl == nil {
+		t.Fatal("RuntimeControl = nil, want non-nil")
+	}
+	if got.RuntimeControl.JobID != "job-1" {
+		t.Fatalf("RuntimeControl.JobID = %q, want %q", got.RuntimeControl.JobID, "job-1")
+	}
+	if got.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("RuntimeControl.Step.ID = %q, want %q", got.RuntimeControl.Step.ID, "build")
+	}
+	if got.RuntimeControl.Step.Type != missioncontrol.StepTypeOneShotCode {
+		t.Fatalf("RuntimeControl.Step.Type = %q, want %q", got.RuntimeControl.Step.Type, missioncontrol.StepTypeOneShotCode)
+	}
 }
 
 func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
@@ -2749,6 +2761,9 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if len(pausedSnapshot.Runtime.CompletedSteps) != 0 {
 		t.Fatalf("pausedSnapshot.Runtime.CompletedSteps = %#v, want empty", pausedSnapshot.Runtime.CompletedSteps)
 	}
+	if pausedSnapshot.RuntimeControl == nil || pausedSnapshot.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("pausedSnapshot.RuntimeControl = %#v, want persisted build control", pausedSnapshot.RuntimeControl)
+	}
 
 	ag.ClearMissionStep()
 
@@ -2765,6 +2780,9 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if tornDownSnapshot.Runtime.ActiveStepID != "build" {
 		t.Fatalf("tornDownSnapshot.Runtime.ActiveStepID = %q, want %q", tornDownSnapshot.Runtime.ActiveStepID, "build")
 	}
+	if tornDownSnapshot.RuntimeControl == nil || tornDownSnapshot.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("tornDownSnapshot.RuntimeControl = %#v, want persisted build control", tornDownSnapshot.RuntimeControl)
+	}
 
 	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
@@ -2779,6 +2797,9 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	}
 	if resumedSnapshot.Runtime.ActiveStepID != "build" {
 		t.Fatalf("resumedSnapshot.Runtime.ActiveStepID = %q, want %q", resumedSnapshot.Runtime.ActiveStepID, "build")
+	}
+	if resumedSnapshot.RuntimeControl == nil || resumedSnapshot.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("resumedSnapshot.RuntimeControl = %#v, want persisted build control", resumedSnapshot.RuntimeControl)
 	}
 
 	ag.ClearMissionStep()
@@ -2799,6 +2820,9 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	}
 	if abortedSnapshot.Active {
 		t.Fatal("abortedSnapshot.Active = true, want false")
+	}
+	if abortedSnapshot.RuntimeControl != nil {
+		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)
 	}
 }
 
@@ -2857,6 +2881,9 @@ func TestMissionStatusRuntimeChangeHookPersistsDurableAbortFromWaitingUserAfterT
 	if len(tornDownSnapshot.Runtime.ApprovalRequests) != 1 || tornDownSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("tornDownSnapshot.Runtime.ApprovalRequests = %#v, want one pending approval", tornDownSnapshot.Runtime.ApprovalRequests)
 	}
+	if tornDownSnapshot.RuntimeControl == nil || tornDownSnapshot.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("tornDownSnapshot.RuntimeControl = %#v, want persisted build control", tornDownSnapshot.RuntimeControl)
+	}
 
 	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
@@ -2874,6 +2901,9 @@ func TestMissionStatusRuntimeChangeHookPersistsDurableAbortFromWaitingUserAfterT
 	}
 	if abortedSnapshot.Active {
 		t.Fatal("abortedSnapshot.Active = true, want false")
+	}
+	if abortedSnapshot.RuntimeControl != nil {
+		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)
 	}
 }
 
@@ -3418,6 +3448,74 @@ func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep(t *testing
 	}
 }
 
+func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeControlWhenMissionFileChanges(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+	writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           job.ID,
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: []string{"shell"},
+		Plan: missioncontrol.Plan{
+			ID: job.Plan.ID,
+			Steps: []missioncontrol.Step{
+				{
+					ID:   "final",
+					Type: missioncontrol.StepTypeFinalResponse,
+				},
+			},
+		},
+	}, missionFile)
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-resume-approved", "true"); err != nil {
+		t.Fatalf("Flags().Set(mission-resume-approved) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Step == nil {
+		t.Fatal("ActiveMissionStep().Step = nil, want non-nil")
+	}
+	if ec.Step.Type != missioncontrol.StepTypeOneShotCode {
+		t.Fatalf("ActiveMissionStep().Step.Type = %q, want persisted %q", ec.Step.Type, missioncontrol.StepTypeOneShotCode)
+	}
+	if ec.Step.RequiredAuthority != missioncontrol.AuthorityTierLow {
+		t.Fatalf("ActiveMissionStep().Step.RequiredAuthority = %q, want persisted %q", ec.Step.RequiredAuthority, missioncontrol.AuthorityTierLow)
+	}
+	if !reflect.DeepEqual(ec.Step.AllowedTools, []string{"read"}) {
+		t.Fatalf("ActiveMissionStep().Step.AllowedTools = %#v, want persisted %#v", ec.Step.AllowedTools, []string{"read"})
+	}
+}
+
 func TestMissionStatusBootstrapRehydratesPausedRuntimeControlAfterReboot(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()
@@ -3486,6 +3584,54 @@ func TestMissionStatusBootstrapRehydratesPausedRuntimeControlAfterReboot(t *test
 	}
 }
 
+func TestMissionStatusBootstrapRehydratesPausedRuntimeControlUsesFallbackWithoutPersistedControl(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after control rehydration")
+	}
+
+	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want resumed active step", ec)
+	}
+	if ec.Step.Type != missioncontrol.StepTypeOneShotCode {
+		t.Fatalf("ActiveMissionStep().Step.Type = %q, want %q", ec.Step.Type, missioncontrol.StepTypeOneShotCode)
+	}
+}
+
 func TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()
@@ -3527,6 +3673,98 @@ func TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind(t *testing.T) {
 	}
 	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("ActiveMissionStep() ok = true, want false after wrong-job rejection")
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedAbortUsesPersistedRuntimeControlWhenMissionFileChanges(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+				},
+			},
+		},
+	})
+	writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           job.ID,
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: []string{"shell"},
+		Plan: missioncontrol.Plan{
+			ID: job.Plan.ID,
+			Steps: []missioncontrol.Step{
+				{
+					ID:   "final",
+					Type: missioncontrol.StepTypeFinalResponse,
+				},
+			},
+		},
+	}, missionFile)
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after waiting_user rehydration")
+	}
+
+	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
 	}
 }
 
@@ -3773,10 +4011,13 @@ func (p *missionStatusFixedResponseProvider) GetDefaultModel() string {
 	return "stub"
 }
 
-func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {
+func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job, paths ...string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "mission.json")
+	if len(paths) > 0 {
+		path = paths[0]
+	}
 	data, err := json.Marshal(job)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -3785,6 +4026,16 @@ func writeMissionBootstrapJobFile(t *testing.T, job missioncontrol.Job) string {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	return path
+}
+
+func runtimeControlForBootstrapStep(t *testing.T, job missioncontrol.Job, stepID string) *missioncontrol.RuntimeControlContext {
+	t.Helper()
+
+	control, err := missioncontrol.BuildRuntimeControlContext(job, stepID)
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	return &control
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

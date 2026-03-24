@@ -169,18 +169,25 @@ func (a *AgentLoop) MissionRuntimeState() (missioncontrol.JobRuntimeState, bool)
 	return a.taskState.MissionRuntimeState()
 }
 
-func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, resumeApproved bool) error {
+func (a *AgentLoop) MissionRuntimeControl() (missioncontrol.RuntimeControlContext, bool) {
 	if a == nil || a.taskState == nil {
-		return nil
+		return missioncontrol.RuntimeControlContext{}, false
 	}
-	return a.taskState.ResumeRuntime(job, runtimeState, resumeApproved)
+	return a.taskState.MissionRuntimeControl()
 }
 
-func (a *AgentLoop) HydrateMissionRuntimeControl(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {
 	if a == nil || a.taskState == nil {
 		return nil
 	}
-	return a.taskState.HydrateRuntimeControl(job, runtimeState)
+	return a.taskState.ResumeRuntime(job, runtimeState, control, resumeApproved)
+}
+
+func (a *AgentLoop) HydrateMissionRuntimeControl(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+	if a == nil || a.taskState == nil {
+		return nil
+	}
+	return a.taskState.HydrateRuntimeControl(job, runtimeState, control)
 }
 
 func (a *AgentLoop) SetMissionRuntimeChangeHook(hook func()) {
