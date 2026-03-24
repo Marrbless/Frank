@@ -21,7 +21,7 @@ import (
 
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
-var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort)\s+(\S+)\s*$`)
+var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
 
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
@@ -564,6 +564,9 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			err = a.taskState.ResumeRuntimeControl(jobID)
 		case "abort":
 			err = a.taskState.AbortRuntime(jobID)
+		case "status":
+			response, err := a.taskState.OperatorStatus(jobID)
+			return true, response, err
 		default:
 			return false, "", nil
 		}

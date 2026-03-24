@@ -514,6 +514,53 @@ func (s *TaskState) AbortRuntime(jobID string) error {
 	return s.applyRuntimeControl(jobID, "abort", missioncontrol.AbortJobRuntime, true)
 }
 
+func (s *TaskState) OperatorStatus(jobID string) (string, error) {
+	if s == nil {
+		return "", missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	s.mu.Unlock()
+
+	if hasExecutionContext && ec.Runtime != nil {
+		if ec.Job != nil && ec.Job.ID != jobID {
+			return "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+		}
+		if ec.Runtime.JobID != "" && ec.Runtime.JobID != jobID {
+			return "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+		}
+		return missioncontrol.FormatOperatorStatusSummary(*ec.Runtime)
+	}
+
+	if !hasRuntimeState || runtimeState == nil {
+		return "", missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+	}
+	if runtimeState.JobID != jobID {
+		return "", missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "operator command does not match the active job",
+		}
+	}
+
+	return missioncontrol.FormatOperatorStatusSummary(*runtimeState)
+}
+
 func resolveNaturalApprovalRequestFromExecutionContext(ec missioncontrol.ExecutionContext) (missioncontrol.ApprovalRequest, bool, error) {
 	if ec.Runtime == nil {
 		return missioncontrol.ApprovalRequest{}, false, nil

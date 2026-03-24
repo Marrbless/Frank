@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -620,6 +621,36 @@ func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
 	assertAuditEvent(t, audits[0], "job-1", "build", "pause", true, "")
 	assertAuditEvent(t, audits[1], "job-1", "build", "resume", true, "")
 	assertAuditEvent(t, audits[2], "job-1", "build", "abort", true, "")
+}
+
+func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got["job_id"] != "job-1" {
+		t.Fatalf("job_id = %#v, want %q", got["job_id"], "job-1")
+	}
+	if got["state"] != string(missioncontrol.JobStateRunning) {
+		t.Fatalf("state = %#v, want %q", got["state"], missioncontrol.JobStateRunning)
+	}
+	if got["active_step_id"] != "build" {
+		t.Fatalf("active_step_id = %#v, want %q", got["active_step_id"], "build")
+	}
 }
 
 func TestProcessDirectResumeCommandUsesDurablePausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
