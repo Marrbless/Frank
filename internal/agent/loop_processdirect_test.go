@@ -946,6 +946,83 @@ func TestProcessDirectNaturalApprovalUsesPersistedWaitingRuntimeAfterExecutionCo
 	}
 }
 
+func TestProcessDirectYesDoesNotBindExpiredPendingApprovalStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "(stub) Echo: yes"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want waiting runtime", ec)
+	}
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	ec.Runtime.ApprovalRequests[0].ExpiresAt = expiredAt
+	ag.taskState.SetExecutionContext(ec)
+
+	resp, err := ag.ProcessDirect("yes", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+	if resp != "(stub) Echo: yes" {
+		t.Fatalf("ProcessDirect(yes) response = %q, want provider fallback", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want expired approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestProcessDirectApproveCommandBindsOnlyLatestValidRequest(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want waiting runtime", ec)
+	}
+	now := time.Now()
+	ec.Runtime.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
+	ec.Runtime.ApprovalRequests[0].SupersededAt = now
+	ec.Runtime.ApprovalRequests = append(ec.Runtime.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "build",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+		RequestedAt:     now.Add(time.Second),
+	})
+	ag.taskState.SetExecutionContext(ec)
+
+	resp, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(APPROVE) response = %q, want approval acknowledgement", resp)
+	}
+}
+
 func TestProcessDirectResumeCommandDoesNotBypassWaitingApproval(t *testing.T) {
 	t.Parallel()
 

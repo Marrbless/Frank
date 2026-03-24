@@ -9,11 +9,12 @@ import (
 type ApprovalState string
 
 const (
-	ApprovalStatePending ApprovalState = "pending"
-	ApprovalStateGranted ApprovalState = "granted"
-	ApprovalStateDenied  ApprovalState = "denied"
-	ApprovalStateExpired ApprovalState = "expired"
-	ApprovalStateRevoked ApprovalState = "revoked"
+	ApprovalStatePending    ApprovalState = "pending"
+	ApprovalStateGranted    ApprovalState = "granted"
+	ApprovalStateDenied     ApprovalState = "denied"
+	ApprovalStateExpired    ApprovalState = "expired"
+	ApprovalStateSuperseded ApprovalState = "superseded"
+	ApprovalStateRevoked    ApprovalState = "revoked"
 )
 
 type ApprovalDecision string
@@ -41,7 +42,9 @@ type ApprovalRequest struct {
 	State           ApprovalState `json:"state"`
 	Reason          string        `json:"reason,omitempty"`
 	RequestedAt     time.Time     `json:"requested_at,omitempty"`
+	ExpiresAt       time.Time     `json:"expires_at,omitempty"`
 	ResolvedAt      time.Time     `json:"resolved_at,omitempty"`
+	SupersededAt    time.Time     `json:"superseded_at,omitempty"`
 }
 
 type ApprovalGrant struct {
@@ -130,17 +133,72 @@ func findLatestApprovalRequest(requests []ApprovalRequest, jobID, stepID, reques
 	return 0, false
 }
 
+func RefreshApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntimeState, bool) {
+	next := *CloneJobRuntimeState(&current)
+	changed := false
+	for i := range next.ApprovalRequests {
+		request := &next.ApprovalRequests[i]
+		if request.State != ApprovalStatePending {
+			continue
+		}
+		if request.ExpiresAt.IsZero() || request.ExpiresAt.After(now) {
+			continue
+		}
+		request.State = ApprovalStateExpired
+		if request.ResolvedAt.IsZero() {
+			request.ResolvedAt = request.ExpiresAt
+			if request.ResolvedAt.IsZero() {
+				request.ResolvedAt = now
+			}
+		}
+		request.GrantedVia = ""
+		request.SupersededAt = time.Time{}
+		changed = true
+	}
+	if changed {
+		next.UpdatedAt = now
+	}
+	return next, changed
+}
+
+func ExpireActiveApprovalRequest(current JobRuntimeState, now time.Time, jobID, stepID, requestedAction, scope string) (JobRuntimeState, bool) {
+	next, _ := RefreshApprovalRequests(current, now)
+	requestIndex, ok := findPendingApprovalRequest(next.ApprovalRequests, jobID, stepID, requestedAction, scope)
+	if !ok {
+		return next, false
+	}
+
+	next.ApprovalRequests[requestIndex].State = ApprovalStateExpired
+	next.ApprovalRequests[requestIndex].GrantedVia = ""
+	next.ApprovalRequests[requestIndex].ExpiresAt = now
+	next.ApprovalRequests[requestIndex].ResolvedAt = now
+	next.ApprovalRequests[requestIndex].SupersededAt = time.Time{}
+	next.UpdatedAt = now
+	return next, true
+}
+
 func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, request ApprovalRequest) JobRuntimeState {
 	next := *CloneJobRuntimeState(&current)
-	if _, ok := findPendingApprovalRequest(next.ApprovalRequests, request.JobID, request.StepID, request.RequestedAction, request.Scope); ok {
-		return next
+	for i := range next.ApprovalRequests {
+		if !approvalRequestsShareBinding(next.ApprovalRequests[i], request) {
+			continue
+		}
+		if next.ApprovalRequests[i].State != ApprovalStatePending {
+			continue
+		}
+		next.ApprovalRequests[i].State = ApprovalStateSuperseded
+		next.ApprovalRequests[i].GrantedVia = ""
+		next.ApprovalRequests[i].ResolvedAt = now
+		next.ApprovalRequests[i].SupersededAt = now
 	}
 
 	request.State = ApprovalStatePending
 	request.GrantedVia = ""
 	request.RequestedAt = now
+	request.SupersededAt = time.Time{}
 	request.ResolvedAt = time.Time{}
 	next.ApprovalRequests = append(next.ApprovalRequests, request)
+	next.UpdatedAt = now
 	return next
 }
 
@@ -176,6 +234,7 @@ func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision Approval
 	}
 
 	next := *CloneJobRuntimeState(ec.Runtime)
+	next, _ = RefreshApprovalRequests(next, now)
 	requestIndex, ok := findPendingApprovalRequest(next.ApprovalRequests, ec.Job.ID, ec.Step.ID, requestedAction, scope)
 	if !ok {
 		return JobRuntimeState{}, ValidationError{
@@ -234,4 +293,11 @@ func findPendingApprovalRequest(requests []ApprovalRequest, jobID, stepID, reque
 	}
 
 	return 0, false
+}
+
+func approvalRequestsShareBinding(left ApprovalRequest, right ApprovalRequest) bool {
+	return left.JobID == right.JobID &&
+		left.StepID == right.StepID &&
+		left.RequestedAction == right.RequestedAction &&
+		left.Scope == right.Scope
 }

@@ -241,7 +241,9 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 		}
 	}
 
-	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval && hasPendingApprovalRequest(ec.Runtime, ec.Job.ID, ec.Step.ID, requestedAction, scope) {
+	current := *CloneJobRuntimeState(ec.Runtime)
+	current, _ = RefreshApprovalRequests(current, now)
+	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval && hasPendingApprovalRequest(&current, ec.Job.ID, ec.Step.ID, requestedAction, scope) {
 		switch inputKind {
 		case WaitingUserInputApproval:
 			if input.ApprovalVia == "" {
@@ -251,6 +253,7 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 					Message: "pending approval requires explicit operator approve command",
 				}
 			}
+			ec.Runtime = &current
 			return ApplyApprovalDecision(ec, now, ApprovalDecisionApprove, input.ApprovalVia)
 		case WaitingUserInputRejection:
 			if input.ApprovalVia == "" {
@@ -260,7 +263,14 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 					Message: "pending approval requires explicit operator deny command",
 				}
 			}
+			ec.Runtime = &current
 			return ApplyApprovalDecision(ec, now, ApprovalDecisionDeny, input.ApprovalVia)
+		case WaitingUserInputTimeout:
+			nextRuntime, ok := ExpireActiveApprovalRequest(current, now, ec.Job.ID, ec.Step.ID, requestedAction, scope)
+			if !ok {
+				return current, nil
+			}
+			return nextRuntime, nil
 		default:
 			return JobRuntimeState{}, ValidationError{
 				Code:    RejectionCodeStepValidationFailed,
@@ -270,15 +280,31 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 		}
 	}
 	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
-		if requestIndex, ok := findLatestApprovalRequest(ec.Runtime.ApprovalRequests, ec.Job.ID, ec.Step.ID, requestedAction, scope); ok && ec.Runtime.ApprovalRequests[requestIndex].State == ApprovalStateDenied {
-			return JobRuntimeState{}, ValidationError{
-				Code:    RejectionCodeStepValidationFailed,
-				StepID:  ec.Step.ID,
-				Message: "denied approval requires a new approval request before the step can complete",
+		if requestIndex, ok := findLatestApprovalRequest(current.ApprovalRequests, ec.Job.ID, ec.Step.ID, requestedAction, scope); ok {
+			switch current.ApprovalRequests[requestIndex].State {
+			case ApprovalStateDenied:
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeStepValidationFailed,
+					StepID:  ec.Step.ID,
+					Message: "denied approval requires a new approval request before the step can complete",
+				}
+			case ApprovalStateExpired:
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeStepValidationFailed,
+					StepID:  ec.Step.ID,
+					Message: "expired approval requires a new approval request before the step can complete",
+				}
+			case ApprovalStateSuperseded:
+				return JobRuntimeState{}, ValidationError{
+					Code:    RejectionCodeStepValidationFailed,
+					StepID:  ec.Step.ID,
+					Message: "superseded approval requires a new approval request before the step can complete",
+				}
 			}
 		}
 	}
 
+	ec.Runtime = &current
 	return pauseAfterValidatedCompletion(ec, now)
 }
 

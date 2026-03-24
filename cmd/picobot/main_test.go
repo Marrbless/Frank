@@ -2992,6 +2992,314 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 }
 
+func TestMissionStatusRuntimeChangeHookPersistsApprovalExpiryLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "Need approval before continuing."}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("timeout", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(timeout) error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if len(snapshot.Runtime.ApprovalRequests) != 1 || snapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want one expired approval", snapshot.Runtime.ApprovalRequests)
+	}
+	if snapshot.Runtime.ApprovalRequests[0].ExpiresAt.IsZero() {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests[0].ExpiresAt = %v, want non-zero", snapshot.Runtime.ApprovalRequests[0].ExpiresAt)
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedYesDoesNotBindExpiredApproval(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+					ExpiresAt:       expiredAt,
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("yes", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+	if !strings.Contains(resp, "(stub) Echo") {
+		t.Fatalf("ProcessDirect(yes) response = %q, want provider fallback", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedApproveUsesLatestNonSupersededApproval(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	now := time.Now()
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStateSuperseded,
+					RequestedAt:     now.Add(-2 * time.Minute),
+					ResolvedAt:      now.Add(-1 * time.Minute),
+					SupersededAt:    now.Add(-1 * time.Minute),
+				},
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+					RequestedAt:     now,
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateSuperseded || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want superseded then granted approvals", runtime.ApprovalRequests)
+	}
+}
+
+func TestMissionStatusRuntimeChangeHookPersistsSupersededApprovalLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	now := time.Now()
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStateSuperseded,
+					RequestedAt:     now.Add(-2 * time.Minute),
+					ResolvedAt:      now.Add(-1 * time.Minute),
+					SupersededAt:    now.Add(-1 * time.Minute),
+				},
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+					RequestedAt:     now,
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if len(snapshot.Runtime.ApprovalRequests) != 2 || snapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateSuperseded || snapshot.Runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want superseded then granted approvals", snapshot.Runtime.ApprovalRequests)
+	}
+}
+
 func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()

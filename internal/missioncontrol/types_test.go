@@ -73,6 +73,9 @@ func TestEnumValues(t *testing.T) {
 	if ApprovalStateExpired != "expired" {
 		t.Fatalf("ApprovalStateExpired = %q, want %q", ApprovalStateExpired, "expired")
 	}
+	if ApprovalStateSuperseded != "superseded" {
+		t.Fatalf("ApprovalStateSuperseded = %q, want %q", ApprovalStateSuperseded, "superseded")
+	}
 	if ApprovalStateRevoked != "revoked" {
 		t.Fatalf("ApprovalStateRevoked = %q, want %q", ApprovalStateRevoked, "revoked")
 	}

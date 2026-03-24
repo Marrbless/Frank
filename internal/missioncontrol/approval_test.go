@@ -1,6 +1,9 @@
 package missioncontrol
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParsePlainApprovalDecision(t *testing.T) {
 	t.Parallel()
@@ -101,5 +104,69 @@ func TestApprovalRequestMatchesStepBinding(t *testing.T) {
 	}
 	if ApprovalRequestMatchesStepBinding(request, "other-job", step) {
 		t.Fatal("ApprovalRequestMatchesStepBinding(wrong job) = true, want false")
+	}
+}
+
+func TestRefreshApprovalRequestsExpiresElapsedPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 15, 0, 0, 0, time.UTC)
+	runtime, changed := RefreshApprovalRequests(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStatePending,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ExpiresAt:       now.Add(-1 * time.Minute),
+			},
+		},
+	}, now)
+	if !changed {
+		t.Fatal("RefreshApprovalRequests() changed = false, want true")
+	}
+	if runtime.ApprovalRequests[0].State != ApprovalStateExpired {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, ApprovalStateExpired)
+	}
+	if runtime.ApprovalRequests[0].ResolvedAt != now.Add(-1*time.Minute) {
+		t.Fatalf("ApprovalRequests[0].ResolvedAt = %v, want %v", runtime.ApprovalRequests[0].ResolvedAt, now.Add(-1*time.Minute))
+	}
+}
+
+func TestAppendPendingApprovalRequestSupersedesOlderMatchingPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 15, 5, 0, 0, time.UTC)
+	runtime := appendPendingApprovalRequest(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStatePending,
+				RequestedAt:     now.Add(-2 * time.Minute),
+			},
+		},
+	}, now, ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "build",
+		RequestedAction: ApprovalRequestedActionStepComplete,
+		Scope:           ApprovalScopeMissionStep,
+		RequestedVia:    ApprovalRequestedViaRuntime,
+	})
+	if len(runtime.ApprovalRequests) != 2 {
+		t.Fatalf("len(ApprovalRequests) = %d, want 2", len(runtime.ApprovalRequests))
+	}
+	if runtime.ApprovalRequests[0].State != ApprovalStateSuperseded {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, ApprovalStateSuperseded)
+	}
+	if runtime.ApprovalRequests[0].SupersededAt != now {
+		t.Fatalf("ApprovalRequests[0].SupersededAt = %v, want %v", runtime.ApprovalRequests[0].SupersededAt, now)
+	}
+	if runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests[1].State = %q, want %q", runtime.ApprovalRequests[1].State, ApprovalStatePending)
 	}
 }

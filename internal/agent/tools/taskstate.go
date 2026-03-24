@@ -253,6 +253,18 @@ func (s *TaskState) ApplyWaitingUserInput(input string) (missioncontrol.WaitingU
 		return missioncontrol.WaitingUserInputNone, nil
 	}
 
+	refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*ec.Runtime, time.Now())
+	if changed {
+		ec.Runtime = &refreshedRuntime
+		s.mu.Lock()
+		err := s.storeRuntimeStateLocked(ec.Job, refreshedRuntime, nil)
+		s.mu.Unlock()
+		if err != nil {
+			return missioncontrol.WaitingUserInputNone, err
+		}
+		s.notifyRuntimeChanged()
+	}
+
 	inputKind := missioncontrol.ClassifyWaitingUserInput(input)
 	if inputKind == missioncontrol.WaitingUserInputNone {
 		return inputKind, nil
@@ -296,6 +308,17 @@ func (s *TaskState) ApplyNaturalApprovalDecision(input string) (bool, string, er
 	s.mu.Unlock()
 
 	if hasExecutionContext && ec.Runtime != nil {
+		refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*ec.Runtime, time.Now())
+		if changed {
+			ec.Runtime = &refreshedRuntime
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(ec.Job, refreshedRuntime, nil)
+			s.mu.Unlock()
+			if err != nil {
+				return true, "", err
+			}
+			s.notifyRuntimeChanged()
+		}
 		request, handled, err := resolveNaturalApprovalRequestFromExecutionContext(ec)
 		if err != nil {
 			return true, "", err
@@ -311,6 +334,25 @@ func (s *TaskState) ApplyNaturalApprovalDecision(input string) (bool, string, er
 
 	if !hasRuntimeState || runtimeState == nil {
 		return false, "", nil
+	}
+
+	refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*runtimeState, time.Now())
+	if changed {
+		if hasRuntimeControl && control != nil {
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(nil, refreshedRuntime, control)
+			s.mu.Unlock()
+			if err != nil {
+				return true, "", err
+			}
+		} else {
+			s.mu.Lock()
+			s.runtimeState = refreshedRuntime
+			s.hasRuntimeState = true
+			s.mu.Unlock()
+		}
+		s.notifyRuntimeChanged()
+		runtimeState = &refreshedRuntime
 	}
 
 	request, handled, err := resolveNaturalApprovalRequestFromPersistedRuntime(runtimeState, control, hasRuntimeControl)
@@ -344,6 +386,17 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	storeControl := (*missioncontrol.RuntimeControlContext)(nil)
 	rebootSafePath := false
 	if hasExecutionContext && ec.Job != nil && ec.Step != nil && ec.Runtime != nil {
+		refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*ec.Runtime, time.Now())
+		if changed {
+			ec.Runtime = &refreshedRuntime
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(ec.Job, refreshedRuntime, nil)
+			s.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			s.notifyRuntimeChanged()
+		}
 		if ec.Job.ID != jobID || ec.Step.ID != stepID {
 			return missioncontrol.ValidationError{
 				Code:    missioncontrol.RejectionCodeStepValidationFailed,
@@ -399,6 +452,18 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 				StepID:  stepID,
 				Message: "approval command does not match the active job and step",
 			}
+		}
+
+		refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*runtimeState, time.Now())
+		if changed {
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(nil, refreshedRuntime, control)
+			s.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			s.notifyRuntimeChanged()
+			runtimeState = &refreshedRuntime
 		}
 
 		resolved, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, *runtimeState)

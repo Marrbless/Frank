@@ -3,6 +3,7 @@ package tools
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/local/picobot/internal/missioncontrol"
 )
@@ -1013,6 +1014,166 @@ func TestTaskStateApplyNaturalApprovalDecisionUsesPersistedRuntimeControlAfterEx
 	}
 	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionDoesNotBindExpiredPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.mu.Lock()
+	expiredAt := time.Now().Add(-1 * time.Minute)
+	state.executionContext.Runtime.ApprovalRequests[0].ExpiresAt = expiredAt
+	state.runtimeState.ApprovalRequests[0].ExpiresAt = expiredAt
+	state.mu.Unlock()
+
+	for _, input := range []string{"yes", "no"} {
+		handled, _, err := state.ApplyNaturalApprovalDecision(input)
+		if err != nil {
+			t.Fatalf("ApplyNaturalApprovalDecision(%q) error = %v", input, err)
+		}
+		if handled {
+			t.Fatalf("ApplyNaturalApprovalDecision(%q) handled = true, want false", input)
+		}
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionDoesNotBindSupersededRequest(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	now := time.Now()
+	state.mu.Lock()
+	state.executionContext.Runtime.ApprovalRequests = append(state.executionContext.Runtime.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "build",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+		RequestedAt:     now,
+	})
+	state.runtimeState.ApprovalRequests = append(state.runtimeState.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "build",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+		RequestedAt:     now,
+	})
+	state.executionContext.Runtime.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
+	state.executionContext.Runtime.ApprovalRequests[0].SupersededAt = now
+	state.runtimeState.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
+	state.runtimeState.ApprovalRequests[0].SupersededAt = now
+	state.mu.Unlock()
+
+	handled, resp, err := state.ApplyNaturalApprovalDecision("yes")
+	if err != nil {
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) response = %q, want approval acknowledgement", resp)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateSuperseded {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want leading superseded request", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyApprovalDecisionBindsOnlyLatestValidRequest(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	now := time.Now()
+	state.mu.Lock()
+	state.executionContext.Runtime.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
+	state.executionContext.Runtime.ApprovalRequests[0].SupersededAt = now
+	state.runtimeState.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
+	state.runtimeState.ApprovalRequests[0].SupersededAt = now
+	newRequest := missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "build",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+		RequestedAt:     now.Add(time.Second),
+	}
+	state.executionContext.Runtime.ApprovalRequests = append(state.executionContext.Runtime.ApprovalRequests, newRequest)
+	state.runtimeState.ApprovalRequests = append(state.runtimeState.ApprovalRequests, newRequest)
+	state.mu.Unlock()
+
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 2 {
+		t.Fatalf("len(ApprovalRequests) = %d, want 2", len(runtime.ApprovalRequests))
+	}
+	if runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateSuperseded {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, missioncontrol.ApprovalStateSuperseded)
+	}
+	if runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("ApprovalRequests[1].State = %q, want %q", runtime.ApprovalRequests[1].State, missioncontrol.ApprovalStateGranted)
 	}
 }
 

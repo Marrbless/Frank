@@ -409,6 +409,45 @@ func TestCompleteRuntimeStepWaitingUserDenyRecordsDeniedApproval(t *testing.T) {
 	}
 }
 
+func TestCompleteRuntimeStepWaitingUserTimeoutExpiresPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	now := time.Date(2026, 3, 23, 12, 11, 50, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		UserInput:     "timeout",
+		UserInputKind: WaitingUserInputTimeout,
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != ApprovalStateExpired {
+		t.Fatalf("ApprovalRequests = %#v, want one expired approval", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].ExpiresAt != now {
+		t.Fatalf("ApprovalRequests[0].ExpiresAt = %v, want %v", runtime.ApprovalRequests[0].ExpiresAt, now)
+	}
+}
+
 func TestCompleteRuntimeStepWaitingUserDeniedApprovalRejectsLaterFreeFormInput(t *testing.T) {
 	t.Parallel()
 
@@ -443,6 +482,36 @@ func TestCompleteRuntimeStepWaitingUserDeniedApprovalRejectsLaterFreeFormInput(t
 	}
 	if validationErr.Code != RejectionCodeStepValidationFailed {
 		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
+	}
+}
+
+func TestCompleteRuntimeStepWaitingUserExpiredApprovalRejectsLaterFreeFormInput(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStateExpired,
+			RequestedAt:     time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC),
+			ExpiresAt:       time.Date(2026, 3, 23, 12, 11, 45, 0, time.UTC),
+			ResolvedAt:      time.Date(2026, 3, 23, 12, 11, 45, 0, time.UTC),
+		},
+	}
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 12, 0, 0, time.UTC), StepValidationInput{
+		UserInput: "go ahead",
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want expired approval failure")
 	}
 }
 
