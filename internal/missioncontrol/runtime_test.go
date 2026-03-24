@@ -31,6 +31,55 @@ func TestSetJobRuntimeActiveStepStartsRunningRuntime(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if control.JobID != job.ID {
+		t.Fatalf("JobID = %q, want %q", control.JobID, job.ID)
+	}
+	if control.Step.ID != "build" {
+		t.Fatalf("Step.ID = %q, want %q", control.Step.ID, "build")
+	}
+	if !reflect.DeepEqual(control.AllowedTools, job.AllowedTools) {
+		t.Fatalf("AllowedTools = %#v, want %#v", control.AllowedTools, job.AllowedTools)
+	}
+}
+
+func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+	ec, err := ResolveExecutionContextWithRuntimeControl(control, runtime)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl() error = %v", err)
+	}
+	if ec.Job == nil || ec.Job.ID != job.ID {
+		t.Fatalf("ExecutionContext.Job = %#v, want job %q", ec.Job, job.ID)
+	}
+	if ec.Step == nil || ec.Step.ID != "build" {
+		t.Fatalf("ExecutionContext.Step = %#v, want build", ec.Step)
+	}
+	if ec.Runtime == nil || ec.Runtime.State != JobStateRunning {
+		t.Fatalf("ExecutionContext.Runtime = %#v, want running runtime", ec.Runtime)
+	}
+}
+
 func TestTransitionJobRuntimeCompletedRequiresValidation(t *testing.T) {
 	t.Parallel()
 

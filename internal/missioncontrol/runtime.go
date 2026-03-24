@@ -52,6 +52,13 @@ type JobRuntimeState struct {
 	FailedAt         time.Time           `json:"failed_at,omitempty"`
 }
 
+type RuntimeControlContext struct {
+	JobID        string        `json:"job_id"`
+	MaxAuthority AuthorityTier `json:"max_authority"`
+	AllowedTools []string      `json:"allowed_tools,omitempty"`
+	Step         Step          `json:"step"`
+}
+
 type RuntimeTransitionOptions struct {
 	StepID           string
 	WaitingReason    string
@@ -74,6 +81,17 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	return &cloned
 }
 
+func CloneRuntimeControlContext(control *RuntimeControlContext) *RuntimeControlContext {
+	if control == nil {
+		return nil
+	}
+
+	cloned := *control
+	cloned.AllowedTools = append([]string(nil), control.AllowedTools...)
+	cloned.Step = copyStep(control.Step)
+	return &cloned
+}
+
 func IsTerminalJobState(state JobState) bool {
 	switch state {
 	case JobStateCompleted, JobStateFailed, JobStateRejected, JobStateAborted:
@@ -81,6 +99,26 @@ func IsTerminalJobState(state JobState) bool {
 	default:
 		return false
 	}
+}
+
+func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, error) {
+	ec, err := ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return RuntimeControlContext{}, err
+	}
+	if ec.Job == nil || ec.Step == nil {
+		return RuntimeControlContext{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "runtime control requires an active job and active step",
+		}
+	}
+
+	return RuntimeControlContext{
+		JobID:        ec.Job.ID,
+		MaxAuthority: ec.Job.MaxAuthority,
+		AllowedTools: append([]string(nil), ec.Job.AllowedTools...),
+		Step:         copyStep(*ec.Step),
+	}, nil
 }
 
 func ResolveExecutionContextWithRuntime(job Job, runtime JobRuntimeState) (ExecutionContext, error) {
@@ -103,6 +141,48 @@ func ResolveExecutionContextWithRuntime(job Job, runtime JobRuntimeState) (Execu
 	}
 	ec.Runtime = CloneJobRuntimeState(&runtime)
 	return ec, nil
+}
+
+func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, runtime JobRuntimeState) (ExecutionContext, error) {
+	if runtime.JobID != "" && control.JobID != "" && runtime.JobID != control.JobID {
+		return ExecutionContext{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("runtime job %q does not match mission job %q", runtime.JobID, control.JobID),
+		}
+	}
+	if runtime.ActiveStepID == "" {
+		return ExecutionContext{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "runtime execution requires an active step",
+		}
+	}
+	if control.Step.ID == "" {
+		return ExecutionContext{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "runtime control requires an active step",
+		}
+	}
+	if runtime.ActiveStepID != control.Step.ID {
+		return ExecutionContext{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("runtime active step %q does not match control step %q", runtime.ActiveStepID, control.Step.ID),
+		}
+	}
+
+	job := Job{
+		ID:           control.JobID,
+		MaxAuthority: control.MaxAuthority,
+		AllowedTools: append([]string(nil), control.AllowedTools...),
+		Plan: Plan{
+			Steps: []Step{copyStep(control.Step)},
+		},
+	}
+	step := copyStep(control.Step)
+	return ExecutionContext{
+		Job:     &job,
+		Step:    &step,
+		Runtime: CloneJobRuntimeState(&runtime),
+	}, nil
 }
 
 func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, now time.Time) (JobRuntimeState, error) {

@@ -176,6 +176,13 @@ func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState mi
 	return a.taskState.ResumeRuntime(job, runtimeState, resumeApproved)
 }
 
+func (a *AgentLoop) HydrateMissionRuntimeControl(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState) error {
+	if a == nil || a.taskState == nil {
+		return nil
+	}
+	return a.taskState.HydrateRuntimeControl(job, runtimeState)
+}
+
 func (a *AgentLoop) SetMissionRuntimeChangeHook(hook func()) {
 	if a == nil || a.taskState == nil {
 		return

@@ -854,16 +854,29 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 		if runtimeState.ActiveStepID != "" && runtimeState.ActiveStepID != missionStep {
 			return nil, fmt.Errorf("persisted mission runtime step %q does not match --mission-step %q", runtimeState.ActiveStepID, missionStep)
 		}
-		if !resumeApproved {
+		if resumeApproved {
+			if err := ag.ResumeMissionRuntime(job, runtimeState, true); err != nil {
+				return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", statusFile, err)
+			}
+			return &job, nil
+		}
+		switch runtimeState.State {
+		case missioncontrol.JobStatePaused, missioncontrol.JobStateWaitingUser:
+			if err := ag.HydrateMissionRuntimeControl(job, runtimeState); err != nil {
+				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime control from %q: %w", statusFile, err)
+			}
+			return &job, nil
+		case missioncontrol.JobStateCompleted, missioncontrol.JobStateFailed, missioncontrol.JobStateRejected, missioncontrol.JobStateAborted:
+			if err := ag.HydrateMissionRuntimeControl(job, runtimeState); err != nil {
+				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime terminal state from %q: %w", statusFile, err)
+			}
+			return &job, nil
+		default:
 			return nil, missioncontrol.ValidationError{
 				Code:    missioncontrol.RejectionCodeResumeApprovalRequired,
 				Message: "persisted mission runtime requires --mission-resume-approved before resuming after reboot",
 			}
 		}
-		if err := ag.ResumeMissionRuntime(job, runtimeState, true); err != nil {
-			return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", statusFile, err)
-		}
-		return &job, nil
 	}
 
 	if err := ag.ActivateMissionStep(job, missionStep); err != nil {
@@ -978,9 +991,6 @@ func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missionco
 		return missioncontrol.JobRuntimeState{}, false, nil
 	}
 	if snapshot.Runtime.JobID != "" && snapshot.Runtime.JobID != job.ID {
-		return missioncontrol.JobRuntimeState{}, false, nil
-	}
-	if missioncontrol.IsTerminalJobState(snapshot.Runtime.State) {
 		return missioncontrol.JobRuntimeState{}, false, nil
 	}
 	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), true, nil

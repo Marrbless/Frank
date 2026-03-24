@@ -406,6 +406,40 @@ func TestTaskStateResumeRuntimeControlRequiresPausedState(t *testing.T) {
 	}
 }
 
+func TestTaskStateHydrateRuntimeControlResumesPausedRuntimeAfterRehydration(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after rehydration")
+	}
+	if err := state.ResumeRuntimeControl("job-1"); err != nil {
+		t.Fatalf("ResumeRuntimeControl() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want restored context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want running runtime", ec.Runtime)
+	}
+	if ec.Step == nil || ec.Step.ID != "build" {
+		t.Fatalf("ExecutionContext().Step = %#v, want build", ec.Step)
+	}
+}
+
 func TestTaskStateResumeRuntimeControlResumesPausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 
@@ -555,6 +589,36 @@ func TestTaskStateResumeRuntimeControlWrongJobDoesNotBindAfterExecutionContextTe
 	}
 }
 
+func TestTaskStateHydrateRuntimeControlWrongJobDoesNotBindAfterRehydration(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	err := state.ResumeRuntimeControl("other-job")
+	if err == nil {
+		t.Fatal("ResumeRuntimeControl() error = nil, want job mismatch failure")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ResumeRuntimeControl() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeStepValidationFailed {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeStepValidationFailed)
+	}
+}
+
 func TestTaskStateAbortRuntimeTransitionsToAborted(t *testing.T) {
 	t.Parallel()
 
@@ -583,6 +647,51 @@ func TestTaskStateAbortRuntimeTransitionsToAborted(t *testing.T) {
 	}
 	if runtime.AbortedReason != missioncontrol.RuntimeAbortReasonOperatorCommand {
 		t.Fatalf("MissionRuntimeState().AbortedReason = %q, want %q", runtime.AbortedReason, missioncontrol.RuntimeAbortReasonOperatorCommand)
+	}
+}
+
+func TestTaskStateHydrateRuntimeControlAbortsWaitingUserRuntimeAfterRehydration(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:         job.ID,
+		State:         missioncontrol.JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "awaiting operator input",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				State:           missioncontrol.ApprovalStatePending,
+			},
+		},
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	if err := state.AbortRuntime("job-1"); err != nil {
+		t.Fatalf("AbortRuntime() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after abort")
+	}
+	got, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if got.State != missioncontrol.JobStateAborted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", got.State, missioncontrol.JobStateAborted)
 	}
 }
 
@@ -622,6 +731,52 @@ func TestTaskStateAbortRuntimeAbortsWaitingUserRuntimeAfterExecutionContextTeard
 	}
 	if runtime.AbortedReason != missioncontrol.RuntimeAbortReasonOperatorCommand {
 		t.Fatalf("MissionRuntimeState().AbortedReason = %q, want %q", runtime.AbortedReason, missioncontrol.RuntimeAbortReasonOperatorCommand)
+	}
+}
+
+func TestTaskStateHydrateRuntimeControlRejectsTerminalOperatorCommands(t *testing.T) {
+	t.Parallel()
+
+	for _, stateValue := range []missioncontrol.JobState{
+		missioncontrol.JobStateCompleted,
+		missioncontrol.JobStateFailed,
+		missioncontrol.JobStateAborted,
+	} {
+		stateValue := stateValue
+		t.Run(string(stateValue), func(t *testing.T) {
+			t.Parallel()
+
+			state := NewTaskState()
+			job := testTaskStateJob()
+			runtime := missioncontrol.JobRuntimeState{
+				JobID: job.ID,
+				State: stateValue,
+			}
+
+			if err := state.HydrateRuntimeControl(job, runtime); err != nil {
+				t.Fatalf("HydrateRuntimeControl() error = %v", err)
+			}
+
+			for _, run := range []struct {
+				name string
+				fn   func() error
+			}{
+				{name: "resume", fn: func() error { return state.ResumeRuntimeControl(job.ID) }},
+				{name: "abort", fn: func() error { return state.AbortRuntime(job.ID) }},
+			} {
+				err := run.fn()
+				if err == nil {
+					t.Fatalf("%s error = nil, want invalid runtime state", run.name)
+				}
+				validationErr, ok := err.(missioncontrol.ValidationError)
+				if !ok {
+					t.Fatalf("%s error type = %T, want ValidationError", run.name, err)
+				}
+				if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+					t.Fatalf("%s ValidationError.Code = %q, want %q", run.name, validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+				}
+			}
+		})
 	}
 }
 

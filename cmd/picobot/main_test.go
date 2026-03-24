@@ -3418,6 +3418,250 @@ func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep(t *testing
 	}
 }
 
+func TestMissionStatusBootstrapRehydratesPausedRuntimeControlAfterReboot(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after control rehydration")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+
+	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want running runtime", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil || snapshot.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("snapshot.Runtime = %#v, want running runtime", snapshot.Runtime)
+	}
+	if !snapshot.Active {
+		t.Fatal("snapshot.Active = false, want true after resume")
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	_, err := ag.ProcessDirect("RESUME other-job", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(RESUME wrong job) error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "does not match the active job") {
+		t.Fatalf("ProcessDirect(RESUME wrong job) error = %q, want job mismatch", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after wrong-job rejection")
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedAbortFromWaitingUserPersistsLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after waiting_user rehydration")
+	}
+
+	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil || snapshot.Runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("snapshot.Runtime = %#v, want aborted runtime", snapshot.Runtime)
+	}
+	if snapshot.Active {
+		t.Fatal("snapshot.Active = true, want false after abort")
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsOperatorControl(t *testing.T) {
+	for _, runtimeState := range []missioncontrol.JobState{
+		missioncontrol.JobStateCompleted,
+		missioncontrol.JobStateFailed,
+		missioncontrol.JobStateAborted,
+	} {
+		runtimeState := runtimeState
+		t.Run(string(runtimeState), func(t *testing.T) {
+			ag := newMissionBootstrapTestLoop()
+			cmd := newMissionBootstrapTestCommand()
+			job := testMissionBootstrapJob()
+			missionFile := writeMissionBootstrapJobFile(t, job)
+			statusFile := filepath.Join(t.TempDir(), "status.json")
+			writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+				MissionFile: missionFile,
+				JobID:       job.ID,
+				Runtime: &missioncontrol.JobRuntimeState{
+					JobID: job.ID,
+					State: runtimeState,
+				},
+			})
+
+			if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+				t.Fatalf("Flags().Set(mission-file) error = %v", err)
+			}
+			if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+				t.Fatalf("Flags().Set(mission-step) error = %v", err)
+			}
+			if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+				t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+			}
+
+			if err := configureMissionBootstrap(cmd, ag); err != nil {
+				t.Fatalf("configureMissionBootstrap() error = %v", err)
+			}
+			if _, ok := ag.ActiveMissionStep(); ok {
+				t.Fatal("ActiveMissionStep() ok = true, want false for terminal rehydration")
+			}
+
+			for _, command := range []string{"RESUME job-1", "ABORT job-1"} {
+				_, err := ag.ProcessDirect(command, 2*time.Second)
+				if err == nil {
+					t.Fatalf("ProcessDirect(%s) error = nil, want invalid runtime state", command)
+				}
+				if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeInvalidRuntimeState)) {
+					t.Fatalf("ProcessDirect(%s) error = %q, want invalid runtime state", command, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWatchMissionStepControlFileChangedFileAppliesOnceAfterStartup(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
