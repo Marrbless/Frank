@@ -701,6 +701,50 @@ func TestProcessDirectApproveCommandCompletesPendingApprovalStep(t *testing.T) {
 	}
 }
 
+func TestProcessDirectYesApprovesSinglePendingApprovalStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("yes", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(yes) response = %q, want approval acknowledgement", resp)
+	}
+}
+
+func TestProcessDirectNoDeniesSinglePendingApprovalStep(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("no", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(no) error = %v", err)
+	}
+	if resp != "Denied job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(no) response = %q, want denial acknowledgement", resp)
+	}
+}
+
 func TestProcessDirectPauseCommandWrongJobDoesNotBind(t *testing.T) {
 	t.Parallel()
 
@@ -804,6 +848,41 @@ func TestProcessDirectApproveCommandUsesPersistedWaitingRuntimeAfterExecutionCon
 	}
 }
 
+func TestProcessDirectNaturalApprovalRejectsAmbiguousPendingRequests(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want waiting step")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want waiting_user runtime")
+	}
+	ec.Runtime.ApprovalRequests = append(ec.Runtime.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "other-step",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+	})
+	ag.taskState.SetExecutionContext(ec)
+
+	_, err := ag.ProcessDirect("yes", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(yes) error = nil, want ambiguity failure")
+	}
+}
+
 func TestProcessDirectDenyCommandUsesPersistedWaitingRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 
@@ -840,6 +919,30 @@ func TestProcessDirectDenyCommandUsesPersistedWaitingRuntimeAfterExecutionContex
 	}
 	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestProcessDirectNaturalApprovalUsesPersistedWaitingRuntimeAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	resp, err := ag.ProcessDirect("yes", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(yes) response = %q, want approval acknowledgement", resp)
 	}
 }
 

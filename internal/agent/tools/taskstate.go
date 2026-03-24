@@ -276,6 +276,56 @@ func (s *TaskState) ApplyWaitingUserInput(input string) (missioncontrol.WaitingU
 	return inputKind, nil
 }
 
+func (s *TaskState) ApplyNaturalApprovalDecision(input string) (bool, string, error) {
+	if s == nil {
+		return false, "", nil
+	}
+
+	decision, ok := missioncontrol.ParsePlainApprovalDecision(input)
+	if !ok {
+		return false, "", nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	s.mu.Unlock()
+
+	if hasExecutionContext && ec.Runtime != nil {
+		request, handled, err := resolveNaturalApprovalRequestFromExecutionContext(ec)
+		if err != nil {
+			return true, "", err
+		}
+		if !handled {
+			return false, "", nil
+		}
+		if err := s.ApplyApprovalDecision(request.JobID, request.StepID, decision, missioncontrol.ApprovalGrantedViaOperatorReply); err != nil {
+			return true, "", err
+		}
+		return true, naturalApprovalResponse(decision, request.JobID, request.StepID), nil
+	}
+
+	if !hasRuntimeState || runtimeState == nil {
+		return false, "", nil
+	}
+
+	request, handled, err := resolveNaturalApprovalRequestFromPersistedRuntime(runtimeState, control, hasRuntimeControl)
+	if err != nil {
+		return true, "", err
+	}
+	if !handled {
+		return false, "", nil
+	}
+	if err := s.ApplyApprovalDecision(request.JobID, request.StepID, decision, missioncontrol.ApprovalGrantedViaOperatorReply); err != nil {
+		return true, "", err
+	}
+	return true, naturalApprovalResponse(decision, request.JobID, request.StepID), nil
+}
+
 func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision missioncontrol.ApprovalDecision, via string) error {
 	if s == nil {
 		return nil
@@ -388,6 +438,112 @@ func (s *TaskState) ResumeRuntimeControl(jobID string) error {
 
 func (s *TaskState) AbortRuntime(jobID string) error {
 	return s.applyRuntimeControl(jobID, "abort", missioncontrol.AbortJobRuntime, true)
+}
+
+func resolveNaturalApprovalRequestFromExecutionContext(ec missioncontrol.ExecutionContext) (missioncontrol.ApprovalRequest, bool, error) {
+	if ec.Runtime == nil {
+		return missioncontrol.ApprovalRequest{}, false, nil
+	}
+	if missioncontrol.IsTerminalJobState(ec.Runtime.State) {
+		return missioncontrol.ApprovalRequest{}, true, approvalDecisionStateError(ec.Runtime.ActiveStepID, ec.Runtime.State)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		return missioncontrol.ApprovalRequest{}, false, nil
+	}
+	if ec.Job == nil || ec.Step == nil {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "approval decision requires active job and step",
+		}
+	}
+
+	request, handled, err := missioncontrol.ResolveSinglePendingApprovalRequest(*ec.Runtime)
+	if err != nil || !handled {
+		return request, handled, err
+	}
+	if !missioncontrol.ApprovalRequestMatchesStepBinding(request, ec.Job.ID, *ec.Step) {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			StepID:  request.StepID,
+			Message: "approval decision does not match the active job and step",
+		}
+	}
+	return request, true, nil
+}
+
+func resolveNaturalApprovalRequestFromPersistedRuntime(runtimeState *missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, hasRuntimeControl bool) (missioncontrol.ApprovalRequest, bool, error) {
+	if runtimeState == nil {
+		return missioncontrol.ApprovalRequest{}, false, nil
+	}
+	if missioncontrol.IsTerminalJobState(runtimeState.State) {
+		return missioncontrol.ApprovalRequest{}, true, approvalDecisionStateError(runtimeState.ActiveStepID, runtimeState.State)
+	}
+	if runtimeState.State != missioncontrol.JobStateWaitingUser {
+		return missioncontrol.ApprovalRequest{}, false, nil
+	}
+
+	request, handled, err := missioncontrol.ResolveSinglePendingApprovalRequest(*runtimeState)
+	if err != nil || !handled {
+		return request, handled, err
+	}
+	if runtimeState.ActiveStepID == "" {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			StepID:  request.StepID,
+			Message: "approval decision requires an active step",
+		}
+	}
+	if !hasRuntimeControl || control == nil {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			StepID:  request.StepID,
+			Message: "approval decision requires persisted mission control context",
+		}
+	}
+	if runtimeState.JobID != "" && request.JobID != runtimeState.JobID {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			StepID:  request.StepID,
+			Message: "approval decision does not match the active job and step",
+		}
+	}
+	if control.JobID != "" && request.JobID != control.JobID {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			StepID:  request.StepID,
+			Message: "approval decision does not match the active job and step",
+		}
+	}
+	if request.StepID != runtimeState.ActiveStepID || request.StepID != control.Step.ID {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			StepID:  request.StepID,
+			Message: "approval decision does not match the active job and step",
+		}
+	}
+	if !missioncontrol.ApprovalRequestMatchesStepBinding(request, control.JobID, control.Step) {
+		return missioncontrol.ApprovalRequest{}, true, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			StepID:  request.StepID,
+			Message: "approval decision does not match the active job and step",
+		}
+	}
+	return request, true, nil
+}
+
+func approvalDecisionStateError(stepID string, state missioncontrol.JobState) error {
+	return missioncontrol.ValidationError{
+		Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+		StepID:  stepID,
+		Message: fmt.Sprintf("approval decision requires waiting_user runtime state, got %q", state),
+	}
+}
+
+func naturalApprovalResponse(decision missioncontrol.ApprovalDecision, jobID string, stepID string) string {
+	if decision == missioncontrol.ApprovalDecisionDeny {
+		return fmt.Sprintf("Denied job=%s step=%s.", jobID, stepID)
+	}
+	return fmt.Sprintf("Approved job=%s step=%s.", jobID, stepID)
 }
 
 func (s *TaskState) ClearExecutionContext() {

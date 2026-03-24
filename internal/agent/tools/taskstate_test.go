@@ -880,6 +880,205 @@ func TestTaskStateApplyApprovalDecisionUsesPersistedRuntimeControlAfterExecution
 	}
 }
 
+func TestTaskStateApplyNaturalApprovalDecisionApprovesSinglePendingRequest(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	handled, resp, err := state.ApplyNaturalApprovalDecision("yes")
+	if err != nil {
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) response = %q, want approval acknowledgement", resp)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionRejectsAmbiguousPendingRequests(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.mu.Lock()
+	state.executionContext.Runtime.ApprovalRequests = append(state.executionContext.Runtime.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "other-step",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+	})
+	state.runtimeState.ApprovalRequests = append(state.runtimeState.ApprovalRequests, missioncontrol.ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "other-step",
+		RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+		Scope:           missioncontrol.ApprovalScopeMissionStep,
+		State:           missioncontrol.ApprovalStatePending,
+	})
+	state.mu.Unlock()
+
+	handled, _, err := state.ApplyNaturalApprovalDecision("yes")
+	if err == nil {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) error = nil, want ambiguity failure")
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want two pending approvals", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionUsesPersistedRuntimeControlAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.ClearExecutionContext()
+
+	handled, resp, err := state.ApplyNaturalApprovalDecision("no")
+	if err != nil {
+		t.Fatalf("ApplyNaturalApprovalDecision(no) error = %v", err)
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(no) handled = false, want true")
+	}
+	if resp != "Denied job=job-1 step=build." {
+		t.Fatalf("ApplyNaturalApprovalDecision(no) response = %q, want denial acknowledgement", resp)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionDoesNotBindWrongStep(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.mu.Lock()
+	state.executionContext.Runtime.ApprovalRequests[0].StepID = "other-step"
+	state.runtimeState.ApprovalRequests[0].StepID = "other-step"
+	state.mu.Unlock()
+
+	handled, _, err := state.ApplyNaturalApprovalDecision("yes")
+	if err == nil {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) error = nil, want mismatch failure")
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+}
+
+func TestTaskStateApplyNaturalApprovalDecisionRejectsTerminalPersistedRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.HydrateRuntimeControl(missioncontrol.Job{ID: "job-1"}, missioncontrol.JobRuntimeState{
+		JobID: "job-1",
+		State: missioncontrol.JobStateCompleted,
+	}, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	handled, _, err := state.ApplyNaturalApprovalDecision("yes")
+	if err == nil {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) error = nil, want terminal-state rejection")
+	}
+	if !handled {
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
+	}
+}
+
 func TestTaskStateApplyApprovalDecisionDenyAfterExecutionContextTeardownBlocksLaterFreeFormInput(t *testing.T) {
 	t.Parallel()
 

@@ -2729,6 +2729,61 @@ func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
 	}
 }
 
+func TestMissionStatusRuntimeChangeHookPersistsNaturalApprovalLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "Need approval before continuing."}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("yes", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if snapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("snapshot.Runtime.State = %q, want %q", snapshot.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(snapshot.Runtime.ApprovalGrants) != 1 || snapshot.Runtime.ApprovalGrants[0].GrantedVia != missioncontrol.ApprovalGrantedViaOperatorReply {
+		t.Fatalf("snapshot.Runtime.ApprovalGrants = %#v, want one natural-language approval grant", snapshot.Runtime.ApprovalGrants)
+	}
+}
+
 func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()
@@ -2832,6 +2887,108 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	}
 	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one granted approval", approvedSnapshot.Runtime.ApprovalGrants)
+	}
+}
+
+func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	initialSnapshot := missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:         job.ID,
+			State:         missioncontrol.JobStateWaitingUser,
+			ActiveStepID:  "build",
+			WaitingReason: "awaiting operator input",
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStatePending,
+				},
+			},
+		},
+	}
+	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("no", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(no) error = %v", err)
+	}
+
+	deniedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if deniedSnapshot.Runtime == nil {
+		t.Fatal("deniedSnapshot.Runtime = nil, want non-nil")
+	}
+	if deniedSnapshot.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("deniedSnapshot.Runtime.State = %q, want %q", deniedSnapshot.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(deniedSnapshot.Runtime.ApprovalRequests) != 1 || deniedSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests = %#v, want one denied approval", deniedSnapshot.Runtime.ApprovalRequests)
+	}
+
+	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
+	ag = agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() second boot error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("yes", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(yes) error = %v", err)
+	}
+
+	approvedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if approvedSnapshot.Runtime == nil {
+		t.Fatal("approvedSnapshot.Runtime = nil, want non-nil")
+	}
+	if approvedSnapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("approvedSnapshot.Runtime.State = %q, want %q", approvedSnapshot.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].GrantedVia != missioncontrol.ApprovalGrantedViaOperatorReply {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one natural-language approval grant", approvedSnapshot.Runtime.ApprovalGrants)
 	}
 }
 
@@ -4386,6 +4543,53 @@ func TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsApprovalDecisions
 			}
 			if !strings.Contains(err.Error(), string(runtimeState)) {
 				t.Fatalf("ProcessDirect(APPROVE) error = %q, want state-specific rejection", err)
+			}
+		})
+	}
+}
+
+func TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsNaturalApprovalDecisions(t *testing.T) {
+	for _, runtimeState := range []missioncontrol.JobState{
+		missioncontrol.JobStateCompleted,
+		missioncontrol.JobStateFailed,
+		missioncontrol.JobStateAborted,
+	} {
+		runtimeState := runtimeState
+		t.Run(string(runtimeState), func(t *testing.T) {
+			ag := newMissionBootstrapTestLoop()
+			cmd := newMissionBootstrapTestCommand()
+			job := testMissionBootstrapJob()
+			missionFile := writeMissionBootstrapJobFile(t, job)
+			statusFile := filepath.Join(t.TempDir(), "status.json")
+			writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+				MissionFile: missionFile,
+				JobID:       job.ID,
+				Runtime: &missioncontrol.JobRuntimeState{
+					JobID: job.ID,
+					State: runtimeState,
+				},
+			})
+
+			if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+				t.Fatalf("Flags().Set(mission-file) error = %v", err)
+			}
+			if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+				t.Fatalf("Flags().Set(mission-step) error = %v", err)
+			}
+			if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+				t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+			}
+
+			if err := configureMissionBootstrap(cmd, ag); err != nil {
+				t.Fatalf("configureMissionBootstrap() error = %v", err)
+			}
+
+			_, err := ag.ProcessDirect("yes", 2*time.Second)
+			if err == nil {
+				t.Fatal("ProcessDirect(yes) error = nil, want terminal-state rejection")
+			}
+			if !strings.Contains(err.Error(), string(runtimeState)) {
+				t.Fatalf("ProcessDirect(yes) error = %q, want state-specific rejection", err)
 			}
 		})
 	}

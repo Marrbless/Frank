@@ -254,6 +254,26 @@ func (a *AgentLoop) Run(ctx context.Context) {
 					}
 					continue
 				}
+				if handled, content, err := a.taskState.ApplyNaturalApprovalDecision(msg.Content); handled {
+					if err != nil {
+						content = err.Error()
+					}
+					if !isSystemChannel(msg.Channel) {
+						sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
+						sess.AddMessage("user", msg.Content)
+						sess.AddMessage("assistant", content)
+						if saveErr := a.sessions.Save(sess); saveErr != nil {
+							log.Printf("error saving session: %v", saveErr)
+						}
+					}
+					out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: content}
+					select {
+					case a.hub.Out <- out:
+					default:
+						log.Println("Outbound channel full, dropping message")
+					}
+					continue
+				}
 				if inputKind, err := a.taskState.ApplyWaitingUserInput(msg.Content); err != nil {
 					log.Printf("mission runtime waiting_user input validation failed: %v", err)
 				} else if inputKind != missioncontrol.WaitingUserInputNone {
@@ -423,6 +443,9 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
 		if handled, response, err := a.processOperatorCommand(content); handled {
+			return response, err
+		}
+		if handled, response, err := a.taskState.ApplyNaturalApprovalDecision(content); handled {
 			return response, err
 		}
 		if inputKind, err := a.taskState.ApplyWaitingUserInput(content); err != nil {

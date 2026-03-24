@@ -28,6 +28,7 @@ const (
 	ApprovalScopeMissionStep            = "mission_step"
 	ApprovalRequestedViaRuntime         = "runtime_waiting_user"
 	ApprovalGrantedViaOperatorCommand   = "operator_command"
+	ApprovalGrantedViaOperatorReply     = "operator_reply"
 )
 
 type ApprovalRequest struct {
@@ -59,6 +60,50 @@ func approvalBindingForStep(step Step) (string, string, bool) {
 		return "", "", false
 	}
 	return ApprovalRequestedActionStepComplete, ApprovalScopeMissionStep, true
+}
+
+func ParsePlainApprovalDecision(input string) (ApprovalDecision, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	normalized = strings.Trim(normalized, " \t\r\n.!?")
+	switch normalized {
+	case "yes":
+		return ApprovalDecisionApprove, true
+	case "no":
+		return ApprovalDecisionDeny, true
+	default:
+		return "", false
+	}
+}
+
+func ResolveSinglePendingApprovalRequest(runtime JobRuntimeState) (ApprovalRequest, bool, error) {
+	pending := make([]ApprovalRequest, 0, 1)
+	for _, request := range runtime.ApprovalRequests {
+		if request.State != ApprovalStatePending {
+			continue
+		}
+		pending = append(pending, request)
+		if len(pending) > 1 {
+			return ApprovalRequest{}, true, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				Message: "plain yes/no approval is ambiguous because multiple pending approval requests exist",
+			}
+		}
+	}
+	if len(pending) == 0 {
+		return ApprovalRequest{}, false, nil
+	}
+	return pending[0], true, nil
+}
+
+func ApprovalRequestMatchesStepBinding(request ApprovalRequest, jobID string, step Step) bool {
+	requestedAction, scope, ok := approvalBindingForStep(step)
+	if !ok {
+		return false
+	}
+	if request.JobID != jobID || request.StepID != step.ID {
+		return false
+	}
+	return request.RequestedAction == requestedAction && request.Scope == scope
 }
 
 func hasPendingApprovalRequest(runtime *JobRuntimeState, jobID, stepID, requestedAction, scope string) bool {
