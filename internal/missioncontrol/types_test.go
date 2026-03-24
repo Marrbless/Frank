@@ -21,6 +21,9 @@ func TestEnumValues(t *testing.T) {
 	if JobStateFailed != "failed" {
 		t.Fatalf("JobStateFailed = %q, want %q", JobStateFailed, "failed")
 	}
+	if JobStateAborted != "aborted" {
+		t.Fatalf("JobStateAborted = %q, want %q", JobStateAborted, "aborted")
+	}
 
 	if StepTypeDiscussion != "discussion" {
 		t.Fatalf("StepTypeDiscussion = %q, want %q", StepTypeDiscussion, "discussion")

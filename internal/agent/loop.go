@@ -21,6 +21,7 @@ import (
 
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
+var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort)\s+(\S+)\s*$`)
 
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
@@ -219,7 +220,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			if a.taskState != nil {
 				a.taskState.BeginTask(fmt.Sprintf("%s:%s:%d", msg.Channel, msg.ChatID, time.Now().UnixNano()))
-				if handled, content, err := a.processApprovalCommand(msg.Content); handled {
+				if handled, content, err := a.processOperatorCommand(msg.Content); handled {
 					if err != nil {
 						content = err.Error()
 					}
@@ -407,7 +408,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
-		if handled, response, err := a.processApprovalCommand(content); handled {
+		if handled, response, err := a.processOperatorCommand(content); handled {
 			return response, err
 		}
 		if inputKind, err := a.taskState.ApplyWaitingUserInput(content); err != nil {
@@ -502,14 +503,44 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	return "Max iterations reached without final response", nil
 }
 
-func (a *AgentLoop) processApprovalCommand(content string) (bool, string, error) {
+func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error) {
 	if a == nil || a.taskState == nil {
 		return false, "", nil
 	}
 
-	matches := approvalCommandRE.FindStringSubmatch(strings.TrimSpace(content))
+	trimmed := strings.TrimSpace(content)
+
+	matches := approvalCommandRE.FindStringSubmatch(trimmed)
 	if len(matches) != 4 {
-		return false, "", nil
+		runtimeMatches := runtimeCommandRE.FindStringSubmatch(trimmed)
+		if len(runtimeMatches) != 3 {
+			return false, "", nil
+		}
+
+		action := strings.ToLower(runtimeMatches[1])
+		jobID := runtimeMatches[2]
+		var err error
+		switch action {
+		case "pause":
+			err = a.taskState.PauseRuntime(jobID)
+		case "resume":
+			err = a.taskState.ResumeRuntimeControl(jobID)
+		case "abort":
+			err = a.taskState.AbortRuntime(jobID)
+		default:
+			return false, "", nil
+		}
+		if err != nil {
+			return true, "", err
+		}
+
+		verb := strings.ToUpper(action[:1]) + action[1:] + "d"
+		if action == "pause" {
+			verb = "Paused"
+		} else if action == "abort" {
+			verb = "Aborted"
+		}
+		return true, fmt.Sprintf("%s job=%s.", verb, jobID), nil
 	}
 
 	decision := missioncontrol.ApprovalDecision(strings.ToLower(matches[1]))

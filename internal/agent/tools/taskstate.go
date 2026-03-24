@@ -271,6 +271,18 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	return err
 }
 
+func (s *TaskState) PauseRuntime(jobID string) error {
+	return s.applyRuntimeControl(jobID, "pause", missioncontrol.PauseJobRuntime)
+}
+
+func (s *TaskState) ResumeRuntimeControl(jobID string) error {
+	return s.applyRuntimeControl(jobID, "resume", missioncontrol.ResumePausedJobRuntime)
+}
+
+func (s *TaskState) AbortRuntime(jobID string) error {
+	return s.applyRuntimeControl(jobID, "abort", missioncontrol.AbortJobRuntime)
+}
+
 func (s *TaskState) ClearExecutionContext() {
 	if s == nil {
 		return
@@ -315,4 +327,78 @@ func (s *TaskState) notifyRuntimeChanged() {
 	if hook != nil {
 		hook()
 	}
+}
+
+func (s *TaskState) applyRuntimeControl(jobID string, action string, apply func(missioncontrol.JobRuntimeState, time.Time) (missioncontrol.JobRuntimeState, error)) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+		s.emitRuntimeControlAuditEvent(ec, action, err)
+		return err
+	}
+	if ec.Job.ID != jobID {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "operator command does not match the active job",
+		}
+		s.emitRuntimeControlAuditEvent(ec, action, err)
+		return err
+	}
+
+	nextRuntime, err := apply(*missioncontrol.CloneJobRuntimeState(ec.Runtime), time.Now())
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(ec, action, err)
+		return err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(*ec.Job, nextRuntime)
+	s.mu.Unlock()
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(ec, action, err)
+		return err
+	}
+
+	s.emitRuntimeControlAuditEvent(ec, action, nil)
+	s.notifyRuntimeChanged()
+	return nil
+}
+
+func (s *TaskState) emitRuntimeControlAuditEvent(ec missioncontrol.ExecutionContext, action string, err error) {
+	if s == nil {
+		return
+	}
+
+	event := missioncontrol.AuditEvent{
+		ToolName:  action,
+		Allowed:   err == nil,
+		Timestamp: time.Now(),
+	}
+	if ec.Job != nil {
+		event.JobID = ec.Job.ID
+	}
+	if ec.Step != nil {
+		event.StepID = ec.Step.ID
+	}
+	if err != nil {
+		event.Reason = err.Error()
+		if validationErr, ok := err.(missioncontrol.ValidationError); ok {
+			event.Code = validationErr.Code
+		} else {
+			event.Code = missioncontrol.RejectionCodeInvalidRuntimeState
+		}
+	}
+
+	s.EmitAuditEvent(event)
 }

@@ -76,6 +76,89 @@ func TestResumeJobRuntimeAfterBootRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestPauseJobRuntimeDoesNotCompleteActiveStep(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	runtime, err := PauseJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    time.Date(2026, 3, 24, 11, 0, 0, 0, time.UTC),
+		StartedAt:    time.Date(2026, 3, 24, 11, 0, 0, 0, time.UTC),
+		ActiveStepAt: time.Date(2026, 3, 24, 11, 30, 0, 0, time.UTC),
+	}, now)
+	if err != nil {
+		t.Fatalf("PauseJobRuntime() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.PausedReason != RuntimePauseReasonOperatorCommand {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonOperatorCommand)
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+}
+
+func TestResumePausedJobRuntimeRequiresPausedState(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResumePausedJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateWaitingUser,
+		ActiveStepID: "build",
+	}, time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("ResumePausedJobRuntime() error = nil, want paused-state failure")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ResumePausedJobRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+}
+
+func TestAbortJobRuntimeTransitionsToTerminalAbortedState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	runtime, err := AbortJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: RuntimePauseReasonOperatorCommand,
+		PausedAt:     time.Date(2026, 3, 24, 11, 45, 0, 0, time.UTC),
+	}, now)
+	if err != nil {
+		t.Fatalf("AbortJobRuntime() error = %v", err)
+	}
+
+	if runtime.State != JobStateAborted {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateAborted)
+	}
+	if runtime.AbortedReason != RuntimeAbortReasonOperatorCommand {
+		t.Fatalf("AbortedReason = %q, want %q", runtime.AbortedReason, RuntimeAbortReasonOperatorCommand)
+	}
+	if runtime.AbortedAt != now {
+		t.Fatalf("AbortedAt = %v, want %v", runtime.AbortedAt, now)
+	}
+	if runtime.ActiveStepID != "" {
+		t.Fatalf("ActiveStepID = %q, want empty", runtime.ActiveStepID)
+	}
+	if !IsTerminalJobState(runtime.State) {
+		t.Fatalf("IsTerminalJobState(%q) = false, want true", runtime.State)
+	}
+}
+
 func TestValidateRuntimeExecutionWaitingUserDenied(t *testing.T) {
 	t.Parallel()
 

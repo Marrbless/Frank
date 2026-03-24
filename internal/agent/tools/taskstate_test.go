@@ -312,6 +312,162 @@ func TestTaskStateApplyStepOutputTransitionsDiscussionSubtypeToWaitingUser(t *te
 	}
 }
 
+func TestTaskStatePauseRuntimePausesActiveStepWithoutCompletion(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if err := state.PauseRuntime("job-1"); err != nil {
+		t.Fatalf("PauseRuntime() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want paused execution context")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ExecutionContext().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("ExecutionContext().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if ec.Runtime.ActiveStepID != "build" {
+		t.Fatalf("ExecutionContext().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
+	}
+	if len(ec.Runtime.CompletedSteps) != 0 {
+		t.Fatalf("ExecutionContext().Runtime.CompletedSteps = %#v, want empty", ec.Runtime.CompletedSteps)
+	}
+}
+
+func TestTaskStateResumeRuntimeControlRequiresPausedState(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	err := state.ResumeRuntimeControl("job-1")
+	if err == nil {
+		t.Fatal("ResumeRuntimeControl() error = nil, want paused-state failure")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ResumeRuntimeControl() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+}
+
+func TestTaskStateResumeRuntimeControlDoesNotBypassPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	err := state.ResumeRuntimeControl("job-1")
+	if err == nil {
+		t.Fatal("ResumeRuntimeControl() error = nil, want waiting_user failure")
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want waiting execution context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want waiting_user runtime", ec.Runtime)
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateResumeRuntimeControlDoesNotBypassDeniedApproval(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionDeny, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	err := state.ResumeRuntimeControl("job-1")
+	if err == nil {
+		t.Fatal("ResumeRuntimeControl() error = nil, want waiting_user failure")
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want waiting execution context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want waiting_user runtime", ec.Runtime)
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one denied approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateAbortRuntimeTransitionsToAborted(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.PauseRuntime("job-1"); err != nil {
+		t.Fatalf("PauseRuntime() error = %v", err)
+	}
+
+	if err := state.AbortRuntime("job-1"); err != nil {
+		t.Fatalf("AbortRuntime() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after abort")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
+	}
+	if runtime.AbortedReason != missioncontrol.RuntimeAbortReasonOperatorCommand {
+		t.Fatalf("MissionRuntimeState().AbortedReason = %q, want %q", runtime.AbortedReason, missioncontrol.RuntimeAbortReasonOperatorCommand)
+	}
+}
+
 func TestTaskStateApplyApprovalDecisionPausesCompletedStep(t *testing.T) {
 	t.Parallel()
 

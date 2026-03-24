@@ -549,6 +549,79 @@ func TestProcessDirectDiscussionSubtypeTransitionsToWaitingUser(t *testing.T) {
 	}
 }
 
+func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+	if resp != "Paused job=job-1." {
+		t.Fatalf("ProcessDirect(PAUSE) response = %q, want pause acknowledgement", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want paused active step", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(ec.Runtime.CompletedSteps) != 0 {
+		t.Fatalf("ActiveMissionStep().Runtime.CompletedSteps = %#v, want empty", ec.Runtime.CompletedSteps)
+	}
+
+	resp, err = ag.ProcessDirect("RESUME job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
+	}
+	if resp != "Resumed job=job-1." {
+		t.Fatalf("ProcessDirect(RESUME) response = %q, want resume acknowledgement", resp)
+	}
+
+	ec, ok = ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want resumed active step", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+
+	resp, err = ag.ProcessDirect("ABORT job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+	if resp != "Aborted job=job-1." {
+		t.Fatalf("ProcessDirect(ABORT) response = %q, want abort acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after abort")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
+	}
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) != 3 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 3)
+	}
+	assertAuditEvent(t, audits[0], "job-1", "build", "pause", true, "")
+	assertAuditEvent(t, audits[1], "job-1", "build", "resume", true, "")
+	assertAuditEvent(t, audits[2], "job-1", "build", "abort", true, "")
+}
+
 func TestProcessDirectApproveCommandCompletesPendingApprovalStep(t *testing.T) {
 	t.Parallel()
 
@@ -589,6 +662,36 @@ func TestProcessDirectApproveCommandCompletesPendingApprovalStep(t *testing.T) {
 	}
 }
 
+func TestProcessDirectPauseCommandWrongJobDoesNotBind(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	_, err := ag.ProcessDirect("PAUSE other-job", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(PAUSE wrong job) error = nil, want mismatch failure")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want unchanged active step", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) != 1 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	}
+	assertAuditEvent(t, audits[0], "job-1", "build", "pause", false, missioncontrol.RejectionCodeStepValidationFailed)
+}
+
 func TestProcessDirectDenyCommandKeepsPendingApprovalStepWaiting(t *testing.T) {
 	t.Parallel()
 
@@ -620,6 +723,37 @@ func TestProcessDirectDenyCommandKeepsPendingApprovalStepWaiting(t *testing.T) {
 	}
 	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests = %#v, want one denied approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestProcessDirectResumeCommandDoesNotBypassWaitingApproval(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	_, err := ag.ProcessDirect("RESUME job-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(RESUME) error = nil, want waiting_user failure")
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want waiting active step", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
 	}
 }
 

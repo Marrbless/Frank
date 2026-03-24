@@ -16,14 +16,18 @@ func TestCanTransitionJobAllowed(t *testing.T) {
 		{name: "running to paused", from: JobStateRunning, to: JobStatePaused},
 		{name: "running to completed", from: JobStateRunning, to: JobStateCompleted},
 		{name: "running to failed", from: JobStateRunning, to: JobStateFailed},
+		{name: "running to aborted", from: JobStateRunning, to: JobStateAborted},
 		{name: "running to rejected", from: JobStateRunning, to: JobStateRejected},
 		{name: "waiting_user to running", from: JobStateWaitingUser, to: JobStateRunning},
 		{name: "waiting_user to paused", from: JobStateWaitingUser, to: JobStatePaused},
 		{name: "waiting_user to failed", from: JobStateWaitingUser, to: JobStateFailed},
+		{name: "waiting_user to aborted", from: JobStateWaitingUser, to: JobStateAborted},
 		{name: "paused to running", from: JobStatePaused, to: JobStateRunning},
 		{name: "paused to failed", from: JobStatePaused, to: JobStateFailed},
+		{name: "paused to aborted", from: JobStatePaused, to: JobStateAborted},
 		{name: "completed to completed", from: JobStateCompleted, to: JobStateCompleted},
 		{name: "failed to failed", from: JobStateFailed, to: JobStateFailed},
+		{name: "aborted to aborted", from: JobStateAborted, to: JobStateAborted},
 		{name: "rejected to rejected", from: JobStateRejected, to: JobStateRejected},
 	}
 
@@ -57,6 +61,7 @@ func TestCanTransitionJobInvalid(t *testing.T) {
 		{name: "paused to completed", from: JobStatePaused, to: JobStateCompleted},
 		{name: "completed to running", from: JobStateCompleted, to: JobStateRunning},
 		{name: "failed to running", from: JobStateFailed, to: JobStateRunning},
+		{name: "aborted to running", from: JobStateAborted, to: JobStateRunning},
 		{name: "rejected to pending", from: JobStateRejected, to: JobStatePending},
 		{name: "unknown from state", from: JobState("unknown"), to: JobStateRunning},
 	}

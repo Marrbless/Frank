@@ -9,6 +9,12 @@ const (
 	JobStateWaitingUser JobState = "waiting_user"
 	JobStatePaused      JobState = "paused"
 	JobStateFailed      JobState = "failed"
+	JobStateAborted     JobState = "aborted"
+)
+
+const (
+	RuntimePauseReasonOperatorCommand = "operator_command"
+	RuntimeAbortReasonOperatorCommand = "operator_command"
 )
 
 const (
@@ -34,12 +40,14 @@ type JobRuntimeState struct {
 	ApprovalGrants   []ApprovalGrant     `json:"approval_grants,omitempty"`
 	WaitingReason    string              `json:"waiting_reason,omitempty"`
 	PausedReason     string              `json:"paused_reason,omitempty"`
+	AbortedReason    string              `json:"aborted_reason,omitempty"`
 	CreatedAt        time.Time           `json:"created_at,omitempty"`
 	UpdatedAt        time.Time           `json:"updated_at,omitempty"`
 	StartedAt        time.Time           `json:"started_at,omitempty"`
 	ActiveStepAt     time.Time           `json:"active_step_at,omitempty"`
 	WaitingAt        time.Time           `json:"waiting_at,omitempty"`
 	PausedAt         time.Time           `json:"paused_at,omitempty"`
+	AbortedAt        time.Time           `json:"aborted_at,omitempty"`
 	CompletedAt      time.Time           `json:"completed_at,omitempty"`
 	FailedAt         time.Time           `json:"failed_at,omitempty"`
 }
@@ -48,6 +56,7 @@ type RuntimeTransitionOptions struct {
 	StepID           string
 	WaitingReason    string
 	PausedReason     string
+	AbortedReason    string
 	FailureReason    string
 	validationResult *stepValidationResult
 }
@@ -67,7 +76,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 
 func IsTerminalJobState(state JobState) bool {
 	switch state {
-	case JobStateCompleted, JobStateFailed, JobStateRejected:
+	case JobStateCompleted, JobStateFailed, JobStateRejected, JobStateAborted:
 		return true
 	default:
 		return false
@@ -192,6 +201,63 @@ func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved 
 	}
 }
 
+func PauseJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {
+	if current.State != JobStateRunning {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("pause requires running runtime state, got %q", current.State),
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "pause requires an active step",
+		}
+	}
+	return TransitionJobRuntime(current, JobStatePaused, now, RuntimeTransitionOptions{
+		StepID:       current.ActiveStepID,
+		PausedReason: RuntimePauseReasonOperatorCommand,
+	})
+}
+
+func ResumePausedJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {
+	if current.State != JobStatePaused {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("resume requires paused runtime state, got %q", current.State),
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "resume requires a paused active step",
+		}
+	}
+	return TransitionJobRuntime(current, JobStateRunning, now, RuntimeTransitionOptions{
+		StepID: current.ActiveStepID,
+	})
+}
+
+func AbortJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {
+	switch current.State {
+	case JobStateRunning, JobStateWaitingUser, JobStatePaused:
+	default:
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("abort requires running, waiting_user, or paused runtime state, got %q", current.State),
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "abort requires an active step",
+		}
+	}
+	return TransitionJobRuntime(current, JobStateAborted, now, RuntimeTransitionOptions{
+		AbortedReason: RuntimeAbortReasonOperatorCommand,
+	})
+}
+
 func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, opts RuntimeTransitionOptions) (JobRuntimeState, error) {
 	if err := ValidateJobTransition(current.State, to); err != nil {
 		return JobRuntimeState{}, err
@@ -231,8 +297,10 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.ActiveStepID = stepID
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.AbortedReason = ""
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
+		next.AbortedAt = time.Time{}
 	case JobStateWaitingUser:
 		stepID := opts.StepID
 		if stepID == "" {
@@ -254,7 +322,9 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingReason = opts.WaitingReason
 		next.WaitingAt = now
 		next.PausedReason = ""
+		next.AbortedReason = ""
 		next.PausedAt = time.Time{}
+		next.AbortedAt = time.Time{}
 	case JobStatePaused:
 		if opts.PausedReason == "" {
 			return JobRuntimeState{}, ValidationError{
@@ -265,7 +335,9 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.PausedReason = opts.PausedReason
 		next.PausedAt = now
 		next.WaitingReason = ""
+		next.AbortedReason = ""
 		next.WaitingAt = time.Time{}
+		next.AbortedAt = time.Time{}
 		if opts.validationResult != nil && opts.validationResult.recordCompletion {
 			if next.ActiveStepID == "" {
 				return JobRuntimeState{}, ValidationError{
@@ -302,8 +374,10 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.ActiveStepAt = time.Time{}
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.AbortedReason = ""
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
+		next.AbortedAt = time.Time{}
 	case JobStateFailed:
 		if next.ActiveStepID == "" {
 			return JobRuntimeState{}, ValidationError{
@@ -318,16 +392,37 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		})
 		next.FailedAt = now
 		next.ActiveStepID = ""
+		next.ActiveStepAt = time.Time{}
+		next.WaitingReason = ""
+		next.PausedReason = ""
+		next.AbortedReason = ""
+		next.WaitingAt = time.Time{}
+		next.PausedAt = time.Time{}
+		next.AbortedAt = time.Time{}
+	case JobStateAborted:
+		if opts.AbortedReason == "" {
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeInvalidRuntimeState,
+				Message: "aborted state requires an abort reason",
+			}
+		}
+		next.AbortedReason = opts.AbortedReason
+		next.AbortedAt = now
+		next.ActiveStepID = ""
+		next.ActiveStepAt = time.Time{}
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 	case JobStateRejected:
 		next.ActiveStepID = ""
+		next.ActiveStepAt = time.Time{}
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.AbortedReason = ""
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
+		next.AbortedAt = time.Time{}
 	}
 
 	return next, nil

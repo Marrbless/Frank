@@ -2717,6 +2717,73 @@ func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
 	}
 }
 
+func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := ag.ActivateMissionStep(testMissionBootstrapJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+
+	pausedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if pausedSnapshot.Runtime == nil {
+		t.Fatal("pausedSnapshot.Runtime = nil, want non-nil")
+	}
+	if pausedSnapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("pausedSnapshot.Runtime.State = %q, want %q", pausedSnapshot.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if pausedSnapshot.Runtime.ActiveStepID != "build" {
+		t.Fatalf("pausedSnapshot.Runtime.ActiveStepID = %q, want %q", pausedSnapshot.Runtime.ActiveStepID, "build")
+	}
+	if len(pausedSnapshot.Runtime.CompletedSteps) != 0 {
+		t.Fatalf("pausedSnapshot.Runtime.CompletedSteps = %#v, want empty", pausedSnapshot.Runtime.CompletedSteps)
+	}
+
+	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
+	}
+
+	resumedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if resumedSnapshot.Runtime == nil {
+		t.Fatal("resumedSnapshot.Runtime = nil, want non-nil")
+	}
+	if resumedSnapshot.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("resumedSnapshot.Runtime.State = %q, want %q", resumedSnapshot.Runtime.State, missioncontrol.JobStateRunning)
+	}
+	if resumedSnapshot.Runtime.ActiveStepID != "build" {
+		t.Fatalf("resumedSnapshot.Runtime.ActiveStepID = %q, want %q", resumedSnapshot.Runtime.ActiveStepID, "build")
+	}
+
+	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+
+	abortedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if abortedSnapshot.Runtime == nil {
+		t.Fatal("abortedSnapshot.Runtime = nil, want non-nil")
+	}
+	if abortedSnapshot.Runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("abortedSnapshot.Runtime.State = %q, want %q", abortedSnapshot.Runtime.State, missioncontrol.JobStateAborted)
+	}
+	if abortedSnapshot.Runtime.AbortedReason != missioncontrol.RuntimeAbortReasonOperatorCommand {
+		t.Fatalf("abortedSnapshot.Runtime.AbortedReason = %q, want %q", abortedSnapshot.Runtime.AbortedReason, missioncontrol.RuntimeAbortReasonOperatorCommand)
+	}
+	if abortedSnapshot.Active {
+		t.Fatal("abortedSnapshot.Active = true, want false")
+	}
+}
+
 func TestWriteMissionStatusSnapshotLeavesNoTempFileOnSuccess(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	dir := t.TempDir()
