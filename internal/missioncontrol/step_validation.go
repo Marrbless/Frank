@@ -201,11 +201,13 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 	if waitingReason, ok := discussionWaitingReason(ec.Step.Subtype); ok {
 		nextRuntime := *CloneJobRuntimeState(ec.Runtime)
 		if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
+			content, _ := approvalRequestContentForStep(*ec.Job, *ec.Step)
 			nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
 				JobID:           ec.Job.ID,
 				StepID:          ec.Step.ID,
 				RequestedAction: requestedAction,
 				Scope:           scope,
+				Content:         &content,
 				RequestedVia:    ApprovalRequestedViaRuntime,
 				Reason:          waitingReason,
 			})

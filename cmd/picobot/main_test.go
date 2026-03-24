@@ -2812,6 +2812,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 		},
 	}
 	missionFile := writeMissionBootstrapJobFile(t, job)
+	content := expectedAuthorizationApprovalContent(job.MaxAuthority)
 	initialSnapshot := missionStatusSnapshot{
 		MissionFile: missionFile,
 		JobID:       job.ID,
@@ -2827,6 +2828,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 					StepID:          "build",
 					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
 					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					Content:         &content,
 					State:           missioncontrol.ApprovalStatePending,
 				},
 			},
@@ -2863,6 +2865,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	if len(deniedSnapshot.Runtime.ApprovalRequests) != 1 || deniedSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests = %#v, want one denied approval", deniedSnapshot.Runtime.ApprovalRequests)
 	}
+	if deniedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *deniedSnapshot.Runtime.ApprovalRequests[0].Content != content {
+		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0].Content = %#v, want %#v", deniedSnapshot.Runtime.ApprovalRequests[0].Content, content)
+	}
 
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
 	ag = agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
@@ -2887,6 +2892,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	}
 	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one granted approval", approvedSnapshot.Runtime.ApprovalGrants)
+	}
+	if len(approvedSnapshot.Runtime.ApprovalRequests) != 1 || approvedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *approvedSnapshot.Runtime.ApprovalRequests[0].Content != content {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests = %#v, want persisted enriched request content", approvedSnapshot.Runtime.ApprovalRequests)
 	}
 }
 
@@ -2918,6 +2926,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 		},
 	}
 	missionFile := writeMissionBootstrapJobFile(t, job)
+	content := expectedAuthorizationApprovalContent(job.MaxAuthority)
 	initialSnapshot := missionStatusSnapshot{
 		MissionFile:    missionFile,
 		JobID:          job.ID,
@@ -2934,6 +2943,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 					StepID:          "build",
 					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
 					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					Content:         &content,
 					State:           missioncontrol.ApprovalStatePending,
 				},
 			},
@@ -2955,6 +2965,11 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	if err := configureMissionBootstrap(cmd, ag); err != nil {
 		t.Fatalf("configureMissionBootstrap() error = %v", err)
 	}
+	if runtime, ok := ag.MissionRuntimeState(); !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	} else if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].Content == nil || *runtime.ApprovalRequests[0].Content != content {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want preserved enriched request content after rehydration", runtime.ApprovalRequests)
+	}
 	if _, err := ag.ProcessDirect("no", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(no) error = %v", err)
 	}
@@ -2968,6 +2983,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 	if len(deniedSnapshot.Runtime.ApprovalRequests) != 1 || deniedSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests = %#v, want one denied approval", deniedSnapshot.Runtime.ApprovalRequests)
+	}
+	if deniedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *deniedSnapshot.Runtime.ApprovalRequests[0].Content != content {
+		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0].Content = %#v, want %#v", deniedSnapshot.Runtime.ApprovalRequests[0].Content, content)
 	}
 
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
@@ -2989,6 +3007,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].GrantedVia != missioncontrol.ApprovalGrantedViaOperatorReply {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one natural-language approval grant", approvedSnapshot.Runtime.ApprovalGrants)
+	}
+	if len(approvedSnapshot.Runtime.ApprovalRequests) != 1 || approvedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *approvedSnapshot.Runtime.ApprovalRequests[0].Content != content {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests = %#v, want persisted enriched request content", approvedSnapshot.Runtime.ApprovalRequests)
 	}
 }
 
@@ -5148,6 +5169,20 @@ func runtimeControlForBootstrapStep(t *testing.T, job missioncontrol.Job, stepID
 		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
 	}
 	return &control
+}
+
+func expectedAuthorizationApprovalContent(authority missioncontrol.AuthorityTier) missioncontrol.ApprovalRequestContent {
+	return missioncontrol.ApprovalRequestContent{
+		ProposedAction:   "Complete the authorization discussion step and continue to the next mission step.",
+		WhyNeeded:        "This step asks the operator to explicitly approve continuation before the mission can proceed.",
+		AuthorityTier:    authority,
+		IdentityScope:    missioncontrol.ApprovalScopeNone,
+		PublicScope:      missioncontrol.ApprovalScopeNone,
+		FilesystemEffect: missioncontrol.ApprovalEffectNone,
+		ProcessEffect:    missioncontrol.ApprovalEffectNone,
+		NetworkEffect:    missioncontrol.ApprovalEffectNone,
+		FallbackIfDenied: "Keep the mission in waiting_user and require an explicit follow-up decision before proceeding.",
+	}
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

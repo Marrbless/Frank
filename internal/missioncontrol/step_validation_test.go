@@ -71,6 +71,21 @@ func TestCompleteRuntimeStepAuthorizationTransitionsToWaitingUserWithPendingAppr
 	if request.RequestedVia != ApprovalRequestedViaRuntime {
 		t.Fatalf("ApprovalRequests[0].RequestedVia = %q, want %q", request.RequestedVia, ApprovalRequestedViaRuntime)
 	}
+	if request.Content == nil {
+		t.Fatal("ApprovalRequests[0].Content = nil, want enriched content")
+	}
+	if request.Content.ProposedAction == "" {
+		t.Fatal("ApprovalRequests[0].Content.ProposedAction = empty, want non-empty")
+	}
+	if request.Content.FallbackIfDenied == "" {
+		t.Fatal("ApprovalRequests[0].Content.FallbackIfDenied = empty, want non-empty")
+	}
+	if request.Content.AuthorityTier != AuthorityTierHigh {
+		t.Fatalf("ApprovalRequests[0].Content.AuthorityTier = %q, want %q", request.Content.AuthorityTier, AuthorityTierHigh)
+	}
+	if request.Content.FilesystemEffect != ApprovalEffectNone || request.Content.ProcessEffect != ApprovalEffectNone || request.Content.NetworkEffect != ApprovalEffectNone {
+		t.Fatalf("ApprovalRequests[0].Content effects = (%q, %q, %q), want all %q", request.Content.FilesystemEffect, request.Content.ProcessEffect, request.Content.NetworkEffect, ApprovalEffectNone)
+	}
 }
 
 func TestStepValidatorKindUsesSpecAlignedWaitUserName(t *testing.T) {

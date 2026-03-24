@@ -107,6 +107,51 @@ func TestApprovalRequestMatchesStepBinding(t *testing.T) {
 	}
 }
 
+func TestApprovalRequestContentForAuthorizationStep(t *testing.T) {
+	t.Parallel()
+
+	content, ok := approvalRequestContentForStep(Job{MaxAuthority: AuthorityTierHigh}, Step{
+		ID:                "build",
+		Type:              StepTypeDiscussion,
+		Subtype:           StepSubtypeAuthorization,
+		RequiredAuthority: AuthorityTierMedium,
+	})
+	if !ok {
+		t.Fatal("approvalRequestContentForStep() ok = false, want true")
+	}
+	if content.ProposedAction == "" {
+		t.Fatal("approvalRequestContentForStep().ProposedAction = empty, want non-empty")
+	}
+	if content.FallbackIfDenied == "" {
+		t.Fatal("approvalRequestContentForStep().FallbackIfDenied = empty, want non-empty")
+	}
+	if content.AuthorityTier != AuthorityTierMedium {
+		t.Fatalf("approvalRequestContentForStep().AuthorityTier = %q, want %q", content.AuthorityTier, AuthorityTierMedium)
+	}
+	if content.IdentityScope != ApprovalScopeNone || content.PublicScope != ApprovalScopeNone {
+		t.Fatalf("approvalRequestContentForStep() scopes = (%q, %q), want (%q, %q)", content.IdentityScope, content.PublicScope, ApprovalScopeNone, ApprovalScopeNone)
+	}
+	if content.FilesystemEffect != ApprovalEffectNone || content.ProcessEffect != ApprovalEffectNone || content.NetworkEffect != ApprovalEffectNone {
+		t.Fatalf("approvalRequestContentForStep() effects = (%q, %q, %q), want all %q", content.FilesystemEffect, content.ProcessEffect, content.NetworkEffect, ApprovalEffectNone)
+	}
+}
+
+func TestApprovalRequestContentForAuthorizationStepFallsBackToJobAuthority(t *testing.T) {
+	t.Parallel()
+
+	content, ok := approvalRequestContentForStep(Job{MaxAuthority: AuthorityTierHigh}, Step{
+		ID:      "build",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	})
+	if !ok {
+		t.Fatal("approvalRequestContentForStep() ok = false, want true")
+	}
+	if content.AuthorityTier != AuthorityTierHigh {
+		t.Fatalf("approvalRequestContentForStep().AuthorityTier = %q, want %q", content.AuthorityTier, AuthorityTierHigh)
+	}
+}
+
 func TestRefreshApprovalRequestsExpiresElapsedPendingRequest(t *testing.T) {
 	t.Parallel()
 

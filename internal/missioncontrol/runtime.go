@@ -76,9 +76,25 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	cloned := *runtime
 	cloned.CompletedSteps = append([]RuntimeStepRecord(nil), runtime.CompletedSteps...)
 	cloned.FailedSteps = append([]RuntimeStepRecord(nil), runtime.FailedSteps...)
-	cloned.ApprovalRequests = append([]ApprovalRequest(nil), runtime.ApprovalRequests...)
+	if len(runtime.ApprovalRequests) > 0 {
+		cloned.ApprovalRequests = make([]ApprovalRequest, len(runtime.ApprovalRequests))
+		for i, request := range runtime.ApprovalRequests {
+			cloned.ApprovalRequests[i] = cloneApprovalRequest(request)
+		}
+	} else {
+		cloned.ApprovalRequests = nil
+	}
 	cloned.ApprovalGrants = append([]ApprovalGrant(nil), runtime.ApprovalGrants...)
 	return &cloned
+}
+
+func cloneApprovalRequest(request ApprovalRequest) ApprovalRequest {
+	cloned := request
+	if request.Content != nil {
+		content := *request.Content
+		cloned.Content = &content
+	}
+	return cloned
 }
 
 func CloneRuntimeControlContext(control *RuntimeControlContext) *RuntimeControlContext {

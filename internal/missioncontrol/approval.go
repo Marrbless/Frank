@@ -33,19 +33,37 @@ const (
 	defaultApprovalRequestTTL           = 5 * time.Minute
 )
 
+const (
+	ApprovalScopeNone  = "none"
+	ApprovalEffectNone = "none"
+)
+
+type ApprovalRequestContent struct {
+	ProposedAction   string        `json:"proposed_action,omitempty"`
+	WhyNeeded        string        `json:"why_needed,omitempty"`
+	AuthorityTier    AuthorityTier `json:"authority_tier,omitempty"`
+	IdentityScope    string        `json:"identity_scope,omitempty"`
+	PublicScope      string        `json:"public_scope,omitempty"`
+	FilesystemEffect string        `json:"filesystem_effect,omitempty"`
+	ProcessEffect    string        `json:"process_effect,omitempty"`
+	NetworkEffect    string        `json:"network_effect,omitempty"`
+	FallbackIfDenied string        `json:"fallback_if_denied,omitempty"`
+}
+
 type ApprovalRequest struct {
-	JobID           string        `json:"job_id"`
-	StepID          string        `json:"step_id"`
-	RequestedAction string        `json:"requested_action"`
-	Scope           string        `json:"scope"`
-	RequestedVia    string        `json:"requested_via"`
-	GrantedVia      string        `json:"granted_via,omitempty"`
-	State           ApprovalState `json:"state"`
-	Reason          string        `json:"reason,omitempty"`
-	RequestedAt     time.Time     `json:"requested_at,omitempty"`
-	ExpiresAt       time.Time     `json:"expires_at,omitempty"`
-	ResolvedAt      time.Time     `json:"resolved_at,omitempty"`
-	SupersededAt    time.Time     `json:"superseded_at,omitempty"`
+	JobID           string                  `json:"job_id"`
+	StepID          string                  `json:"step_id"`
+	RequestedAction string                  `json:"requested_action"`
+	Scope           string                  `json:"scope"`
+	Content         *ApprovalRequestContent `json:"content,omitempty"`
+	RequestedVia    string                  `json:"requested_via"`
+	GrantedVia      string                  `json:"granted_via,omitempty"`
+	State           ApprovalState           `json:"state"`
+	Reason          string                  `json:"reason,omitempty"`
+	RequestedAt     time.Time               `json:"requested_at,omitempty"`
+	ExpiresAt       time.Time               `json:"expires_at,omitempty"`
+	ResolvedAt      time.Time               `json:"resolved_at,omitempty"`
+	SupersededAt    time.Time               `json:"superseded_at,omitempty"`
 }
 
 type ApprovalGrant struct {
@@ -64,6 +82,29 @@ func approvalBindingForStep(step Step) (string, string, bool) {
 		return "", "", false
 	}
 	return ApprovalRequestedActionStepComplete, ApprovalScopeMissionStep, true
+}
+
+func approvalRequestContentForStep(job Job, step Step) (ApprovalRequestContent, bool) {
+	if step.Type != StepTypeDiscussion || step.Subtype != StepSubtypeAuthorization {
+		return ApprovalRequestContent{}, false
+	}
+
+	authorityTier := step.RequiredAuthority
+	if authorityTier == "" {
+		authorityTier = job.MaxAuthority
+	}
+
+	return ApprovalRequestContent{
+		ProposedAction:   "Complete the authorization discussion step and continue to the next mission step.",
+		WhyNeeded:        "This step asks the operator to explicitly approve continuation before the mission can proceed.",
+		AuthorityTier:    authorityTier,
+		IdentityScope:    ApprovalScopeNone,
+		PublicScope:      ApprovalScopeNone,
+		FilesystemEffect: ApprovalEffectNone,
+		ProcessEffect:    ApprovalEffectNone,
+		NetworkEffect:    ApprovalEffectNone,
+		FallbackIfDenied: "Keep the mission in waiting_user and require an explicit follow-up decision before proceeding.",
+	}, true
 }
 
 func ParsePlainApprovalDecision(input string) (ApprovalDecision, bool) {

@@ -366,9 +366,12 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 				StepID:          "build",
 				RequestedAction: ApprovalRequestedActionStepComplete,
 				Scope:           ApprovalScopeMissionStep,
-				RequestedVia:    ApprovalRequestedViaRuntime,
-				State:           ApprovalStatePending,
-				RequestedAt:     time.Date(2026, 3, 23, 11, 30, 0, 0, time.UTC),
+				Content: &ApprovalRequestContent{
+					ProposedAction: "Complete the authorization discussion step and continue to the next mission step.",
+				},
+				RequestedVia: ApprovalRequestedViaRuntime,
+				State:        ApprovalStatePending,
+				RequestedAt:  time.Date(2026, 3, 23, 11, 30, 0, 0, time.UTC),
 			},
 		},
 		ApprovalGrants: []ApprovalGrant{
@@ -398,12 +401,16 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 
 	ec.Runtime.CompletedSteps[0].StepID = "mutated"
 	ec.Runtime.ApprovalRequests[0].StepID = "mutated-request"
+	ec.Runtime.ApprovalRequests[0].Content.ProposedAction = "mutated-content"
 	ec.Runtime.ApprovalGrants[0].StepID = "mutated-grant"
 	if runtime.CompletedSteps[0].StepID != "draft" {
 		t.Fatalf("original runtime step = %q, want %q", runtime.CompletedSteps[0].StepID, "draft")
 	}
 	if runtime.ApprovalRequests[0].StepID != "build" {
 		t.Fatalf("original approval request step = %q, want %q", runtime.ApprovalRequests[0].StepID, "build")
+	}
+	if runtime.ApprovalRequests[0].Content == nil || runtime.ApprovalRequests[0].Content.ProposedAction != "Complete the authorization discussion step and continue to the next mission step." {
+		t.Fatalf("original approval request content = %#v, want preserved content", runtime.ApprovalRequests[0].Content)
 	}
 	if runtime.ApprovalGrants[0].StepID != "draft" {
 		t.Fatalf("original approval grant step = %q, want %q", runtime.ApprovalGrants[0].StepID, "draft")
