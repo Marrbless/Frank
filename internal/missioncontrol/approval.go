@@ -30,6 +30,7 @@ const (
 	ApprovalRequestedViaRuntime         = "runtime_waiting_user"
 	ApprovalGrantedViaOperatorCommand   = "operator_command"
 	ApprovalGrantedViaOperatorReply     = "operator_reply"
+	defaultApprovalRequestTTL           = 5 * time.Minute
 )
 
 type ApprovalRequest struct {
@@ -202,6 +203,9 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 	request.State = ApprovalStatePending
 	request.GrantedVia = ""
 	request.RequestedAt = now
+	if request.ExpiresAt.IsZero() {
+		request.ExpiresAt = now.Add(defaultApprovalRequestTTL)
+	}
 	request.SupersededAt = time.Time{}
 	request.ResolvedAt = time.Time{}
 	next.ApprovalRequests = append(next.ApprovalRequests, request)

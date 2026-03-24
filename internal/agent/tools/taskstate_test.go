@@ -1141,6 +1141,12 @@ func TestTaskStateApplyApprovalDecisionBindsOnlyLatestValidRequest(t *testing.T)
 	}
 
 	now := time.Now()
+	if state.executionContext.Runtime.ApprovalRequests[0].ExpiresAt.IsZero() {
+		t.Fatalf("executionContext approval request = %#v, want stamped expires_at", state.executionContext.Runtime.ApprovalRequests)
+	}
+	if state.runtimeState.ApprovalRequests[0].ExpiresAt.IsZero() {
+		t.Fatalf("runtimeState approval request = %#v, want stamped expires_at", state.runtimeState.ApprovalRequests)
+	}
 	state.mu.Lock()
 	state.executionContext.Runtime.ApprovalRequests[0].State = missioncontrol.ApprovalStateSuperseded
 	state.executionContext.Runtime.ApprovalRequests[0].SupersededAt = now

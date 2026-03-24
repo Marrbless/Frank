@@ -3039,6 +3039,9 @@ func TestMissionStatusRuntimeChangeHookPersistsApprovalExpiryLifecycle(t *testin
 	if snapshot.Runtime == nil {
 		t.Fatal("snapshot.Runtime = nil, want non-nil")
 	}
+	if len(snapshot.Runtime.ApprovalRequests) != 1 || snapshot.Runtime.ApprovalRequests[0].ExpiresAt.IsZero() {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want one stamped approval request", snapshot.Runtime.ApprovalRequests)
+	}
 	if len(snapshot.Runtime.ApprovalRequests) != 1 || snapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateExpired {
 		t.Fatalf("snapshot.Runtime.ApprovalRequests = %#v, want one expired approval", snapshot.Runtime.ApprovalRequests)
 	}

@@ -169,4 +169,7 @@ func TestAppendPendingApprovalRequestSupersedesOlderMatchingPendingRequest(t *te
 	if runtime.ApprovalRequests[1].State != ApprovalStatePending {
 		t.Fatalf("ApprovalRequests[1].State = %q, want %q", runtime.ApprovalRequests[1].State, ApprovalStatePending)
 	}
+	if runtime.ApprovalRequests[1].ExpiresAt != now.Add(defaultApprovalRequestTTL) {
+		t.Fatalf("ApprovalRequests[1].ExpiresAt = %v, want %v", runtime.ApprovalRequests[1].ExpiresAt, now.Add(defaultApprovalRequestTTL))
+	}
 }

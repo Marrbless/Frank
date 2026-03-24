@@ -963,6 +963,9 @@ func TestProcessDirectYesDoesNotBindExpiredPendingApprovalStep(t *testing.T) {
 	if !ok || ec.Runtime == nil {
 		t.Fatalf("ActiveMissionStep() = %#v, want waiting runtime", ec)
 	}
+	if ec.Runtime.ApprovalRequests[0].ExpiresAt.IsZero() {
+		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests = %#v, want stamped expires_at", ec.Runtime.ApprovalRequests)
+	}
 	expiredAt := time.Now().Add(-1 * time.Minute)
 	ec.Runtime.ApprovalRequests[0].ExpiresAt = expiredAt
 	ag.taskState.SetExecutionContext(ec)

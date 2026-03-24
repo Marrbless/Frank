@@ -335,6 +335,34 @@ func TestCompleteRuntimeStepWaitingUserPendingApprovalRejectsFreeFormApproval(t 
 	}
 }
 
+func TestCompleteRuntimeStepDiscussionAuthorizationStampsApprovalExpiry(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 10, 30, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "Need approval before continuing.",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 1 {
+		t.Fatalf("len(ApprovalRequests) = %d, want 1", len(runtime.ApprovalRequests))
+	}
+	if runtime.ApprovalRequests[0].ExpiresAt != now.Add(defaultApprovalRequestTTL) {
+		t.Fatalf("ApprovalRequests[0].ExpiresAt = %v, want %v", runtime.ApprovalRequests[0].ExpiresAt, now.Add(defaultApprovalRequestTTL))
+	}
+}
+
 func TestCompleteRuntimeStepWaitingUserPendingApprovalDoesNotLeakAcrossSteps(t *testing.T) {
 	t.Parallel()
 
