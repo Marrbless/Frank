@@ -2750,6 +2750,22 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 		t.Fatalf("pausedSnapshot.Runtime.CompletedSteps = %#v, want empty", pausedSnapshot.Runtime.CompletedSteps)
 	}
 
+	ag.ClearMissionStep()
+
+	tornDownSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if tornDownSnapshot.Active {
+		t.Fatal("tornDownSnapshot.Active = true, want false after teardown")
+	}
+	if tornDownSnapshot.Runtime == nil {
+		t.Fatal("tornDownSnapshot.Runtime = nil, want non-nil")
+	}
+	if tornDownSnapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("tornDownSnapshot.Runtime.State = %q, want %q", tornDownSnapshot.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if tornDownSnapshot.Runtime.ActiveStepID != "build" {
+		t.Fatalf("tornDownSnapshot.Runtime.ActiveStepID = %q, want %q", tornDownSnapshot.Runtime.ActiveStepID, "build")
+	}
+
 	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
 	}
@@ -2763,6 +2779,83 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	}
 	if resumedSnapshot.Runtime.ActiveStepID != "build" {
 		t.Fatalf("resumedSnapshot.Runtime.ActiveStepID = %q, want %q", resumedSnapshot.Runtime.ActiveStepID, "build")
+	}
+
+	ag.ClearMissionStep()
+
+	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+
+	abortedSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if abortedSnapshot.Runtime == nil {
+		t.Fatal("abortedSnapshot.Runtime = nil, want non-nil")
+	}
+	if abortedSnapshot.Runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("abortedSnapshot.Runtime.State = %q, want %q", abortedSnapshot.Runtime.State, missioncontrol.JobStateAborted)
+	}
+	if abortedSnapshot.Runtime.AbortedReason != missioncontrol.RuntimeAbortReasonOperatorCommand {
+		t.Fatalf("abortedSnapshot.Runtime.AbortedReason = %q, want %q", abortedSnapshot.Runtime.AbortedReason, missioncontrol.RuntimeAbortReasonOperatorCommand)
+	}
+	if abortedSnapshot.Active {
+		t.Fatal("abortedSnapshot.Active = true, want false")
+	}
+}
+
+func TestMissionStatusRuntimeChangeHookPersistsDurableAbortFromWaitingUserAfterTeardown(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "Need approval before continuing."}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	tornDownSnapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if tornDownSnapshot.Active {
+		t.Fatal("tornDownSnapshot.Active = true, want false after teardown")
+	}
+	if tornDownSnapshot.Runtime == nil {
+		t.Fatal("tornDownSnapshot.Runtime = nil, want non-nil")
+	}
+	if tornDownSnapshot.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("tornDownSnapshot.Runtime.State = %q, want %q", tornDownSnapshot.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(tornDownSnapshot.Runtime.ApprovalRequests) != 1 || tornDownSnapshot.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("tornDownSnapshot.Runtime.ApprovalRequests = %#v, want one pending approval", tornDownSnapshot.Runtime.ApprovalRequests)
 	}
 
 	if _, err := ag.ProcessDirect("ABORT job-1", 2*time.Second); err != nil {

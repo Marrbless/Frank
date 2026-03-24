@@ -622,6 +622,45 @@ func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
 	assertAuditEvent(t, audits[2], "job-1", "build", "abort", true, "")
 }
 
+func TestProcessDirectResumeCommandUsesDurablePausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after teardown")
+	}
+
+	resp, err := ag.ProcessDirect("RESUME job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
+	}
+	if resp != "Resumed job=job-1." {
+		t.Fatalf("ProcessDirect(RESUME) response = %q, want resume acknowledgement", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want resumed active step", ec)
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+	if ec.Runtime.ActiveStepID != "build" {
+		t.Fatalf("ActiveMissionStep().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
+	}
+}
+
 func TestProcessDirectApproveCommandCompletesPendingApprovalStep(t *testing.T) {
 	t.Parallel()
 
@@ -754,6 +793,46 @@ func TestProcessDirectResumeCommandDoesNotBypassWaitingApproval(t *testing.T) {
 	}
 	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestProcessDirectAbortCommandUsesDurableWaitingRuntimeAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after teardown")
+	}
+
+	resp, err := ag.ProcessDirect("ABORT job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ABORT) error = %v", err)
+	}
+	if resp != "Aborted job=job-1." {
+		t.Fatalf("ProcessDirect(ABORT) response = %q, want abort acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after abort")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateAborted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
 	}
 }
 

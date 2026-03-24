@@ -159,6 +159,122 @@ func TestAbortJobRuntimeTransitionsToTerminalAbortedState(t *testing.T) {
 	}
 }
 
+func TestRuntimeControlRejectsTerminalStatesDeterministically(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 30, 0, 0, time.UTC)
+	testCases := []struct {
+		name string
+		run  func() error
+		want RejectionCode
+	}{
+		{
+			name: "resume completed",
+			run: func() error {
+				_, err := ResumePausedJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateCompleted,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+		{
+			name: "resume failed",
+			run: func() error {
+				_, err := ResumePausedJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateFailed,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+		{
+			name: "resume aborted",
+			run: func() error {
+				_, err := ResumePausedJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateAborted,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+		{
+			name: "abort completed",
+			run: func() error {
+				_, err := AbortJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateCompleted,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+		{
+			name: "abort failed",
+			run: func() error {
+				_, err := AbortJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateFailed,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+		{
+			name: "abort aborted",
+			run: func() error {
+				_, err := AbortJobRuntime(JobRuntimeState{
+					JobID: "job-1",
+					State: JobStateAborted,
+				}, now)
+				return err
+			},
+			want: RejectionCodeInvalidRuntimeState,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatal("runtime control error = nil, want deterministic rejection")
+			}
+
+			validationErr, ok := err.(ValidationError)
+			if !ok {
+				t.Fatalf("runtime control error type = %T, want ValidationError", err)
+			}
+			if validationErr.Code != tc.want {
+				t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, tc.want)
+			}
+		})
+	}
+}
+
+func TestSetJobRuntimeActiveStepRejectsAbortedRuntime(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	_, err := SetJobRuntimeActiveStep(job, &JobRuntimeState{
+		JobID: job.ID,
+		State: JobStateAborted,
+	}, "build", time.Date(2026, 3, 24, 12, 45, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("SetJobRuntimeActiveStep() error = nil, want aborted-state rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("SetJobRuntimeActiveStep() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidJobTransition {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidJobTransition)
+	}
+}
+
 func TestValidateRuntimeExecutionWaitingUserDenied(t *testing.T) {
 	t.Parallel()
 
