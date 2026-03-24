@@ -284,19 +284,80 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	s.mu.Lock()
 	ec := missioncontrol.CloneExecutionContext(s.executionContext)
 	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
 	s.mu.Unlock()
-	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
-		return missioncontrol.ValidationError{
-			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
-			Message: "approval command requires an active mission step",
+
+	storeJob := ec.Job
+	storeControl := (*missioncontrol.RuntimeControlContext)(nil)
+	rebootSafePath := false
+	if hasExecutionContext && ec.Job != nil && ec.Step != nil && ec.Runtime != nil {
+		if ec.Job.ID != jobID || ec.Step.ID != stepID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
 		}
-	}
-	if ec.Job.ID != jobID || ec.Step.ID != stepID {
-		return missioncontrol.ValidationError{
-			Code:    missioncontrol.RejectionCodeStepValidationFailed,
-			StepID:  stepID,
-			Message: "approval command does not match the active job and step",
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "approval command requires an active mission step",
+			}
 		}
+		if runtimeState.JobID != jobID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+		if runtimeState.State != missioncontrol.JobStateWaitingUser {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  stepID,
+				Message: fmt.Sprintf("approval decision requires waiting_user runtime state, got %q", runtimeState.State),
+			}
+		}
+		if runtimeState.ActiveStepID == "" {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  stepID,
+				Message: "approval decision requires an active step",
+			}
+		}
+		if !hasRuntimeControl || control == nil {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  stepID,
+				Message: "approval command requires persisted mission control context",
+			}
+		}
+		if control.JobID != "" && control.JobID != jobID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+		if control.Step.ID != stepID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+
+		resolved, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, *runtimeState)
+		if err != nil {
+			return err
+		}
+		ec = resolved
+		storeControl = control
+		rebootSafePath = true
 	}
 
 	nextRuntime, err := missioncontrol.ApplyApprovalDecision(ec, time.Now(), decision, via)
@@ -305,7 +366,11 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	}
 
 	s.mu.Lock()
-	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	if rebootSafePath && nextRuntime.ActiveStepID != "" {
+		err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, storeControl)
+	} else {
+		err = s.storeRuntimeStateLocked(storeJob, nextRuntime, storeControl)
+	}
 	s.mu.Unlock()
 	if err == nil {
 		s.notifyRuntimeChanged()

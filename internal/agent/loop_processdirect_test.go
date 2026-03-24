@@ -765,6 +765,84 @@ func TestProcessDirectDenyCommandKeepsPendingApprovalStepWaiting(t *testing.T) {
 	}
 }
 
+func TestProcessDirectApproveCommandUsesPersistedWaitingRuntimeAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	resp, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(APPROVE) response = %q, want approval acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after reboot-safe approval completion")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
+func TestProcessDirectDenyCommandUsesPersistedWaitingRuntimeAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testDiscussionMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("continue", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(continue) error = %v", err)
+	}
+
+	ag.ClearMissionStep()
+
+	resp, err := ag.ProcessDirect("DENY job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(DENY) error = %v", err)
+	}
+	if resp != "Denied job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(DENY) response = %q, want denial acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after reboot-safe denial")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	}
+}
+
 func TestProcessDirectResumeCommandDoesNotBypassWaitingApproval(t *testing.T) {
 	t.Parallel()
 

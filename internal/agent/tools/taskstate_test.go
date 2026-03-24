@@ -832,6 +832,106 @@ func TestTaskStateApplyApprovalDecisionPausesCompletedStep(t *testing.T) {
 	}
 }
 
+func TestTaskStateApplyApprovalDecisionUsesPersistedRuntimeControlAfterExecutionContextTeardown(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.ClearExecutionContext()
+
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after reboot-safe approval completion")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one granted approval", runtime.ApprovalGrants)
+	}
+}
+
+func TestTaskStateApplyApprovalDecisionDenyAfterExecutionContextTeardownBlocksLaterFreeFormInput(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.ClearExecutionContext()
+
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionDeny, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	inputKind, err := state.ApplyWaitingUserInput("approved")
+	if err != nil {
+		t.Fatalf("ApplyWaitingUserInput() error = %v", err)
+	}
+	if inputKind != missioncontrol.WaitingUserInputNone {
+		t.Fatalf("ApplyWaitingUserInput() kind = %q, want %q without execution context", inputKind, missioncontrol.WaitingUserInputNone)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	}
+}
+
 func TestTaskStateApplyWaitingUserInputDoesNotBindPendingApproval(t *testing.T) {
 	t.Parallel()
 
@@ -869,6 +969,59 @@ func TestTaskStateApplyWaitingUserInputDoesNotBindPendingApproval(t *testing.T) 
 	}
 	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateApplyApprovalDecisionWrongBindingAfterExecutionContextTeardownDoesNotMutateRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+	job.Plan.Steps[1] = missioncontrol.Step{
+		ID:        "final",
+		Type:      missioncontrol.StepTypeFinalResponse,
+		DependsOn: []string{"build"},
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	state.ClearExecutionContext()
+
+	for _, tc := range []struct {
+		name   string
+		jobID  string
+		stepID string
+	}{
+		{name: "wrong job", jobID: "other-job", stepID: "build"},
+		{name: "wrong step", jobID: "job-1", stepID: "other-step"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := state.ApplyApprovalDecision(tc.jobID, tc.stepID, missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand)
+			if err == nil {
+				t.Fatal("ApplyApprovalDecision() error = nil, want mismatch failure")
+			}
+		})
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one pending approval", runtime.ApprovalRequests)
 	}
 }
 
