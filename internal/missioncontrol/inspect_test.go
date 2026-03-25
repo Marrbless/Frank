@@ -77,3 +77,49 @@ func TestNewInspectSummaryFromControlReturnsResolvableStep(t *testing.T) {
 		t.Fatalf("EffectiveAllowedTools = %#v, want %#v", summary.Steps[0].EffectiveAllowedTools, []string{"read"})
 	}
 }
+
+func TestNewInspectSummaryFromInspectablePlanReturnsResolvableStep(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read", "read"},
+					SuccessCriteria:   []string{"produce code"},
+				},
+				{
+					ID:           "final",
+					Type:         StepTypeFinalResponse,
+					DependsOn:    []string{"build"},
+					AllowedTools: []string{"read"},
+				},
+			},
+		},
+	}
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryFromInspectablePlan(job.ID, &plan, "final")
+	if err != nil {
+		t.Fatalf("NewInspectSummaryFromInspectablePlan() error = %v", err)
+	}
+	if summary.JobID != "job-1" {
+		t.Fatalf("JobID = %q, want %q", summary.JobID, "job-1")
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
+	}
+	if !reflect.DeepEqual(summary.Steps[0].EffectiveAllowedTools, []string{"read"}) {
+		t.Fatalf("EffectiveAllowedTools = %#v, want %#v", summary.Steps[0].EffectiveAllowedTools, []string{"read"})
+	}
+}

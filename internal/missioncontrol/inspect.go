@@ -74,6 +74,29 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 	}, nil
 }
 
+func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanContext, stepID string) (InspectSummary, error) {
+	if plan == nil {
+		return InspectSummary{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "inspect command requires validated mission plan",
+		}
+	}
+
+	job := Job{
+		ID:           jobID,
+		MaxAuthority: plan.MaxAuthority,
+		AllowedTools: append([]string(nil), plan.AllowedTools...),
+		Plan: Plan{
+			Steps: make([]Step, len(plan.Steps)),
+		},
+	}
+	for i, step := range plan.Steps {
+		job.Plan.Steps[i] = copyStep(step)
+	}
+
+	return NewInspectSummary(job, stepID)
+}
+
 func FormatInspectSummary(summary InspectSummary) (string, error) {
 	data, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

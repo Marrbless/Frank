@@ -653,6 +653,13 @@ func (s *TaskState) OperatorInspect(jobID string, stepID string) (string, error)
 		}
 		return missioncontrol.FormatInspectSummary(summary)
 	}
+	if runtimeState.InspectablePlan != nil {
+		summary, err := missioncontrol.NewInspectSummaryFromInspectablePlan(runtimeState.JobID, runtimeState.InspectablePlan, stepID)
+		if err != nil {
+			return "", err
+		}
+		return missioncontrol.FormatInspectSummary(summary)
+	}
 	if !hasRuntimeControl || control == nil {
 		return "", missioncontrol.ValidationError{
 			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
@@ -795,13 +802,22 @@ func (s *TaskState) ClearExecutionContext() {
 }
 
 func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
-	s.runtimeState = runtimeState
-	s.hasRuntimeState = true
-	s.auditEvents = missioncontrol.CloneAuditHistory(runtimeState.AuditHistory)
+	storedRuntime := *missioncontrol.CloneJobRuntimeState(&runtimeState)
+	if job != nil && storedRuntime.InspectablePlan == nil {
+		inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(*job)
+		if err != nil {
+			return err
+		}
+		storedRuntime.InspectablePlan = &inspectablePlan
+	}
 
-	if runtimeState.ActiveStepID != "" {
+	s.runtimeState = storedRuntime
+	s.hasRuntimeState = true
+	s.auditEvents = missioncontrol.CloneAuditHistory(storedRuntime.AuditHistory)
+
+	if storedRuntime.ActiveStepID != "" {
 		if control != nil {
-			if _, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, runtimeState); err != nil {
+			if _, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, storedRuntime); err != nil {
 				return err
 			}
 			s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(control)
@@ -825,7 +841,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 		s.hasRuntimeControl = false
 	}
 
-	if runtimeState.ActiveStepID == "" {
+	if storedRuntime.ActiveStepID == "" {
 		s.storeMissionJobLocked(job)
 		s.executionContext = missioncontrol.ExecutionContext{}
 		s.hasExecutionContext = false
@@ -833,7 +849,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 	}
 
 	if control != nil {
-		ec, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, runtimeState)
+		ec, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, storedRuntime)
 		if err != nil {
 			return err
 		}
@@ -848,7 +864,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 			Message: "runtime execution requires a mission job or persisted control context",
 		}
 	}
-	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(*job, runtimeState)
+	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(*job, storedRuntime)
 	if err != nil {
 		return err
 	}

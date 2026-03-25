@@ -30,27 +30,34 @@ type RuntimeStepRecord struct {
 	At     time.Time `json:"at"`
 }
 
+type InspectablePlanContext struct {
+	MaxAuthority AuthorityTier `json:"max_authority"`
+	AllowedTools []string      `json:"allowed_tools,omitempty"`
+	Steps        []Step        `json:"steps,omitempty"`
+}
+
 type JobRuntimeState struct {
-	JobID            string              `json:"job_id"`
-	State            JobState            `json:"state"`
-	ActiveStepID     string              `json:"active_step_id,omitempty"`
-	CompletedSteps   []RuntimeStepRecord `json:"completed_steps,omitempty"`
-	FailedSteps      []RuntimeStepRecord `json:"failed_steps,omitempty"`
-	AuditHistory     []AuditEvent        `json:"audit_history,omitempty"`
-	ApprovalRequests []ApprovalRequest   `json:"approval_requests,omitempty"`
-	ApprovalGrants   []ApprovalGrant     `json:"approval_grants,omitempty"`
-	WaitingReason    string              `json:"waiting_reason,omitempty"`
-	PausedReason     string              `json:"paused_reason,omitempty"`
-	AbortedReason    string              `json:"aborted_reason,omitempty"`
-	CreatedAt        time.Time           `json:"created_at,omitempty"`
-	UpdatedAt        time.Time           `json:"updated_at,omitempty"`
-	StartedAt        time.Time           `json:"started_at,omitempty"`
-	ActiveStepAt     time.Time           `json:"active_step_at,omitempty"`
-	WaitingAt        time.Time           `json:"waiting_at,omitempty"`
-	PausedAt         time.Time           `json:"paused_at,omitempty"`
-	AbortedAt        time.Time           `json:"aborted_at,omitempty"`
-	CompletedAt      time.Time           `json:"completed_at,omitempty"`
-	FailedAt         time.Time           `json:"failed_at,omitempty"`
+	JobID            string                  `json:"job_id"`
+	State            JobState                `json:"state"`
+	ActiveStepID     string                  `json:"active_step_id,omitempty"`
+	InspectablePlan  *InspectablePlanContext `json:"inspectable_plan,omitempty"`
+	CompletedSteps   []RuntimeStepRecord     `json:"completed_steps,omitempty"`
+	FailedSteps      []RuntimeStepRecord     `json:"failed_steps,omitempty"`
+	AuditHistory     []AuditEvent            `json:"audit_history,omitempty"`
+	ApprovalRequests []ApprovalRequest       `json:"approval_requests,omitempty"`
+	ApprovalGrants   []ApprovalGrant         `json:"approval_grants,omitempty"`
+	WaitingReason    string                  `json:"waiting_reason,omitempty"`
+	PausedReason     string                  `json:"paused_reason,omitempty"`
+	AbortedReason    string                  `json:"aborted_reason,omitempty"`
+	CreatedAt        time.Time               `json:"created_at,omitempty"`
+	UpdatedAt        time.Time               `json:"updated_at,omitempty"`
+	StartedAt        time.Time               `json:"started_at,omitempty"`
+	ActiveStepAt     time.Time               `json:"active_step_at,omitempty"`
+	WaitingAt        time.Time               `json:"waiting_at,omitempty"`
+	PausedAt         time.Time               `json:"paused_at,omitempty"`
+	AbortedAt        time.Time               `json:"aborted_at,omitempty"`
+	CompletedAt      time.Time               `json:"completed_at,omitempty"`
+	FailedAt         time.Time               `json:"failed_at,omitempty"`
 }
 
 type RuntimeControlContext struct {
@@ -75,6 +82,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	}
 
 	cloned := *runtime
+	cloned.InspectablePlan = CloneInspectablePlanContext(runtime.InspectablePlan)
 	cloned.CompletedSteps = append([]RuntimeStepRecord(nil), runtime.CompletedSteps...)
 	cloned.FailedSteps = append([]RuntimeStepRecord(nil), runtime.FailedSteps...)
 	cloned.AuditHistory = CloneAuditHistory(runtime.AuditHistory)
@@ -87,6 +95,24 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 		cloned.ApprovalRequests = nil
 	}
 	cloned.ApprovalGrants = append([]ApprovalGrant(nil), runtime.ApprovalGrants...)
+	return &cloned
+}
+
+func CloneInspectablePlanContext(plan *InspectablePlanContext) *InspectablePlanContext {
+	if plan == nil {
+		return nil
+	}
+
+	cloned := *plan
+	cloned.AllowedTools = append([]string(nil), plan.AllowedTools...)
+	if len(plan.Steps) > 0 {
+		cloned.Steps = make([]Step, len(plan.Steps))
+		for i, step := range plan.Steps {
+			cloned.Steps[i] = copyStep(step)
+		}
+	} else {
+		cloned.Steps = nil
+	}
 	return &cloned
 }
 
@@ -137,6 +163,24 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 		AllowedTools: append([]string(nil), ec.Job.AllowedTools...),
 		Step:         copyStep(*ec.Step),
 	}, nil
+}
+
+func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
+	if validationErrors := ValidatePlan(job); len(validationErrors) > 0 {
+		return InspectablePlanContext{}, validationErrors[0]
+	}
+
+	context := InspectablePlanContext{
+		MaxAuthority: job.MaxAuthority,
+		AllowedTools: append([]string(nil), job.AllowedTools...),
+	}
+	if len(job.Plan.Steps) > 0 {
+		context.Steps = make([]Step, len(job.Plan.Steps))
+		for i, step := range job.Plan.Steps {
+			context.Steps[i] = copyStep(step)
+		}
+	}
+	return context, nil
 }
 
 func ResolveExecutionContextWithRuntime(job Job, runtime JobRuntimeState) (ExecutionContext, error) {

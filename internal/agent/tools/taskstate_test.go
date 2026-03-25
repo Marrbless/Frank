@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -1713,6 +1714,161 @@ func TestTaskStateOperatorInspectWithoutValidatedPlanReturnsDeterministicError(t
 	}
 	if !strings.Contains(err.Error(), "inspect command requires validated mission plan") {
 		t.Fatalf("OperatorInspect() error = %q, want missing validated plan message", err)
+	}
+}
+
+func TestTaskStateOperatorInspectActiveExecutionContextPreservesValidatedPlanBehavior(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	got, err := state.OperatorInspect("job-1", "final")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
+	}
+}
+
+func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStatePaused,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	state.hasRuntimeState = true
+	state.runtimeControl = control
+	state.hasRuntimeControl = true
+
+	got, err := state.OperatorInspect("job-1", "final")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if summary.JobID != "job-1" {
+		t.Fatalf("JobID = %q, want %q", summary.JobID, "job-1")
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
+	}
+	if !reflect.DeepEqual(summary.Steps[0].EffectiveAllowedTools, []string{"read"}) {
+		t.Fatalf("EffectiveAllowedTools = %#v, want %#v", summary.Steps[0].EffectiveAllowedTools, []string{"read"})
+	}
+}
+
+func TestTaskStateOperatorInspectPersistedInspectablePlanWrongJobDoesNotBind(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(testTaskStateJob())
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStatePaused,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	state.hasRuntimeState = true
+
+	_, err = state.OperatorInspect("other-job", "final")
+	if err == nil {
+		t.Fatal("OperatorInspect() error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "does not match the active job") {
+		t.Fatalf("OperatorInspect() error = %q, want job mismatch", err)
+	}
+}
+
+func TestTaskStateOperatorInspectPersistedInspectablePlanRejectsInvalidStep(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(testTaskStateJob())
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStatePaused,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	state.hasRuntimeState = true
+
+	_, err = state.OperatorInspect("job-1", "missing")
+	if err == nil {
+		t.Fatal("OperatorInspect() error = nil, want unknown-step failure")
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+		t.Fatalf("OperatorInspect() error = %q, want unknown_step code", err)
+	}
+	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
+		t.Fatalf("OperatorInspect() error = %q, want missing-step message", err)
+	}
+}
+
+func TestTaskStateOperatorInspectTerminalRuntimeUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(testTaskStateJob())
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStateCompleted,
+		InspectablePlan: &inspectablePlan,
+		CompletedAt:     time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}
+	state.hasRuntimeState = true
+
+	got, err := state.OperatorInspect("job-1", "final")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
 	}
 }
 

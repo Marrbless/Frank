@@ -2645,6 +2645,12 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	if got.Runtime.ActiveStepID != "build" {
 		t.Fatalf("Runtime.ActiveStepID = %q, want %q", got.Runtime.ActiveStepID, "build")
 	}
+	if got.Runtime.InspectablePlan == nil {
+		t.Fatal("Runtime.InspectablePlan = nil, want non-nil")
+	}
+	if len(got.Runtime.InspectablePlan.Steps) != len(testMissionBootstrapJob().Plan.Steps) {
+		t.Fatalf("len(Runtime.InspectablePlan.Steps) = %d, want %d", len(got.Runtime.InspectablePlan.Steps), len(testMissionBootstrapJob().Plan.Steps))
+	}
 	if got.RuntimeControl == nil {
 		t.Fatal("RuntimeControl = nil, want non-nil")
 	}
@@ -3628,6 +3634,12 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if abortedSnapshot.Active {
 		t.Fatal("abortedSnapshot.Active = true, want false")
 	}
+	if abortedSnapshot.Runtime.InspectablePlan == nil {
+		t.Fatal("abortedSnapshot.Runtime.InspectablePlan = nil, want persisted inspectable plan")
+	}
+	if len(abortedSnapshot.Runtime.InspectablePlan.Steps) != len(testMissionBootstrapJob().Plan.Steps) {
+		t.Fatalf("len(abortedSnapshot.Runtime.InspectablePlan.Steps) = %d, want %d", len(abortedSnapshot.Runtime.InspectablePlan.Steps), len(testMissionBootstrapJob().Plan.Steps))
+	}
 	if abortedSnapshot.RuntimeControl != nil {
 		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)
 	}
@@ -3708,6 +3720,12 @@ func TestMissionStatusRuntimeChangeHookPersistsDurableAbortFromWaitingUserAfterT
 	}
 	if abortedSnapshot.Active {
 		t.Fatal("abortedSnapshot.Active = true, want false")
+	}
+	if abortedSnapshot.Runtime.InspectablePlan == nil {
+		t.Fatal("abortedSnapshot.Runtime.InspectablePlan = nil, want persisted inspectable plan")
+	}
+	if len(abortedSnapshot.Runtime.InspectablePlan.Steps) != 2 {
+		t.Fatalf("len(abortedSnapshot.Runtime.InspectablePlan.Steps) = %d, want %d", len(abortedSnapshot.Runtime.InspectablePlan.Steps), 2)
 	}
 	if abortedSnapshot.RuntimeControl != nil {
 		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)

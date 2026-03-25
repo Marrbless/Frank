@@ -51,6 +51,29 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	}
 }
 
+func TestBuildInspectablePlanContextCapturesValidatedPlan(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	if plan.MaxAuthority != job.MaxAuthority {
+		t.Fatalf("MaxAuthority = %q, want %q", plan.MaxAuthority, job.MaxAuthority)
+	}
+	if !reflect.DeepEqual(plan.AllowedTools, job.AllowedTools) {
+		t.Fatalf("AllowedTools = %#v, want %#v", plan.AllowedTools, job.AllowedTools)
+	}
+	if len(plan.Steps) != len(job.Plan.Steps) {
+		t.Fatalf("len(Steps) = %d, want %d", len(plan.Steps), len(job.Plan.Steps))
+	}
+	if plan.Steps[1].ID != "final" {
+		t.Fatalf("Steps[1].ID = %q, want %q", plan.Steps[1].ID, "final")
+	}
+}
+
 func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t *testing.T) {
 	t.Parallel()
 
