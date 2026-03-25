@@ -146,6 +146,37 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 	}
 }
 
+func TestFormatOperatorStatusSummaryWithAllowedToolsUsesSortedUniqueIntersection(t *testing.T) {
+	t.Parallel()
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedTools(
+		JobRuntimeState{
+			JobID:        "job-1",
+			State:        JobStateRunning,
+			ActiveStepID: "build",
+		},
+		EffectiveAllowedTools(
+			&Job{AllowedTools: []string{"write", "read", "read", "shell"}},
+			&Step{AllowedTools: []string{"shell", "read", "read", "missing"}},
+		),
+	)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedTools() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(formatted), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	allowedTools, ok := got["allowed_tools"].([]any)
+	if !ok || len(allowedTools) != 2 {
+		t.Fatalf("allowed_tools = %#v, want two entries", got["allowed_tools"])
+	}
+	if allowedTools[0] != "read" || allowedTools[1] != "shell" {
+		t.Fatalf("allowed_tools = %#v, want [read shell]", allowedTools)
+	}
+}
+
 func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -228,5 +259,8 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 	}
 	if entry["timestamp"] != "2026-03-24T12:08:00Z" {
 		t.Fatalf("recent_audit[0].timestamp = %#v, want %q", entry["timestamp"], "2026-03-24T12:08:00Z")
+	}
+	if _, ok := got["allowed_tools"]; ok {
+		t.Fatalf("allowed_tools = %#v, want omitted without active or persisted control context", got["allowed_tools"])
 	}
 }

@@ -35,6 +35,10 @@ func TestTaskStateOperatorStatusReturnsDeterministicSummaryForActiveRuntime(t *t
 	if got["active_step_id"] != "build" {
 		t.Fatalf("active_step_id = %#v, want %q", got["active_step_id"], "build")
 	}
+	allowedTools, ok := got["allowed_tools"].([]any)
+	if !ok || len(allowedTools) != 1 || allowedTools[0] != "read" {
+		t.Fatalf("allowed_tools = %#v, want [%q]", got["allowed_tools"], "read")
+	}
 
 	runtime, ok := state.MissionRuntimeState()
 	if !ok {
@@ -212,6 +216,9 @@ func TestTaskStateOperatorStatusReturnsPausedReason(t *testing.T) {
 	if !strings.Contains(summary, `"paused_reason": "operator_command"`) {
 		t.Fatalf("OperatorStatus() = %q, want paused reason", summary)
 	}
+	if !strings.Contains(summary, `"allowed_tools": [`) || !strings.Contains(summary, `"read"`) {
+		t.Fatalf("OperatorStatus() = %q, want effective allowed tools", summary)
+	}
 }
 
 func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing.T) {
@@ -271,6 +278,10 @@ func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing
 	}
 	if first["result"] != string(persistedHistory[1].Result) || second["result"] != string(persistedHistory[0].Result) {
 		t.Fatalf("recent_audit result = (%#v, %#v), want (%q, %q)", first["result"], second["result"], persistedHistory[1].Result, persistedHistory[0].Result)
+	}
+	allowedTools, ok := got["allowed_tools"].([]any)
+	if !ok || len(allowedTools) != 1 || allowedTools[0] != "read" {
+		t.Fatalf("allowed_tools = %#v, want [%q]", got["allowed_tools"], "read")
 	}
 }
 
@@ -336,6 +347,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			}
 			if !strings.Contains(summary, `"recent_audit": [`) {
 				t.Fatalf("OperatorStatus() = %q, want recent audit block", summary)
+			}
+			if strings.Contains(summary, `"allowed_tools":`) {
+				t.Fatalf("OperatorStatus() = %q, want allowed_tools omitted without control context", summary)
 			}
 		})
 	}

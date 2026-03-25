@@ -537,6 +537,8 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 	s.mu.Lock()
 	ec := missioncontrol.CloneExecutionContext(s.executionContext)
 	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
 	s.mu.Unlock()
@@ -554,7 +556,7 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 				Message: "operator command does not match the active job",
 			}
 		}
-		return missioncontrol.FormatOperatorStatusSummary(*ec.Runtime)
+		return missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*ec.Runtime, missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step))
 	}
 
 	if !hasRuntimeState || runtimeState == nil {
@@ -570,7 +572,11 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 		}
 	}
 
-	return missioncontrol.FormatOperatorStatusSummary(*runtimeState)
+	var allowedTools []string
+	if hasRuntimeControl && control != nil {
+		allowedTools = missioncontrol.EffectiveAllowedTools(&missioncontrol.Job{AllowedTools: append([]string(nil), control.AllowedTools...)}, &control.Step)
+	}
+	return missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
 }
 
 func resolveNaturalApprovalRequestFromExecutionContext(ec missioncontrol.ExecutionContext) (missioncontrol.ApprovalRequest, bool, error) {

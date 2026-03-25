@@ -671,6 +671,10 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	if got["active_step_id"] != "build" {
 		t.Fatalf("active_step_id = %#v, want %q", got["active_step_id"], "build")
 	}
+	allowedTools, ok := got["allowed_tools"].([]any)
+	if !ok || len(allowedTools) != 1 || allowedTools[0] != "read" {
+		t.Fatalf("allowed_tools = %#v, want [%q]", got["allowed_tools"], "read")
+	}
 	recentAudit, ok := got["recent_audit"].([]any)
 	if !ok || len(recentAudit) != 1 {
 		t.Fatalf("recent_audit = %#v, want one audit entry", got["recent_audit"])

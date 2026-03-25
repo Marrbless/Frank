@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 )
 
@@ -11,6 +12,7 @@ type OperatorStatusSummary struct {
 	JobID           string                         `json:"job_id"`
 	State           JobState                       `json:"state"`
 	ActiveStepID    string                         `json:"active_step_id,omitempty"`
+	AllowedTools    []string                       `json:"allowed_tools,omitempty"`
 	WaitingReason   string                         `json:"waiting_reason,omitempty"`
 	PausedReason    string                         `json:"paused_reason,omitempty"`
 	AbortedReason   string                         `json:"aborted_reason,omitempty"`
@@ -44,6 +46,47 @@ type OperatorRecentAuditStatus struct {
 }
 
 func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
+	return buildOperatorStatusSummary(runtime, nil)
+}
+
+func FormatOperatorStatusSummary(runtime JobRuntimeState) (string, error) {
+	return formatOperatorStatusSummary(buildOperatorStatusSummary(runtime, nil))
+}
+
+func FormatOperatorStatusSummaryWithAllowedTools(runtime JobRuntimeState, allowedTools []string) (string, error) {
+	return formatOperatorStatusSummary(buildOperatorStatusSummary(runtime, allowedTools))
+}
+
+func EffectiveAllowedTools(job *Job, step *Step) []string {
+	if job == nil {
+		return nil
+	}
+
+	jobTools := make(map[string]struct{}, len(job.AllowedTools))
+	for _, toolName := range job.AllowedTools {
+		jobTools[toolName] = struct{}{}
+	}
+
+	allowed := make([]string, 0, len(jobTools))
+	if step == nil || len(step.AllowedTools) == 0 {
+		for toolName := range jobTools {
+			allowed = append(allowed, toolName)
+		}
+		sort.Strings(allowed)
+		return allowed
+	}
+
+	for _, toolName := range step.AllowedTools {
+		if _, ok := jobTools[toolName]; ok {
+			allowed = append(allowed, toolName)
+			delete(jobTools, toolName)
+		}
+	}
+	sort.Strings(allowed)
+	return allowed
+}
+
+func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) OperatorStatusSummary {
 	summary := OperatorStatusSummary{
 		JobID:         runtime.JobID,
 		State:         runtime.State,
@@ -51,6 +94,9 @@ func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
 		WaitingReason: runtime.WaitingReason,
 		PausedReason:  runtime.PausedReason,
 		AbortedReason: runtime.AbortedReason,
+	}
+	if allowedTools != nil {
+		summary.AllowedTools = append([]string(nil), allowedTools...)
 	}
 
 	if request, ok := selectOperatorStatusApprovalRequest(runtime); ok {
@@ -81,8 +127,8 @@ func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
 	return summary
 }
 
-func FormatOperatorStatusSummary(runtime JobRuntimeState) (string, error) {
-	data, err := json.MarshalIndent(BuildOperatorStatusSummary(runtime), "", "  ")
+func formatOperatorStatusSummary(summary OperatorStatusSummary) (string, error) {
+	data, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		return "", err
 	}
