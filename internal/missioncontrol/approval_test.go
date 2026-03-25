@@ -107,6 +107,157 @@ func TestApprovalRequestMatchesStepBinding(t *testing.T) {
 	}
 }
 
+func TestFindReusableApprovalGrantMatchesOneJobAcrossSteps(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	grant, ok := FindReusableApprovalGrant(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}, now, "job-1", Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneJob,
+	})
+	if !ok {
+		t.Fatal("FindReusableApprovalGrant() ok = false, want true")
+	}
+	if grant.StepID != "authorize-1" {
+		t.Fatalf("FindReusableApprovalGrant().StepID = %q, want %q", grant.StepID, "authorize-1")
+	}
+}
+
+func TestFindReusableApprovalGrantRejectsNonGrantedLatestJobScopeState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		request ApprovalRequest
+		grant   ApprovalGrant
+	}{
+		{
+			name: "pending request",
+			request: ApprovalRequest{
+				JobID:           "job-1",
+				StepID:          "authorize-2",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				State:           ApprovalStatePending,
+				RequestedAt:     now.Add(-30 * time.Second),
+			},
+			grant: ApprovalGrant{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-2 * time.Minute),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+		{
+			name: "revoked grant",
+			request: ApprovalRequest{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+			grant: ApprovalGrant{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateRevoked,
+				GrantedAt:       now.Add(-90 * time.Second),
+				RevokedAt:       now.Add(-30 * time.Second),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := FindReusableApprovalGrant(JobRuntimeState{
+				ApprovalRequests: []ApprovalRequest{tc.request},
+				ApprovalGrants:   []ApprovalGrant{tc.grant},
+			}, now, "job-1", Step{
+				ID:            "authorize-2",
+				Type:          StepTypeDiscussion,
+				Subtype:       StepSubtypeAuthorization,
+				ApprovalScope: ApprovalScopeOneJob,
+			})
+			if ok {
+				t.Fatal("FindReusableApprovalGrant() ok = true, want false")
+			}
+		})
+	}
+}
+
+func TestFindReusableApprovalGrantRejectsWrongAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	_, ok := FindReusableApprovalGrant(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: "different_action",
+				Scope:           ApprovalScopeOneJob,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: "different_action",
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}, now, "job-1", Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneJob,
+	})
+	if ok {
+		t.Fatal("FindReusableApprovalGrant() ok = true, want false")
+	}
+}
+
 func TestApprovalRequestContentForAuthorizationStep(t *testing.T) {
 	t.Parallel()
 
@@ -216,5 +367,42 @@ func TestAppendPendingApprovalRequestSupersedesOlderMatchingPendingRequest(t *te
 	}
 	if runtime.ApprovalRequests[1].ExpiresAt != now.Add(defaultApprovalRequestTTL) {
 		t.Fatalf("ApprovalRequests[1].ExpiresAt = %v, want %v", runtime.ApprovalRequests[1].ExpiresAt, now.Add(defaultApprovalRequestTTL))
+	}
+}
+
+func TestAppendPendingApprovalRequestSupersedesOlderPendingOneJobRequestAcrossSteps(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 15, 5, 0, 0, time.UTC)
+	runtime := appendPendingApprovalRequest(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				State:           ApprovalStatePending,
+				RequestedAt:     now.Add(-2 * time.Minute),
+			},
+		},
+	}, now, ApprovalRequest{
+		JobID:           "job-1",
+		StepID:          "authorize-2",
+		RequestedAction: ApprovalRequestedActionStepComplete,
+		Scope:           ApprovalScopeOneJob,
+		RequestedVia:    ApprovalRequestedViaRuntime,
+	})
+
+	if len(runtime.ApprovalRequests) != 2 {
+		t.Fatalf("len(ApprovalRequests) = %d, want 2", len(runtime.ApprovalRequests))
+	}
+	if runtime.ApprovalRequests[0].State != ApprovalStateSuperseded {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, ApprovalStateSuperseded)
+	}
+	if runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests[1].State = %q, want %q", runtime.ApprovalRequests[1].State, ApprovalStatePending)
+	}
+	if runtime.ApprovalRequests[1].StepID != "authorize-2" {
+		t.Fatalf("ApprovalRequests[1].StepID = %q, want %q", runtime.ApprovalRequests[1].StepID, "authorize-2")
 	}
 }

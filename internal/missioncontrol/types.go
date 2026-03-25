@@ -53,6 +53,7 @@ type Step struct {
 	ID                string        `json:"id"`
 	Type              StepType      `json:"type"`
 	Subtype           StepSubtype   `json:"subtype,omitempty"`
+	ApprovalScope     string        `json:"approval_scope,omitempty"`
 	DependsOn         []string      `json:"depends_on"`
 	RequiredAuthority AuthorityTier `json:"required_authority"`
 	AllowedTools      []string      `json:"allowed_tools"`

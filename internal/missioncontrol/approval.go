@@ -27,6 +27,8 @@ const (
 const (
 	ApprovalRequestedActionStepComplete = "step_complete"
 	ApprovalScopeMissionStep            = "mission_step"
+	ApprovalScopeOneStep                = ApprovalScopeMissionStep
+	ApprovalScopeOneJob                 = "one_job"
 	ApprovalRequestedViaRuntime         = "runtime_waiting_user"
 	ApprovalGrantedViaOperatorCommand   = "operator_command"
 	ApprovalGrantedViaOperatorReply     = "operator_reply"
@@ -74,6 +76,7 @@ type ApprovalGrant struct {
 	GrantedVia      string        `json:"granted_via"`
 	State           ApprovalState `json:"state"`
 	GrantedAt       time.Time     `json:"granted_at,omitempty"`
+	ExpiresAt       time.Time     `json:"expires_at,omitempty"`
 	RevokedAt       time.Time     `json:"revoked_at,omitempty"`
 }
 
@@ -81,7 +84,11 @@ func approvalBindingForStep(step Step) (string, string, bool) {
 	if step.Type != StepTypeDiscussion || step.Subtype != StepSubtypeAuthorization {
 		return "", "", false
 	}
-	return ApprovalRequestedActionStepComplete, ApprovalScopeMissionStep, true
+	scope := normalizeApprovalScope(step.ApprovalScope)
+	if scope == "" {
+		scope = ApprovalScopeOneStep
+	}
+	return ApprovalRequestedActionStepComplete, scope, true
 }
 
 func approvalRequestContentForStep(job Job, step Step) (ApprovalRequestContent, bool) {
@@ -148,7 +155,7 @@ func ApprovalRequestMatchesStepBinding(request ApprovalRequest, jobID string, st
 	if request.JobID != jobID || request.StepID != step.ID {
 		return false
 	}
-	return request.RequestedAction == requestedAction && request.Scope == scope
+	return request.RequestedAction == requestedAction && normalizeApprovalScope(request.Scope) == normalizeApprovalScope(scope)
 }
 
 func hasPendingApprovalRequest(runtime *JobRuntimeState, jobID, stepID, requestedAction, scope string) bool {
@@ -163,10 +170,7 @@ func hasPendingApprovalRequest(runtime *JobRuntimeState, jobID, stepID, requeste
 func findLatestApprovalRequest(requests []ApprovalRequest, jobID, stepID, requestedAction, scope string) (int, bool) {
 	for i := len(requests) - 1; i >= 0; i-- {
 		request := requests[i]
-		if request.JobID != jobID || request.StepID != stepID {
-			continue
-		}
-		if request.RequestedAction != requestedAction || request.Scope != scope {
+		if !approvalRequestMatchesBinding(request, jobID, stepID, requestedAction, scope) {
 			continue
 		}
 		return i, true
@@ -228,6 +232,7 @@ func ExpireActiveApprovalRequest(current JobRuntimeState, now time.Time, jobID, 
 
 func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, request ApprovalRequest) JobRuntimeState {
 	next := *CloneJobRuntimeState(&current)
+	request.Scope = normalizeApprovalScope(request.Scope)
 	for i := range next.ApprovalRequests {
 		if !approvalRequestsShareBinding(next.ApprovalRequests[i], request) {
 			continue
@@ -305,10 +310,11 @@ func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision Approval
 			JobID:           ec.Job.ID,
 			StepID:          ec.Step.ID,
 			RequestedAction: requestedAction,
-			Scope:           scope,
+			Scope:           normalizeApprovalScope(scope),
 			GrantedVia:      via,
 			State:           ApprovalStateGranted,
 			GrantedAt:       now,
+			ExpiresAt:       next.ApprovalRequests[requestIndex].ExpiresAt,
 		})
 
 		return pauseAfterValidatedCompletion(ExecutionContext{
@@ -335,7 +341,7 @@ func findPendingApprovalRequest(requests []ApprovalRequest, jobID, stepID, reque
 		if request.JobID != jobID || request.StepID != stepID {
 			continue
 		}
-		if request.RequestedAction != requestedAction || request.Scope != scope {
+		if request.RequestedAction != requestedAction || normalizeApprovalScope(request.Scope) != normalizeApprovalScope(scope) {
 			continue
 		}
 		if request.State != ApprovalStatePending {
@@ -348,8 +354,88 @@ func findPendingApprovalRequest(requests []ApprovalRequest, jobID, stepID, reque
 }
 
 func approvalRequestsShareBinding(left ApprovalRequest, right ApprovalRequest) bool {
-	return left.JobID == right.JobID &&
-		left.StepID == right.StepID &&
-		left.RequestedAction == right.RequestedAction &&
-		left.Scope == right.Scope
+	return approvalBindingScopeMatches(left.JobID, left.StepID, left.RequestedAction, left.Scope, right.JobID, right.StepID, right.RequestedAction, right.Scope)
+}
+
+func FindReusableApprovalGrant(runtime JobRuntimeState, now time.Time, jobID string, step Step) (ApprovalGrant, bool) {
+	requestedAction, scope, ok := approvalBindingForStep(step)
+	if !ok || normalizeApprovalScope(scope) != ApprovalScopeOneJob {
+		return ApprovalGrant{}, false
+	}
+
+	if requestIndex, ok := findLatestApprovalRequest(runtime.ApprovalRequests, jobID, step.ID, requestedAction, scope); ok {
+		switch runtime.ApprovalRequests[requestIndex].State {
+		case ApprovalStatePending, ApprovalStateDenied, ApprovalStateExpired, ApprovalStateSuperseded, ApprovalStateRevoked:
+			return ApprovalGrant{}, false
+		}
+	}
+
+	grantIndex, ok := findLatestApprovalGrant(runtime.ApprovalGrants, jobID, step.ID, requestedAction, scope)
+	if !ok {
+		return ApprovalGrant{}, false
+	}
+	grant := runtime.ApprovalGrants[grantIndex]
+	if grant.State != ApprovalStateGranted {
+		return ApprovalGrant{}, false
+	}
+	if !grant.RevokedAt.IsZero() && !grant.RevokedAt.After(now) {
+		return ApprovalGrant{}, false
+	}
+	if !grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(now) {
+		return ApprovalGrant{}, false
+	}
+	return grant, true
+}
+
+func appendGrantedApprovalRequest(current JobRuntimeState, now time.Time, request ApprovalRequest) JobRuntimeState {
+	next := *CloneJobRuntimeState(&current)
+	request.Scope = normalizeApprovalScope(request.Scope)
+	request.State = ApprovalStateGranted
+	request.RequestedAt = now
+	request.ResolvedAt = now
+	request.SupersededAt = time.Time{}
+	next.ApprovalRequests = append(next.ApprovalRequests, request)
+	next.UpdatedAt = now
+	return next
+}
+
+func normalizeApprovalScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", ApprovalScopeMissionStep, "one_step":
+		return ApprovalScopeMissionStep
+	case ApprovalScopeOneJob:
+		return ApprovalScopeOneJob
+	default:
+		return scope
+	}
+}
+
+func approvalBindingScopeMatches(leftJobID, leftStepID, leftAction, leftScope, rightJobID, rightStepID, rightAction, rightScope string) bool {
+	leftScope = normalizeApprovalScope(leftScope)
+	rightScope = normalizeApprovalScope(rightScope)
+	if leftJobID != rightJobID || leftAction != rightAction || leftScope != rightScope {
+		return false
+	}
+	if leftScope == ApprovalScopeOneJob {
+		return true
+	}
+	return leftStepID == rightStepID
+}
+
+func approvalRequestMatchesBinding(request ApprovalRequest, jobID, stepID, requestedAction, scope string) bool {
+	return approvalBindingScopeMatches(request.JobID, request.StepID, request.RequestedAction, request.Scope, jobID, stepID, requestedAction, scope)
+}
+
+func approvalGrantMatchesBinding(grant ApprovalGrant, jobID, stepID, requestedAction, scope string) bool {
+	return approvalBindingScopeMatches(grant.JobID, grant.StepID, grant.RequestedAction, grant.Scope, jobID, stepID, requestedAction, scope)
+}
+
+func findLatestApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAction, scope string) (int, bool) {
+	for i := len(grants) - 1; i >= 0; i-- {
+		if !approvalGrantMatchesBinding(grants[i], jobID, stepID, requestedAction, scope) {
+			continue
+		}
+		return i, true
+	}
+	return 0, false
 }

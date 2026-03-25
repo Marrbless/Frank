@@ -202,6 +202,24 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 		nextRuntime := *CloneJobRuntimeState(ec.Runtime)
 		if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
 			content, _ := approvalRequestContentForStep(*ec.Job, *ec.Step)
+			if reusableGrant, ok := FindReusableApprovalGrant(nextRuntime, now, ec.Job.ID, *ec.Step); ok {
+				nextRuntime = appendGrantedApprovalRequest(nextRuntime, now, ApprovalRequest{
+					JobID:           ec.Job.ID,
+					StepID:          ec.Step.ID,
+					RequestedAction: requestedAction,
+					Scope:           scope,
+					Content:         &content,
+					RequestedVia:    ApprovalRequestedViaRuntime,
+					GrantedVia:      reusableGrant.GrantedVia,
+					Reason:          waitingReason,
+					ExpiresAt:       reusableGrant.ExpiresAt,
+				})
+				return pauseAfterValidatedCompletion(ExecutionContext{
+					Job:     ec.Job,
+					Step:    ec.Step,
+					Runtime: &nextRuntime,
+				}, now)
+			}
 			nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
 				JobID:           ec.Job.ID,
 				StepID:          ec.Step.ID,

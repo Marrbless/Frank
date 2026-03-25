@@ -88,6 +88,70 @@ func TestCompleteRuntimeStepAuthorizationTransitionsToWaitingUserWithPendingAppr
 	}
 }
 
+func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 1, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContextForJob(Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "authorize-1", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob},
+				{ID: "authorize-2", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob},
+			},
+		},
+	}, "authorize-2", JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(time.Minute),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Still need approval context."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "authorize-2" {
+		t.Fatalf("CompletedSteps = %#v, want authorize-2 completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalRequests = %#v, want reused one_job approval recorded as granted", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].StepID != "authorize-2" {
+		t.Fatalf("ApprovalRequests[1].StepID = %q, want %q", runtime.ApprovalRequests[1].StepID, "authorize-2")
+	}
+	if runtime.ApprovalRequests[1].GrantedVia != ApprovalGrantedViaOperatorCommand {
+		t.Fatalf("ApprovalRequests[1].GrantedVia = %q, want %q", runtime.ApprovalRequests[1].GrantedVia, ApprovalGrantedViaOperatorCommand)
+	}
+	if len(runtime.ApprovalGrants) != 1 {
+		t.Fatalf("ApprovalGrants = %#v, want original reusable grant only", runtime.ApprovalGrants)
+	}
+}
+
 func TestStepValidatorKindUsesSpecAlignedWaitUserName(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +383,9 @@ func TestCompleteRuntimeStepWaitingUserApprovalPausesAndRecordsCompletion(t *tes
 	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != ApprovalStateGranted {
 		t.Fatalf("ApprovalGrants = %#v, want one granted record", runtime.ApprovalGrants)
 	}
+	if runtime.ApprovalGrants[0].ExpiresAt != ec.Runtime.ApprovalRequests[0].ExpiresAt {
+		t.Fatalf("ApprovalGrants[0].ExpiresAt = %v, want %v", runtime.ApprovalGrants[0].ExpiresAt, ec.Runtime.ApprovalRequests[0].ExpiresAt)
+	}
 }
 
 func TestCompleteRuntimeStepWaitingUserPendingApprovalRejectsFreeFormApproval(t *testing.T) {
@@ -375,6 +442,161 @@ func TestCompleteRuntimeStepDiscussionAuthorizationStampsApprovalExpiry(t *testi
 	}
 	if runtime.ApprovalRequests[0].ExpiresAt != now.Add(defaultApprovalRequestTTL) {
 		t.Fatalf("ApprovalRequests[0].ExpiresAt = %v, want %v", runtime.ApprovalRequests[0].ExpiresAt, now.Add(defaultApprovalRequestTTL))
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindOneJobGrantAcrossJobs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 2, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContext(Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneJob,
+	}, JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "other-job",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "other-job",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(time.Minute),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests = %#v, want a new pending approval for the active job", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].JobID != "job-1" {
+		t.Fatalf("ApprovalRequests[1].JobID = %q, want %q", runtime.ApprovalRequests[1].JobID, "job-1")
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindExpiredOneJobGrant(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 3, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContext(Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneJob,
+	}, JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneJob,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(-time.Second),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests = %#v, want a fresh pending approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindNonGrantedOneJobRequest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 4, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		state ApprovalState
+	}{
+		{name: "pending", state: ApprovalStatePending},
+		{name: "denied", state: ApprovalStateDenied},
+		{name: "superseded", state: ApprovalStateSuperseded},
+		{name: "revoked", state: ApprovalStateRevoked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ec := testStepValidationExecutionContext(Step{
+				ID:            "authorize-2",
+				Type:          StepTypeDiscussion,
+				Subtype:       StepSubtypeAuthorization,
+				ApprovalScope: ApprovalScopeOneJob,
+			}, JobStateRunning)
+			ec.Runtime.ApprovalRequests = []ApprovalRequest{
+				{
+					JobID:           "job-1",
+					StepID:          "authorize-1",
+					RequestedAction: ApprovalRequestedActionStepComplete,
+					Scope:           ApprovalScopeOneJob,
+					State:           tc.state,
+					RequestedAt:     now.Add(-2 * time.Minute),
+				},
+			}
+			if tc.state != ApprovalStatePending {
+				ec.Runtime.ApprovalRequests[0].ResolvedAt = now.Add(-90 * time.Second)
+			}
+			ec.Runtime.ApprovalGrants = []ApprovalGrant{
+				{
+					JobID:           "job-1",
+					StepID:          "authorize-1",
+					RequestedAction: ApprovalRequestedActionStepComplete,
+					Scope:           ApprovalScopeOneJob,
+					GrantedVia:      ApprovalGrantedViaOperatorCommand,
+					State:           ApprovalStateGranted,
+					GrantedAt:       now.Add(-90 * time.Second),
+					ExpiresAt:       now.Add(time.Minute),
+				},
+			}
+
+			runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+			if err != nil {
+				t.Fatalf("CompleteRuntimeStep() error = %v", err)
+			}
+			if runtime.State != JobStateWaitingUser {
+				t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+			}
+			if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+				t.Fatalf("ApprovalRequests = %#v, want a fresh pending approval", runtime.ApprovalRequests)
+			}
+		})
 	}
 }
 
@@ -634,23 +856,56 @@ func TestCompleteRuntimeStepFinalResponseCompletesJob(t *testing.T) {
 }
 
 func testStepValidationExecutionContext(step Step, state JobState) ExecutionContext {
-	job := Job{
+	steps := []Step{step}
+	if step.Type != StepTypeFinalResponse || step.ID != "final" {
+		steps = append(steps, Step{
+			ID:        "final",
+			Type:      StepTypeFinalResponse,
+			DependsOn: []string{step.ID},
+		})
+	}
+
+	return testStepValidationExecutionContextForJob(Job{
 		ID:           "job-1",
 		MaxAuthority: AuthorityTierHigh,
 		AllowedTools: []string{"read", "write"},
 		Plan: Plan{
 			ID:    "plan-1",
-			Steps: []Step{step},
+			Steps: steps,
 		},
+	}, step.ID, state)
+}
+
+func testStepValidationExecutionContextForJob(job Job, stepID string, state JobState) ExecutionContext {
+	if len(job.Plan.Steps) > 0 {
+		hasTerminalFinal := false
+		for _, planStep := range job.Plan.Steps {
+			if planStep.Type == StepTypeFinalResponse {
+				hasTerminalFinal = true
+				break
+			}
+		}
+		if !hasTerminalFinal {
+			job.Plan.Steps = append(job.Plan.Steps, Step{
+				ID:        "final",
+				Type:      StepTypeFinalResponse,
+				DependsOn: []string{job.Plan.Steps[len(job.Plan.Steps)-1].ID},
+			})
+		}
+	}
+
+	ec, err := ResolveExecutionContext(job, stepID)
+	if err != nil {
+		panic(err)
 	}
 
 	return ExecutionContext{
-		Job:  &job,
-		Step: &step,
+		Job:  ec.Job,
+		Step: ec.Step,
 		Runtime: &JobRuntimeState{
 			JobID:        job.ID,
 			State:        state,
-			ActiveStepID: step.ID,
+			ActiveStepID: stepID,
 		},
 	}
 }
