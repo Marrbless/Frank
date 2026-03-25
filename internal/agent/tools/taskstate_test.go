@@ -626,6 +626,116 @@ func TestTaskStateResumeRuntimePreservesReusableOneSessionApprovalAfterReboot(t 
 	}
 }
 
+func TestTaskStateResumeRuntimeUsesDeterministicLatestReusableApprovalAfterReboot(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:            "authorize-a",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneJob,
+				},
+				{
+					ID:            "authorize-b",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneJob,
+					DependsOn:     []string{"authorize-a"},
+				},
+				{
+					ID:            "authorize-c",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneJob,
+					DependsOn:     []string{"authorize-b"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"authorize-c"},
+				},
+			},
+		},
+	}
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-c",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-b",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-90 * time.Second),
+				ResolvedAt:      now.Add(-time.Minute),
+			},
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-3 * time.Minute),
+				ResolvedAt:      now.Add(-2 * time.Minute),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-b",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorReply,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-time.Minute),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-2 * time.Minute),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 3 {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want three approval records", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[2].StepID != "authorize-c" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[2].StepID = %q, want %q", runtime.ApprovalRequests[2].StepID, "authorize-c")
+	}
+	if runtime.ApprovalRequests[2].GrantedVia != missioncontrol.ApprovalGrantedViaOperatorReply {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[2].GrantedVia = %q, want %q", runtime.ApprovalRequests[2].GrantedVia, missioncontrol.ApprovalGrantedViaOperatorReply)
+	}
+}
+
 func TestTaskStateResumeRuntimeControlResumesPausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 

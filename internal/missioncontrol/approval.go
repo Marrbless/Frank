@@ -497,21 +497,104 @@ func findLatestApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAct
 }
 
 func findLatestReusableApprovalRequest(requests []ApprovalRequest, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) (int, bool) {
-	for i := len(requests) - 1; i >= 0; i-- {
-		if !approvalRequestMatchesReusableBinding(requests[i], jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
+	bestIndex := -1
+	for i, request := range requests {
+		if !approvalRequestMatchesReusableBinding(request, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
 			continue
 		}
-		return i, true
+		if bestIndex < 0 || reusableApprovalRequestSortsAfter(request, requests[bestIndex]) {
+			bestIndex = i
+		}
 	}
-	return 0, false
+	if bestIndex < 0 {
+		return 0, false
+	}
+	return bestIndex, true
 }
 
 func findLatestReusableApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) (int, bool) {
-	for i := len(grants) - 1; i >= 0; i-- {
-		if !approvalGrantMatchesReusableBinding(grants[i], jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
+	bestIndex := -1
+	for i, grant := range grants {
+		if !approvalGrantMatchesReusableBinding(grant, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
 			continue
 		}
-		return i, true
+		if bestIndex < 0 || reusableApprovalGrantSortsAfter(grant, grants[bestIndex]) {
+			bestIndex = i
+		}
 	}
-	return 0, false
+	if bestIndex < 0 {
+		return 0, false
+	}
+	return bestIndex, true
+}
+
+func reusableApprovalRequestSortsAfter(left ApprovalRequest, right ApprovalRequest) bool {
+	leftAt := approvalRequestDecisionTime(left)
+	rightAt := approvalRequestDecisionTime(right)
+	if leftAt.After(rightAt) {
+		return true
+	}
+	if rightAt.After(leftAt) {
+		return false
+	}
+	return approvalRequestStableKey(left) > approvalRequestStableKey(right)
+}
+
+func reusableApprovalGrantSortsAfter(left ApprovalGrant, right ApprovalGrant) bool {
+	leftAt := approvalGrantDecisionTime(left)
+	rightAt := approvalGrantDecisionTime(right)
+	if leftAt.After(rightAt) {
+		return true
+	}
+	if rightAt.After(leftAt) {
+		return false
+	}
+	return approvalGrantStableKey(left) > approvalGrantStableKey(right)
+}
+
+func approvalRequestDecisionTime(request ApprovalRequest) time.Time {
+	if !request.ResolvedAt.IsZero() {
+		return request.ResolvedAt
+	}
+	return request.RequestedAt
+}
+
+func approvalGrantDecisionTime(grant ApprovalGrant) time.Time {
+	if !grant.RevokedAt.IsZero() {
+		return grant.RevokedAt
+	}
+	return grant.GrantedAt
+}
+
+func approvalRequestStableKey(request ApprovalRequest) string {
+	return strings.Join([]string{
+		request.JobID,
+		request.StepID,
+		request.RequestedAction,
+		normalizeApprovalScope(request.Scope),
+		strings.TrimSpace(request.SessionChannel),
+		strings.TrimSpace(request.SessionChatID),
+		string(request.State),
+		request.RequestedVia,
+		request.GrantedVia,
+		approvalRequestDecisionTime(request).UTC().Format(time.RFC3339Nano),
+		request.RequestedAt.UTC().Format(time.RFC3339Nano),
+		request.ResolvedAt.UTC().Format(time.RFC3339Nano),
+	}, "\x00")
+}
+
+func approvalGrantStableKey(grant ApprovalGrant) string {
+	return strings.Join([]string{
+		grant.JobID,
+		grant.StepID,
+		grant.RequestedAction,
+		normalizeApprovalScope(grant.Scope),
+		strings.TrimSpace(grant.SessionChannel),
+		strings.TrimSpace(grant.SessionChatID),
+		string(grant.State),
+		grant.GrantedVia,
+		approvalGrantDecisionTime(grant).UTC().Format(time.RFC3339Nano),
+		grant.GrantedAt.UTC().Format(time.RFC3339Nano),
+		grant.RevokedAt.UTC().Format(time.RFC3339Nano),
+	}, "\x00")
 }
