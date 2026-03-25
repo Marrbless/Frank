@@ -374,6 +374,46 @@ func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing
 	}
 }
 
+func TestTaskStateOperatorStatusUsesPersistedRequestRevokedAtAfterRehydration(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "cli",
+				SessionChatID:   "direct",
+				State:           missioncontrol.ApprovalStateRevoked,
+				RequestedAt:     time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+				ResolvedAt:      time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+				RevokedAt:       time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+	if !strings.Contains(summary, `"revoked_at": "2026-03-24T12:01:00Z"`) {
+		t.Fatalf("OperatorStatus() = %q, want persisted revoked_at", summary)
+	}
+}
+
 func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testing.T) {
 	t.Parallel()
 

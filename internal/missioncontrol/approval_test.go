@@ -718,6 +718,9 @@ func TestRevokeLatestApprovalGrantWithSessionRevokesLatestMatchingGrantedApprova
 	if nextRuntime.ApprovalRequests[1].ResolvedAt != revokedAt {
 		t.Fatalf("ApprovalRequests[1].ResolvedAt = %v, want %v", nextRuntime.ApprovalRequests[1].ResolvedAt, revokedAt)
 	}
+	if nextRuntime.ApprovalRequests[1].RevokedAt != revokedAt {
+		t.Fatalf("ApprovalRequests[1].RevokedAt = %v, want %v", nextRuntime.ApprovalRequests[1].RevokedAt, revokedAt)
+	}
 	if nextRuntime.ApprovalGrants[0].State != ApprovalStateGranted {
 		t.Fatalf("ApprovalGrants[0].State = %q, want %q", nextRuntime.ApprovalGrants[0].State, ApprovalStateGranted)
 	}

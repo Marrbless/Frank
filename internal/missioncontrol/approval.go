@@ -69,6 +69,7 @@ type ApprovalRequest struct {
 	ExpiresAt       time.Time               `json:"expires_at,omitempty"`
 	ResolvedAt      time.Time               `json:"resolved_at,omitempty"`
 	SupersededAt    time.Time               `json:"superseded_at,omitempty"`
+	RevokedAt       time.Time               `json:"revoked_at,omitempty"`
 }
 
 type ApprovalGrant struct {
@@ -204,6 +205,7 @@ func RefreshApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntime
 		}
 		request.GrantedVia = ""
 		request.SupersededAt = time.Time{}
+		request.RevokedAt = time.Time{}
 		changed = true
 	}
 	if changed {
@@ -231,6 +233,7 @@ func ExpireActiveApprovalRequest(current JobRuntimeState, now time.Time, jobID, 
 	next.ApprovalRequests[requestIndex].ExpiresAt = now
 	next.ApprovalRequests[requestIndex].ResolvedAt = now
 	next.ApprovalRequests[requestIndex].SupersededAt = time.Time{}
+	next.ApprovalRequests[requestIndex].RevokedAt = time.Time{}
 	next.UpdatedAt = now
 	return next, true
 }
@@ -249,6 +252,7 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 		next.ApprovalRequests[i].GrantedVia = ""
 		next.ApprovalRequests[i].ResolvedAt = now
 		next.ApprovalRequests[i].SupersededAt = now
+		next.ApprovalRequests[i].RevokedAt = time.Time{}
 	}
 
 	request.State = ApprovalStatePending
@@ -259,6 +263,7 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 	}
 	request.SupersededAt = time.Time{}
 	request.ResolvedAt = time.Time{}
+	request.RevokedAt = time.Time{}
 	next.ApprovalRequests = append(next.ApprovalRequests, request)
 	next.UpdatedAt = now
 	return next
@@ -313,6 +318,7 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 	next.ApprovalRequests[requestIndex].ResolvedAt = now
 	next.ApprovalRequests[requestIndex].SessionChannel = strings.TrimSpace(sessionChannel)
 	next.ApprovalRequests[requestIndex].SessionChatID = strings.TrimSpace(sessionChatID)
+	next.ApprovalRequests[requestIndex].RevokedAt = time.Time{}
 	switch decision {
 	case ApprovalDecisionApprove:
 		next.ApprovalRequests[requestIndex].State = ApprovalStateGranted
@@ -399,6 +405,7 @@ func RevokeLatestApprovalGrantWithSession(ec ExecutionContext, now time.Time, se
 	request.State = ApprovalStateRevoked
 	request.ResolvedAt = now
 	request.SupersededAt = time.Time{}
+	request.RevokedAt = now
 
 	grant := &next.ApprovalGrants[grantIndex]
 	grant.State = ApprovalStateRevoked
@@ -473,6 +480,7 @@ func appendGrantedApprovalRequest(current JobRuntimeState, now time.Time, reques
 	request.RequestedAt = now
 	request.ResolvedAt = now
 	request.SupersededAt = time.Time{}
+	request.RevokedAt = time.Time{}
 	next.ApprovalRequests = append(next.ApprovalRequests, request)
 	next.UpdatedAt = now
 	return next

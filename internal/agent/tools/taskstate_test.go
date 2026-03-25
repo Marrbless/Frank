@@ -793,6 +793,9 @@ func TestTaskStateRevokeApprovalPreventsOneJobReuse(t *testing.T) {
 	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateRevoked || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want revoked then pending approvals", runtime.ApprovalRequests)
 	}
+	if runtime.ApprovalRequests[0].RevokedAt.IsZero() {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0].RevokedAt = %v, want stamped revoke time", runtime.ApprovalRequests[0].RevokedAt)
+	}
 	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
 		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", runtime.ApprovalGrants)
 	}
@@ -856,6 +859,9 @@ func TestTaskStateRevokeApprovalPreventsOneSessionReuse(t *testing.T) {
 	}
 	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateRevoked || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want revoked then pending approvals", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].RevokedAt.IsZero() {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0].RevokedAt = %v, want stamped revoke time", runtime.ApprovalRequests[0].RevokedAt)
 	}
 	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
 		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", runtime.ApprovalGrants)

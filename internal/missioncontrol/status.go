@@ -253,6 +253,9 @@ func findOperatorStatusApprovalRevokedAt(grants []ApprovalGrant, request Approva
 	if request.State != ApprovalStateRevoked {
 		return nil
 	}
+	if revokedAt := formatOperatorStatusTime(request.RevokedAt); revokedAt != nil {
+		return revokedAt
+	}
 
 	for i := len(grants) - 1; i >= 0; i-- {
 		grant := grants[i]
