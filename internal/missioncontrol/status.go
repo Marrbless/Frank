@@ -25,6 +25,10 @@ type OperatorApprovalRequestStatus struct {
 	StepID           string        `json:"step_id"`
 	RequestedAction  string        `json:"requested_action"`
 	Scope            string        `json:"scope"`
+	RequestedVia     string        `json:"requested_via,omitempty"`
+	GrantedVia       string        `json:"granted_via,omitempty"`
+	SessionChannel   string        `json:"session_channel,omitempty"`
+	SessionChatID    string        `json:"session_chat_id,omitempty"`
 	ProposedAction   string        `json:"proposed_action,omitempty"`
 	WhyNeeded        string        `json:"why_needed,omitempty"`
 	AuthorityTier    AuthorityTier `json:"authority_tier,omitempty"`
@@ -105,6 +109,10 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 			StepID:          request.StepID,
 			RequestedAction: request.RequestedAction,
 			Scope:           request.Scope,
+			RequestedVia:    request.RequestedVia,
+			GrantedVia:      request.GrantedVia,
+			SessionChannel:  request.SessionChannel,
+			SessionChatID:   request.SessionChatID,
 		}
 		if request.Content != nil {
 			status.ProposedAction = request.Content.ProposedAction

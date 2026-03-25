@@ -152,6 +152,9 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 				StepID:          "build",
 				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
 				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
 				State:           missioncontrol.ApprovalStatePending,
 				ExpiresAt:       time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC),
 				Content: &missioncontrol.ApprovalRequestContent{
@@ -181,6 +184,9 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 		`"waiting_reason": "discussion_authorization"`,
 		`"requested_action": "step_complete"`,
 		`"scope": "mission_step"`,
+		`"requested_via": "runtime_waiting_user"`,
+		`"session_channel": "telegram"`,
+		`"session_chat_id": "chat-42"`,
 		`"proposed_action": "Continue build."`,
 		`"why_needed": "Operator approval is required."`,
 		`"authority_tier": "medium"`,
@@ -189,6 +195,68 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("OperatorStatus() = %q, want substring %q", summary, want)
+		}
+	}
+}
+
+func TestTaskStateOperatorStatusMatchesActiveAndPersistedApprovalBindingMetadata(t *testing.T) {
+	t.Parallel()
+
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorReply,
+				SessionChannel:  "slack",
+				SessionChatID:   "C123::171234",
+				State:           missioncontrol.ApprovalStateGranted,
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	state := NewTaskState()
+	state.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job:     &job,
+		Step:    &job.Plan.Steps[0],
+		Runtime: missioncontrol.CloneJobRuntimeState(&runtime),
+	})
+
+	activeSummary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus(active) error = %v", err)
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime, &control); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	persistedSummary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus(persisted) error = %v", err)
+	}
+
+	if activeSummary != persistedSummary {
+		t.Fatalf("OperatorStatus active/persisted mismatch\nactive:\n%s\npersisted:\n%s", activeSummary, persistedSummary)
+	}
+	for _, want := range []string{
+		`"requested_via": "runtime_waiting_user"`,
+		`"granted_via": "operator_reply"`,
+		`"session_channel": "slack"`,
+		`"session_chat_id": "C123::171234"`,
+	} {
+		if !strings.Contains(persistedSummary, want) {
+			t.Fatalf("OperatorStatus() = %q, want substring %q", persistedSummary, want)
 		}
 	}
 }

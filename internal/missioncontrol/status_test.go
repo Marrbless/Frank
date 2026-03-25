@@ -30,6 +30,9 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 				StepID:          "build",
 				RequestedAction: ApprovalRequestedActionStepComplete,
 				Scope:           ApprovalScopeMissionStep,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
 				State:           ApprovalStatePending,
 				ExpiresAt:       expiresAt,
 				Content: &ApprovalRequestContent{
@@ -63,6 +66,18 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	if summary.ApprovalRequest.State != ApprovalStatePending {
 		t.Fatalf("ApprovalRequest.State = %q, want %q", summary.ApprovalRequest.State, ApprovalStatePending)
 	}
+	if summary.ApprovalRequest.RequestedVia != ApprovalRequestedViaRuntime {
+		t.Fatalf("ApprovalRequest.RequestedVia = %q, want %q", summary.ApprovalRequest.RequestedVia, ApprovalRequestedViaRuntime)
+	}
+	if summary.ApprovalRequest.GrantedVia != "" {
+		t.Fatalf("ApprovalRequest.GrantedVia = %q, want empty", summary.ApprovalRequest.GrantedVia)
+	}
+	if summary.ApprovalRequest.SessionChannel != "telegram" {
+		t.Fatalf("ApprovalRequest.SessionChannel = %q, want %q", summary.ApprovalRequest.SessionChannel, "telegram")
+	}
+	if summary.ApprovalRequest.SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalRequest.SessionChatID = %q, want %q", summary.ApprovalRequest.SessionChatID, "chat-42")
+	}
 	if summary.ApprovalRequest.ProposedAction != "Continue build." {
 		t.Fatalf("ApprovalRequest.ProposedAction = %q, want %q", summary.ApprovalRequest.ProposedAction, "Continue build.")
 	}
@@ -80,6 +95,45 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	}
 	if summary.ApprovalRequest.SupersededAt != nil {
 		t.Fatalf("ApprovalRequest.SupersededAt = %#v, want nil for active request", summary.ApprovalRequest.SupersededAt)
+	}
+}
+
+func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorReply,
+				SessionChannel:  "slack",
+				SessionChatID:   "C123::171234",
+				State:           ApprovalStateGranted,
+			},
+		},
+	})
+
+	if summary.ApprovalRequest == nil {
+		t.Fatal("ApprovalRequest = nil, want populated summary")
+	}
+	if summary.ApprovalRequest.RequestedVia != ApprovalRequestedViaRuntime {
+		t.Fatalf("ApprovalRequest.RequestedVia = %q, want %q", summary.ApprovalRequest.RequestedVia, ApprovalRequestedViaRuntime)
+	}
+	if summary.ApprovalRequest.GrantedVia != ApprovalGrantedViaOperatorReply {
+		t.Fatalf("ApprovalRequest.GrantedVia = %q, want %q", summary.ApprovalRequest.GrantedVia, ApprovalGrantedViaOperatorReply)
+	}
+	if summary.ApprovalRequest.SessionChannel != "slack" {
+		t.Fatalf("ApprovalRequest.SessionChannel = %q, want %q", summary.ApprovalRequest.SessionChannel, "slack")
+	}
+	if summary.ApprovalRequest.SessionChatID != "C123::171234" {
+		t.Fatalf("ApprovalRequest.SessionChatID = %q, want %q", summary.ApprovalRequest.SessionChatID, "C123::171234")
 	}
 }
 
