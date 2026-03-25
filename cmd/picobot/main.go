@@ -143,9 +143,11 @@ func NewRootCmd() *cobra.Command {
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil)
 			installMissionRuntimeChangeHook(cmd, ag)
-			if err := configureMissionBootstrap(cmd, ag); err != nil {
+			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
+			if err != nil {
 				return err
 			}
+			installMissionOperatorSetStepHook(cmd, ag, bootstrappedJob, true)
 			if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
 				return err
 			}
@@ -203,6 +205,7 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			installMissionOperatorSetStepHook(cmd, ag, bootstrappedJob, false)
 			var missionStepControlBaseline []byte
 			if bootstrappedJob != nil {
 				missionStepControlBaseline = restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
@@ -531,36 +534,14 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			statusFile, _ := cmd.Flags().GetString("status-file")
-			var previousStatusUpdatedAt string
-			if statusFile != "" {
-				if snapshot, err := loadMissionStatusSnapshot(statusFile); err == nil {
-					previousStatusUpdatedAt = snapshot.UpdatedAt
-				}
-			}
-
-			control := missionStepControlFile{
-				StepID:    stepID,
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			}
-
-			if err := writeJSONAtomic(controlFile, control, "failed to encode mission step control file", "failed to write mission step control file"); err != nil {
-				return err
-			}
-
-			if statusFile == "" {
-				return nil
-			}
-
 			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
-			if !cmd.Flags().Changed("wait-timeout") {
-				waitTimeout = 5 * time.Second
-			}
-
-			if err := waitForMissionStatusStepConfirmation(statusFile, stepID, expectedJobID, previousStatusUpdatedAt, waitTimeout); err != nil {
+			if err := writeMissionStepControlAndConfirm(controlFile, statusFile, stepID, expectedJobID, waitTimeout, cmd.Flags().Changed("wait-timeout"), nil); err != nil {
 				return err
 			}
 
-			log.Printf("mission set-step status confirmation succeeded job_id=%q step_id=%q control_file=%q status_file=%q", expectedJobID, stepID, controlFile, statusFile)
+			if statusFile != "" {
+				log.Printf("mission set-step status confirmation succeeded job_id=%q step_id=%q control_file=%q status_file=%q", expectedJobID, stepID, controlFile, statusFile)
+			}
 
 			return nil
 		},
@@ -808,6 +789,153 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 			log.Printf("mission runtime status snapshot update failed for %q: %v", statusFile, err)
 		}
 	})
+}
+
+func installMissionOperatorSetStepHook(cmd *cobra.Command, ag *agent.AgentLoop, job *missioncontrol.Job, applySynchronously bool) {
+	if ag == nil {
+		return
+	}
+	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, job, applySynchronously, 0))
+}
+
+func newMissionOperatorSetStepHook(cmd *cobra.Command, ag *agent.AgentLoop, job *missioncontrol.Job, applySynchronously bool, waitTimeout time.Duration) func(string, string) (string, error) {
+	return func(jobID string, stepID string) (string, error) {
+		if cmd == nil || ag == nil || job == nil {
+			return "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "SET_STEP requires an active bootstrapped mission",
+			}
+		}
+
+		controlFile, _ := cmd.Flags().GetString("mission-step-control-file")
+		if controlFile == "" {
+			return "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "SET_STEP requires --mission-step-control-file",
+			}
+		}
+
+		statusFile, _ := cmd.Flags().GetString("mission-status-file")
+		if statusFile == "" {
+			return "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "SET_STEP requires --mission-status-file",
+			}
+		}
+
+		if err := validateMissionOperatorSetStepBinding(ag, *job, jobID); err != nil {
+			return "", err
+		}
+
+		missionFile := missionStatusSnapshotMissionFile(cmd)
+		if err := validateMissionStepSelection(*job, stepID); err != nil {
+			return "", fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
+		}
+
+		var apply func() error
+		if applySynchronously {
+			apply = func() error {
+				_, _, err := applyMissionStepControlFile(cmd, ag, *job, controlFile)
+				return err
+			}
+		}
+
+		if err := writeMissionStepControlAndConfirm(controlFile, statusFile, stepID, jobID, waitTimeout, false, apply); err != nil {
+			return "", err
+		}
+
+		return fmt.Sprintf("Set step job=%s step=%s.", jobID, stepID), nil
+	}
+}
+
+func validateMissionOperatorSetStepBinding(ag *agent.AgentLoop, job missioncontrol.Job, jobID string) error {
+	if ag == nil {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+	}
+
+	if ec, ok := ag.ActiveMissionStep(); ok && ec.Job != nil && ec.Runtime != nil {
+		if ec.Job.ID != jobID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+		}
+		return nil
+	}
+
+	runtimeState, ok := ag.MissionRuntimeState()
+	if !ok {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+	}
+	if runtimeState.JobID != "" && runtimeState.JobID != jobID {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "operator command does not match the active job",
+		}
+	}
+	if runtimeState.JobID == "" && job.ID != jobID {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "operator command does not match the active job",
+		}
+	}
+	if missioncontrol.IsTerminalJobState(runtimeState.State) {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("cannot activate a new step while job is %q", runtimeState.State),
+		}
+	}
+	if runtimeState.ActiveStepID == "" {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "operator command requires an active mission step",
+		}
+	}
+	if control, hasControl := ag.MissionRuntimeControl(); hasControl && control.JobID != "" && control.JobID != jobID {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "operator command does not match the active job",
+		}
+	}
+	return nil
+}
+
+func writeMissionStepControlAndConfirm(controlFile string, statusFile string, stepID string, expectedJobID string, waitTimeout time.Duration, waitTimeoutExplicit bool, apply func() error) error {
+	var previousStatusUpdatedAt string
+	if statusFile != "" {
+		if snapshot, err := loadMissionStatusSnapshot(statusFile); err == nil {
+			previousStatusUpdatedAt = snapshot.UpdatedAt
+		}
+	}
+
+	control := missionStepControlFile{
+		StepID:    stepID,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+
+	if err := writeJSONAtomic(controlFile, control, "failed to encode mission step control file", "failed to write mission step control file"); err != nil {
+		return err
+	}
+	if apply != nil {
+		if err := apply(); err != nil {
+			return err
+		}
+	}
+
+	if statusFile == "" {
+		return nil
+	}
+	if !waitTimeoutExplicit && waitTimeout <= 0 {
+		waitTimeout = 5 * time.Second
+	}
+
+	return waitForMissionStatusStepConfirmation(statusFile, stepID, expectedJobID, previousStatusUpdatedAt, waitTimeout)
 }
 
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {

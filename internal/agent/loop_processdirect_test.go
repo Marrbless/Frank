@@ -653,6 +653,49 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	}
 }
 
+func TestProcessDirectSetStepCommandUsesOperatorHook(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	var gotJobID string
+	var gotStepID string
+	ag.SetOperatorSetStepHook(func(jobID string, stepID string) (string, error) {
+		gotJobID = jobID
+		gotStepID = stepID
+		return "Set step job=job-1 step=final.", nil
+	})
+
+	resp, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(SET_STEP) error = %v", err)
+	}
+	if resp != "Set step job=job-1 step=final." {
+		t.Fatalf("ProcessDirect(SET_STEP) response = %q, want set-step acknowledgement", resp)
+	}
+	if gotJobID != "job-1" || gotStepID != "final" {
+		t.Fatalf("operator hook received job=%q step=%q, want job-1/final", gotJobID, gotStepID)
+	}
+}
+
+func TestProcessDirectSetStepCommandWithoutHookRejectsDeterministically(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP) error = nil, want deterministic rejection")
+	}
+	if !strings.Contains(err.Error(), "SET_STEP requires mission step control configuration") {
+		t.Fatalf("ProcessDirect(SET_STEP) error = %q, want configuration rejection", err)
+	}
+}
+
 func TestProcessDirectResumeCommandUsesDurablePausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 

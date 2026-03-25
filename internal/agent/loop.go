@@ -22,6 +22,7 @@ import (
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
 var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
+var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
 
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
@@ -64,16 +65,17 @@ func activeToolDefinitions(reg *tools.Registry, taskState *tools.TaskState) []pr
 
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
-	hub           *chat.Hub
-	provider      providers.LLMProvider
-	tools         *tools.Registry
-	sessions      *session.SessionManager
-	context       *ContextBuilder
-	memory        *memory.MemoryStore
-	model         string
-	maxIterations int
-	running       bool
-	taskState     *tools.TaskState
+	hub                 *chat.Hub
+	provider            providers.LLMProvider
+	tools               *tools.Registry
+	sessions            *session.SessionManager
+	context             *ContextBuilder
+	memory              *memory.MemoryStore
+	model               string
+	maxIterations       int
+	running             bool
+	taskState           *tools.TaskState
+	operatorSetStepHook func(jobID string, stepID string) (string, error)
 }
 
 // NewAgentLoop creates a new AgentLoop with the given provider.
@@ -202,6 +204,13 @@ func (a *AgentLoop) SetMissionRequired(required bool) {
 		return
 	}
 	a.tools.SetMissionRequired(required)
+}
+
+func (a *AgentLoop) SetOperatorSetStepHook(hook func(jobID string, stepID string) (string, error)) {
+	if a == nil {
+		return
+	}
+	a.operatorSetStepHook = hook
 }
 
 func (a *AgentLoop) MissionRequired() bool {
@@ -546,6 +555,18 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 	}
 
 	trimmed := strings.TrimSpace(content)
+
+	setStepMatches := setStepCommandRE.FindStringSubmatch(trimmed)
+	if len(setStepMatches) == 4 {
+		if a.operatorSetStepHook == nil {
+			return true, "", missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "SET_STEP requires mission step control configuration",
+			}
+		}
+		response, err := a.operatorSetStepHook(setStepMatches[2], setStepMatches[3])
+		return true, response, err
+	}
 
 	matches := approvalCommandRE.FindStringSubmatch(trimmed)
 	if len(matches) != 4 {

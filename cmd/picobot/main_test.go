@@ -4635,6 +4635,291 @@ func TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind(t *testing.T) {
 	}
 }
 
+func TestMissionOperatorSetStepCommandActiveJobSucceedsThroughConfirmationPath(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	installMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, true)
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(SET_STEP) error = %v", err)
+	}
+	if resp != "Set step job=job-1 step=final." {
+		t.Fatalf("ProcessDirect(SET_STEP) response = %q, want set-step acknowledgement", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active final step", ec)
+	}
+	if ec.Step.ID != "final" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+
+	control := readMissionStepControlFile(t, controlFile)
+	if control.StepID != "final" {
+		t.Fatalf("control.StepID = %q, want %q", control.StepID, "final")
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.StepID != "final" {
+		t.Fatalf("snapshot.StepID = %q, want %q", snapshot.StepID, "final")
+	}
+	if snapshot.JobID != job.ID {
+		t.Fatalf("snapshot.JobID = %q, want %q", snapshot.JobID, job.ID)
+	}
+}
+
+func TestMissionOperatorSetStepCommandWrongJobDoesNotBind(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	installMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, true)
+
+	_, err := ag.ProcessDirect("SET_STEP other-job final", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP wrong job) error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "does not match the active job") {
+		t.Fatalf("ProcessDirect(SET_STEP wrong job) error = %q, want job mismatch", err)
+	}
+	if _, statErr := os.Stat(controlFile); !os.IsNotExist(statErr) {
+		t.Fatalf("Stat(controlFile) error = %v, want not exists", statErr)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want unchanged active step", ec)
+	}
+	if ec.Step.ID != "build" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "build")
+	}
+}
+
+func TestMissionOperatorSetStepCommandInvalidStepRejectsDeterministically(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	installMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, true)
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 missing", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP missing step) error = nil, want validation failure")
+	}
+	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
+		t.Fatalf("ProcessDirect(SET_STEP missing step) error = %q, want unknown-step rejection", err)
+	}
+	if _, statErr := os.Stat(controlFile); !os.IsNotExist(statErr) {
+		t.Fatalf("Stat(controlFile) error = %v, want not exists", statErr)
+	}
+}
+
+func TestMissionOperatorSetStepCommandStaleMatchingStatusSnapshotDoesNotConfirmSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 150*time.Millisecond))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:      true,
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "final",
+		UpdatedAt:   "2026-03-19T12:00:00Z",
+	})
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP stale status) error = nil, want confirmation timeout")
+	}
+	if !strings.Contains(err.Error(), "want a fresh matching update") {
+		t.Fatalf("ProcessDirect(SET_STEP stale status) error = %q, want stale snapshot rejection", err)
+	}
+}
+
+func TestMissionOperatorSetStepCommandFreshMatchingStatusSnapshotConfirmsSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 500*time.Millisecond))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:      true,
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		UpdatedAt:   "2026-03-19T12:00:00Z",
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+			Active:      true,
+			MissionFile: missionFile,
+			JobID:       job.ID,
+			StepID:      "final",
+			UpdatedAt:   "2026-03-19T12:00:01Z",
+		})
+	}()
+
+	resp, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(SET_STEP fresh status) error = %v", err)
+	}
+	if resp != "Set step job=job-1 step=final." {
+		t.Fatalf("ProcessDirect(SET_STEP fresh status) response = %q, want set-step acknowledgement", resp)
+	}
+}
+
+func TestMissionOperatorSetStepCommandRehydratedRuntimeSucceedsWhenAppropriate(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+	runtimeControl := runtimeControlForBootstrapStep(t, job, "build")
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:         true,
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControl,
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+		UpdatedAt: "2026-03-19T12:00:00Z",
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	installMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, true)
+
+	resp, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(SET_STEP rehydrated runtime) error = %v", err)
+	}
+	if resp != "Set step job=job-1 step=final." {
+		t.Fatalf("ProcessDirect(SET_STEP rehydrated runtime) response = %q, want set-step acknowledgement", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Step == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active final step", ec)
+	}
+	if ec.Step.ID != "final" {
+		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+}
+
 func TestMissionStatusBootstrapRehydratedWrongStepDoesNotBind(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()
