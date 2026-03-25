@@ -29,6 +29,7 @@ const (
 	ApprovalScopeMissionStep            = "mission_step"
 	ApprovalScopeOneStep                = ApprovalScopeMissionStep
 	ApprovalScopeOneJob                 = "one_job"
+	ApprovalScopeOneSession             = "one_session"
 	ApprovalRequestedViaRuntime         = "runtime_waiting_user"
 	ApprovalGrantedViaOperatorCommand   = "operator_command"
 	ApprovalGrantedViaOperatorReply     = "operator_reply"
@@ -369,20 +370,26 @@ func approvalRequestsShareBinding(left ApprovalRequest, right ApprovalRequest) b
 	return approvalBindingScopeMatches(left.JobID, left.StepID, left.RequestedAction, left.Scope, right.JobID, right.StepID, right.RequestedAction, right.Scope)
 }
 
-func FindReusableApprovalGrant(runtime JobRuntimeState, now time.Time, jobID string, step Step) (ApprovalGrant, bool) {
+func FindReusableApprovalGrant(runtime JobRuntimeState, now time.Time, jobID string, step Step, sessionChannel string, sessionChatID string) (ApprovalGrant, bool) {
 	requestedAction, scope, ok := approvalBindingForStep(step)
-	if !ok || normalizeApprovalScope(scope) != ApprovalScopeOneJob {
+	scope = normalizeApprovalScope(scope)
+	if !ok || (scope != ApprovalScopeOneJob && scope != ApprovalScopeOneSession) {
+		return ApprovalGrant{}, false
+	}
+	sessionChannel = strings.TrimSpace(sessionChannel)
+	sessionChatID = strings.TrimSpace(sessionChatID)
+	if scope == ApprovalScopeOneSession && (sessionChannel == "" || sessionChatID == "") {
 		return ApprovalGrant{}, false
 	}
 
-	if requestIndex, ok := findLatestApprovalRequest(runtime.ApprovalRequests, jobID, step.ID, requestedAction, scope); ok {
+	if requestIndex, ok := findLatestReusableApprovalRequest(runtime.ApprovalRequests, jobID, step.ID, requestedAction, scope, sessionChannel, sessionChatID); ok {
 		switch runtime.ApprovalRequests[requestIndex].State {
 		case ApprovalStatePending, ApprovalStateDenied, ApprovalStateExpired, ApprovalStateSuperseded, ApprovalStateRevoked:
 			return ApprovalGrant{}, false
 		}
 	}
 
-	grantIndex, ok := findLatestApprovalGrant(runtime.ApprovalGrants, jobID, step.ID, requestedAction, scope)
+	grantIndex, ok := findLatestReusableApprovalGrant(runtime.ApprovalGrants, jobID, step.ID, requestedAction, scope, sessionChannel, sessionChatID)
 	if !ok {
 		return ApprovalGrant{}, false
 	}
@@ -417,6 +424,8 @@ func normalizeApprovalScope(scope string) string {
 		return ApprovalScopeMissionStep
 	case ApprovalScopeOneJob:
 		return ApprovalScopeOneJob
+	case ApprovalScopeOneSession:
+		return ApprovalScopeOneSession
 	default:
 		return scope
 	}
@@ -434,6 +443,33 @@ func approvalBindingScopeMatches(leftJobID, leftStepID, leftAction, leftScope, r
 	return leftStepID == rightStepID
 }
 
+func approvalReusableBindingMatches(leftJobID, leftStepID, leftAction, leftScope, leftSessionChannel, leftSessionChatID, rightJobID, rightStepID, rightAction, rightScope, rightSessionChannel, rightSessionChatID string) bool {
+	leftScope = normalizeApprovalScope(leftScope)
+	rightScope = normalizeApprovalScope(rightScope)
+	if leftJobID != rightJobID || leftAction != rightAction || leftScope != rightScope {
+		return false
+	}
+	switch leftScope {
+	case ApprovalScopeOneJob:
+		return true
+	case ApprovalScopeOneSession:
+		return approvalSessionMatches(leftSessionChannel, leftSessionChatID, rightSessionChannel, rightSessionChatID)
+	default:
+		return leftStepID == rightStepID
+	}
+}
+
+func approvalSessionMatches(leftChannel, leftChatID, rightChannel, rightChatID string) bool {
+	leftChannel = strings.TrimSpace(leftChannel)
+	leftChatID = strings.TrimSpace(leftChatID)
+	rightChannel = strings.TrimSpace(rightChannel)
+	rightChatID = strings.TrimSpace(rightChatID)
+	if leftChannel == "" || leftChatID == "" || rightChannel == "" || rightChatID == "" {
+		return false
+	}
+	return leftChannel == rightChannel && leftChatID == rightChatID
+}
+
 func approvalRequestMatchesBinding(request ApprovalRequest, jobID, stepID, requestedAction, scope string) bool {
 	return approvalBindingScopeMatches(request.JobID, request.StepID, request.RequestedAction, request.Scope, jobID, stepID, requestedAction, scope)
 }
@@ -442,9 +478,37 @@ func approvalGrantMatchesBinding(grant ApprovalGrant, jobID, stepID, requestedAc
 	return approvalBindingScopeMatches(grant.JobID, grant.StepID, grant.RequestedAction, grant.Scope, jobID, stepID, requestedAction, scope)
 }
 
+func approvalRequestMatchesReusableBinding(request ApprovalRequest, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) bool {
+	return approvalReusableBindingMatches(request.JobID, request.StepID, request.RequestedAction, request.Scope, request.SessionChannel, request.SessionChatID, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID)
+}
+
+func approvalGrantMatchesReusableBinding(grant ApprovalGrant, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) bool {
+	return approvalReusableBindingMatches(grant.JobID, grant.StepID, grant.RequestedAction, grant.Scope, grant.SessionChannel, grant.SessionChatID, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID)
+}
+
 func findLatestApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAction, scope string) (int, bool) {
 	for i := len(grants) - 1; i >= 0; i-- {
 		if !approvalGrantMatchesBinding(grants[i], jobID, stepID, requestedAction, scope) {
+			continue
+		}
+		return i, true
+	}
+	return 0, false
+}
+
+func findLatestReusableApprovalRequest(requests []ApprovalRequest, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) (int, bool) {
+	for i := len(requests) - 1; i >= 0; i-- {
+		if !approvalRequestMatchesReusableBinding(requests[i], jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
+			continue
+		}
+		return i, true
+	}
+	return 0, false
+}
+
+func findLatestReusableApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) (int, bool) {
+	for i := len(grants) - 1; i >= 0; i-- {
+		if !approvalGrantMatchesReusableBinding(grants[i], jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID) {
 			continue
 		}
 		return i, true

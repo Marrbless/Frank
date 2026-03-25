@@ -140,7 +140,7 @@ func TestFindReusableApprovalGrantMatchesOneJobAcrossSteps(t *testing.T) {
 		Type:          StepTypeDiscussion,
 		Subtype:       StepSubtypeAuthorization,
 		ApprovalScope: ApprovalScopeOneJob,
-	})
+	}, "", "")
 	if !ok {
 		t.Fatal("FindReusableApprovalGrant() ok = false, want true")
 	}
@@ -211,7 +211,7 @@ func TestFindReusableApprovalGrantRejectsNonGrantedLatestJobScopeState(t *testin
 				Type:          StepTypeDiscussion,
 				Subtype:       StepSubtypeAuthorization,
 				ApprovalScope: ApprovalScopeOneJob,
-			})
+			}, "", "")
 			if ok {
 				t.Fatal("FindReusableApprovalGrant() ok = true, want false")
 			}
@@ -252,7 +252,96 @@ func TestFindReusableApprovalGrantRejectsWrongAction(t *testing.T) {
 		Type:          StepTypeDiscussion,
 		Subtype:       StepSubtypeAuthorization,
 		ApprovalScope: ApprovalScopeOneJob,
-	})
+	}, "", "")
+	if ok {
+		t.Fatal("FindReusableApprovalGrant() ok = true, want false")
+	}
+}
+
+func TestFindReusableApprovalGrantMatchesOneSessionAcrossStepsInSameSession(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	grant, ok := FindReusableApprovalGrant(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}, now, "job-1", Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneSession,
+	}, "telegram", "chat-42")
+	if !ok {
+		t.Fatal("FindReusableApprovalGrant() ok = false, want true")
+	}
+	if grant.StepID != "authorize-1" {
+		t.Fatalf("FindReusableApprovalGrant().StepID = %q, want %q", grant.StepID, "authorize-1")
+	}
+}
+
+func TestFindReusableApprovalGrantRejectsOneSessionAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	_, ok := FindReusableApprovalGrant(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}, now, "job-1", Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneSession,
+	}, "slack", "C123::171234")
 	if ok {
 		t.Fatal("FindReusableApprovalGrant() ok = true, want false")
 	}

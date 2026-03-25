@@ -531,6 +531,101 @@ func TestTaskStateResumeRuntimePreservesReusableOneJobApprovalAfterReboot(t *tes
 	}
 }
 
+func TestTaskStateResumeRuntimePreservesReusableOneSessionApprovalAfterReboot(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:            "authorize-1",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneSession,
+				},
+				{
+					ID:            "authorize-2",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneSession,
+					DependsOn:     []string{"authorize-1"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"authorize-2"},
+				},
+			},
+		},
+	}
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	state.SetOperatorSession("telegram", "chat-42")
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after completion")
+	}
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "authorize-2" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want authorize-2 completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want reused one_session approval recorded", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].SessionChannel != "telegram" || runtime.ApprovalRequests[1].SessionChatID != "chat-42" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[1] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[1].SessionChannel, runtime.ApprovalRequests[1].SessionChatID, "telegram", "chat-42")
+	}
+}
+
 func TestTaskStateResumeRuntimeControlResumesPausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 

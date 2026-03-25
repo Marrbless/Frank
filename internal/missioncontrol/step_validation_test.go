@@ -157,6 +157,75 @@ func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *te
 	}
 }
 
+func TestCompleteRuntimeStepAuthorizationBindsReusableOneSessionGrantInSameSession(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 1, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContextForJob(Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "authorize-1", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneSession},
+				{ID: "authorize-2", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneSession},
+			},
+		},
+	}, "authorize-2", JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(time.Minute),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse:  "Still need approval context.",
+		SessionChannel: "telegram",
+		SessionChatID:  "chat-42",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "authorize-2" {
+		t.Fatalf("CompletedSteps = %#v, want authorize-2 completion", runtime.CompletedSteps)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalRequests = %#v, want reused one_session approval recorded as granted", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].SessionChannel != "telegram" || runtime.ApprovalRequests[1].SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalRequests[1] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[1].SessionChannel, runtime.ApprovalRequests[1].SessionChatID, "telegram", "chat-42")
+	}
+	if len(runtime.ApprovalGrants) != 1 {
+		t.Fatalf("ApprovalGrants = %#v, want original reusable grant only", runtime.ApprovalGrants)
+	}
+}
+
 func TestStepValidatorKindUsesSpecAlignedWaitUserName(t *testing.T) {
 	t.Parallel()
 
@@ -499,6 +568,120 @@ func TestCompleteRuntimeStepAuthorizationDoesNotBindOneJobGrantAcrossJobs(t *tes
 	}
 }
 
+func TestCompleteRuntimeStepAuthorizationDoesNotBindOneSessionGrantAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 2, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContext(Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneSession,
+	}, JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(time.Minute),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse:  "Need approval before continuing.",
+		SessionChannel: "slack",
+		SessionChatID:  "C123::171234",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests = %#v, want a new pending approval for the current session", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].StepID != "authorize-2" {
+		t.Fatalf("ApprovalRequests[1].StepID = %q, want %q", runtime.ApprovalRequests[1].StepID, "authorize-2")
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindOneSessionGrantAcrossJobs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 2, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContext(Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneSession,
+	}, JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "other-job",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "other-job",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(time.Minute),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse:  "Need approval before continuing.",
+		SessionChannel: "telegram",
+		SessionChatID:  "chat-42",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests = %#v, want a new pending approval for the active job", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[1].JobID != "job-1" {
+		t.Fatalf("ApprovalRequests[1].JobID = %q, want %q", runtime.ApprovalRequests[1].JobID, "job-1")
+	}
+}
+
 func TestCompleteRuntimeStepAuthorizationDoesNotBindExpiredOneJobGrant(t *testing.T) {
 	t.Parallel()
 
@@ -534,6 +717,60 @@ func TestCompleteRuntimeStepAuthorizationDoesNotBindExpiredOneJobGrant(t *testin
 	}
 
 	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests = %#v, want a fresh pending approval", runtime.ApprovalRequests)
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindExpiredOneSessionGrant(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 3, 0, 0, time.UTC)
+	ec := testStepValidationExecutionContext(Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeOneSession,
+	}, JobStateRunning)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			RequestedAt:     now.Add(-2 * time.Minute),
+			ResolvedAt:      now.Add(-90 * time.Second),
+		},
+	}
+	ec.Runtime.ApprovalGrants = []ApprovalGrant{
+		{
+			JobID:           "job-1",
+			StepID:          "authorize-1",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeOneSession,
+			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
+			State:           ApprovalStateGranted,
+			GrantedAt:       now.Add(-90 * time.Second),
+			ExpiresAt:       now.Add(-time.Second),
+		},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse:  "Need approval before continuing.",
+		SessionChannel: "telegram",
+		SessionChatID:  "chat-42",
+	})
 	if err != nil {
 		t.Fatalf("CompleteRuntimeStep() error = %v", err)
 	}
@@ -592,6 +829,75 @@ func TestCompleteRuntimeStepAuthorizationDoesNotBindNonGrantedOneJobRequest(t *t
 			}
 
 			runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+			if err != nil {
+				t.Fatalf("CompleteRuntimeStep() error = %v", err)
+			}
+			if runtime.State != JobStateWaitingUser {
+				t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+			}
+			if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != ApprovalStatePending {
+				t.Fatalf("ApprovalRequests = %#v, want a fresh pending approval", runtime.ApprovalRequests)
+			}
+		})
+	}
+}
+
+func TestCompleteRuntimeStepAuthorizationDoesNotBindNonGrantedOneSessionRequest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 4, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		state ApprovalState
+	}{
+		{name: "pending", state: ApprovalStatePending},
+		{name: "denied", state: ApprovalStateDenied},
+		{name: "expired", state: ApprovalStateExpired},
+		{name: "superseded", state: ApprovalStateSuperseded},
+		{name: "revoked", state: ApprovalStateRevoked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ec := testStepValidationExecutionContext(Step{
+				ID:            "authorize-2",
+				Type:          StepTypeDiscussion,
+				Subtype:       StepSubtypeAuthorization,
+				ApprovalScope: ApprovalScopeOneSession,
+			}, JobStateRunning)
+			ec.Runtime.ApprovalRequests = []ApprovalRequest{
+				{
+					JobID:           "job-1",
+					StepID:          "authorize-1",
+					RequestedAction: ApprovalRequestedActionStepComplete,
+					Scope:           ApprovalScopeOneSession,
+					SessionChannel:  "telegram",
+					SessionChatID:   "chat-42",
+					State:           tc.state,
+					RequestedAt:     now.Add(-2 * time.Minute),
+				},
+			}
+			if tc.state != ApprovalStatePending {
+				ec.Runtime.ApprovalRequests[0].ResolvedAt = now.Add(-90 * time.Second)
+			}
+			ec.Runtime.ApprovalGrants = []ApprovalGrant{
+				{
+					JobID:           "job-1",
+					StepID:          "authorize-1",
+					RequestedAction: ApprovalRequestedActionStepComplete,
+					Scope:           ApprovalScopeOneSession,
+					GrantedVia:      ApprovalGrantedViaOperatorCommand,
+					SessionChannel:  "telegram",
+					SessionChatID:   "chat-42",
+					State:           ApprovalStateGranted,
+					GrantedAt:       now.Add(-90 * time.Second),
+					ExpiresAt:       now.Add(time.Minute),
+				},
+			}
+
+			runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+				FinalResponse:  "Need approval before continuing.",
+				SessionChannel: "telegram",
+				SessionChatID:  "chat-42",
+			})
 			if err != nil {
 				t.Fatalf("CompleteRuntimeStep() error = %v", err)
 			}

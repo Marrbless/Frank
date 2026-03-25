@@ -49,6 +49,8 @@ type StepValidationInput struct {
 	UserInput       string
 	UserInputKind   WaitingUserInputKind
 	ApprovalVia     string
+	SessionChannel  string
+	SessionChatID   string
 	SuccessfulTools []RuntimeToolCallEvidence
 }
 
@@ -202,7 +204,7 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 		nextRuntime := *CloneJobRuntimeState(ec.Runtime)
 		if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
 			content, _ := approvalRequestContentForStep(*ec.Job, *ec.Step)
-			if reusableGrant, ok := FindReusableApprovalGrant(nextRuntime, now, ec.Job.ID, *ec.Step); ok {
+			if reusableGrant, ok := FindReusableApprovalGrant(nextRuntime, now, ec.Job.ID, *ec.Step, input.SessionChannel, input.SessionChatID); ok {
 				nextRuntime = appendGrantedApprovalRequest(nextRuntime, now, ApprovalRequest{
 					JobID:           ec.Job.ID,
 					StepID:          ec.Step.ID,

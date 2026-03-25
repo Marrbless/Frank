@@ -254,6 +254,8 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 	s.mu.Lock()
 	ec := missioncontrol.CloneExecutionContext(s.executionContext)
 	hasExecutionContext := s.hasExecutionContext
+	operatorChannel := s.operatorChannel
+	operatorChatID := s.operatorChatID
 	s.mu.Unlock()
 	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
 		return nil
@@ -261,6 +263,8 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 
 	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, time.Now(), missioncontrol.StepValidationInput{
 		FinalResponse:   finalContent,
+		SessionChannel:  operatorChannel,
+		SessionChatID:   operatorChatID,
 		SuccessfulTools: successfulTools,
 	})
 	if err != nil {
