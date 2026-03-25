@@ -781,7 +781,7 @@ func TestProcessDirectInspectCommandRejectsUnknownStepDeterministically(t *testi
 	}
 }
 
-func TestProcessDirectInspectCommandUsesPersistedRuntimeControlAfterRehydration(t *testing.T) {
+func TestProcessDirectInspectCommandUsesValidatedPlanAfterRehydration(t *testing.T) {
 	t.Parallel()
 
 	b := chat.NewHub(10)
@@ -801,7 +801,7 @@ func TestProcessDirectInspectCommandUsesPersistedRuntimeControlAfterRehydration(
 		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
 	}
 
-	resp, err := ag.ProcessDirect("INSPECT job-1 build", 2*time.Second)
+	resp, err := ag.ProcessDirect("INSPECT job-1 final", 2*time.Second)
 	if err != nil {
 		t.Fatalf("ProcessDirect(INSPECT persisted) error = %v", err)
 	}
@@ -813,8 +813,8 @@ func TestProcessDirectInspectCommandUsesPersistedRuntimeControlAfterRehydration(
 	if got.JobID != "job-1" {
 		t.Fatalf("JobID = %q, want %q", got.JobID, "job-1")
 	}
-	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
-		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", got.Steps)
 	}
 	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"read"}) {
 		t.Fatalf("Steps[0].EffectiveAllowedTools = %#v, want %#v", got.Steps[0].EffectiveAllowedTools, []string{"read"})
@@ -822,6 +822,44 @@ func TestProcessDirectInspectCommandUsesPersistedRuntimeControlAfterRehydration(
 
 	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("ActiveMissionStep() ok = true, want false for rehydrated persisted inspect path")
+	}
+}
+
+func TestProcessDirectInspectCommandUsesValidatedPlanForTerminalRuntime(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testMissionJob([]string{"write", "read", "search"}, []string{"read", "read"})
+	if err := ag.HydrateMissionRuntimeControl(job, missioncontrol.JobRuntimeState{
+		JobID:       "job-1",
+		State:       missioncontrol.JobStateCompleted,
+		CompletedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 25, 11, 59, 0, 0, time.UTC)},
+		},
+	}, nil); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("INSPECT job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(INSPECT terminal) error = %v", err)
+	}
+
+	var got missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.JobID != "job-1" {
+		t.Fatalf("JobID = %q, want %q", got.JobID, "job-1")
+	}
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "final" {
+		t.Fatalf("Steps = %#v, want one final step", got.Steps)
+	}
+	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"read"}) {
+		t.Fatalf("Steps[0].EffectiveAllowedTools = %#v, want %#v", got.Steps[0].EffectiveAllowedTools, []string{"read"})
 	}
 }
 

@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1681,6 +1682,37 @@ func TestTaskStateApplyWaitingUserInputDoesNotCompleteDeniedApproval(t *testing.
 	}
 	if len(ec.Runtime.ApprovalRequests) != 1 || ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("ExecutionContext().Runtime.ApprovalRequests = %#v, want one denied approval", ec.Runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateOperatorInspectWithoutValidatedPlanReturnsDeterministicError(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	control, err := missioncontrol.BuildRuntimeControlContext(testTaskStateJob(), "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	state.hasRuntimeState = true
+	state.runtimeControl = control
+	state.hasRuntimeControl = true
+
+	_, err = state.OperatorInspect("job-1", "build")
+	if err == nil {
+		t.Fatal("OperatorInspect() error = nil, want missing-plan failure")
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeInvalidRuntimeState)) {
+		t.Fatalf("OperatorInspect() error = %q, want invalid_runtime_state code", err)
+	}
+	if !strings.Contains(err.Error(), "inspect command requires validated mission plan") {
+		t.Fatalf("OperatorInspect() error = %q, want missing validated plan message", err)
 	}
 }
 

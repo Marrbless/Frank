@@ -187,6 +187,35 @@ func TestResolveExecutionContextReturnsIndependentCopies(t *testing.T) {
 	}
 }
 
+func TestCloneJobReturnsIndependentCopy(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+
+	cloned := CloneJob(&job)
+	if cloned == nil {
+		t.Fatal("CloneJob() = nil, want non-nil copy")
+	}
+
+	job.AllowedTools[0] = "mutated-job-tool"
+	job.Plan.Steps[0].ID = "mutated-step-id"
+	job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
+	job.Plan.Steps[0].SuccessCriteria[0] = "mutated-success"
+
+	if cloned.AllowedTools[0] != "read" {
+		t.Fatalf("CloneJob().AllowedTools[0] = %q, want %q", cloned.AllowedTools[0], "read")
+	}
+	if cloned.Plan.Steps[0].ID != "build" {
+		t.Fatalf("CloneJob().Plan.Steps[0].ID = %q, want %q", cloned.Plan.Steps[0].ID, "build")
+	}
+	if cloned.Plan.Steps[0].AllowedTools[0] != "read" {
+		t.Fatalf("CloneJob().Plan.Steps[0].AllowedTools[0] = %q, want %q", cloned.Plan.Steps[0].AllowedTools[0], "read")
+	}
+	if cloned.Plan.Steps[0].SuccessCriteria[0] != "produce code" {
+		t.Fatalf("CloneJob().Plan.Steps[0].SuccessCriteria[0] = %q, want %q", cloned.Plan.Steps[0].SuccessCriteria[0], "produce code")
+	}
+}
+
 func testExecutionJob() Job {
 	return Job{
 		ID:           "job-1",

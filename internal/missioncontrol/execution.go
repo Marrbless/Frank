@@ -7,8 +7,7 @@ const RejectionCodeUnknownStep RejectionCode = "unknown_step"
 func CloneExecutionContext(ec ExecutionContext) ExecutionContext {
 	var cloned ExecutionContext
 	if ec.Job != nil {
-		jobCopy := copyJob(*ec.Job)
-		cloned.Job = &jobCopy
+		cloned.Job = CloneJob(ec.Job)
 	}
 	if ec.Step != nil {
 		stepCopy := copyStep(*ec.Step)
@@ -16,6 +15,14 @@ func CloneExecutionContext(ec ExecutionContext) ExecutionContext {
 	}
 	cloned.Runtime = CloneJobRuntimeState(ec.Runtime)
 	return cloned
+}
+
+func CloneJob(job *Job) *Job {
+	if job == nil {
+		return nil
+	}
+	jobCopy := copyJob(*job)
+	return &jobCopy
 }
 
 func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
