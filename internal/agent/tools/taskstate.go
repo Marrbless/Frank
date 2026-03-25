@@ -82,9 +82,11 @@ func (s *TaskState) SetExecutionContext(ec missioncontrol.ExecutionContext) {
 	if cloned.Runtime != nil {
 		s.runtimeState = *missioncontrol.CloneJobRuntimeState(cloned.Runtime)
 		s.hasRuntimeState = true
+		s.auditEvents = missioncontrol.CloneAuditHistory(s.runtimeState.AuditHistory)
 	} else {
 		s.runtimeState = missioncontrol.JobRuntimeState{}
 		s.hasRuntimeState = false
+		s.auditEvents = nil
 	}
 }
 
@@ -135,8 +137,18 @@ func (s *TaskState) EmitAuditEvent(event missioncontrol.AuditEvent) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.auditEvents = append(s.auditEvents, event)
+	s.auditEvents = missioncontrol.AppendAuditHistory(s.auditEvents, event)
+	persisted := s.hasRuntimeState
+	if s.hasRuntimeState {
+		s.runtimeState.AuditHistory = missioncontrol.AppendAuditHistory(s.runtimeState.AuditHistory, event)
+	}
+	if s.hasExecutionContext && s.executionContext.Runtime != nil {
+		s.executionContext.Runtime.AuditHistory = missioncontrol.AppendAuditHistory(s.executionContext.Runtime.AuditHistory, event)
+	}
+	s.mu.Unlock()
+	if persisted {
+		s.notifyRuntimeChanged()
+	}
 }
 
 func (s *TaskState) AuditEvents() []missioncontrol.AuditEvent {
@@ -145,7 +157,7 @@ func (s *TaskState) AuditEvents() []missioncontrol.AuditEvent {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]missioncontrol.AuditEvent(nil), s.auditEvents...)
+	return missioncontrol.CloneAuditHistory(s.auditEvents)
 }
 
 func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
@@ -674,7 +686,11 @@ func (s *TaskState) ClearExecutionContext() {
 	s.mu.Lock()
 	s.executionContext = missioncontrol.ExecutionContext{}
 	s.hasExecutionContext = false
-	s.auditEvents = nil
+	if s.hasRuntimeState {
+		s.auditEvents = missioncontrol.CloneAuditHistory(s.runtimeState.AuditHistory)
+	} else {
+		s.auditEvents = nil
+	}
 	s.mu.Unlock()
 	s.notifyRuntimeChanged()
 }
@@ -682,6 +698,7 @@ func (s *TaskState) ClearExecutionContext() {
 func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 	s.runtimeState = runtimeState
 	s.hasRuntimeState = true
+	s.auditEvents = missioncontrol.CloneAuditHistory(runtimeState.AuditHistory)
 
 	if runtimeState.ActiveStepID != "" {
 		if control != nil {
@@ -742,6 +759,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 	s.runtimeState = *missioncontrol.CloneJobRuntimeState(&runtimeState)
 	s.hasRuntimeState = true
+	s.auditEvents = missioncontrol.CloneAuditHistory(s.runtimeState.AuditHistory)
 	s.executionContext = missioncontrol.ExecutionContext{}
 	s.hasExecutionContext = false
 	s.runtimeControl = missioncontrol.RuntimeControlContext{}

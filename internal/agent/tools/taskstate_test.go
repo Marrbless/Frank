@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -1335,6 +1336,98 @@ func TestTaskStateHydrateRuntimeControlLeavesTerminalRuntimeUnchanged(t *testing
 	}
 	if hookCalls != 0 {
 		t.Fatalf("runtime change hook calls = %d, want 0", hookCalls)
+	}
+}
+
+func TestTaskStateEmitAuditEventPersistsIntoRuntimeHistoryAndTruncatesDeterministically(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	total := missioncontrol.AuditHistoryCap + 2
+	for i := 0; i < total; i++ {
+		state.EmitAuditEvent(missioncontrol.AuditEvent{
+			JobID:     "job-1",
+			StepID:    "build",
+			ToolName:  fmt.Sprintf("command-%02d", i),
+			Allowed:   true,
+			Timestamp: time.Date(2026, 3, 24, 12, 0, i, 0, time.UTC),
+		})
+	}
+
+	audits := state.AuditEvents()
+	if len(audits) != missioncontrol.AuditHistoryCap {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), missioncontrol.AuditHistoryCap)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.AuditHistory) != missioncontrol.AuditHistoryCap {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want %d", len(runtime.AuditHistory), missioncontrol.AuditHistoryCap)
+	}
+
+	for i := 0; i < missioncontrol.AuditHistoryCap; i++ {
+		want := fmt.Sprintf("command-%02d", i+2)
+		if audits[i].ToolName != want {
+			t.Fatalf("AuditEvents()[%d].ToolName = %q, want %q", i, audits[i].ToolName, want)
+		}
+		if runtime.AuditHistory[i].ToolName != want {
+			t.Fatalf("MissionRuntimeState().AuditHistory[%d].ToolName = %q, want %q", i, runtime.AuditHistory[i].ToolName, want)
+		}
+	}
+}
+
+func TestTaskStateHydrateRuntimeControlRestoresAuditHistoryWithoutDuplication(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		AuditHistory: []missioncontrol.AuditEvent{
+			{
+				JobID:     "job-1",
+				StepID:    "build",
+				ToolName:  "pause",
+				Allowed:   true,
+				Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() second error = %v", err)
+	}
+
+	audits := state.AuditEvents()
+	if len(audits) != 1 {
+		t.Fatalf("AuditEvents() count = %d, want 1", len(audits))
+	}
+	if audits[0].ToolName != "pause" {
+		t.Fatalf("AuditEvents()[0].ToolName = %q, want %q", audits[0].ToolName, "pause")
+	}
+
+	gotRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(gotRuntime.AuditHistory) != 1 {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want 1", len(gotRuntime.AuditHistory))
+	}
+	if gotRuntime.AuditHistory[0].ToolName != "pause" {
+		t.Fatalf("MissionRuntimeState().AuditHistory[0].ToolName = %q, want %q", gotRuntime.AuditHistory[0].ToolName, "pause")
 	}
 }
 

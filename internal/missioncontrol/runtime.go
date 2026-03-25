@@ -36,6 +36,7 @@ type JobRuntimeState struct {
 	ActiveStepID     string              `json:"active_step_id,omitempty"`
 	CompletedSteps   []RuntimeStepRecord `json:"completed_steps,omitempty"`
 	FailedSteps      []RuntimeStepRecord `json:"failed_steps,omitempty"`
+	AuditHistory     []AuditEvent        `json:"audit_history,omitempty"`
 	ApprovalRequests []ApprovalRequest   `json:"approval_requests,omitempty"`
 	ApprovalGrants   []ApprovalGrant     `json:"approval_grants,omitempty"`
 	WaitingReason    string              `json:"waiting_reason,omitempty"`
@@ -76,6 +77,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	cloned := *runtime
 	cloned.CompletedSteps = append([]RuntimeStepRecord(nil), runtime.CompletedSteps...)
 	cloned.FailedSteps = append([]RuntimeStepRecord(nil), runtime.FailedSteps...)
+	cloned.AuditHistory = CloneAuditHistory(runtime.AuditHistory)
 	if len(runtime.ApprovalRequests) > 0 {
 		cloned.ApprovalRequests = make([]ApprovalRequest, len(runtime.ApprovalRequests))
 		for i, request := range runtime.ApprovalRequests {

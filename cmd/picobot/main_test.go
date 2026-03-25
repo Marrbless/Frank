@@ -2659,6 +2659,113 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 }
 
+func TestMissionStatusSnapshotWritePersistsAuditHistory(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := ag.ActivateMissionStep(testMissionBootstrapJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, statusFile)
+	if got.Runtime == nil {
+		t.Fatal("Runtime = nil, want non-nil")
+	}
+	if got.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("Runtime.State = %q, want %q", got.Runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(got.Runtime.AuditHistory) != 1 {
+		t.Fatalf("Runtime.AuditHistory count = %d, want 1", len(got.Runtime.AuditHistory))
+	}
+	if !reflect.DeepEqual(got.Runtime.AuditHistory, []missioncontrol.AuditEvent{
+		{
+			JobID:     "job-1",
+			StepID:    "build",
+			ToolName:  "pause",
+			Allowed:   true,
+			Timestamp: got.Runtime.AuditHistory[0].Timestamp,
+		},
+	}) {
+		t.Fatalf("Runtime.AuditHistory = %#v, want one persisted pause audit", got.Runtime.AuditHistory)
+	}
+}
+
+func TestMissionStatusBootstrapRehydratesAuditHistoryWithoutDuplication(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	persistedAudit := missioncontrol.AuditEvent{
+		JobID:     job.ID,
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	}
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			AuditHistory: []missioncontrol.AuditEvent{persistedAudit},
+		},
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if !reflect.DeepEqual(runtime.AuditHistory, []missioncontrol.AuditEvent{persistedAudit}) {
+		t.Fatalf("MissionRuntimeState().AuditHistory = %#v, want persisted history %#v", runtime.AuditHistory, []missioncontrol.AuditEvent{persistedAudit})
+	}
+
+	now := time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want non-nil")
+	}
+	if !reflect.DeepEqual(snapshot.Runtime.AuditHistory, []missioncontrol.AuditEvent{persistedAudit}) {
+		t.Fatalf("snapshot.Runtime.AuditHistory = %#v, want persisted history %#v", snapshot.Runtime.AuditHistory, []missioncontrol.AuditEvent{persistedAudit})
+	}
+}
+
 func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
 	statusFile := filepath.Join(t.TempDir(), "status.json")
 	cmd := newMissionBootstrapTestCommand()

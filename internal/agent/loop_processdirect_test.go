@@ -613,6 +613,12 @@ func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
 	if runtime.State != missioncontrol.JobStateAborted {
 		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
 	}
+	if len(runtime.AuditHistory) != 3 {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want %d", len(runtime.AuditHistory), 3)
+	}
+	assertAuditEvent(t, runtime.AuditHistory[0], "job-1", "build", "pause", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[1], "job-1", "build", "resume", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[2], "job-1", "build", "abort", true, "")
 
 	audits := ag.taskState.AuditEvents()
 	if len(audits) != 3 {
