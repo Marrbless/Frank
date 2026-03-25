@@ -170,18 +170,6 @@ func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 				SessionChannel:  "cli",
 				SessionChatID:   "direct",
 				State:           ApprovalStateRevoked,
-			},
-		},
-		ApprovalGrants: []ApprovalGrant{
-			{
-				JobID:           "job-1",
-				StepID:          "build",
-				RequestedAction: ApprovalRequestedActionStepComplete,
-				Scope:           ApprovalScopeOneJob,
-				GrantedVia:      ApprovalGrantedViaOperatorCommand,
-				SessionChannel:  "cli",
-				SessionChatID:   "direct",
-				State:           ApprovalStateRevoked,
 				RevokedAt:       revokedAt,
 			},
 		},
@@ -201,6 +189,50 @@ func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 	}
 	if summary.ApprovalHistory[0].RevokedAt == nil || *summary.ApprovalHistory[0].RevokedAt != "2026-03-24T12:09:00Z" {
 		t.Fatalf("ApprovalHistory[0].RevokedAt = %#v, want RFC3339 time", summary.ApprovalHistory[0].RevokedAt)
+	}
+}
+
+func TestBuildOperatorStatusSummaryFallsBackToGrantRevokedAtForOlderSnapshots(t *testing.T) {
+	t.Parallel()
+
+	revokedAt := time.Date(2026, 3, 24, 12, 9, 0, 0, time.UTC)
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "cli",
+				SessionChatID:   "direct",
+				State:           ApprovalStateRevoked,
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "cli",
+				SessionChatID:   "direct",
+				State:           ApprovalStateRevoked,
+				RevokedAt:       revokedAt,
+			},
+		},
+	})
+
+	if len(summary.ApprovalHistory) != 1 {
+		t.Fatalf("ApprovalHistory count = %d, want 1", len(summary.ApprovalHistory))
+	}
+	if summary.ApprovalHistory[0].RevokedAt == nil || *summary.ApprovalHistory[0].RevokedAt != "2026-03-24T12:09:00Z" {
+		t.Fatalf("ApprovalHistory[0].RevokedAt = %#v, want fallback RFC3339 time", summary.ApprovalHistory[0].RevokedAt)
 	}
 }
 

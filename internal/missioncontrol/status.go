@@ -52,18 +52,18 @@ type OperatorRecentAuditStatus struct {
 }
 
 type OperatorApprovalHistoryEntry struct {
-	StepID          string   `json:"step_id"`
-	RequestedAction string   `json:"requested_action"`
-	Scope           string   `json:"scope"`
-	State           string   `json:"state"`
-	RequestedVia    string   `json:"requested_via"`
-	GrantedVia      string   `json:"granted_via"`
-	SessionChannel  string   `json:"session_channel"`
-	SessionChatID   string   `json:"session_chat_id"`
-	RequestedAt     *string  `json:"requested_at"`
-	ResolvedAt      *string  `json:"resolved_at"`
-	ExpiresAt       *string  `json:"expires_at"`
-	RevokedAt       *string  `json:"revoked_at,omitempty"`
+	StepID          string  `json:"step_id"`
+	RequestedAction string  `json:"requested_action"`
+	Scope           string  `json:"scope"`
+	State           string  `json:"state"`
+	RequestedVia    string  `json:"requested_via"`
+	GrantedVia      string  `json:"granted_via"`
+	SessionChannel  string  `json:"session_channel"`
+	SessionChatID   string  `json:"session_chat_id"`
+	RequestedAt     *string `json:"requested_at"`
+	ResolvedAt      *string `json:"resolved_at"`
+	ExpiresAt       *string `json:"expires_at"`
+	RevokedAt       *string `json:"revoked_at,omitempty"`
 }
 
 func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
@@ -252,6 +252,9 @@ func selectOperatorStatusApprovalHistory(runtime JobRuntimeState) []OperatorAppr
 func findOperatorStatusApprovalRevokedAt(grants []ApprovalGrant, request ApprovalRequest) *string {
 	if request.State != ApprovalStateRevoked {
 		return nil
+	}
+	if revokedAt := formatOperatorStatusTime(request.RevokedAt); revokedAt != nil {
+		return revokedAt
 	}
 
 	for i := len(grants) - 1; i >= 0; i-- {
