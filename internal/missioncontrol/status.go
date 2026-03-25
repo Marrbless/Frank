@@ -7,6 +7,7 @@ import (
 )
 
 const OperatorStatusRecentAuditLimit = 5
+const OperatorStatusApprovalHistoryLimit = 5
 
 type OperatorStatusSummary struct {
 	JobID           string                         `json:"job_id"`
@@ -17,6 +18,7 @@ type OperatorStatusSummary struct {
 	PausedReason    string                         `json:"paused_reason,omitempty"`
 	AbortedReason   string                         `json:"aborted_reason,omitempty"`
 	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
+	ApprovalHistory []OperatorApprovalHistoryEntry `json:"approval_history,omitempty"`
 	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
 }
 
@@ -47,6 +49,21 @@ type OperatorRecentAuditStatus struct {
 	Allowed     bool             `json:"allowed"`
 	Code        RejectionCode    `json:"error_code,omitempty"`
 	Timestamp   string           `json:"timestamp"`
+}
+
+type OperatorApprovalHistoryEntry struct {
+	StepID          string   `json:"step_id"`
+	RequestedAction string   `json:"requested_action"`
+	Scope           string   `json:"scope"`
+	State           string   `json:"state"`
+	RequestedVia    string   `json:"requested_via"`
+	GrantedVia      string   `json:"granted_via"`
+	SessionChannel  string   `json:"session_channel"`
+	SessionChatID   string   `json:"session_chat_id"`
+	RequestedAt     *string  `json:"requested_at"`
+	ResolvedAt      *string  `json:"resolved_at"`
+	ExpiresAt       *string  `json:"expires_at"`
+	RevokedAt       *string  `json:"revoked_at,omitempty"`
 }
 
 func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
@@ -130,6 +147,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		}
 		summary.ApprovalRequest = &status
 	}
+	summary.ApprovalHistory = selectOperatorStatusApprovalHistory(runtime)
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 
 	return summary
@@ -191,4 +209,89 @@ func selectOperatorStatusRecentAudit(runtime JobRuntimeState) []OperatorRecentAu
 	}
 
 	return recent
+}
+
+func selectOperatorStatusApprovalHistory(runtime JobRuntimeState) []OperatorApprovalHistoryEntry {
+	if len(runtime.ApprovalRequests) == 0 {
+		return nil
+	}
+
+	history := make([]OperatorApprovalHistoryEntry, 0, minInt(len(runtime.ApprovalRequests), OperatorStatusApprovalHistoryLimit))
+	for i := len(runtime.ApprovalRequests) - 1; i >= 0 && len(history) < OperatorStatusApprovalHistoryLimit; i-- {
+		request := runtime.ApprovalRequests[i]
+		if runtime.JobID != "" && request.JobID != runtime.JobID {
+			continue
+		}
+
+		entry := OperatorApprovalHistoryEntry{
+			StepID:          request.StepID,
+			RequestedAction: request.RequestedAction,
+			Scope:           request.Scope,
+			State:           string(request.State),
+			RequestedVia:    request.RequestedVia,
+			GrantedVia:      request.GrantedVia,
+			SessionChannel:  request.SessionChannel,
+			SessionChatID:   request.SessionChatID,
+			RequestedAt:     formatOperatorStatusTime(request.RequestedAt),
+			ResolvedAt:      formatOperatorStatusTime(request.ResolvedAt),
+			ExpiresAt:       formatOperatorStatusTime(request.ExpiresAt),
+		}
+		if revokedAt := findOperatorStatusApprovalRevokedAt(runtime.ApprovalGrants, request); revokedAt != nil {
+			entry.RevokedAt = revokedAt
+		}
+
+		history = append(history, entry)
+	}
+
+	if len(history) == 0 {
+		return nil
+	}
+	return history
+}
+
+func findOperatorStatusApprovalRevokedAt(grants []ApprovalGrant, request ApprovalRequest) *string {
+	if request.State != ApprovalStateRevoked {
+		return nil
+	}
+
+	for i := len(grants) - 1; i >= 0; i-- {
+		grant := grants[i]
+		if grant.State != ApprovalStateRevoked || grant.RevokedAt.IsZero() {
+			continue
+		}
+		if !approvalReusableBindingMatches(
+			request.JobID,
+			request.StepID,
+			request.RequestedAction,
+			request.Scope,
+			request.SessionChannel,
+			request.SessionChatID,
+			grant.JobID,
+			grant.StepID,
+			grant.RequestedAction,
+			grant.Scope,
+			grant.SessionChannel,
+			grant.SessionChatID,
+		) {
+			continue
+		}
+		return formatOperatorStatusTime(grant.RevokedAt)
+	}
+
+	return nil
+}
+
+func formatOperatorStatusTime(at time.Time) *string {
+	if at.IsZero() {
+		return nil
+	}
+	formatted := at.UTC().Format(time.RFC3339Nano)
+	return &formatted
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }

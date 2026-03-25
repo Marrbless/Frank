@@ -636,9 +636,37 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	b := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}
 	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
-	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = %#v, want active runtime", ec)
+	}
+	ec.Runtime.ApprovalRequests = []missioncontrol.ApprovalRequest{
+		{
+			JobID:           job.ID,
+			StepID:          "draft",
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+			State:           missioncontrol.ApprovalStateDenied,
+			RequestedAt:     time.Date(2026, 3, 24, 11, 59, 0, 0, time.UTC),
+			ResolvedAt:      time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			JobID:           job.ID,
+			StepID:          "build",
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+			State:           missioncontrol.ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+			ExpiresAt:       time.Date(2026, 3, 24, 12, 6, 0, 0, time.UTC),
+		},
+	}
+	ag.taskState.SetExecutionContext(ec)
 	ag.taskState.EmitAuditEvent(missioncontrol.AuditEvent{
 		JobID:     "job-1",
 		StepID:    "build",
@@ -695,6 +723,39 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	}
 	if entry["result"] != string(expected.Result) {
 		t.Fatalf("recent_audit[0].result = %#v, want %q", entry["result"], expected.Result)
+	}
+	approvalHistory, ok := got["approval_history"].([]any)
+	if !ok || len(approvalHistory) != 2 {
+		t.Fatalf("approval_history = %#v, want two approval entries", got["approval_history"])
+	}
+	firstHistory, ok := approvalHistory[0].(map[string]any)
+	if !ok {
+		t.Fatalf("approval_history[0] = %#v, want object", approvalHistory[0])
+	}
+	if firstHistory["step_id"] != "build" {
+		t.Fatalf("approval_history[0].step_id = %#v, want %q", firstHistory["step_id"], "build")
+	}
+	if firstHistory["requested_at"] != "2026-03-24T12:01:00Z" {
+		t.Fatalf("approval_history[0].requested_at = %#v, want %q", firstHistory["requested_at"], "2026-03-24T12:01:00Z")
+	}
+}
+
+func TestProcessDirectStatusCommandWrongJobDoesNotBind(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	_, err := ag.ProcessDirect("STATUS other-job", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(STATUS other-job) error = nil, want mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "does not match the active job") {
+		t.Fatalf("ProcessDirect(STATUS other-job) error = %q, want job mismatch", err)
 	}
 }
 

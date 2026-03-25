@@ -9,6 +9,7 @@ import (
 func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testing.T) {
 	t.Parallel()
 
+	requestedAt := time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)
 	expiresAt := time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC)
 	supersededAt := time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)
 	summary := BuildOperatorStatusSummary(JobRuntimeState{
@@ -34,6 +35,7 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 				SessionChannel:  "telegram",
 				SessionChatID:   "chat-42",
 				State:           ApprovalStatePending,
+				RequestedAt:     requestedAt,
 				ExpiresAt:       expiresAt,
 				Content: &ApprovalRequestContent{
 					ProposedAction:   "Continue build.",
@@ -96,6 +98,18 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	if summary.ApprovalRequest.SupersededAt != nil {
 		t.Fatalf("ApprovalRequest.SupersededAt = %#v, want nil for active request", summary.ApprovalRequest.SupersededAt)
 	}
+	if len(summary.ApprovalHistory) != 2 {
+		t.Fatalf("ApprovalHistory count = %d, want %d", len(summary.ApprovalHistory), 2)
+	}
+	if summary.ApprovalHistory[0].StepID != "build" {
+		t.Fatalf("ApprovalHistory[0].StepID = %q, want %q", summary.ApprovalHistory[0].StepID, "build")
+	}
+	if summary.ApprovalHistory[0].RequestedAt == nil || *summary.ApprovalHistory[0].RequestedAt != "2026-03-24T12:02:00Z" {
+		t.Fatalf("ApprovalHistory[0].RequestedAt = %#v, want RFC3339 time", summary.ApprovalHistory[0].RequestedAt)
+	}
+	if summary.ApprovalHistory[1].StepID != "draft" {
+		t.Fatalf("ApprovalHistory[1].StepID = %q, want %q", summary.ApprovalHistory[1].StepID, "draft")
+	}
 }
 
 func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *testing.T) {
@@ -140,6 +154,7 @@ func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *tes
 func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 	t.Parallel()
 
+	revokedAt := time.Date(2026, 3, 24, 12, 9, 0, 0, time.UTC)
 	summary := BuildOperatorStatusSummary(JobRuntimeState{
 		JobID:        "job-1",
 		State:        JobStateRunning,
@@ -157,6 +172,19 @@ func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 				State:           ApprovalStateRevoked,
 			},
 		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "cli",
+				SessionChatID:   "direct",
+				State:           ApprovalStateRevoked,
+				RevokedAt:       revokedAt,
+			},
+		},
 	})
 
 	if summary.ApprovalRequest == nil {
@@ -167,6 +195,44 @@ func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 	}
 	if summary.ApprovalRequest.GrantedVia != ApprovalGrantedViaOperatorCommand {
 		t.Fatalf("ApprovalRequest.GrantedVia = %q, want %q", summary.ApprovalRequest.GrantedVia, ApprovalGrantedViaOperatorCommand)
+	}
+	if len(summary.ApprovalHistory) != 1 {
+		t.Fatalf("ApprovalHistory count = %d, want 1", len(summary.ApprovalHistory))
+	}
+	if summary.ApprovalHistory[0].RevokedAt == nil || *summary.ApprovalHistory[0].RevokedAt != "2026-03-24T12:09:00Z" {
+		t.Fatalf("ApprovalHistory[0].RevokedAt = %#v, want RFC3339 time", summary.ApprovalHistory[0].RevokedAt)
+	}
+}
+
+func TestBuildOperatorStatusSummaryIncludesBoundedDeterministicApprovalHistory(t *testing.T) {
+	t.Parallel()
+
+	requests := make([]ApprovalRequest, 0, OperatorStatusApprovalHistoryLimit+2)
+	for i := 0; i < OperatorStatusApprovalHistoryLimit+2; i++ {
+		requests = append(requests, ApprovalRequest{
+			JobID:           "job-1",
+			StepID:          "step-" + string(rune('a'+i)),
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, i, 0, 0, time.UTC),
+		})
+	}
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:            "job-1",
+		State:            JobStateWaitingUser,
+		ApprovalRequests: requests,
+	})
+
+	if len(summary.ApprovalHistory) != OperatorStatusApprovalHistoryLimit {
+		t.Fatalf("ApprovalHistory count = %d, want %d", len(summary.ApprovalHistory), OperatorStatusApprovalHistoryLimit)
+	}
+	for i, wantStep := range []string{"step-g", "step-f", "step-e", "step-d", "step-c"} {
+		if summary.ApprovalHistory[i].StepID != wantStep {
+			t.Fatalf("ApprovalHistory[%d].StepID = %q, want %q", i, summary.ApprovalHistory[i].StepID, wantStep)
+		}
 	}
 }
 
@@ -287,6 +353,9 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 				RequestedAction: ApprovalRequestedActionStepComplete,
 				Scope:           ApprovalScopeMissionStep,
 				State:           ApprovalStateSuperseded,
+				RequestedAt:     time.Date(2026, 3, 24, 12, 6, 0, 0, time.UTC),
+				ResolvedAt:      time.Date(2026, 3, 24, 12, 7, 0, 0, time.UTC),
+				ExpiresAt:       time.Date(2026, 3, 24, 12, 9, 0, 0, time.UTC),
 				SupersededAt:    time.Date(2026, 3, 24, 12, 7, 0, 0, time.UTC),
 			},
 		},
@@ -319,6 +388,26 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 	}
 	if request["superseded_at"] != "2026-03-24T12:07:00Z" {
 		t.Fatalf("approval_request.superseded_at = %#v, want RFC3339 time", request["superseded_at"])
+	}
+	approvalHistory, ok := got["approval_history"].([]any)
+	if !ok || len(approvalHistory) != 1 {
+		t.Fatalf("approval_history = %#v, want one approval entry", got["approval_history"])
+	}
+	historyEntry, ok := approvalHistory[0].(map[string]any)
+	if !ok {
+		t.Fatalf("approval_history[0] = %#v, want object", approvalHistory[0])
+	}
+	if historyEntry["state"] != string(ApprovalStateSuperseded) {
+		t.Fatalf("approval_history[0].state = %#v, want %q", historyEntry["state"], ApprovalStateSuperseded)
+	}
+	if historyEntry["requested_at"] != "2026-03-24T12:06:00Z" {
+		t.Fatalf("approval_history[0].requested_at = %#v, want %q", historyEntry["requested_at"], "2026-03-24T12:06:00Z")
+	}
+	if historyEntry["resolved_at"] != "2026-03-24T12:07:00Z" {
+		t.Fatalf("approval_history[0].resolved_at = %#v, want %q", historyEntry["resolved_at"], "2026-03-24T12:07:00Z")
+	}
+	if historyEntry["expires_at"] != "2026-03-24T12:09:00Z" {
+		t.Fatalf("approval_history[0].expires_at = %#v, want %q", historyEntry["expires_at"], "2026-03-24T12:09:00Z")
 	}
 
 	recentAudit, ok := got["recent_audit"].([]any)

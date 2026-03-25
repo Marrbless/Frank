@@ -156,6 +156,7 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 				SessionChannel:  "telegram",
 				SessionChatID:   "chat-42",
 				State:           missioncontrol.ApprovalStatePending,
+				RequestedAt:     time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC),
 				ExpiresAt:       time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC),
 				Content: &missioncontrol.ApprovalRequestContent{
 					ProposedAction:   "Continue build.",
@@ -191,6 +192,8 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 		`"why_needed": "Operator approval is required."`,
 		`"authority_tier": "medium"`,
 		`"fallback_if_denied": "Stay waiting."`,
+		`"approval_history": [`,
+		`"requested_at": "2026-03-24T12:02:00Z"`,
 		`"expires_at": "2026-03-24T12:05:00Z"`,
 	} {
 		if !strings.Contains(summary, want) {
@@ -203,11 +206,23 @@ func TestTaskStateOperatorStatusMatchesActiveAndPersistedApprovalBindingMetadata
 	t.Parallel()
 
 	job := testTaskStateJob()
+	requestedAt := time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)
+	resolvedAt := time.Date(2026, 3, 24, 12, 4, 0, 0, time.UTC)
 	runtime := missioncontrol.JobRuntimeState{
 		JobID:        "job-1",
 		State:        missioncontrol.JobStatePaused,
 		ActiveStepID: "build",
 		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "draft",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				State:           missioncontrol.ApprovalStateDenied,
+				RequestedAt:     requestedAt.Add(-2 * time.Minute),
+				ResolvedAt:      requestedAt.Add(-1 * time.Minute),
+			},
 			{
 				JobID:           "job-1",
 				StepID:          "build",
@@ -218,6 +233,8 @@ func TestTaskStateOperatorStatusMatchesActiveAndPersistedApprovalBindingMetadata
 				SessionChannel:  "slack",
 				SessionChatID:   "C123::171234",
 				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     requestedAt,
+				ResolvedAt:      resolvedAt,
 			},
 		},
 	}
@@ -254,6 +271,10 @@ func TestTaskStateOperatorStatusMatchesActiveAndPersistedApprovalBindingMetadata
 		`"granted_via": "operator_reply"`,
 		`"session_channel": "slack"`,
 		`"session_chat_id": "C123::171234"`,
+		`"approval_history": [`,
+		`"step_id": "build"`,
+		`"requested_at": "2026-03-24T12:02:00Z"`,
+		`"resolved_at": "2026-03-24T12:04:00Z"`,
 	} {
 		if !strings.Contains(persistedSummary, want) {
 			t.Fatalf("OperatorStatus() = %q, want substring %q", persistedSummary, want)
@@ -361,6 +382,17 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			JobID:         "job-1",
 			State:         missioncontrol.JobStateAborted,
 			AbortedReason: missioncontrol.RuntimeAbortReasonOperatorCommand,
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           "job-1",
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStateSuperseded,
+					RequestedAt:     time.Date(2026, 3, 24, 11, 59, 0, 0, time.UTC),
+					ResolvedAt:      time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+				},
+			},
 			AuditHistory: []missioncontrol.AuditEvent{
 				{
 					JobID:     "job-1",
@@ -374,6 +406,17 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 		{
 			JobID: "job-1",
 			State: missioncontrol.JobStateCompleted,
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           "job-1",
+					StepID:          "final",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStateGranted,
+					RequestedAt:     time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+					ResolvedAt:      time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+				},
+			},
 			AuditHistory: []missioncontrol.AuditEvent{
 				{
 					JobID:     "job-1",
@@ -387,6 +430,17 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 		{
 			JobID: "job-1",
 			State: missioncontrol.JobStateFailed,
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           "job-1",
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeMissionStep,
+					State:           missioncontrol.ApprovalStateDenied,
+					RequestedAt:     time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+					ResolvedAt:      time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC),
+				},
+			},
 			AuditHistory: []missioncontrol.AuditEvent{
 				{
 					JobID:     "job-1",
@@ -415,6 +469,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			}
 			if !strings.Contains(summary, `"recent_audit": [`) {
 				t.Fatalf("OperatorStatus() = %q, want recent audit block", summary)
+			}
+			if !strings.Contains(summary, `"approval_history": [`) {
+				t.Fatalf("OperatorStatus() = %q, want approval history block", summary)
 			}
 			if strings.Contains(summary, `"allowed_tools":`) {
 				t.Fatalf("OperatorStatus() = %q, want allowed_tools omitted without control context", summary)
