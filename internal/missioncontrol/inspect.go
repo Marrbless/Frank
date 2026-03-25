@@ -1,0 +1,96 @@
+package missioncontrol
+
+import "encoding/json"
+
+type InspectSummary struct {
+	JobID        string        `json:"job_id"`
+	MaxAuthority AuthorityTier `json:"max_authority"`
+	AllowedTools []string      `json:"allowed_tools"`
+	Steps        []InspectStep `json:"steps"`
+}
+
+type InspectStep struct {
+	StepID                string        `json:"step_id"`
+	StepType              StepType      `json:"step_type"`
+	DependsOn             []string      `json:"depends_on"`
+	RequiredAuthority     AuthorityTier `json:"required_authority"`
+	AllowedTools          []string      `json:"allowed_tools"`
+	SuccessCriteria       []string      `json:"success_criteria"`
+	EffectiveAllowedTools []string      `json:"effective_allowed_tools"`
+	RequiresApproval      bool          `json:"requires_approval"`
+}
+
+func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
+	summary := InspectSummary{
+		JobID:        job.ID,
+		MaxAuthority: job.MaxAuthority,
+		AllowedTools: append([]string(nil), job.AllowedTools...),
+	}
+
+	if stepID != "" {
+		ec, err := ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return InspectSummary{}, err
+		}
+
+		summary.Steps = append(summary.Steps, newInspectStepSummary(*ec.Step, ec))
+		return summary, nil
+	}
+
+	summary.Steps = make([]InspectStep, 0, len(job.Plan.Steps))
+	for _, step := range job.Plan.Steps {
+		ec, err := ResolveExecutionContext(job, step.ID)
+		if err != nil {
+			return InspectSummary{}, err
+		}
+
+		summary.Steps = append(summary.Steps, newInspectStepSummary(step, ec))
+	}
+
+	return summary, nil
+}
+
+func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) (InspectSummary, error) {
+	if stepID != "" && control.Step.ID != stepID {
+		return InspectSummary{}, ValidationError{
+			Code:    RejectionCodeUnknownStep,
+			StepID:  stepID,
+			Message: `step "` + stepID + `" not found in plan`,
+		}
+	}
+
+	job := Job{
+		ID:           control.JobID,
+		MaxAuthority: control.MaxAuthority,
+		AllowedTools: append([]string(nil), control.AllowedTools...),
+	}
+	step := copyStep(control.Step)
+
+	return InspectSummary{
+		JobID:        job.ID,
+		MaxAuthority: job.MaxAuthority,
+		AllowedTools: append([]string(nil), job.AllowedTools...),
+		Steps:        []InspectStep{newInspectStepSummary(step, ExecutionContext{Job: &job, Step: &step})},
+	}, nil
+}
+
+func FormatInspectSummary(summary InspectSummary) (string, error) {
+	data, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(append(data, '\n')), nil
+}
+
+func newInspectStepSummary(step Step, ec ExecutionContext) InspectStep {
+	return InspectStep{
+		StepID:                step.ID,
+		StepType:              step.Type,
+		DependsOn:             append([]string(nil), step.DependsOn...),
+		RequiredAuthority:     step.RequiredAuthority,
+		AllowedTools:          append([]string(nil), step.AllowedTools...),
+		SuccessCriteria:       append([]string(nil), step.SuccessCriteria...),
+		EffectiveAllowedTools: EffectiveAllowedTools(ec.Job, ec.Step),
+		RequiresApproval:      step.RequiresApproval,
+	}
+}

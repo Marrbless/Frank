@@ -22,6 +22,7 @@ import (
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
 var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
+var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
 
 // sendChannelNotification delivers a non-blocking status message back to the
@@ -565,6 +566,12 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			}
 		}
 		response, err := a.operatorSetStepHook(setStepMatches[2], setStepMatches[3])
+		return true, response, err
+	}
+
+	inspectMatches := inspectCommandRE.FindStringSubmatch(trimmed)
+	if len(inspectMatches) == 4 {
+		response, err := a.taskState.OperatorInspect(inspectMatches[2], inspectMatches[3])
 		return true, response, err
 	}
 
