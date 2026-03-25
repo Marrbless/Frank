@@ -535,6 +535,126 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	return err
 }
 
+func (s *TaskState) RevokeApproval(jobID string, stepID string) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	operatorChannel := s.operatorChannel
+	operatorChatID := s.operatorChatID
+	s.mu.Unlock()
+
+	storeJob := ec.Job
+	storeControl := (*missioncontrol.RuntimeControlContext)(nil)
+	rebootSafePath := false
+	if hasExecutionContext && ec.Job != nil && ec.Step != nil && ec.Runtime != nil {
+		refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*ec.Runtime, time.Now())
+		if changed {
+			ec.Runtime = &refreshedRuntime
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(ec.Job, refreshedRuntime, nil)
+			s.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			s.notifyRuntimeChanged()
+		}
+		if ec.Job.ID != jobID || ec.Step.ID != stepID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "approval command requires an active mission step",
+			}
+		}
+		if runtimeState.JobID != jobID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+		if runtimeState.ActiveStepID == "" {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  stepID,
+				Message: "approval revocation requires an active step",
+			}
+		}
+		if !hasRuntimeControl || control == nil {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  stepID,
+				Message: "approval command requires persisted mission control context",
+			}
+		}
+		if control.JobID != "" && control.JobID != jobID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+		if control.Step.ID != stepID {
+			return missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  stepID,
+				Message: "approval command does not match the active job and step",
+			}
+		}
+
+		refreshedRuntime, changed := missioncontrol.RefreshApprovalRequests(*runtimeState, time.Now())
+		if changed {
+			s.mu.Lock()
+			err := s.storeRuntimeStateLocked(nil, refreshedRuntime, control)
+			s.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			s.notifyRuntimeChanged()
+			runtimeState = &refreshedRuntime
+		}
+
+		resolved, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, *runtimeState)
+		if err != nil {
+			return err
+		}
+		ec = resolved
+		storeControl = control
+		rebootSafePath = true
+	}
+
+	nextRuntime, err := missioncontrol.RevokeLatestApprovalGrantWithSession(ec, time.Now(), operatorChannel, operatorChatID)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	if rebootSafePath && nextRuntime.ActiveStepID != "" {
+		err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, storeControl)
+	} else {
+		err = s.storeRuntimeStateLocked(storeJob, nextRuntime, storeControl)
+	}
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return err
+}
+
 func (s *TaskState) PauseRuntime(jobID string) error {
 	return s.applyRuntimeControl(jobID, "pause", missioncontrol.PauseJobRuntime, false)
 }

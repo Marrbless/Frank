@@ -736,6 +736,364 @@ func TestTaskStateResumeRuntimeUsesDeterministicLatestReusableApprovalAfterReboo
 	}
 }
 
+func TestTaskStateRevokeApprovalPreventsOneJobReuse(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testReusableApprovalJob(missioncontrol.ApprovalScopeOneJob)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.RevokeApproval(job.ID, "authorize-2"); err != nil {
+		t.Fatalf("RevokeApproval() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateRevoked || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want revoked then pending approvals", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", runtime.ApprovalGrants)
+	}
+}
+
+func TestTaskStateRevokeApprovalPreventsOneSessionReuse(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testReusableApprovalJob(missioncontrol.ApprovalScopeOneSession)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	state.SetOperatorSession("telegram", "chat-42")
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.RevokeApproval(job.ID, "authorize-2"); err != nil {
+		t.Fatalf("RevokeApproval() error = %v", err)
+	}
+	if err := state.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateRevoked || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want revoked then pending approvals", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", runtime.ApprovalGrants)
+	}
+}
+
+func TestTaskStateRevokeApprovalDoesNotAffectDifferentSession(t *testing.T) {
+	t.Parallel()
+
+	job := testReusableApprovalJob(missioncontrol.ApprovalScopeOneSession)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneSession,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	state := NewTaskState()
+	state.SetOperatorSession("slack", "C123::171234")
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.RevokeApproval(job.ID, "authorize-2"); err == nil {
+		t.Fatal("RevokeApproval() error = nil, want session mismatch failure")
+	}
+
+	reuseState := NewTaskState()
+	reuseState.SetOperatorSession("telegram", "chat-42")
+	if err := reuseState.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := reuseState.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	runtime, ok := reuseState.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want reused one_session approval recorded", runtime.ApprovalRequests)
+	}
+}
+
+func TestTaskStateRevokeApprovalWrongJobOrStepDoesNotBind(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testReusableApprovalJob(missioncontrol.ApprovalScopeOneJob)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := state.RevokeApproval("other-job", "authorize-2"); err == nil {
+		t.Fatal("RevokeApproval(wrong job) error = nil, want mismatch failure")
+	}
+	if err := state.RevokeApproval(job.ID, "authorize-1"); err == nil {
+		t.Fatal("RevokeApproval(wrong step) error = nil, want mismatch failure")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want unchanged granted approval", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want unchanged granted approval", runtime.ApprovalGrants)
+	}
+}
+
+func TestTaskStatePersistedRuntimeRevocationHonorsRevokedApprovalState(t *testing.T) {
+	t.Parallel()
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:            "authorize-1",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneJob,
+				},
+				{
+					ID:            "authorize-2",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: missioncontrol.ApprovalScopeOneJob,
+					DependsOn:     []string{"authorize-1"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"authorize-2"},
+				},
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "authorize-2")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+
+	state := NewTaskState()
+	if err := state.HydrateRuntimeControl(job, runtimeState, &control); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	if err := state.RevokeApproval(job.ID, "authorize-2"); err != nil {
+		t.Fatalf("RevokeApproval() error = %v", err)
+	}
+
+	revokedRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(revokedRuntime.ApprovalGrants) != 1 || revokedRuntime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", revokedRuntime.ApprovalGrants)
+	}
+
+	resumed := NewTaskState()
+	if err := resumed.ResumeRuntime(job, revokedRuntime, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	if err := resumed.ApplyStepOutput("Need approval before continuing.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	runtime, ok := resumed.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(runtime.ApprovalRequests) != 2 || runtime.ApprovalRequests[1].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want revoked then pending approvals after reboot-safe resume", runtime.ApprovalRequests)
+	}
+}
+
 func TestTaskStateResumeRuntimeControlResumesPausedRuntimeAfterExecutionContextTeardown(t *testing.T) {
 	t.Parallel()
 
@@ -2205,6 +2563,37 @@ func testTaskStateJob() missioncontrol.Job {
 					Type:         missioncontrol.StepTypeFinalResponse,
 					DependsOn:    []string{"build"},
 					AllowedTools: []string{"read"},
+				},
+			},
+		},
+	}
+}
+
+func testReusableApprovalJob(scope string) missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:            "authorize-1",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: scope,
+				},
+				{
+					ID:            "authorize-2",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: scope,
+					DependsOn:     []string{"authorize-1"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"authorize-2"},
 				},
 			},
 		},

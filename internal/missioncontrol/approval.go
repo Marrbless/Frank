@@ -348,6 +348,66 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 	}
 }
 
+func RevokeLatestApprovalGrantWithSession(ec ExecutionContext, now time.Time, sessionChannel string, sessionChatID string) (JobRuntimeState, error) {
+	if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "approval revocation requires active job, step, and runtime state",
+		}
+	}
+	if ec.Runtime.ActiveStepID == "" || ec.Runtime.ActiveStepID != ec.Step.ID {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  ec.Step.ID,
+			Message: "approval revocation requires an active step",
+		}
+	}
+
+	requestedAction, scope, ok := approvalBindingForStep(*ec.Step)
+	if !ok {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "step does not define an approval binding",
+		}
+	}
+
+	next := *CloneJobRuntimeState(ec.Runtime)
+	next, _ = RefreshApprovalRequests(next, now)
+	sessionChannel = strings.TrimSpace(sessionChannel)
+	sessionChatID = strings.TrimSpace(sessionChatID)
+
+	requestIndex, ok := findLatestReusableApprovalRequest(next.ApprovalRequests, ec.Job.ID, ec.Step.ID, requestedAction, scope, sessionChannel, sessionChatID)
+	if !ok || next.ApprovalRequests[requestIndex].State != ApprovalStateGranted {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "no granted approval matches the active job and step",
+		}
+	}
+
+	grantIndex, ok := findLatestReusableApprovalGrant(next.ApprovalGrants, ec.Job.ID, ec.Step.ID, requestedAction, scope, sessionChannel, sessionChatID)
+	if !ok || next.ApprovalGrants[grantIndex].State != ApprovalStateGranted {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "no granted approval matches the active job and step",
+		}
+	}
+
+	request := &next.ApprovalRequests[requestIndex]
+	request.State = ApprovalStateRevoked
+	request.ResolvedAt = now
+	request.SupersededAt = time.Time{}
+
+	grant := &next.ApprovalGrants[grantIndex]
+	grant.State = ApprovalStateRevoked
+	grant.RevokedAt = now
+
+	next.UpdatedAt = now
+	return next, nil
+}
+
 func findPendingApprovalRequest(requests []ApprovalRequest, jobID, stepID, requestedAction, scope string) (int, bool) {
 	for i := len(requests) - 1; i >= 0; i-- {
 		request := requests[i]

@@ -631,6 +631,222 @@ func TestApplyApprovalDecisionWithSessionStampsRequestAndGrant(t *testing.T) {
 	}
 }
 
+func TestRevokeLatestApprovalGrantWithSessionRevokesLatestMatchingGrantedApproval(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "authorize-a", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob},
+				{ID: "authorize-b", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob, DependsOn: []string{"authorize-a"}},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"authorize-b"}},
+			},
+		},
+	}
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "authorize-b",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-3 * time.Minute),
+				ResolvedAt:      now.Add(-2 * time.Minute),
+			},
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-b",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorReply,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-90 * time.Second),
+				ResolvedAt:      now.Add(-time.Minute),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-2 * time.Minute),
+				ExpiresAt:       now.Add(5 * time.Minute),
+			},
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-b",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorReply,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-time.Minute),
+				ExpiresAt:       now.Add(5 * time.Minute),
+			},
+		},
+	}
+	ec, err := ResolveExecutionContextWithRuntime(job, runtime)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntime() error = %v", err)
+	}
+
+	revokedAt := now.Add(30 * time.Second)
+	nextRuntime, err := RevokeLatestApprovalGrantWithSession(ec, revokedAt, "", "")
+	if err != nil {
+		t.Fatalf("RevokeLatestApprovalGrantWithSession() error = %v", err)
+	}
+	if nextRuntime.ApprovalRequests[0].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", nextRuntime.ApprovalRequests[0].State, ApprovalStateGranted)
+	}
+	if nextRuntime.ApprovalRequests[1].State != ApprovalStateRevoked {
+		t.Fatalf("ApprovalRequests[1].State = %q, want %q", nextRuntime.ApprovalRequests[1].State, ApprovalStateRevoked)
+	}
+	if nextRuntime.ApprovalRequests[1].ResolvedAt != revokedAt {
+		t.Fatalf("ApprovalRequests[1].ResolvedAt = %v, want %v", nextRuntime.ApprovalRequests[1].ResolvedAt, revokedAt)
+	}
+	if nextRuntime.ApprovalGrants[0].State != ApprovalStateGranted {
+		t.Fatalf("ApprovalGrants[0].State = %q, want %q", nextRuntime.ApprovalGrants[0].State, ApprovalStateGranted)
+	}
+	if nextRuntime.ApprovalGrants[1].State != ApprovalStateRevoked {
+		t.Fatalf("ApprovalGrants[1].State = %q, want %q", nextRuntime.ApprovalGrants[1].State, ApprovalStateRevoked)
+	}
+	if nextRuntime.ApprovalGrants[1].RevokedAt != revokedAt {
+		t.Fatalf("ApprovalGrants[1].RevokedAt = %v, want %v", nextRuntime.ApprovalGrants[1].RevokedAt, revokedAt)
+	}
+}
+
+func TestRevokeLatestApprovalGrantWithSessionRejectsWrongSessionBinding(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "authorize-a", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneSession},
+				{ID: "authorize-b", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneSession, DependsOn: []string{"authorize-a"}},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"authorize-b"}},
+			},
+		},
+	}
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "authorize-b",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-time.Minute),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneSession,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "telegram",
+				SessionChatID:   "chat-42",
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-time.Minute),
+				ExpiresAt:       now.Add(5 * time.Minute),
+			},
+		},
+	}
+	ec, err := ResolveExecutionContextWithRuntime(job, runtime)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntime() error = %v", err)
+	}
+
+	if _, err := RevokeLatestApprovalGrantWithSession(ec, now.Add(30*time.Second), "slack", "C123::171234"); err == nil {
+		t.Fatal("RevokeLatestApprovalGrantWithSession() error = nil, want session mismatch failure")
+	}
+}
+
+func TestRevokeLatestApprovalGrantWithSessionRejectsWrongAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "authorize-a", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob},
+				{ID: "authorize-b", Type: StepTypeDiscussion, Subtype: StepSubtypeAuthorization, ApprovalScope: ApprovalScopeOneJob, DependsOn: []string{"authorize-a"}},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"authorize-b"}},
+			},
+		},
+	}
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "authorize-b",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: "different_action",
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-time.Minute),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-a",
+				RequestedAction: "different_action",
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-time.Minute),
+				ExpiresAt:       now.Add(5 * time.Minute),
+			},
+		},
+	}
+	ec, err := ResolveExecutionContextWithRuntime(job, runtime)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntime() error = %v", err)
+	}
+
+	if _, err := RevokeLatestApprovalGrantWithSession(ec, now.Add(30*time.Second), "", ""); err == nil {
+		t.Fatal("RevokeLatestApprovalGrantWithSession() error = nil, want wrong-action failure")
+	}
+}
+
 func TestApprovalRequestContentForAuthorizationStep(t *testing.T) {
 	t.Parallel()
 

@@ -137,6 +137,39 @@ func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *tes
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				SessionChannel:  "cli",
+				SessionChatID:   "direct",
+				State:           ApprovalStateRevoked,
+			},
+		},
+	})
+
+	if summary.ApprovalRequest == nil {
+		t.Fatal("ApprovalRequest = nil, want populated summary")
+	}
+	if summary.ApprovalRequest.State != ApprovalStateRevoked {
+		t.Fatalf("ApprovalRequest.State = %q, want %q", summary.ApprovalRequest.State, ApprovalStateRevoked)
+	}
+	if summary.ApprovalRequest.GrantedVia != ApprovalGrantedViaOperatorCommand {
+		t.Fatalf("ApprovalRequest.GrantedVia = %q, want %q", summary.ApprovalRequest.GrantedVia, ApprovalGrantedViaOperatorCommand)
+	}
+}
+
 func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *testing.T) {
 	t.Parallel()
 

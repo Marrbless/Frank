@@ -1163,6 +1163,68 @@ func TestProcessDirectApproveCommandUsesPersistedWaitingRuntimeAfterExecutionCon
 	}
 }
 
+func TestProcessDirectRevokeApprovalCommandRevokesMatchingGrant(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testReusableApprovalMissionJob(missioncontrol.ApprovalScopeOneJob)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+	if err := ag.taskState.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("REVOKE_APPROVAL job-1 authorize-2", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(REVOKE_APPROVAL) error = %v", err)
+	}
+	if resp != "Revoked approval job=job-1 step=authorize-2." {
+		t.Fatalf("ProcessDirect(REVOKE_APPROVAL) response = %q, want revoke acknowledgement", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateRevoked {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one revoked approval request", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateRevoked {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one revoked approval grant", runtime.ApprovalGrants)
+	}
+}
+
 func TestProcessDirectNaturalApprovalRejectsAmbiguousPendingRequests(t *testing.T) {
 	t.Parallel()
 
@@ -1525,6 +1587,37 @@ func testDiscussionMissionJob() missioncontrol.Job {
 					ID:        "final",
 					Type:      missioncontrol.StepTypeFinalResponse,
 					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testReusableApprovalMissionJob(scope string) missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:            "authorize-1",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: scope,
+				},
+				{
+					ID:            "authorize-2",
+					Type:          missioncontrol.StepTypeDiscussion,
+					Subtype:       missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope: scope,
+					DependsOn:     []string{"authorize-1"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"authorize-2"},
 				},
 			},
 		},
