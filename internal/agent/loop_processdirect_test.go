@@ -645,6 +645,13 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 		Allowed:   true,
 		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
 	})
+	expected := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "status",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	})[0]
 
 	resp, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
 	if err != nil {
@@ -674,6 +681,15 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	}
 	if entry["action"] != "status" {
 		t.Fatalf("recent_audit[0].action = %#v, want %q", entry["action"], "status")
+	}
+	if entry["event_id"] != expected.EventID {
+		t.Fatalf("recent_audit[0].event_id = %#v, want %q", entry["event_id"], expected.EventID)
+	}
+	if entry["action_class"] != string(expected.ActionClass) {
+		t.Fatalf("recent_audit[0].action_class = %#v, want %q", entry["action_class"], expected.ActionClass)
+	}
+	if entry["result"] != string(expected.Result) {
+		t.Fatalf("recent_audit[0].result = %#v, want %q", entry["result"], expected.Result)
 	}
 }
 

@@ -1376,6 +1376,15 @@ func TestTaskStateEmitAuditEventPersistsIntoRuntimeHistoryAndTruncatesDeterminis
 		if audits[i].ToolName != want {
 			t.Fatalf("AuditEvents()[%d].ToolName = %q, want %q", i, audits[i].ToolName, want)
 		}
+		if audits[i].EventID == "" {
+			t.Fatalf("AuditEvents()[%d].EventID = empty, want deterministic id", i)
+		}
+		if audits[i].ActionClass != missioncontrol.AuditActionClassToolCall {
+			t.Fatalf("AuditEvents()[%d].ActionClass = %q, want %q", i, audits[i].ActionClass, missioncontrol.AuditActionClassToolCall)
+		}
+		if audits[i].Result != missioncontrol.AuditResultAllowed {
+			t.Fatalf("AuditEvents()[%d].Result = %q, want %q", i, audits[i].Result, missioncontrol.AuditResultAllowed)
+		}
 		if runtime.AuditHistory[i].ToolName != want {
 			t.Fatalf("MissionRuntimeState().AuditHistory[%d].ToolName = %q, want %q", i, runtime.AuditHistory[i].ToolName, want)
 		}
@@ -1426,8 +1435,15 @@ func TestTaskStateHydrateRuntimeControlRestoresAuditHistoryWithoutDuplication(t 
 	if len(gotRuntime.AuditHistory) != 1 {
 		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want 1", len(gotRuntime.AuditHistory))
 	}
-	if gotRuntime.AuditHistory[0].ToolName != "pause" {
-		t.Fatalf("MissionRuntimeState().AuditHistory[0].ToolName = %q, want %q", gotRuntime.AuditHistory[0].ToolName, "pause")
+	expectedAudit := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	})[0]
+	if gotRuntime.AuditHistory[0] != expectedAudit {
+		t.Fatalf("MissionRuntimeState().AuditHistory[0] = %#v, want %#v", gotRuntime.AuditHistory[0], expectedAudit)
 	}
 }
 

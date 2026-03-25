@@ -2688,15 +2688,14 @@ func TestMissionStatusSnapshotWritePersistsAuditHistory(t *testing.T) {
 	if len(got.Runtime.AuditHistory) != 1 {
 		t.Fatalf("Runtime.AuditHistory count = %d, want 1", len(got.Runtime.AuditHistory))
 	}
-	if !reflect.DeepEqual(got.Runtime.AuditHistory, []missioncontrol.AuditEvent{
-		{
-			JobID:     "job-1",
-			StepID:    "build",
-			ToolName:  "pause",
-			Allowed:   true,
-			Timestamp: got.Runtime.AuditHistory[0].Timestamp,
-		},
-	}) {
+	expectedAudit := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   true,
+		Timestamp: got.Runtime.AuditHistory[0].Timestamp,
+	})
+	if !reflect.DeepEqual(got.Runtime.AuditHistory, expectedAudit) {
 		t.Fatalf("Runtime.AuditHistory = %#v, want one persisted pause audit", got.Runtime.AuditHistory)
 	}
 }
@@ -2710,13 +2709,13 @@ func TestMissionStatusBootstrapRehydratesAuditHistoryWithoutDuplication(t *testi
 
 	job := testMissionBootstrapJob()
 	missionFile := writeMissionBootstrapJobFile(t, job)
-	persistedAudit := missioncontrol.AuditEvent{
+	persistedAudit := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
 		JobID:     job.ID,
 		StepID:    "build",
 		ToolName:  "pause",
 		Allowed:   true,
 		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
-	}
+	})[0]
 	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
 		MissionFile: missionFile,
 		JobID:       job.ID,

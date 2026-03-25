@@ -86,17 +86,17 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *testing.T) {
 	t.Parallel()
 
+	history := AppendAuditHistory(nil, AuditEvent{JobID: "job-1", StepID: "build", ToolName: "write_memory", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)})
+	history = AppendAuditHistory(history, AuditEvent{JobID: "job-1", StepID: "build", ToolName: "pause", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)})
+	history = AppendAuditHistory(history, AuditEvent{JobID: "job-1", StepID: "build", ToolName: "resume", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)})
+	history = AppendAuditHistory(history, AuditEvent{JobID: "job-1", StepID: "build", ToolName: "abort", Allowed: false, Code: RejectionCodeInvalidRuntimeState, Timestamp: time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC)})
+	history = AppendAuditHistory(history, AuditEvent{JobID: "job-1", StepID: "final", ToolName: "status", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 4, 0, 0, time.UTC)})
+	history = AppendAuditHistory(history, AuditEvent{JobID: "job-1", StepID: "final", ToolName: "set_step", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC)})
+
 	runtime := JobRuntimeState{
-		JobID: "job-1",
-		State: JobStatePaused,
-		AuditHistory: []AuditEvent{
-			{JobID: "job-1", StepID: "build", ToolName: "write_memory", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)},
-			{JobID: "job-1", StepID: "build", ToolName: "pause", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)},
-			{JobID: "job-1", StepID: "build", ToolName: "resume", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)},
-			{JobID: "job-1", StepID: "build", ToolName: "abort", Allowed: false, Code: RejectionCodeInvalidRuntimeState, Timestamp: time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC)},
-			{JobID: "job-1", StepID: "final", ToolName: "status", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 4, 0, 0, time.UTC)},
-			{JobID: "job-1", StepID: "final", ToolName: "set_step", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC)},
-		},
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		AuditHistory: history,
 	}
 
 	summary := BuildOperatorStatusSummary(runtime)
@@ -107,16 +107,21 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 	for i, want := range []struct {
 		action string
 		stepID string
+		class  AuditActionClass
+		result AuditResult
 		code   RejectionCode
 		at     string
 	}{
-		{action: "set_step", stepID: "final", at: "2026-03-24T12:05:00Z"},
-		{action: "status", stepID: "final", at: "2026-03-24T12:04:00Z"},
-		{action: "abort", stepID: "build", code: RejectionCodeInvalidRuntimeState, at: "2026-03-24T12:03:00Z"},
-		{action: "resume", stepID: "build", at: "2026-03-24T12:02:00Z"},
-		{action: "pause", stepID: "build", at: "2026-03-24T12:01:00Z"},
+		{action: "set_step", stepID: "final", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:05:00Z"},
+		{action: "status", stepID: "final", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:04:00Z"},
+		{action: "abort", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultRejected, code: RejectionCodeInvalidRuntimeState, at: "2026-03-24T12:03:00Z"},
+		{action: "resume", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:02:00Z"},
+		{action: "pause", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:01:00Z"},
 	} {
 		got := summary.RecentAudit[i]
+		if got.EventID == "" {
+			t.Fatalf("RecentAudit[%d].EventID = empty, want deterministic id", i)
+		}
 		if got.JobID != "job-1" {
 			t.Fatalf("RecentAudit[%d].JobID = %q, want %q", i, got.JobID, "job-1")
 		}
@@ -125,6 +130,12 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 		}
 		if got.Action != want.action {
 			t.Fatalf("RecentAudit[%d].Action = %q, want %q", i, got.Action, want.action)
+		}
+		if got.ActionClass != want.class {
+			t.Fatalf("RecentAudit[%d].ActionClass = %q, want %q", i, got.ActionClass, want.class)
+		}
+		if got.Result != want.result {
+			t.Fatalf("RecentAudit[%d].Result = %q, want %q", i, got.Result, want.result)
 		}
 		if got.Code != want.code {
 			t.Fatalf("RecentAudit[%d].Code = %q, want %q", i, got.Code, want.code)
@@ -138,19 +149,19 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(t *testing.T) {
 	t.Parallel()
 
+	terminalAudit := AppendAuditHistory(nil, AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "abort",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 8, 0, 0, time.UTC),
+	})[0]
+
 	formatted, err := FormatOperatorStatusSummary(JobRuntimeState{
 		JobID:         "job-1",
 		State:         JobStateAborted,
 		AbortedReason: RuntimeAbortReasonOperatorCommand,
-		AuditHistory: []AuditEvent{
-			{
-				JobID:     "job-1",
-				StepID:    "build",
-				ToolName:  "abort",
-				Allowed:   true,
-				Timestamp: time.Date(2026, 3, 24, 12, 8, 0, 0, time.UTC),
-			},
-		},
+		AuditHistory:  []AuditEvent{terminalAudit},
 		ApprovalRequests: []ApprovalRequest{
 			{
 				JobID:           "job-1",
@@ -203,8 +214,17 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 	if entry["job_id"] != "job-1" {
 		t.Fatalf("recent_audit[0].job_id = %#v, want %q", entry["job_id"], "job-1")
 	}
+	if entry["event_id"] != terminalAudit.EventID {
+		t.Fatalf("recent_audit[0].event_id = %#v, want %q", entry["event_id"], terminalAudit.EventID)
+	}
 	if entry["action"] != "abort" {
 		t.Fatalf("recent_audit[0].action = %#v, want %q", entry["action"], "abort")
+	}
+	if entry["action_class"] != string(AuditActionClassOperatorCommand) {
+		t.Fatalf("recent_audit[0].action_class = %#v, want %q", entry["action_class"], AuditActionClassOperatorCommand)
+	}
+	if entry["result"] != string(AuditResultApplied) {
+		t.Fatalf("recent_audit[0].result = %#v, want %q", entry["result"], AuditResultApplied)
 	}
 	if entry["timestamp"] != "2026-03-24T12:08:00Z" {
 		t.Fatalf("recent_audit[0].timestamp = %#v, want %q", entry["timestamp"], "2026-03-24T12:08:00Z")

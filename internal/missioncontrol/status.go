@@ -32,12 +32,15 @@ type OperatorApprovalRequestStatus struct {
 }
 
 type OperatorRecentAuditStatus struct {
-	JobID     string        `json:"job_id"`
-	StepID    string        `json:"step_id,omitempty"`
-	Action    string        `json:"action"`
-	Allowed   bool          `json:"allowed"`
-	Code      RejectionCode `json:"error_code,omitempty"`
-	Timestamp string        `json:"timestamp"`
+	EventID     string           `json:"event_id,omitempty"`
+	JobID       string           `json:"job_id"`
+	StepID      string           `json:"step_id,omitempty"`
+	Action      string           `json:"action"`
+	ActionClass AuditActionClass `json:"action_class,omitempty"`
+	Result      AuditResult      `json:"result,omitempty"`
+	Allowed     bool             `json:"allowed"`
+	Code        RejectionCode    `json:"error_code,omitempty"`
+	Timestamp   string           `json:"timestamp"`
 }
 
 func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
@@ -119,14 +122,17 @@ func selectOperatorStatusRecentAudit(runtime JobRuntimeState) []OperatorRecentAu
 
 	recent := make([]OperatorRecentAuditStatus, 0, count)
 	for i := len(runtime.AuditHistory) - 1; i >= len(runtime.AuditHistory)-count; i-- {
-		event := runtime.AuditHistory[i]
+		event := normalizeAuditEvent(runtime.AuditHistory[i])
 		recent = append(recent, OperatorRecentAuditStatus{
-			JobID:     event.JobID,
-			StepID:    event.StepID,
-			Action:    event.ToolName,
-			Allowed:   event.Allowed,
-			Code:      event.Code,
-			Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano),
+			EventID:     event.EventID,
+			JobID:       event.JobID,
+			StepID:      event.StepID,
+			Action:      event.ToolName,
+			ActionClass: event.ActionClass,
+			Result:      event.Result,
+			Allowed:     event.Allowed,
+			Code:        event.Code,
+			Timestamp:   event.Timestamp.UTC().Format(time.RFC3339Nano),
 		})
 	}
 

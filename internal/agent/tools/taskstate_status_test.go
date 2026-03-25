@@ -67,6 +67,14 @@ func TestTaskStateOperatorStatusIncludesRecentAuditForActiveRuntime(t *testing.T
 		Code:      missioncontrol.RejectionCodeInvalidRuntimeState,
 		Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
 	})
+	expected := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   false,
+		Code:      missioncontrol.RejectionCodeInvalidRuntimeState,
+		Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	})[0]
 
 	summary, err := state.OperatorStatus("job-1")
 	if err != nil {
@@ -87,6 +95,15 @@ func TestTaskStateOperatorStatusIncludesRecentAuditForActiveRuntime(t *testing.T
 	}
 	if first["action"] != "pause" {
 		t.Fatalf("recent_audit[0].action = %#v, want %q", first["action"], "pause")
+	}
+	if first["event_id"] != expected.EventID {
+		t.Fatalf("recent_audit[0].event_id = %#v, want %q", first["event_id"], expected.EventID)
+	}
+	if first["action_class"] != string(expected.ActionClass) {
+		t.Fatalf("recent_audit[0].action_class = %#v, want %q", first["action_class"], expected.ActionClass)
+	}
+	if first["result"] != string(expected.Result) {
+		t.Fatalf("recent_audit[0].result = %#v, want %q", first["result"], expected.Result)
 	}
 	if first["error_code"] != string(missioncontrol.RejectionCodeInvalidRuntimeState) {
 		t.Fatalf("recent_audit[0].error_code = %#v, want %q", first["error_code"], missioncontrol.RejectionCodeInvalidRuntimeState)
@@ -202,27 +219,26 @@ func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing
 
 	state := NewTaskState()
 	job := testTaskStateJob()
+	persistedHistory := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "write_memory",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	})
+	persistedHistory = missioncontrol.AppendAuditHistory(persistedHistory, missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	})
 	runtime := missioncontrol.JobRuntimeState{
 		JobID:        "job-1",
 		State:        missioncontrol.JobStatePaused,
 		ActiveStepID: "build",
 		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
-		AuditHistory: []missioncontrol.AuditEvent{
-			{
-				JobID:     "job-1",
-				StepID:    "build",
-				ToolName:  "write_memory",
-				Allowed:   true,
-				Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
-			},
-			{
-				JobID:     "job-1",
-				StepID:    "build",
-				ToolName:  "pause",
-				Allowed:   true,
-				Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
-			},
-		},
+		AuditHistory: persistedHistory,
 	}
 	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 		t.Fatalf("HydrateRuntimeControl() error = %v", err)
@@ -246,6 +262,15 @@ func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing
 	second := recentAudit[1].(map[string]any)
 	if first["action"] != "pause" || second["action"] != "write_memory" {
 		t.Fatalf("recent_audit actions = (%#v, %#v), want (%q, %q)", first["action"], second["action"], "pause", "write_memory")
+	}
+	if first["event_id"] != persistedHistory[1].EventID || second["event_id"] != persistedHistory[0].EventID {
+		t.Fatalf("recent_audit event_ids = (%#v, %#v), want (%q, %q)", first["event_id"], second["event_id"], persistedHistory[1].EventID, persistedHistory[0].EventID)
+	}
+	if first["action_class"] != string(persistedHistory[1].ActionClass) || second["action_class"] != string(persistedHistory[0].ActionClass) {
+		t.Fatalf("recent_audit action_class = (%#v, %#v), want (%q, %q)", first["action_class"], second["action_class"], persistedHistory[1].ActionClass, persistedHistory[0].ActionClass)
+	}
+	if first["result"] != string(persistedHistory[1].Result) || second["result"] != string(persistedHistory[0].Result) {
+		t.Fatalf("recent_audit result = (%#v, %#v), want (%q, %q)", first["result"], second["result"], persistedHistory[1].Result, persistedHistory[0].Result)
 	}
 }
 
