@@ -258,6 +258,46 @@ func TestFindReusableApprovalGrantRejectsWrongAction(t *testing.T) {
 	}
 }
 
+func TestApplyApprovalDecisionWithSessionStampsRequestAndGrant(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     now.Add(-30 * time.Second),
+			ExpiresAt:       now.Add(5 * time.Minute),
+		},
+	}
+
+	runtime, err := ApplyApprovalDecisionWithSession(ec, now, ApprovalDecisionApprove, ApprovalGrantedViaOperatorCommand, "telegram", "chat-42")
+	if err != nil {
+		t.Fatalf("ApplyApprovalDecisionWithSession() error = %v", err)
+	}
+	if len(runtime.ApprovalRequests) != 1 {
+		t.Fatalf("ApprovalRequests = %#v, want one request", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].SessionChannel != "telegram" || runtime.ApprovalRequests[0].SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalRequests[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[0].SessionChannel, runtime.ApprovalRequests[0].SessionChatID, "telegram", "chat-42")
+	}
+	if len(runtime.ApprovalGrants) != 1 {
+		t.Fatalf("ApprovalGrants = %#v, want one grant", runtime.ApprovalGrants)
+	}
+	if runtime.ApprovalGrants[0].SessionChannel != "telegram" || runtime.ApprovalGrants[0].SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalGrants[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalGrants[0].SessionChannel, runtime.ApprovalGrants[0].SessionChatID, "telegram", "chat-42")
+	}
+}
+
 func TestApprovalRequestContentForAuthorizationStep(t *testing.T) {
 	t.Parallel()
 

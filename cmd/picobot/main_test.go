@@ -2839,6 +2839,12 @@ func TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle(t *testing.T) {
 	if len(approvedSnapshot.Runtime.ApprovalGrants) != 1 || approvedSnapshot.Runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants = %#v, want one granted approval", approvedSnapshot.Runtime.ApprovalGrants)
 	}
+	if approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
+	}
+	if approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel, approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID, "cli", "direct")
+	}
 }
 
 func TestMissionStatusRuntimeChangeHookPersistsNaturalApprovalLifecycle(t *testing.T) {
@@ -2894,6 +2900,12 @@ func TestMissionStatusRuntimeChangeHookPersistsNaturalApprovalLifecycle(t *testi
 	if len(snapshot.Runtime.ApprovalGrants) != 1 || snapshot.Runtime.ApprovalGrants[0].GrantedVia != missioncontrol.ApprovalGrantedViaOperatorReply {
 		t.Fatalf("snapshot.Runtime.ApprovalGrants = %#v, want one natural-language approval grant", snapshot.Runtime.ApprovalGrants)
 	}
+	if snapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || snapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", snapshot.Runtime.ApprovalRequests[0].SessionChannel, snapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
+	}
+	if snapshot.Runtime.ApprovalGrants[0].SessionChannel != "cli" || snapshot.Runtime.ApprovalGrants[0].SessionChatID != "direct" {
+		t.Fatalf("snapshot.Runtime.ApprovalGrants[0] session = (%q, %q), want (%q, %q)", snapshot.Runtime.ApprovalGrants[0].SessionChannel, snapshot.Runtime.ApprovalGrants[0].SessionChatID, "cli", "direct")
+	}
 }
 
 func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *testing.T) {
@@ -2941,6 +2953,8 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
 					Scope:           missioncontrol.ApprovalScopeMissionStep,
 					Content:         &content,
+					SessionChannel:  "telegram",
+					SessionChatID:   "chat-42",
 					State:           missioncontrol.ApprovalStatePending,
 				},
 			},
@@ -2962,6 +2976,11 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	if err := configureMissionBootstrap(cmd, ag); err != nil {
 		t.Fatalf("configureMissionBootstrap() error = %v", err)
 	}
+	if runtime, ok := ag.MissionRuntimeState(); !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	} else if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].SessionChannel != "telegram" || runtime.ApprovalRequests[0].SessionChatID != "chat-42" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want preserved rehydrated session binding", runtime.ApprovalRequests)
+	}
 
 	if _, err := ag.ProcessDirect("DENY job-1 build", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(DENY) error = %v", err)
@@ -2979,6 +2998,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	}
 	if deniedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *deniedSnapshot.Runtime.ApprovalRequests[0].Content != content {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0].Content = %#v, want %#v", deniedSnapshot.Runtime.ApprovalRequests[0].Content, content)
+	}
+	if deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
 
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
@@ -3007,6 +3029,12 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	}
 	if len(approvedSnapshot.Runtime.ApprovalRequests) != 1 || approvedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *approvedSnapshot.Runtime.ApprovalRequests[0].Content != content {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests = %#v, want persisted enriched request content", approvedSnapshot.Runtime.ApprovalRequests)
+	}
+	if approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
+	}
+	if approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel, approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID, "cli", "direct")
 	}
 }
 
@@ -3056,6 +3084,8 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
 					Scope:           missioncontrol.ApprovalScopeMissionStep,
 					Content:         &content,
+					SessionChannel:  "telegram",
+					SessionChatID:   "chat-42",
 					State:           missioncontrol.ApprovalStatePending,
 				},
 			},
@@ -3079,8 +3109,8 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 	if runtime, ok := ag.MissionRuntimeState(); !ok {
 		t.Fatal("MissionRuntimeState() ok = false, want true")
-	} else if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].Content == nil || *runtime.ApprovalRequests[0].Content != content {
-		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want preserved enriched request content after rehydration", runtime.ApprovalRequests)
+	} else if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].Content == nil || *runtime.ApprovalRequests[0].Content != content || runtime.ApprovalRequests[0].SessionChannel != "telegram" || runtime.ApprovalRequests[0].SessionChatID != "chat-42" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want preserved enriched request content and session binding after rehydration", runtime.ApprovalRequests)
 	}
 	if _, err := ag.ProcessDirect("no", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(no) error = %v", err)
@@ -3098,6 +3128,9 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 	if deniedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *deniedSnapshot.Runtime.ApprovalRequests[0].Content != content {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0].Content = %#v, want %#v", deniedSnapshot.Runtime.ApprovalRequests[0].Content, content)
+	}
+	if deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
 
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
@@ -3122,6 +3155,12 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	}
 	if len(approvedSnapshot.Runtime.ApprovalRequests) != 1 || approvedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *approvedSnapshot.Runtime.ApprovalRequests[0].Content != content {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests = %#v, want persisted enriched request content", approvedSnapshot.Runtime.ApprovalRequests)
+	}
+	if approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
+	}
+	if approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID != "direct" {
+		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel, approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID, "cli", "direct")
 	}
 }
 

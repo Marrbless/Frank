@@ -60,6 +60,8 @@ type ApprovalRequest struct {
 	Content         *ApprovalRequestContent `json:"content,omitempty"`
 	RequestedVia    string                  `json:"requested_via"`
 	GrantedVia      string                  `json:"granted_via,omitempty"`
+	SessionChannel  string                  `json:"session_channel,omitempty"`
+	SessionChatID   string                  `json:"session_chat_id,omitempty"`
 	State           ApprovalState           `json:"state"`
 	Reason          string                  `json:"reason,omitempty"`
 	RequestedAt     time.Time               `json:"requested_at,omitempty"`
@@ -74,6 +76,8 @@ type ApprovalGrant struct {
 	RequestedAction string        `json:"requested_action"`
 	Scope           string        `json:"scope"`
 	GrantedVia      string        `json:"granted_via"`
+	SessionChannel  string        `json:"session_channel,omitempty"`
+	SessionChatID   string        `json:"session_chat_id,omitempty"`
 	State           ApprovalState `json:"state"`
 	GrantedAt       time.Time     `json:"granted_at,omitempty"`
 	ExpiresAt       time.Time     `json:"expires_at,omitempty"`
@@ -260,6 +264,10 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 }
 
 func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision ApprovalDecision, via string) (JobRuntimeState, error) {
+	return ApplyApprovalDecisionWithSession(ec, now, decision, via, "", "")
+}
+
+func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decision ApprovalDecision, via string, sessionChannel string, sessionChatID string) (JobRuntimeState, error) {
 	if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
 		return JobRuntimeState{}, ValidationError{
 			Code:    RejectionCodeInvalidRuntimeState,
@@ -302,6 +310,8 @@ func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision Approval
 	}
 
 	next.ApprovalRequests[requestIndex].ResolvedAt = now
+	next.ApprovalRequests[requestIndex].SessionChannel = strings.TrimSpace(sessionChannel)
+	next.ApprovalRequests[requestIndex].SessionChatID = strings.TrimSpace(sessionChatID)
 	switch decision {
 	case ApprovalDecisionApprove:
 		next.ApprovalRequests[requestIndex].State = ApprovalStateGranted
@@ -312,6 +322,8 @@ func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision Approval
 			RequestedAction: requestedAction,
 			Scope:           normalizeApprovalScope(scope),
 			GrantedVia:      via,
+			SessionChannel:  next.ApprovalRequests[requestIndex].SessionChannel,
+			SessionChatID:   next.ApprovalRequests[requestIndex].SessionChatID,
 			State:           ApprovalStateGranted,
 			GrantedAt:       now,
 			ExpiresAt:       next.ApprovalRequests[requestIndex].ExpiresAt,

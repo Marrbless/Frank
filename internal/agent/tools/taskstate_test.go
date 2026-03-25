@@ -946,6 +946,7 @@ func TestTaskStateApplyApprovalDecisionUsesPersistedRuntimeControlAfterExecution
 		t.Fatalf("ApplyStepOutput() error = %v", err)
 	}
 
+	state.SetOperatorSession("telegram", "chat-42")
 	state.ClearExecutionContext()
 
 	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionApprove, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
@@ -968,6 +969,12 @@ func TestTaskStateApplyApprovalDecisionUsesPersistedRuntimeControlAfterExecution
 	}
 	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
 		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one granted approval", runtime.ApprovalGrants)
+	}
+	if runtime.ApprovalRequests[0].SessionChannel != "telegram" || runtime.ApprovalRequests[0].SessionChatID != "chat-42" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[0].SessionChannel, runtime.ApprovalRequests[0].SessionChatID, "telegram", "chat-42")
+	}
+	if runtime.ApprovalGrants[0].SessionChannel != "telegram" || runtime.ApprovalGrants[0].SessionChatID != "chat-42" {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalGrants[0].SessionChannel, runtime.ApprovalGrants[0].SessionChatID, "telegram", "chat-42")
 	}
 }
 
@@ -1082,28 +1089,38 @@ func TestTaskStateApplyNaturalApprovalDecisionUsesPersistedRuntimeControlAfterEx
 		t.Fatalf("ApplyStepOutput() error = %v", err)
 	}
 
+	state.SetOperatorSession("slack", "C123::171234")
 	state.ClearExecutionContext()
 
-	handled, resp, err := state.ApplyNaturalApprovalDecision("no")
+	handled, resp, err := state.ApplyNaturalApprovalDecision("yes")
 	if err != nil {
-		t.Fatalf("ApplyNaturalApprovalDecision(no) error = %v", err)
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) error = %v", err)
 	}
 	if !handled {
-		t.Fatal("ApplyNaturalApprovalDecision(no) handled = false, want true")
+		t.Fatal("ApplyNaturalApprovalDecision(yes) handled = false, want true")
 	}
-	if resp != "Denied job=job-1 step=build." {
-		t.Fatalf("ApplyNaturalApprovalDecision(no) response = %q, want denial acknowledgement", resp)
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ApplyNaturalApprovalDecision(yes) response = %q, want approval acknowledgement", resp)
 	}
 
 	runtime, ok := state.MissionRuntimeState()
 	if !ok {
 		t.Fatal("MissionRuntimeState() ok = false, want true")
 	}
-	if runtime.State != missioncontrol.JobStateWaitingUser {
-		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
 	}
-	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
-		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one denied approval", runtime.ApprovalRequests)
+	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one granted approval", runtime.ApprovalRequests)
+	}
+	if len(runtime.ApprovalGrants) != 1 || runtime.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants = %#v, want one granted approval", runtime.ApprovalGrants)
+	}
+	if runtime.ApprovalRequests[0].SessionChannel != "slack" || runtime.ApprovalRequests[0].SessionChatID != "C123::171234" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[0].SessionChannel, runtime.ApprovalRequests[0].SessionChatID, "slack", "C123::171234")
+	}
+	if runtime.ApprovalGrants[0].SessionChannel != "slack" || runtime.ApprovalGrants[0].SessionChatID != "C123::171234" {
+		t.Fatalf("MissionRuntimeState().ApprovalGrants[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalGrants[0].SessionChannel, runtime.ApprovalGrants[0].SessionChatID, "slack", "C123::171234")
 	}
 }
 
@@ -1698,6 +1715,7 @@ func TestTaskStateApplyApprovalDecisionWrongBindingAfterExecutionContextTeardown
 	}
 
 	state.ClearExecutionContext()
+	state.SetOperatorSession("telegram", "chat-99")
 
 	for _, tc := range []struct {
 		name   string
@@ -1724,6 +1742,9 @@ func TestTaskStateApplyApprovalDecisionWrongBindingAfterExecutionContextTeardown
 	}
 	if len(runtime.ApprovalRequests) != 1 || runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
 		t.Fatalf("MissionRuntimeState().ApprovalRequests = %#v, want one pending approval", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].SessionChannel != "" || runtime.ApprovalRequests[0].SessionChatID != "" {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0] session = (%q, %q), want empty session on non-binding mismatch", runtime.ApprovalRequests[0].SessionChannel, runtime.ApprovalRequests[0].SessionChatID)
 	}
 }
 

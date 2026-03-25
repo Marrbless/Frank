@@ -211,6 +211,8 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 					Content:         &content,
 					RequestedVia:    ApprovalRequestedViaRuntime,
 					GrantedVia:      reusableGrant.GrantedVia,
+					SessionChannel:  reusableGrant.SessionChannel,
+					SessionChatID:   reusableGrant.SessionChatID,
 					Reason:          waitingReason,
 					ExpiresAt:       reusableGrant.ExpiresAt,
 				})

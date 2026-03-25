@@ -122,6 +122,8 @@ func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *te
 			RequestedAction: ApprovalRequestedActionStepComplete,
 			Scope:           ApprovalScopeOneJob,
 			GrantedVia:      ApprovalGrantedViaOperatorCommand,
+			SessionChannel:  "telegram",
+			SessionChatID:   "chat-42",
 			State:           ApprovalStateGranted,
 			GrantedAt:       now.Add(-90 * time.Second),
 			ExpiresAt:       now.Add(time.Minute),
@@ -146,6 +148,9 @@ func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *te
 	}
 	if runtime.ApprovalRequests[1].GrantedVia != ApprovalGrantedViaOperatorCommand {
 		t.Fatalf("ApprovalRequests[1].GrantedVia = %q, want %q", runtime.ApprovalRequests[1].GrantedVia, ApprovalGrantedViaOperatorCommand)
+	}
+	if runtime.ApprovalRequests[1].SessionChannel != "telegram" || runtime.ApprovalRequests[1].SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalRequests[1] session = (%q, %q), want (%q, %q)", runtime.ApprovalRequests[1].SessionChannel, runtime.ApprovalRequests[1].SessionChatID, "telegram", "chat-42")
 	}
 	if len(runtime.ApprovalGrants) != 1 {
 		t.Fatalf("ApprovalGrants = %#v, want original reusable grant only", runtime.ApprovalGrants)

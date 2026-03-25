@@ -244,6 +244,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			if a.taskState != nil {
 				a.taskState.BeginTask(fmt.Sprintf("%s:%s:%d", msg.Channel, msg.ChatID, time.Now().UnixNano()))
+				a.taskState.SetOperatorSession(msg.Channel, msg.ChatID)
 				if handled, content, err := a.processOperatorCommand(msg.Content); handled {
 					if err != nil {
 						content = err.Error()
@@ -452,6 +453,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
+		a.taskState.SetOperatorSession("cli", "direct")
 		if handled, response, err := a.processOperatorCommand(content); handled {
 			return response, err
 		}

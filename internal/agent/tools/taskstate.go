@@ -23,6 +23,8 @@ type TaskState struct {
 	hasRuntimeControl   bool
 	runtimeState        missioncontrol.JobRuntimeState
 	hasRuntimeState     bool
+	operatorChannel     string
+	operatorChatID      string
 	auditEvents         []missioncontrol.AuditEvent
 	runtimeChangeHook   func()
 }
@@ -133,6 +135,16 @@ func (s *TaskState) SetRuntimeChangeHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtimeChangeHook = hook
+}
+
+func (s *TaskState) SetOperatorSession(channel string, chatID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.operatorChannel = channel
+	s.operatorChatID = chatID
 }
 
 func (s *TaskState) EmitAuditEvent(event missioncontrol.AuditEvent) {
@@ -404,6 +416,8 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
+	operatorChannel := s.operatorChannel
+	operatorChatID := s.operatorChatID
 	s.mu.Unlock()
 
 	storeJob := ec.Job
@@ -499,7 +513,7 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 		rebootSafePath = true
 	}
 
-	nextRuntime, err := missioncontrol.ApplyApprovalDecision(ec, time.Now(), decision, via)
+	nextRuntime, err := missioncontrol.ApplyApprovalDecisionWithSession(ec, time.Now(), decision, via, operatorChannel, operatorChatID)
 	if err != nil {
 		return err
 	}
