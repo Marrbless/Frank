@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const OperatorStatusRecentAuditLimit = 5
+
 type OperatorStatusSummary struct {
 	JobID           string                         `json:"job_id"`
 	State           JobState                       `json:"state"`
@@ -13,6 +15,7 @@ type OperatorStatusSummary struct {
 	PausedReason    string                         `json:"paused_reason,omitempty"`
 	AbortedReason   string                         `json:"aborted_reason,omitempty"`
 	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
+	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
 }
 
 type OperatorApprovalRequestStatus struct {
@@ -26,6 +29,15 @@ type OperatorApprovalRequestStatus struct {
 	FallbackIfDenied string        `json:"fallback_if_denied,omitempty"`
 	ExpiresAt        *string       `json:"expires_at,omitempty"`
 	SupersededAt     *string       `json:"superseded_at,omitempty"`
+}
+
+type OperatorRecentAuditStatus struct {
+	JobID     string        `json:"job_id"`
+	StepID    string        `json:"step_id,omitempty"`
+	Action    string        `json:"action"`
+	Allowed   bool          `json:"allowed"`
+	Code      RejectionCode `json:"error_code,omitempty"`
+	Timestamp string        `json:"timestamp"`
 }
 
 func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
@@ -61,6 +73,7 @@ func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
 		}
 		summary.ApprovalRequest = &status
 	}
+	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 
 	return summary
 }
@@ -92,4 +105,30 @@ func selectOperatorStatusApprovalRequest(runtime JobRuntimeState) (ApprovalReque
 		return ApprovalRequest{}, false
 	}
 	return *fallback, true
+}
+
+func selectOperatorStatusRecentAudit(runtime JobRuntimeState) []OperatorRecentAuditStatus {
+	if len(runtime.AuditHistory) == 0 {
+		return nil
+	}
+
+	count := OperatorStatusRecentAuditLimit
+	if len(runtime.AuditHistory) < count {
+		count = len(runtime.AuditHistory)
+	}
+
+	recent := make([]OperatorRecentAuditStatus, 0, count)
+	for i := len(runtime.AuditHistory) - 1; i >= len(runtime.AuditHistory)-count; i-- {
+		event := runtime.AuditHistory[i]
+		recent = append(recent, OperatorRecentAuditStatus{
+			JobID:     event.JobID,
+			StepID:    event.StepID,
+			Action:    event.ToolName,
+			Allowed:   event.Allowed,
+			Code:      event.Code,
+			Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano),
+		})
+	}
+
+	return recent
 }

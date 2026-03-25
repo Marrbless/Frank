@@ -638,6 +638,13 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
+	ag.taskState.EmitAuditEvent(missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "status",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	})
 
 	resp, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
 	if err != nil {
@@ -656,6 +663,17 @@ func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
 	}
 	if got["active_step_id"] != "build" {
 		t.Fatalf("active_step_id = %#v, want %q", got["active_step_id"], "build")
+	}
+	recentAudit, ok := got["recent_audit"].([]any)
+	if !ok || len(recentAudit) != 1 {
+		t.Fatalf("recent_audit = %#v, want one audit entry", got["recent_audit"])
+	}
+	entry, ok := recentAudit[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recent_audit[0] = %#v, want object", recentAudit[0])
+	}
+	if entry["action"] != "status" {
+		t.Fatalf("recent_audit[0].action = %#v, want %q", entry["action"], "status")
 	}
 }
 

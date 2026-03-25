@@ -45,6 +45,57 @@ func TestTaskStateOperatorStatusReturnsDeterministicSummaryForActiveRuntime(t *t
 	}
 }
 
+func TestTaskStateOperatorStatusIncludesRecentAuditForActiveRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	state.EmitAuditEvent(missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "write_memory",
+		Allowed:   true,
+		Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	})
+	state.EmitAuditEvent(missioncontrol.AuditEvent{
+		JobID:     "job-1",
+		StepID:    "build",
+		ToolName:  "pause",
+		Allowed:   false,
+		Code:      missioncontrol.RejectionCodeInvalidRuntimeState,
+		Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	})
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(summary), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	recentAudit, ok := got["recent_audit"].([]any)
+	if !ok || len(recentAudit) != 2 {
+		t.Fatalf("recent_audit = %#v, want two audit entries", got["recent_audit"])
+	}
+	first, ok := recentAudit[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recent_audit[0] = %#v, want object", recentAudit[0])
+	}
+	if first["action"] != "pause" {
+		t.Fatalf("recent_audit[0].action = %#v, want %q", first["action"], "pause")
+	}
+	if first["error_code"] != string(missioncontrol.RejectionCodeInvalidRuntimeState) {
+		t.Fatalf("recent_audit[0].error_code = %#v, want %q", first["error_code"], missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+	if first["timestamp"] != "2026-03-24T12:01:00Z" {
+		t.Fatalf("recent_audit[0].timestamp = %#v, want %q", first["timestamp"], "2026-03-24T12:01:00Z")
+	}
+}
+
 func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -146,13 +197,103 @@ func TestTaskStateOperatorStatusReturnsPausedReason(t *testing.T) {
 	}
 }
 
+func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		AuditHistory: []missioncontrol.AuditEvent{
+			{
+				JobID:     "job-1",
+				StepID:    "build",
+				ToolName:  "write_memory",
+				Allowed:   true,
+				Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				JobID:     "job-1",
+				StepID:    "build",
+				ToolName:  "pause",
+				Allowed:   true,
+				Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(summary), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	recentAudit, ok := got["recent_audit"].([]any)
+	if !ok || len(recentAudit) != 2 {
+		t.Fatalf("recent_audit = %#v, want two audit entries", got["recent_audit"])
+	}
+	first := recentAudit[0].(map[string]any)
+	second := recentAudit[1].(map[string]any)
+	if first["action"] != "pause" || second["action"] != "write_memory" {
+		t.Fatalf("recent_audit actions = (%#v, %#v), want (%q, %q)", first["action"], second["action"], "pause", "write_memory")
+	}
+}
+
 func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testing.T) {
 	t.Parallel()
 
 	for _, runtime := range []missioncontrol.JobRuntimeState{
-		{JobID: "job-1", State: missioncontrol.JobStateAborted, AbortedReason: missioncontrol.RuntimeAbortReasonOperatorCommand},
-		{JobID: "job-1", State: missioncontrol.JobStateCompleted},
-		{JobID: "job-1", State: missioncontrol.JobStateFailed},
+		{
+			JobID:         "job-1",
+			State:         missioncontrol.JobStateAborted,
+			AbortedReason: missioncontrol.RuntimeAbortReasonOperatorCommand,
+			AuditHistory: []missioncontrol.AuditEvent{
+				{
+					JobID:     "job-1",
+					StepID:    "build",
+					ToolName:  "abort",
+					Allowed:   true,
+					Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+		{
+			JobID: "job-1",
+			State: missioncontrol.JobStateCompleted,
+			AuditHistory: []missioncontrol.AuditEvent{
+				{
+					JobID:     "job-1",
+					StepID:    "final",
+					ToolName:  "status",
+					Allowed:   true,
+					Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+				},
+			},
+		},
+		{
+			JobID: "job-1",
+			State: missioncontrol.JobStateFailed,
+			AuditHistory: []missioncontrol.AuditEvent{
+				{
+					JobID:     "job-1",
+					StepID:    "build",
+					ToolName:  "pause",
+					Allowed:   false,
+					Code:      missioncontrol.RejectionCodeInvalidRuntimeState,
+					Timestamp: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC),
+				},
+			},
+		},
 	} {
 		runtime := runtime
 		t.Run(string(runtime.State), func(t *testing.T) {
@@ -167,6 +308,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			}
 			if !strings.Contains(summary, `"state": "`+string(runtime.State)+`"`) {
 				t.Fatalf("OperatorStatus() = %q, want state %q", summary, runtime.State)
+			}
+			if !strings.Contains(summary, `"recent_audit": [`) {
+				t.Fatalf("OperatorStatus() = %q, want recent audit block", summary)
 			}
 		})
 	}

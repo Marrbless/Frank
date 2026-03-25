@@ -83,6 +83,58 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID: "job-1",
+		State: JobStatePaused,
+		AuditHistory: []AuditEvent{
+			{JobID: "job-1", StepID: "build", ToolName: "write_memory", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)},
+			{JobID: "job-1", StepID: "build", ToolName: "pause", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)},
+			{JobID: "job-1", StepID: "build", ToolName: "resume", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)},
+			{JobID: "job-1", StepID: "build", ToolName: "abort", Allowed: false, Code: RejectionCodeInvalidRuntimeState, Timestamp: time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC)},
+			{JobID: "job-1", StepID: "final", ToolName: "status", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 4, 0, 0, time.UTC)},
+			{JobID: "job-1", StepID: "final", ToolName: "set_step", Allowed: true, Timestamp: time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC)},
+		},
+	}
+
+	summary := BuildOperatorStatusSummary(runtime)
+	if len(summary.RecentAudit) != OperatorStatusRecentAuditLimit {
+		t.Fatalf("RecentAudit count = %d, want %d", len(summary.RecentAudit), OperatorStatusRecentAuditLimit)
+	}
+
+	for i, want := range []struct {
+		action string
+		stepID string
+		code   RejectionCode
+		at     string
+	}{
+		{action: "set_step", stepID: "final", at: "2026-03-24T12:05:00Z"},
+		{action: "status", stepID: "final", at: "2026-03-24T12:04:00Z"},
+		{action: "abort", stepID: "build", code: RejectionCodeInvalidRuntimeState, at: "2026-03-24T12:03:00Z"},
+		{action: "resume", stepID: "build", at: "2026-03-24T12:02:00Z"},
+		{action: "pause", stepID: "build", at: "2026-03-24T12:01:00Z"},
+	} {
+		got := summary.RecentAudit[i]
+		if got.JobID != "job-1" {
+			t.Fatalf("RecentAudit[%d].JobID = %q, want %q", i, got.JobID, "job-1")
+		}
+		if got.StepID != want.stepID {
+			t.Fatalf("RecentAudit[%d].StepID = %q, want %q", i, got.StepID, want.stepID)
+		}
+		if got.Action != want.action {
+			t.Fatalf("RecentAudit[%d].Action = %q, want %q", i, got.Action, want.action)
+		}
+		if got.Code != want.code {
+			t.Fatalf("RecentAudit[%d].Code = %q, want %q", i, got.Code, want.code)
+		}
+		if got.Timestamp != want.at {
+			t.Fatalf("RecentAudit[%d].Timestamp = %q, want %q", i, got.Timestamp, want.at)
+		}
+	}
+}
+
 func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -90,6 +142,15 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 		JobID:         "job-1",
 		State:         JobStateAborted,
 		AbortedReason: RuntimeAbortReasonOperatorCommand,
+		AuditHistory: []AuditEvent{
+			{
+				JobID:     "job-1",
+				StepID:    "build",
+				ToolName:  "abort",
+				Allowed:   true,
+				Timestamp: time.Date(2026, 3, 24, 12, 8, 0, 0, time.UTC),
+			},
+		},
 		ApprovalRequests: []ApprovalRequest{
 			{
 				JobID:           "job-1",
@@ -129,5 +190,23 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 	}
 	if request["superseded_at"] != "2026-03-24T12:07:00Z" {
 		t.Fatalf("approval_request.superseded_at = %#v, want RFC3339 time", request["superseded_at"])
+	}
+
+	recentAudit, ok := got["recent_audit"].([]any)
+	if !ok || len(recentAudit) != 1 {
+		t.Fatalf("recent_audit = %#v, want one audit entry", got["recent_audit"])
+	}
+	entry, ok := recentAudit[0].(map[string]any)
+	if !ok {
+		t.Fatalf("recent_audit[0] = %#v, want object", recentAudit[0])
+	}
+	if entry["job_id"] != "job-1" {
+		t.Fatalf("recent_audit[0].job_id = %#v, want %q", entry["job_id"], "job-1")
+	}
+	if entry["action"] != "abort" {
+		t.Fatalf("recent_audit[0].action = %#v, want %q", entry["action"], "abort")
+	}
+	if entry["timestamp"] != "2026-03-24T12:08:00Z" {
+		t.Fatalf("recent_audit[0].timestamp = %#v, want %q", entry["timestamp"], "2026-03-24T12:08:00Z")
 	}
 }
