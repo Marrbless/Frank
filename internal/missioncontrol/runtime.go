@@ -25,11 +25,11 @@ const (
 )
 
 type RuntimeStepRecord struct {
-	StepID         string                        `json:"step_id"`
-	Reason         string                        `json:"reason,omitempty"`
-	At             time.Time                     `json:"at"`
-	ResultingState *RuntimeResultingStateRecord  `json:"resulting_state,omitempty"`
-	Rollback       *RuntimeRollbackRecord        `json:"rollback,omitempty"`
+	StepID         string                       `json:"step_id"`
+	Reason         string                       `json:"reason,omitempty"`
+	At             time.Time                    `json:"at"`
+	ResultingState *RuntimeResultingStateRecord `json:"resulting_state,omitempty"`
+	Rollback       *RuntimeRollbackRecord       `json:"rollback,omitempty"`
 }
 
 type InspectablePlanContext struct {
