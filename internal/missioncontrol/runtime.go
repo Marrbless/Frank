@@ -25,9 +25,11 @@ const (
 )
 
 type RuntimeStepRecord struct {
-	StepID string    `json:"step_id"`
-	Reason string    `json:"reason,omitempty"`
-	At     time.Time `json:"at"`
+	StepID         string                        `json:"step_id"`
+	Reason         string                        `json:"reason,omitempty"`
+	At             time.Time                     `json:"at"`
+	ResultingState *RuntimeResultingStateRecord  `json:"resulting_state,omitempty"`
+	Rollback       *RuntimeRollbackRecord        `json:"rollback,omitempty"`
 }
 
 type InspectablePlanContext struct {
@@ -83,8 +85,22 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 
 	cloned := *runtime
 	cloned.InspectablePlan = CloneInspectablePlanContext(runtime.InspectablePlan)
-	cloned.CompletedSteps = append([]RuntimeStepRecord(nil), runtime.CompletedSteps...)
-	cloned.FailedSteps = append([]RuntimeStepRecord(nil), runtime.FailedSteps...)
+	if len(runtime.CompletedSteps) > 0 {
+		cloned.CompletedSteps = make([]RuntimeStepRecord, len(runtime.CompletedSteps))
+		for i, record := range runtime.CompletedSteps {
+			cloned.CompletedSteps[i] = cloneRuntimeStepRecord(record)
+		}
+	} else {
+		cloned.CompletedSteps = nil
+	}
+	if len(runtime.FailedSteps) > 0 {
+		cloned.FailedSteps = make([]RuntimeStepRecord, len(runtime.FailedSteps))
+		for i, record := range runtime.FailedSteps {
+			cloned.FailedSteps[i] = cloneRuntimeStepRecord(record)
+		}
+	} else {
+		cloned.FailedSteps = nil
+	}
 	cloned.AuditHistory = CloneAuditHistory(runtime.AuditHistory)
 	if len(runtime.ApprovalRequests) > 0 {
 		cloned.ApprovalRequests = make([]ApprovalRequest, len(runtime.ApprovalRequests))
@@ -96,6 +112,13 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	}
 	cloned.ApprovalGrants = append([]ApprovalGrant(nil), runtime.ApprovalGrants...)
 	return &cloned
+}
+
+func cloneRuntimeStepRecord(record RuntimeStepRecord) RuntimeStepRecord {
+	cloned := record
+	cloned.ResultingState = cloneRuntimeResultingStateRecord(record.ResultingState)
+	cloned.Rollback = cloneRuntimeRollbackRecord(record.Rollback)
+	return cloned
 }
 
 func CloneInspectablePlanContext(plan *InspectablePlanContext) *InspectablePlanContext {
@@ -488,8 +511,10 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 				}
 			}
 			next.CompletedSteps = append(next.CompletedSteps, RuntimeStepRecord{
-				StepID: next.ActiveStepID,
-				At:     now,
+				StepID:         next.ActiveStepID,
+				At:             now,
+				ResultingState: cloneRuntimeResultingStateRecord(opts.validationResult.resultingState),
+				Rollback:       cloneRuntimeRollbackRecord(opts.validationResult.rollback),
 			})
 			next.ActiveStepID = ""
 			next.ActiveStepAt = time.Time{}
@@ -508,8 +533,10 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 			}
 		}
 		next.CompletedSteps = append(next.CompletedSteps, RuntimeStepRecord{
-			StepID: next.ActiveStepID,
-			At:     now,
+			StepID:         next.ActiveStepID,
+			At:             now,
+			ResultingState: cloneRuntimeResultingStateRecord(opts.validationResult.resultingState),
+			Rollback:       cloneRuntimeRollbackRecord(opts.validationResult.rollback),
 		})
 		next.CompletedAt = now
 		next.ActiveStepID = ""

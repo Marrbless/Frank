@@ -73,5 +73,6 @@ func copyStep(step Step) Step {
 	stepCopy.AllowedTools = append([]string(nil), step.AllowedTools...)
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
+	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
 	return stepCopy
 }

@@ -118,7 +118,7 @@ func TestValidatePlanInvalidStepType(t *testing.T) {
 		{
 			Code:    RejectionCodeInvalidStepType,
 			StepID:  "draft",
-			Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, wait_user, final_response",
+			Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, system_action, wait_user, final_response",
 		},
 	}
 
