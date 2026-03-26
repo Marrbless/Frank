@@ -20,6 +20,7 @@ const (
 	StepTypeStaticArtifact  StepType = "static_artifact"
 	StepTypeOneShotCode     StepType = "one_shot_code"
 	StepTypeLongRunningCode StepType = "long_running_code"
+	StepTypeSystemAction    StepType = "system_action"
 	StepTypeWaitUser        StepType = "wait_user"
 	StepTypeFinalResponse   StepType = "final_response"
 )
@@ -66,6 +67,7 @@ type Step struct {
 	SuccessCriteria           []string      `json:"success_criteria"`
 	LongRunningStartupCommand []string      `json:"long_running_startup_command,omitempty"`
 	LongRunningArtifactPath   string        `json:"long_running_artifact_path,omitempty"`
+	SystemAction              *SystemAction `json:"system_action,omitempty"`
 }
 
 type ValidationError struct {

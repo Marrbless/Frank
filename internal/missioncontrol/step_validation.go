@@ -34,6 +34,7 @@ const (
 	StepValidatorKindStaticArtifact  StepValidatorKind = "static_artifact"
 	StepValidatorKindOneShotCode     StepValidatorKind = "one_shot_code"
 	StepValidatorKindLongRunningCode StepValidatorKind = "long_running_code"
+	StepValidatorKindSystemAction    StepValidatorKind = "system_action"
 	// The Frank spec names the validator contract wait_user; the runtime state remains waiting_user.
 	StepValidatorKindWaitUser      StepValidatorKind = "wait_user"
 	StepValidatorKindFinalResponse StepValidatorKind = "final_response"
@@ -57,6 +58,8 @@ type StepValidationInput struct {
 
 type stepValidationResult struct {
 	recordCompletion bool
+	resultingState   *RuntimeResultingStateRecord
+	rollback         *RuntimeRollbackRecord
 }
 
 func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidationInput) (JobRuntimeState, error) {
@@ -87,6 +90,8 @@ func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidatio
 	case StepValidatorKindDiscussion:
 		return completeRunningStep(ec, now, input)
 	case StepValidatorKindLongRunningCode:
+		return completeRunningStep(ec, now, input)
+	case StepValidatorKindSystemAction:
 		return completeRunningStep(ec, now, input)
 	case StepValidatorKindWaitUser:
 		return completeWaitUserStep(ec, now, input)
@@ -146,6 +151,12 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 			return JobRuntimeState{}, err
 		}
 		return pauseAfterValidatedCompletion(ec, now)
+	case StepTypeSystemAction:
+		result, err := validateSystemActionCompletion(*ec.Job, *ec.Step, input.SuccessfulTools)
+		if err != nil {
+			return JobRuntimeState{}, err
+		}
+		return pauseAfterValidatedCompletionWithResult(ec, now, result)
 	case StepTypeWaitUser:
 		return enterWaitUserStep(ec, now, input)
 	case StepTypeStaticArtifact:
@@ -399,10 +410,17 @@ func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidati
 }
 
 func pauseAfterValidatedCompletion(ec ExecutionContext, now time.Time) (JobRuntimeState, error) {
+	return pauseAfterValidatedCompletionWithResult(ec, now, &stepValidationResult{recordCompletion: true})
+}
+
+func pauseAfterValidatedCompletionWithResult(ec ExecutionContext, now time.Time, result *stepValidationResult) (JobRuntimeState, error) {
+	if result == nil {
+		result = &stepValidationResult{recordCompletion: true}
+	}
 	return TransitionJobRuntime(*CloneJobRuntimeState(ec.Runtime), JobStatePaused, now, RuntimeTransitionOptions{
 		StepID:           ec.Step.ID,
 		PausedReason:     RuntimePauseReasonStepComplete,
-		validationResult: &stepValidationResult{recordCompletion: true},
+		validationResult: result,
 	})
 }
 
@@ -495,6 +513,8 @@ func stepValidatorKind(ec ExecutionContext) StepValidatorKind {
 		return StepValidatorKindDiscussion
 	case StepTypeLongRunningCode:
 		return StepValidatorKindLongRunningCode
+	case StepTypeSystemAction:
+		return StepValidatorKindSystemAction
 	case StepTypeStaticArtifact:
 		return StepValidatorKindStaticArtifact
 	case StepTypeOneShotCode:

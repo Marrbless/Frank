@@ -68,7 +68,7 @@ func ValidatePlan(job Job) []ValidationError {
 			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
 				Code:    RejectionCodeInvalidStepType,
 				StepID:  step.ID,
-				Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, wait_user, final_response",
+				Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, system_action, wait_user, final_response",
 			})
 		}
 		if isV2OnlyStepType(step.Type) && job.SpecVersion != JobSpecVersionV2 {
@@ -105,6 +105,9 @@ func ValidatePlan(job Job) []ValidationError {
 				StepID:  step.ID,
 				Message: "long_running_code step requires explicit long_running_artifact_path metadata",
 			})
+		}
+		if step.Type == StepTypeSystemAction {
+			invalidTypeErrors = append(invalidTypeErrors, validateSystemActionStep(job, step)...)
 		}
 
 		if step.RequiredAuthority != "" {
@@ -175,7 +178,7 @@ func ValidatePlan(job Job) []ValidationError {
 
 func isValidStepType(stepType StepType) bool {
 	switch stepType {
-	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeLongRunningCode, StepTypeWaitUser, StepTypeFinalResponse:
+	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeLongRunningCode, StepTypeSystemAction, StepTypeWaitUser, StepTypeFinalResponse:
 		return true
 	default:
 		return false
@@ -184,7 +187,7 @@ func isValidStepType(stepType StepType) bool {
 
 func isV2OnlyStepType(stepType StepType) bool {
 	switch stepType {
-	case StepTypeLongRunningCode, StepTypeWaitUser:
+	case StepTypeLongRunningCode, StepTypeSystemAction, StepTypeWaitUser:
 		return true
 	default:
 		return false
