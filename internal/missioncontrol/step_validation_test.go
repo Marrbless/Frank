@@ -144,6 +144,64 @@ func TestCompleteRuntimeStepWaitUserAuthorizationTransitionsToWaitingUserWithPen
 	}
 }
 
+func TestCompleteRuntimeStepLongRunningCodePausesAfterBuildAndValidation(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:   "build",
+		Type: StepTypeLongRunningCode,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 1, 30, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "Built the service and verified the artifact.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "service.bin"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.PausedReason != RuntimePauseReasonStepComplete {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonStepComplete)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
+func TestCompleteRuntimeStepLongRunningCodeRejectsStartEvidence(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:   "build",
+		Type: StepTypeLongRunningCode,
+	}, JobStateRunning)
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 2, 0, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Built and started the service.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "service.bin"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"npm", "start"}}},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want long-running start rejection")
+	}
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("CompleteRuntimeStep() error = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeLongRunningStartForbidden {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeLongRunningStartForbidden)
+	}
+}
+
 func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *testing.T) {
 	t.Parallel()
 
@@ -1236,6 +1294,7 @@ func testStepValidationExecutionContext(step Step, state JobState) ExecutionCont
 		ID:           "job-1",
 		MaxAuthority: AuthorityTierHigh,
 		AllowedTools: []string{"read", "write"},
+		SpecVersion:  specVersionForTestSteps(steps),
 		Plan: Plan{
 			ID:    "plan-1",
 			Steps: steps,
@@ -1275,4 +1334,13 @@ func testStepValidationExecutionContextForJob(job Job, stepID string, state JobS
 			ActiveStepID: stepID,
 		},
 	}
+}
+
+func specVersionForTestSteps(steps []Step) string {
+	for _, step := range steps {
+		if isV2OnlyStepType(step.Type) {
+			return JobSpecVersionV2
+		}
+	}
+	return ""
 }

@@ -3,14 +3,16 @@ package missioncontrol
 import (
 	"sort"
 	"strconv"
+	"strings"
 )
 
 const (
-	RejectionCodeDuplicateStepID          RejectionCode = "duplicate_step_id"
-	RejectionCodeMissingDependencyTarget  RejectionCode = "missing_dependency_target"
-	RejectionCodeDependencyCycle          RejectionCode = "dependency_cycle"
-	RejectionCodeMissingTerminalFinalStep RejectionCode = "missing_terminal_final_response"
-	RejectionCodeInvalidStepType          RejectionCode = "invalid_step_type"
+	RejectionCodeDuplicateStepID           RejectionCode = "duplicate_step_id"
+	RejectionCodeMissingDependencyTarget   RejectionCode = "missing_dependency_target"
+	RejectionCodeDependencyCycle           RejectionCode = "dependency_cycle"
+	RejectionCodeMissingTerminalFinalStep  RejectionCode = "missing_terminal_final_response"
+	RejectionCodeInvalidStepType           RejectionCode = "invalid_step_type"
+	RejectionCodeLongRunningStartForbidden RejectionCode = "longrun_start_forbidden"
 )
 
 func ValidatePlan(job Job) []ValidationError {
@@ -66,7 +68,14 @@ func ValidatePlan(job Job) []ValidationError {
 			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
 				Code:    RejectionCodeInvalidStepType,
 				StepID:  step.ID,
-				Message: "step type must be one of discussion, static_artifact, one_shot_code, wait_user, final_response",
+				Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, wait_user, final_response",
+			})
+		}
+		if isV2OnlyStepType(step.Type) && job.SpecVersion != JobSpecVersionV2 {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: `step type "` + string(step.Type) + `" requires job spec_version frank_v2`,
 			})
 		}
 		if step.Type == StepTypeWaitUser && !isValidWaitUserSubtype(step.Subtype) {
@@ -74,6 +83,13 @@ func ValidatePlan(job Job) []ValidationError {
 				Code:    RejectionCodeInvalidStepType,
 				StepID:  step.ID,
 				Message: "wait_user step requires blocker, authorization, or definition subtype",
+			})
+		}
+		if step.Type == StepTypeLongRunningCode && hasLongRunningStartIntent(step) {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeLongRunningStartForbidden,
+				StepID:  step.ID,
+				Message: "long_running_code must not start a process; move start/stop semantics to system_action",
 			})
 		}
 
@@ -145,7 +161,16 @@ func ValidatePlan(job Job) []ValidationError {
 
 func isValidStepType(stepType StepType) bool {
 	switch stepType {
-	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeWaitUser, StepTypeFinalResponse:
+	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeLongRunningCode, StepTypeWaitUser, StepTypeFinalResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+func isV2OnlyStepType(stepType StepType) bool {
+	switch stepType {
+	case StepTypeLongRunningCode, StepTypeWaitUser:
 		return true
 	default:
 		return false
@@ -159,6 +184,32 @@ func isValidWaitUserSubtype(subtype StepSubtype) bool {
 	default:
 		return false
 	}
+}
+
+func hasLongRunningStartIntent(step Step) bool {
+	for _, criterion := range step.SuccessCriteria {
+		normalized := normalizeIntentText(criterion)
+		if normalized == "" {
+			continue
+		}
+		if strings.Contains(normalized, "start the service") ||
+			strings.Contains(normalized, "start the server") ||
+			strings.Contains(normalized, "start the daemon") ||
+			strings.Contains(normalized, "launch the service") ||
+			strings.Contains(normalized, "launch the server") ||
+			strings.Contains(normalized, "run the service") ||
+			strings.Contains(normalized, "run the server") ||
+			strings.Contains(normalized, "service running") ||
+			strings.Contains(normalized, "server running") ||
+			strings.Contains(normalized, "daemon running") {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeIntentText(input string) string {
+	return strings.Join(strings.Fields(strings.ToLower(input)), " ")
 }
 
 func authorityRank(tier AuthorityTier) (int, bool) {

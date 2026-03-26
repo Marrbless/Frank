@@ -9,6 +9,9 @@ import (
 func TestEnumValues(t *testing.T) {
 	t.Parallel()
 
+	if JobSpecVersionV2 != "frank_v2" {
+		t.Fatalf("JobSpecVersionV2 = %q, want %q", JobSpecVersionV2, "frank_v2")
+	}
 	if JobStateRunning != "running" {
 		t.Fatalf("JobStateRunning = %q, want %q", JobStateRunning, "running")
 	}
@@ -35,6 +38,9 @@ func TestEnumValues(t *testing.T) {
 
 	if StepTypeOneShotCode != "one_shot_code" {
 		t.Fatalf("StepTypeOneShotCode = %q, want %q", StepTypeOneShotCode, "one_shot_code")
+	}
+	if StepTypeLongRunningCode != "long_running_code" {
+		t.Fatalf("StepTypeLongRunningCode = %q, want %q", StepTypeLongRunningCode, "long_running_code")
 	}
 	if StepTypeWaitUser != "wait_user" {
 		t.Fatalf("StepTypeWaitUser = %q, want %q", StepTypeWaitUser, "wait_user")
@@ -63,6 +69,9 @@ func TestEnumValues(t *testing.T) {
 	}
 	if RejectionCodeWaitingUser != "waiting_user" {
 		t.Fatalf("RejectionCodeWaitingUser = %q, want %q", RejectionCodeWaitingUser, "waiting_user")
+	}
+	if RejectionCodeLongRunningStartForbidden != "longrun_start_forbidden" {
+		t.Fatalf("RejectionCodeLongRunningStartForbidden = %q, want %q", RejectionCodeLongRunningStartForbidden, "longrun_start_forbidden")
 	}
 	if ApprovalStatePending != "pending" {
 		t.Fatalf("ApprovalStatePending = %q, want %q", ApprovalStatePending, "pending")

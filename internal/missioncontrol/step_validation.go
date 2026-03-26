@@ -30,9 +30,10 @@ const (
 type StepValidatorKind string
 
 const (
-	StepValidatorKindDiscussion     StepValidatorKind = "discussion"
-	StepValidatorKindStaticArtifact StepValidatorKind = "static_artifact"
-	StepValidatorKindOneShotCode    StepValidatorKind = "one_shot_code"
+	StepValidatorKindDiscussion      StepValidatorKind = "discussion"
+	StepValidatorKindStaticArtifact  StepValidatorKind = "static_artifact"
+	StepValidatorKindOneShotCode     StepValidatorKind = "one_shot_code"
+	StepValidatorKindLongRunningCode StepValidatorKind = "long_running_code"
 	// The Frank spec names the validator contract wait_user; the runtime state remains waiting_user.
 	StepValidatorKindWaitUser      StepValidatorKind = "wait_user"
 	StepValidatorKindFinalResponse StepValidatorKind = "final_response"
@@ -85,6 +86,8 @@ func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidatio
 	switch stepValidatorKind(ec) {
 	case StepValidatorKindDiscussion:
 		return completeRunningStep(ec, now, input)
+	case StepValidatorKindLongRunningCode:
+		return completeRunningStep(ec, now, input)
 	case StepValidatorKindWaitUser:
 		return completeWaitUserStep(ec, now, input)
 	case StepValidatorKindStaticArtifact:
@@ -131,6 +134,29 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 	switch ec.Step.Type {
 	case StepTypeDiscussion:
 		return completeDiscussionStep(ec, now, input)
+	case StepTypeLongRunningCode:
+		if hasLongRunningStartEvidence(input.SuccessfulTools) {
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeLongRunningStartForbidden,
+				StepID:  ec.Step.ID,
+				Message: "long_running_code must not start a process; move start/stop semantics to system_action",
+			}
+		}
+		if !hasOneShotCodeArtifactEvidence(input.SuccessfulTools) {
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				StepID:  ec.Step.ID,
+				Message: "long_running_code completion requires artifact or code-change evidence",
+			}
+		}
+		if !hasOneShotCodeVerificationEvidence(input.SuccessfulTools) {
+			return JobRuntimeState{}, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				StepID:  ec.Step.ID,
+				Message: "long_running_code completion requires validation, compile, read, or stat evidence",
+			}
+		}
+		return pauseAfterValidatedCompletion(ec, now)
 	case StepTypeWaitUser:
 		return enterWaitUserStep(ec, now, input)
 	case StepTypeStaticArtifact:
@@ -478,6 +504,8 @@ func stepValidatorKind(ec ExecutionContext) StepValidatorKind {
 	switch ec.Step.Type {
 	case StepTypeDiscussion:
 		return StepValidatorKindDiscussion
+	case StepTypeLongRunningCode:
+		return StepValidatorKindLongRunningCode
 	case StepTypeStaticArtifact:
 		return StepValidatorKindStaticArtifact
 	case StepTypeOneShotCode:
@@ -500,6 +528,36 @@ func hasDiscussionSideEffects(tools []RuntimeToolCallEvidence) bool {
 			}
 		}
 	}
+	return false
+}
+
+func hasLongRunningStartEvidence(tools []RuntimeToolCallEvidence) bool {
+	for _, tool := range tools {
+		if tool.ToolName != "exec" {
+			continue
+		}
+		if isLongRunningStartCommand(toolArgStringSlice(tool.Arguments, "cmd")) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLongRunningStartCommand(cmd []string) bool {
+	if len(cmd) == 0 {
+		return false
+	}
+
+	name := strings.ToLower(filepathBase(cmd[0]))
+	switch name {
+	case "npm", "yarn", "pnpm":
+		return len(cmd) > 1 && strings.EqualFold(cmd[1], "start")
+	case "go":
+		return len(cmd) > 1 && strings.EqualFold(cmd[1], "run")
+	case "systemctl":
+		return len(cmd) > 1 && (strings.EqualFold(cmd[1], "start") || strings.EqualFold(cmd[1], "restart"))
+	}
+
 	return false
 }
 

@@ -118,7 +118,7 @@ func TestValidatePlanInvalidStepType(t *testing.T) {
 		{
 			Code:    RejectionCodeInvalidStepType,
 			StepID:  "draft",
-			Message: "step type must be one of discussion, static_artifact, one_shot_code, wait_user, final_response",
+			Message: "step type must be one of discussion, static_artifact, one_shot_code, long_running_code, wait_user, final_response",
 		},
 	}
 
@@ -127,10 +127,29 @@ func TestValidatePlanInvalidStepType(t *testing.T) {
 	}
 }
 
-func TestValidatePlanAcceptsWaitUserStepWithSubtype(t *testing.T) {
+func TestValidatePlanRejectsWaitUserStepWithoutV2SpecVersion(t *testing.T) {
 	t.Parallel()
 
 	errors := ValidatePlan(testJob([]Step{
+		{ID: "hold", Type: StepTypeWaitUser, Subtype: StepSubtypeDefinition},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"hold"}},
+	}))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "hold",
+			Message: `step type "wait_user" requires job spec_version frank_v2`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsWaitUserStepWithSubtype(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
 		{ID: "hold", Type: StepTypeWaitUser, Subtype: StepSubtypeDefinition},
 		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"hold"}},
 	}))
@@ -142,7 +161,7 @@ func TestValidatePlanAcceptsWaitUserStepWithSubtype(t *testing.T) {
 func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
 	t.Parallel()
 
-	errors := ValidatePlan(testJob([]Step{
+	errors := ValidatePlan(testV2Job([]Step{
 		{ID: "hold", Type: StepTypeWaitUser},
 		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"hold"}},
 	}))
@@ -152,6 +171,56 @@ func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
 			Code:    RejectionCodeInvalidStepType,
 			StepID:  "hold",
 			Message: "wait_user step requires blocker, authorization, or definition subtype",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsLongRunningCodeWithoutV2SpecVersion(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Record startup command `npm start` and verify the artifact builds."}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "build",
+			Message: `step type "long_running_code" requires job spec_version frank_v2`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsLongRunningCodeStep(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Record startup command `npm start` and verify the artifact builds."}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsLongRunningCodeStartIntent(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Start the service and verify it stays running."}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeLongRunningStartForbidden,
+			StepID:  "build",
+			Message: "long_running_code must not start a process; move start/stop semantics to system_action",
 		},
 	}
 	if !reflect.DeepEqual(errors, want) {
@@ -267,4 +336,10 @@ func testJob(steps []Step) Job {
 			Steps: steps,
 		},
 	}
+}
+
+func testV2Job(steps []Step) Job {
+	job := testJob(steps)
+	job.SpecVersion = JobSpecVersionV2
+	return job
 }

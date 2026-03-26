@@ -4,6 +4,8 @@ import "fmt"
 
 type JobState string
 
+const JobSpecVersionV2 = "frank_v2"
+
 const (
 	JobStatePending   JobState = "pending"
 	JobStateRunning   JobState = "running"
@@ -14,11 +16,12 @@ const (
 type StepType string
 
 const (
-	StepTypeDiscussion     StepType = "discussion"
-	StepTypeStaticArtifact StepType = "static_artifact"
-	StepTypeOneShotCode    StepType = "one_shot_code"
-	StepTypeWaitUser       StepType = "wait_user"
-	StepTypeFinalResponse  StepType = "final_response"
+	StepTypeDiscussion      StepType = "discussion"
+	StepTypeStaticArtifact  StepType = "static_artifact"
+	StepTypeOneShotCode     StepType = "one_shot_code"
+	StepTypeLongRunningCode StepType = "long_running_code"
+	StepTypeWaitUser        StepType = "wait_user"
+	StepTypeFinalResponse   StepType = "final_response"
 )
 
 type StepSubtype string
@@ -39,6 +42,7 @@ const (
 
 type Job struct {
 	ID           string        `json:"id"`
+	SpecVersion  string        `json:"spec_version,omitempty"`
 	State        JobState      `json:"state"`
 	MaxAuthority AuthorityTier `json:"max_authority"`
 	AllowedTools []string      `json:"allowed_tools"`

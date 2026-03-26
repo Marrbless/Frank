@@ -380,6 +380,40 @@ func TestProcessDirectOneShotCodeWithArtifactAndVerificationEvidencePausesStep(t
 	}
 }
 
+func TestProcessDirectLongRunningCodeWithArtifactAndVerificationEvidencePausesStepWithoutStart(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &filesystemArtifactProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(testLongRunningMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("build the service", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Created result.txt and verified it exists." {
+		t.Fatalf("ProcessDirect() response = %q, want verified artifact response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after validated long_running_code completion")
+	}
+}
+
 func TestProcessDirectStaticArtifactWithStructureValidationPausesStep(t *testing.T) {
 	t.Parallel()
 
@@ -1802,6 +1836,7 @@ func testStaticArtifactMissionJob() missioncontrol.Job {
 func testWaitUserMissionJob() missioncontrol.Job {
 	return missioncontrol.Job{
 		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
 		MaxAuthority: missioncontrol.AuthorityTierHigh,
 		AllowedTools: []string{"read"},
 		Plan: missioncontrol.Plan{
@@ -1811,6 +1846,31 @@ func testWaitUserMissionJob() missioncontrol.Job {
 					ID:      "build",
 					Type:    missioncontrol.StepTypeWaitUser,
 					Subtype: missioncontrol.StepSubtypeAuthorization,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testLongRunningMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"filesystem"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:              "build",
+					Type:            missioncontrol.StepTypeLongRunningCode,
+					AllowedTools:    []string{"filesystem"},
+					SuccessCriteria: []string{"Record startup command `npm start` and verify the build artifact exists."},
 				},
 				{
 					ID:        "final",
