@@ -17,6 +17,7 @@ const (
 	StepTypeDiscussion     StepType = "discussion"
 	StepTypeStaticArtifact StepType = "static_artifact"
 	StepTypeOneShotCode    StepType = "one_shot_code"
+	StepTypeWaitUser       StepType = "wait_user"
 	StepTypeFinalResponse  StepType = "final_response"
 )
 

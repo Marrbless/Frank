@@ -66,7 +66,14 @@ func ValidatePlan(job Job) []ValidationError {
 			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
 				Code:    RejectionCodeInvalidStepType,
 				StepID:  step.ID,
-				Message: "step type must be one of discussion, static_artifact, one_shot_code, final_response",
+				Message: "step type must be one of discussion, static_artifact, one_shot_code, wait_user, final_response",
+			})
+		}
+		if step.Type == StepTypeWaitUser && !isValidWaitUserSubtype(step.Subtype) {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "wait_user step requires blocker, authorization, or definition subtype",
 			})
 		}
 
@@ -138,7 +145,16 @@ func ValidatePlan(job Job) []ValidationError {
 
 func isValidStepType(stepType StepType) bool {
 	switch stepType {
-	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeFinalResponse:
+	case StepTypeDiscussion, StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeWaitUser, StepTypeFinalResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidWaitUserSubtype(subtype StepSubtype) bool {
+	switch subtype {
+	case StepSubtypeBlocker, StepSubtypeAuthorization, StepSubtypeDefinition:
 		return true
 	default:
 		return false

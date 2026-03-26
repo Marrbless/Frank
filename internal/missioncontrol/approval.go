@@ -87,7 +87,12 @@ type ApprovalGrant struct {
 }
 
 func approvalBindingForStep(step Step) (string, string, bool) {
-	if step.Type != StepTypeDiscussion || step.Subtype != StepSubtypeAuthorization {
+	if step.Subtype != StepSubtypeAuthorization {
+		return "", "", false
+	}
+	switch step.Type {
+	case StepTypeDiscussion, StepTypeWaitUser:
+	default:
 		return "", "", false
 	}
 	scope := normalizeApprovalScope(step.ApprovalScope)
@@ -98,7 +103,12 @@ func approvalBindingForStep(step Step) (string, string, bool) {
 }
 
 func approvalRequestContentForStep(job Job, step Step) (ApprovalRequestContent, bool) {
-	if step.Type != StepTypeDiscussion || step.Subtype != StepSubtypeAuthorization {
+	if step.Subtype != StepSubtypeAuthorization {
+		return ApprovalRequestContent{}, false
+	}
+	switch step.Type {
+	case StepTypeDiscussion, StepTypeWaitUser:
+	default:
 		return ApprovalRequestContent{}, false
 	}
 

@@ -36,6 +36,9 @@ func TestEnumValues(t *testing.T) {
 	if StepTypeOneShotCode != "one_shot_code" {
 		t.Fatalf("StepTypeOneShotCode = %q, want %q", StepTypeOneShotCode, "one_shot_code")
 	}
+	if StepTypeWaitUser != "wait_user" {
+		t.Fatalf("StepTypeWaitUser = %q, want %q", StepTypeWaitUser, "wait_user")
+	}
 
 	if StepTypeFinalResponse != "final_response" {
 		t.Fatalf("StepTypeFinalResponse = %q, want %q", StepTypeFinalResponse, "final_response")

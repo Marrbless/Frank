@@ -551,6 +551,45 @@ func TestProcessDirectDiscussionSubtypeTransitionsToWaitingUser(t *testing.T) {
 	}
 }
 
+func TestProcessDirectWaitUserSubtypeTransitionsToWaitingUser(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testWaitUserMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Need approval before continuing." {
+		t.Fatalf("ProcessDirect() response = %q, want wait_user response", resp)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ActiveMissionStep().Runtime = nil, want non-nil")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if ec.Runtime.WaitingReason != "wait_user_authorization" {
+		t.Fatalf("ActiveMissionStep().Runtime.WaitingReason = %q, want %q", ec.Runtime.WaitingReason, "wait_user_authorization")
+	}
+	if len(ec.Runtime.ApprovalRequests) != 1 {
+		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests = %#v, want one pending approval", ec.Runtime.ApprovalRequests)
+	}
+	if ec.Runtime.ApprovalRequests[0].State != missioncontrol.ApprovalStatePending {
+		t.Fatalf("ActiveMissionStep().Runtime.ApprovalRequests[0].State = %q, want %q", ec.Runtime.ApprovalRequests[0].State, missioncontrol.ApprovalStatePending)
+	}
+}
+
 func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
 	t.Parallel()
 
@@ -1749,6 +1788,29 @@ func testStaticArtifactMissionJob() missioncontrol.Job {
 					Type:            missioncontrol.StepTypeStaticArtifact,
 					AllowedTools:    []string{"filesystem"},
 					SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testWaitUserMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeWaitUser,
+					Subtype: missioncontrol.StepSubtypeAuthorization,
 				},
 				{
 					ID:        "final",

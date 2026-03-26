@@ -88,6 +88,62 @@ func TestCompleteRuntimeStepAuthorizationTransitionsToWaitingUserWithPendingAppr
 	}
 }
 
+func TestCompleteRuntimeStepWaitUserSubtypeTransitionsToWaitingUser(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "wait",
+		Type:    StepTypeWaitUser,
+		Subtype: StepSubtypeBlocker,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 0, 45, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Waiting for your answer."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if runtime.ActiveStepID != "wait" {
+		t.Fatalf("ActiveStepID = %q, want %q", runtime.ActiveStepID, "wait")
+	}
+	if runtime.WaitingReason != "wait_user_blocker" {
+		t.Fatalf("WaitingReason = %q, want %q", runtime.WaitingReason, "wait_user_blocker")
+	}
+	if len(runtime.ApprovalRequests) != 0 {
+		t.Fatalf("ApprovalRequests = %#v, want empty for blocker wait_user step", runtime.ApprovalRequests)
+	}
+}
+
+func TestCompleteRuntimeStepWaitUserAuthorizationTransitionsToWaitingUserWithPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "wait",
+		Type:    StepTypeWaitUser,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 23, 12, 1, 0, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateWaitingUser)
+	}
+	if runtime.WaitingReason != "wait_user_authorization" {
+		t.Fatalf("WaitingReason = %q, want %q", runtime.WaitingReason, "wait_user_authorization")
+	}
+	if len(runtime.ApprovalRequests) != 1 {
+		t.Fatalf("ApprovalRequests = %#v, want one pending request", runtime.ApprovalRequests)
+	}
+	if runtime.ApprovalRequests[0].State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, ApprovalStatePending)
+	}
+}
+
 func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *testing.T) {
 	t.Parallel()
 

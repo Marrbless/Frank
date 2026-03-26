@@ -78,6 +78,10 @@ func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidatio
 		}
 	}
 
+	if ec.Step != nil && ec.Step.Type == StepTypeWaitUser && ec.Runtime != nil && ec.Runtime.State == JobStateRunning {
+		return completeRunningStep(ec, now, input)
+	}
+
 	switch stepValidatorKind(ec) {
 	case StepValidatorKindDiscussion:
 		return completeRunningStep(ec, now, input)
@@ -127,6 +131,8 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 	switch ec.Step.Type {
 	case StepTypeDiscussion:
 		return completeDiscussionStep(ec, now, input)
+	case StepTypeWaitUser:
+		return enterWaitUserStep(ec, now, input)
 	case StepTypeStaticArtifact:
 		if err := validateStaticArtifactCompletion(*ec.Step, input.SuccessfulTools); err != nil {
 			return JobRuntimeState{}, err
@@ -244,6 +250,51 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 	return pauseAfterValidatedCompletion(ec, now)
 }
 
+func enterWaitUserStep(ec ExecutionContext, now time.Time, input StepValidationInput) (JobRuntimeState, error) {
+	if strings.TrimSpace(input.FinalResponse) == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "wait_user completion requires a non-empty response",
+		}
+	}
+	if hasDiscussionSideEffects(input.SuccessfulTools) {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "wait_user completion cannot include side-effecting tool executions",
+		}
+	}
+
+	waitingReason, ok := waitUserWaitingReason(ec.Step.Subtype)
+	if !ok {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeStepValidationFailed,
+			StepID:  ec.Step.ID,
+			Message: "wait_user step requires blocker, authorization, or definition subtype",
+		}
+	}
+
+	nextRuntime := *CloneJobRuntimeState(ec.Runtime)
+	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
+		content, _ := approvalRequestContentForStep(*ec.Job, *ec.Step)
+		nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
+			JobID:           ec.Job.ID,
+			StepID:          ec.Step.ID,
+			RequestedAction: requestedAction,
+			Scope:           scope,
+			Content:         &content,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			Reason:          waitingReason,
+		})
+	}
+
+	return TransitionJobRuntime(nextRuntime, JobStateWaitingUser, now, RuntimeTransitionOptions{
+		StepID:        ec.Step.ID,
+		WaitingReason: waitingReason,
+	})
+}
+
 func completeWaitUserStep(ec ExecutionContext, now time.Time, input StepValidationInput) (JobRuntimeState, error) {
 	if ec.Runtime.State != JobStateWaitingUser {
 		return JobRuntimeState{}, ValidationError{
@@ -348,6 +399,19 @@ func discussionWaitingReason(subtype StepSubtype) (string, bool) {
 		return "discussion_authorization", true
 	case StepSubtypeDefinition:
 		return "discussion_definition", true
+	default:
+		return "", false
+	}
+}
+
+func waitUserWaitingReason(subtype StepSubtype) (string, bool) {
+	switch subtype {
+	case StepSubtypeBlocker:
+		return "wait_user_blocker", true
+	case StepSubtypeAuthorization:
+		return "wait_user_authorization", true
+	case StepSubtypeDefinition:
+		return "wait_user_definition", true
 	default:
 		return "", false
 	}

@@ -118,10 +118,42 @@ func TestValidatePlanInvalidStepType(t *testing.T) {
 		{
 			Code:    RejectionCodeInvalidStepType,
 			StepID:  "draft",
-			Message: "step type must be one of discussion, static_artifact, one_shot_code, final_response",
+			Message: "step type must be one of discussion, static_artifact, one_shot_code, wait_user, final_response",
 		},
 	}
 
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsWaitUserStepWithSubtype(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "hold", Type: StepTypeWaitUser, Subtype: StepSubtypeDefinition},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"hold"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "hold", Type: StepTypeWaitUser},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"hold"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "hold",
+			Message: "wait_user step requires blocker, authorization, or definition subtype",
+		},
+	}
 	if !reflect.DeepEqual(errors, want) {
 		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
 	}
