@@ -48,40 +48,44 @@ func NewDefaultToolGuard() ToolGuard {
 
 func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, toolName string, args map[string]interface{}) GuardDecision {
 	if ec.Job == nil || ec.Step == nil {
-		return newGuardDecision(ec, toolName, false, RejectionCodeToolNotAllowed, "missing job or step context")
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "missing job or step context")
 	}
 	if err := ValidateRuntimeExecution(ec); err != nil {
 		validationErr, ok := err.(ValidationError)
 		if !ok {
-			return newGuardDecision(ec, toolName, false, RejectionCodeInvalidRuntimeState, err.Error())
+			return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
 		}
-		return newGuardDecision(ec, toolName, false, validationErr.Code, validationErr.Message)
+		return newGuardDecision(ec, toolName, args, false, validationErr.Code, validationErr.Message)
 	}
 
 	if ec.Step.RequiresApproval {
-		return newGuardDecision(ec, toolName, false, RejectionCodeApprovalRequired, "step requires approval")
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeApprovalRequired, "step requires approval")
 	}
 
 	jobAuthority, jobAuthorityOK := guardAuthorityRank(ec.Job.MaxAuthority)
 	stepAuthority, stepAuthorityOK := guardAuthorityRank(ec.Step.RequiredAuthority)
 	if stepAuthorityOK && jobAuthorityOK && stepAuthority > jobAuthority {
-		return newGuardDecision(ec, toolName, false, RejectionCodeAuthorityExceeded, "step required authority exceeds job max authority")
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeAuthorityExceeded, "step required authority exceeds job max authority")
 	}
 
 	if !containsTool(ec.Job.AllowedTools, toolName) {
-		return newGuardDecision(ec, toolName, false, RejectionCodeToolNotAllowed, "tool is not allowed by job tool scope")
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "tool is not allowed by job tool scope")
 	}
 
 	if len(ec.Step.AllowedTools) > 0 && !containsTool(ec.Step.AllowedTools, toolName) {
-		return newGuardDecision(ec, toolName, false, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
 	}
 
-	return newGuardDecision(ec, toolName, true, "", "")
+	return newGuardDecision(ec, toolName, args, true, "", "")
 }
 
-func newGuardDecision(ec ExecutionContext, toolName string, allowed bool, code RejectionCode, reason string) GuardDecision {
+func newGuardDecision(ec ExecutionContext, toolName string, args map[string]interface{}, allowed bool, code RejectionCode, reason string) GuardDecision {
+	proposedAction := toolName
+	if ec.Step != nil && ec.Step.Type == StepTypeSystemAction && toolName == "exec" {
+		proposedAction = systemActionAuditAction(ec.Job, ec.Step, args)
+	}
 	event := AuditEvent{
-		ToolName:  toolName,
+		ToolName:  proposedAction,
 		Allowed:   allowed,
 		Code:      code,
 		Reason:    reason,
