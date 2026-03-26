@@ -2122,6 +2122,72 @@ func TestTaskStateHydrateRuntimeControlRestoresAuditHistoryWithoutDuplication(t 
 	}
 }
 
+func TestTaskStateHydrateRuntimeControlNormalizesLegacyRevokedAtOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	hookCalls := 0
+	state.SetRuntimeChangeHook(func() {
+		hookCalls++
+	})
+
+	job := testTaskStateJob()
+	revokedAt := time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateRevoked,
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateRevoked,
+				RevokedAt:       revokedAt,
+			},
+		},
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	gotRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if gotRuntime.ApprovalRequests[0].RevokedAt != revokedAt {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0].RevokedAt = %v, want %v", gotRuntime.ApprovalRequests[0].RevokedAt, revokedAt)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("runtime change hook calls after first hydrate = %d, want 1", hookCalls)
+	}
+
+	state.ClearExecutionContext()
+	if hookCalls != 2 {
+		t.Fatalf("runtime change hook calls after ClearExecutionContext() = %d, want 2", hookCalls)
+	}
+	hookCallsAfterClear := hookCalls
+	if err := state.HydrateRuntimeControl(job, gotRuntime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() second error = %v", err)
+	}
+	if hookCalls != hookCallsAfterClear {
+		t.Fatalf("runtime change hook calls after second hydrate = %d, want unchanged %d", hookCalls, hookCallsAfterClear)
+	}
+}
+
 func TestTaskStateHydrateRuntimeControlApplyApprovalDecisionRejectsExpiredRequest(t *testing.T) {
 	t.Parallel()
 

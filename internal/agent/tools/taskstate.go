@@ -203,7 +203,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 }
 
 func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {
-	nextRuntime, err := missioncontrol.ResumeJobRuntimeAfterBoot(runtimeState, time.Now(), resumeApproved)
+	now := time.Now()
+	normalizedRuntime, _ := missioncontrol.NormalizeHydratedApprovalRequests(runtimeState, now)
+	nextRuntime, err := missioncontrol.ResumeJobRuntimeAfterBoot(normalizedRuntime, now, resumeApproved)
 	if err != nil {
 		return err
 	}
