@@ -1104,6 +1104,9 @@ func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missionco
 	if snapshot.Runtime == nil {
 		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
+	if err := validatePersistedMissionRuntimeSnapshot(snapshot); err != nil {
+		return missioncontrol.JobRuntimeState{}, nil, false, err
+	}
 	if snapshot.Runtime.JobID != "" && snapshot.Runtime.JobID != job.ID {
 		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
@@ -1115,6 +1118,44 @@ func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missionco
 		runtimeControl = missioncontrol.CloneRuntimeControlContext(snapshot.RuntimeControl)
 	}
 	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), runtimeControl, true, nil
+}
+
+func validatePersistedMissionRuntimeSnapshot(snapshot missionStatusSnapshot) error {
+	if snapshot.Runtime == nil {
+		return nil
+	}
+
+	runtime := snapshot.Runtime
+	if snapshot.JobID != "" && runtime.JobID != "" && snapshot.JobID != runtime.JobID {
+		return fmt.Errorf("persisted mission runtime snapshot job_id %q does not match runtime job_id %q", snapshot.JobID, runtime.JobID)
+	}
+	if snapshot.StepID != "" && runtime.ActiveStepID != "" && snapshot.StepID != runtime.ActiveStepID {
+		return fmt.Errorf("persisted mission runtime snapshot step_id %q does not match runtime active_step_id %q", snapshot.StepID, runtime.ActiveStepID)
+	}
+	if snapshot.Active && missioncontrol.IsTerminalJobState(runtime.State) {
+		return fmt.Errorf("persisted mission runtime snapshot marks terminal runtime state %q as active", runtime.State)
+	}
+
+	control := snapshot.RuntimeControl
+	if control == nil {
+		return nil
+	}
+	if control.JobID != "" && runtime.JobID != "" && control.JobID != runtime.JobID {
+		return fmt.Errorf("persisted mission runtime control job_id %q does not match runtime job_id %q", control.JobID, runtime.JobID)
+	}
+	if runtime.ActiveStepID == "" {
+		if control.Step.ID != "" {
+			return fmt.Errorf("persisted mission runtime control step_id %q requires runtime active_step_id", control.Step.ID)
+		}
+		return nil
+	}
+	if control.Step.ID == "" {
+		return fmt.Errorf("persisted mission runtime active_step_id %q requires runtime control step_id", runtime.ActiveStepID)
+	}
+	if control.Step.ID != runtime.ActiveStepID {
+		return fmt.Errorf("persisted mission runtime control step_id %q does not match runtime active_step_id %q", control.Step.ID, runtime.ActiveStepID)
+	}
+	return nil
 }
 
 func newMissionInspectSummary(job missioncontrol.Job, stepID string) (missionInspectSummary, error) {

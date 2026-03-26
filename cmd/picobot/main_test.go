@@ -4261,6 +4261,89 @@ func TestMissionStatusBootstrapRequiresResumeApprovalAfterReboot(t *testing.T) {
 	}
 }
 
+func TestMissionStatusBootstrapRejectsInconsistentPersistedRuntimeStepEnvelope(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "final",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want persisted-runtime mismatch failure")
+	}
+	if !strings.Contains(err.Error(), `snapshot step_id "final" does not match runtime active_step_id "build"`) {
+		t.Fatalf("configureMissionBootstrap() error = %q, want step envelope mismatch", err)
+	}
+}
+
+func TestMissionStatusBootstrapRejectsInconsistentPersistedRuntimeControlStep(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		RuntimeControl: &missioncontrol.RuntimeControlContext{
+			JobID:        job.ID,
+			MaxAuthority: job.MaxAuthority,
+			AllowedTools: []string{"read"},
+			Step: missioncontrol.Step{
+				ID:   "final",
+				Type: missioncontrol.StepTypeFinalResponse,
+			},
+		},
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want persisted-control mismatch failure")
+	}
+	if !strings.Contains(err.Error(), `runtime control step_id "final" does not match runtime active_step_id "build"`) {
+		t.Fatalf("configureMissionBootstrap() error = %q, want runtime-control mismatch", err)
+	}
+}
+
 func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
