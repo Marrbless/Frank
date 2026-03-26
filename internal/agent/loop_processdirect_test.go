@@ -1867,10 +1867,12 @@ func testLongRunningMissionJob() missioncontrol.Job {
 			ID: "plan-1",
 			Steps: []missioncontrol.Step{
 				{
-					ID:              "build",
-					Type:            missioncontrol.StepTypeLongRunningCode,
-					AllowedTools:    []string{"filesystem"},
-					SuccessCriteria: []string{"Record startup command `npm start` and verify the build artifact exists."},
+					ID:                        "build",
+					Type:                      missioncontrol.StepTypeLongRunningCode,
+					AllowedTools:              []string{"filesystem"},
+					SuccessCriteria:           []string{"Record startup command `npm start` and verify the build artifact exists."},
+					LongRunningStartupCommand: []string{"npm", "start"},
+					LongRunningArtifactPath:   "result.txt",
 				},
 				{
 					ID:        "final",

@@ -5676,6 +5676,64 @@ func configureMissionBootstrapJobForStartupTest(t *testing.T, cmd *cobra.Command
 	return *job
 }
 
+func TestConfigureMissionBootstrapJobAcceptsV2LongRunningCodeMissionFile(t *testing.T) {
+	cmd := newMissionBootstrapTestCommand()
+	ag := newMissionBootstrapTestLoop()
+	missionPath := writeMissionBootstrapJobFile(t, missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"filesystem"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                        "build",
+					Type:                      missioncontrol.StepTypeLongRunningCode,
+					RequiredAuthority:         missioncontrol.AuthorityTierLow,
+					AllowedTools:              []string{"filesystem"},
+					SuccessCriteria:           []string{"Build the service artifact and record the startup command."},
+					LongRunningStartupCommand: []string{"npm", "start"},
+					LongRunningArtifactPath:   "dist/service.js",
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionPath); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	job := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	if job.SpecVersion != missioncontrol.JobSpecVersionV2 {
+		t.Fatalf("Job.SpecVersion = %q, want %q", job.SpecVersion, missioncontrol.JobSpecVersionV2)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want activated long_running_code step")
+	}
+	if ec.Step == nil {
+		t.Fatal("ActiveMissionStep().Step = nil, want non-nil")
+	}
+	if ec.Step.Type != missioncontrol.StepTypeLongRunningCode {
+		t.Fatalf("ActiveMissionStep().Step.Type = %q, want %q", ec.Step.Type, missioncontrol.StepTypeLongRunningCode)
+	}
+	if !reflect.DeepEqual(ec.Step.LongRunningStartupCommand, []string{"npm", "start"}) {
+		t.Fatalf("ActiveMissionStep().Step.LongRunningStartupCommand = %#v, want %#v", ec.Step.LongRunningStartupCommand, []string{"npm", "start"})
+	}
+	if ec.Step.LongRunningArtifactPath != "dist/service.js" {
+		t.Fatalf("ActiveMissionStep().Step.LongRunningArtifactPath = %q, want %q", ec.Step.LongRunningArtifactPath, "dist/service.js")
+	}
+}
+
 type missionStatusFixedResponseProvider struct {
 	content string
 }

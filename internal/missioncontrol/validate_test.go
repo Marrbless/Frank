@@ -182,7 +182,13 @@ func TestValidatePlanRejectsLongRunningCodeWithoutV2SpecVersion(t *testing.T) {
 	t.Parallel()
 
 	errors := ValidatePlan(testJob([]Step{
-		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Record startup command `npm start` and verify the artifact builds."}},
+		{
+			ID:                        "build",
+			Type:                      StepTypeLongRunningCode,
+			SuccessCriteria:           []string{"Record startup command `npm start` and verify the artifact builds."},
+			LongRunningStartupCommand: []string{"npm", "start"},
+			LongRunningArtifactPath:   "dist/service.js",
+		},
 		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
 	}))
 	want := []ValidationError{
@@ -201,7 +207,13 @@ func TestValidatePlanAcceptsLongRunningCodeStep(t *testing.T) {
 	t.Parallel()
 
 	errors := ValidatePlan(testV2Job([]Step{
-		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Record startup command `npm start` and verify the artifact builds."}},
+		{
+			ID:                        "build",
+			Type:                      StepTypeLongRunningCode,
+			SuccessCriteria:           []string{"Record startup command `npm start` and verify the artifact builds."},
+			LongRunningStartupCommand: []string{"npm", "start"},
+			LongRunningArtifactPath:   "dist/service.js",
+		},
 		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
 	}))
 	if len(errors) != 0 {
@@ -209,11 +221,65 @@ func TestValidatePlanAcceptsLongRunningCodeStep(t *testing.T) {
 	}
 }
 
+func TestValidatePlanRejectsLongRunningCodeWithoutStartupCommandMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                      "build",
+			Type:                    StepTypeLongRunningCode,
+			SuccessCriteria:         []string{"Record startup command `npm start` and verify the artifact builds."},
+			LongRunningArtifactPath: "dist/service.js",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "build",
+			Message: "long_running_code step requires explicit long_running_startup_command metadata",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsLongRunningCodeWithoutArtifactPathMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                        "build",
+			Type:                      StepTypeLongRunningCode,
+			SuccessCriteria:           []string{"Record startup command `npm start` and verify the artifact builds."},
+			LongRunningStartupCommand: []string{"npm", "start"},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "build",
+			Message: "long_running_code step requires explicit long_running_artifact_path metadata",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
 func TestValidatePlanRejectsLongRunningCodeStartIntent(t *testing.T) {
 	t.Parallel()
 
 	errors := ValidatePlan(testV2Job([]Step{
-		{ID: "build", Type: StepTypeLongRunningCode, SuccessCriteria: []string{"Start the service and verify it stays running."}},
+		{
+			ID:                        "build",
+			Type:                      StepTypeLongRunningCode,
+			SuccessCriteria:           []string{"Start the service and verify it stays running."},
+			LongRunningStartupCommand: []string{"npm", "start"},
+			LongRunningArtifactPath:   "dist/service.js",
+		},
 		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
 	}))
 	want := []ValidationError{

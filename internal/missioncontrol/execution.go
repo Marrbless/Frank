@@ -72,5 +72,6 @@ func copyStep(step Step) Step {
 	stepCopy.DependsOn = append([]string(nil), step.DependsOn...)
 	stepCopy.AllowedTools = append([]string(nil), step.AllowedTools...)
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
+	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	return stepCopy
 }

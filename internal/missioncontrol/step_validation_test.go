@@ -148,8 +148,10 @@ func TestCompleteRuntimeStepLongRunningCodePausesAfterBuildAndValidation(t *test
 	t.Parallel()
 
 	ec := testStepValidationExecutionContext(Step{
-		ID:   "build",
-		Type: StepTypeLongRunningCode,
+		ID:                        "build",
+		Type:                      StepTypeLongRunningCode,
+		LongRunningStartupCommand: []string{"npm", "start"},
+		LongRunningArtifactPath:   "service.bin",
 	}, JobStateRunning)
 	now := time.Date(2026, 3, 23, 12, 1, 30, 0, time.UTC)
 
@@ -157,7 +159,7 @@ func TestCompleteRuntimeStepLongRunningCodePausesAfterBuildAndValidation(t *test
 		FinalResponse: "Built the service and verified the artifact.",
 		SuccessfulTools: []RuntimeToolCallEvidence{
 			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "service.bin"}},
-			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}, Result: "exists=true kind=file"},
 		},
 	})
 	if err != nil {
@@ -178,8 +180,10 @@ func TestCompleteRuntimeStepLongRunningCodeRejectsStartEvidence(t *testing.T) {
 	t.Parallel()
 
 	ec := testStepValidationExecutionContext(Step{
-		ID:   "build",
-		Type: StepTypeLongRunningCode,
+		ID:                        "build",
+		Type:                      StepTypeLongRunningCode,
+		LongRunningStartupCommand: []string{"npm", "start"},
+		LongRunningArtifactPath:   "service.bin",
 	}, JobStateRunning)
 
 	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 2, 0, 0, time.UTC), StepValidationInput{
@@ -199,6 +203,64 @@ func TestCompleteRuntimeStepLongRunningCodeRejectsStartEvidence(t *testing.T) {
 	}
 	if validationErr.Code != RejectionCodeLongRunningStartForbidden {
 		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeLongRunningStartForbidden)
+	}
+}
+
+func TestValidateLongRunningCodeCompletionRejectsMissingStartupMetadata(t *testing.T) {
+	t.Parallel()
+
+	err := validateLongRunningCodeCompletion(Step{
+		ID:                      "build",
+		Type:                    StepTypeLongRunningCode,
+		LongRunningArtifactPath: "service.bin",
+	}, []RuntimeToolCallEvidence{
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "service.bin"}},
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}, Result: "exists=true kind=file"},
+	})
+	if err == nil {
+		t.Fatal("validateLongRunningCodeCompletion() error = nil, want missing startup metadata rejection")
+	}
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("validateLongRunningCodeCompletion() error = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeStepValidationFailed {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
+	}
+	if validationErr.Message != "long_running_code completion requires explicit startup command metadata" {
+		t.Fatalf("ValidationError.Message = %q, want startup metadata failure", validationErr.Message)
+	}
+}
+
+func TestCompleteRuntimeStepLongRunningCodeRequiresDeclaredArtifactPathEvidence(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:                        "build",
+		Type:                      StepTypeLongRunningCode,
+		LongRunningStartupCommand: []string{"npm", "start"},
+		LongRunningArtifactPath:   "service.bin",
+	}, JobStateRunning)
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 23, 12, 3, 0, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Built another file instead.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "wrong.bin"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "wrong.bin"}, Result: "exists=true kind=file"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want declared artifact contract failure")
+	}
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("CompleteRuntimeStep() error = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeStepValidationFailed {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
+	}
+	if validationErr.Message != `long_running_code completion requires writing "service.bin"` {
+		t.Fatalf("ValidationError.Message = %q, want exact artifact path failure", validationErr.Message)
 	}
 }
 

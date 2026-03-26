@@ -92,6 +92,20 @@ func ValidatePlan(job Job) []ValidationError {
 				Message: "long_running_code must not start a process; move start/stop semantics to system_action",
 			})
 		}
+		if step.Type == StepTypeLongRunningCode && !hasLongRunningStartupCommand(step) {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "long_running_code step requires explicit long_running_startup_command metadata",
+			})
+		}
+		if step.Type == StepTypeLongRunningCode && longRunningArtifactPath(step) == "" {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "long_running_code step requires explicit long_running_artifact_path metadata",
+			})
+		}
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -206,6 +220,29 @@ func hasLongRunningStartIntent(step Step) bool {
 		}
 	}
 	return false
+}
+
+func hasLongRunningStartupCommand(step Step) bool {
+	return len(longRunningStartupCommand(step)) > 0
+}
+
+func longRunningStartupCommand(step Step) []string {
+	if len(step.LongRunningStartupCommand) == 0 {
+		return nil
+	}
+	cmd := make([]string, 0, len(step.LongRunningStartupCommand))
+	for _, arg := range step.LongRunningStartupCommand {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			return nil
+		}
+		cmd = append(cmd, trimmed)
+	}
+	return cmd
+}
+
+func longRunningArtifactPath(step Step) string {
+	return cleanedArtifactPath(step.LongRunningArtifactPath)
 }
 
 func normalizeIntentText(input string) string {
