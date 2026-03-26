@@ -173,6 +173,91 @@ func TestDefaultToolGuardEventTimestampNonZero(t *testing.T) {
 	}
 }
 
+func TestDefaultToolGuardSystemActionAuditsCanonicalExecuteAction(t *testing.T) {
+	t.Parallel()
+
+	ec := ExecutionContext{
+		Job: &Job{
+			ID:           "job-1",
+			MaxAuthority: AuthorityTierMedium,
+			AllowedTools: []string{"exec"},
+		},
+		Step: &Step{
+			ID:           "start-service",
+			Type:         StepTypeSystemAction,
+			AllowedTools: []string{"exec"},
+			SystemAction: &SystemAction{
+				Kind:      SystemActionKindService,
+				Operation: SystemActionOperationStart,
+				Target:    "demo-service",
+				Command:   []string{"democtl", "start", "demo-service"},
+				PostState: &SystemActionPostState{
+					Command:         []string{"democtl", "status", "demo-service"},
+					SuccessContains: []string{"state=running"},
+				},
+			},
+		},
+		Runtime: &JobRuntimeState{
+			JobID:        "job-1",
+			State:        JobStateRunning,
+			ActiveStepID: "start-service",
+		},
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "exec", map[string]interface{}{
+		"cmd": []string{"democtl", "start", "demo-service"},
+	})
+
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Event.ToolName != "system_action:execute:start:service:demo-service" {
+		t.Fatalf("Event.ToolName = %q, want canonical system_action execute audit string", decision.Event.ToolName)
+	}
+}
+
+func TestDefaultToolGuardSystemActionApprovalRejectionAuditsCanonicalVerificationAction(t *testing.T) {
+	t.Parallel()
+
+	ec := ExecutionContext{
+		Job: &Job{
+			ID:           "job-1",
+			MaxAuthority: AuthorityTierMedium,
+			AllowedTools: []string{"exec"},
+		},
+		Step: &Step{
+			ID:               "start-service",
+			Type:             StepTypeSystemAction,
+			AllowedTools:     []string{"exec"},
+			RequiresApproval: true,
+			SystemAction: &SystemAction{
+				Kind:      SystemActionKindService,
+				Operation: SystemActionOperationStart,
+				Target:    "demo-service",
+				Command:   []string{"democtl", "start", "demo-service"},
+				PostState: &SystemActionPostState{
+					Command:         []string{"democtl", "status", "demo-service"},
+					SuccessContains: []string{"state=running"},
+				},
+			},
+		},
+		Runtime: &JobRuntimeState{
+			JobID:        "job-1",
+			State:        JobStateRunning,
+			ActiveStepID: "start-service",
+		},
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "exec", map[string]interface{}{
+		"cmd": []string{"democtl", "status", "demo-service"},
+	})
+
+	assertDenied(t, decision, RejectionCodeApprovalRequired, "step requires approval")
+	if decision.Event.ToolName != "system_action:verify_post_state:start:service:demo-service" {
+		t.Fatalf("Event.ToolName = %q, want canonical system_action verification audit string", decision.Event.ToolName)
+	}
+}
+
 func TestAuditEventJSONUsesRequiredFieldNames(t *testing.T) {
 	t.Parallel()
 

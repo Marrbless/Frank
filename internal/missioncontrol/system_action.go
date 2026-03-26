@@ -439,3 +439,36 @@ func buildSystemActionRollbackRecord(spec SystemAction) *RuntimeRollbackRecord {
 	}
 	return record
 }
+
+func systemActionAuditAction(job *Job, step *Step, args map[string]interface{}) string {
+	if step == nil || step.SystemAction == nil {
+		return "system_action"
+	}
+
+	spec := *step.SystemAction
+	command := toolArgStringSlice(args, "cmd")
+	switch {
+	case job != nil:
+		if actionCommand, err := resolveSystemActionCommand(*job, *step); err == nil && commandsEqual(command, actionCommand) {
+			return systemActionAuditLabel(spec, "execute")
+		}
+	case len(command) == 0:
+		return systemActionAuditLabel(spec, "attempt")
+	}
+
+	if spec.PostState != nil && commandsEqual(command, spec.PostState.Command) {
+		return systemActionAuditLabel(spec, "verify_post_state")
+	}
+
+	return systemActionAuditLabel(spec, "attempt")
+}
+
+func systemActionAuditLabel(spec SystemAction, phase string) string {
+	return fmt.Sprintf(
+		"system_action:%s:%s:%s:%s",
+		strings.TrimSpace(phase),
+		strings.TrimSpace(string(spec.Operation)),
+		strings.TrimSpace(string(spec.Kind)),
+		strings.TrimSpace(spec.Target),
+	)
+}
