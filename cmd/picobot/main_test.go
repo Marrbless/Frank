@@ -4798,6 +4798,102 @@ func TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind(t *testing.T) {
 	}
 }
 
+func TestMissionStatusBootstrapNormalizesLegacyRevokedApprovalRequestAndPersistsSnapshot(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeDiscussion,
+					Subtype:           missioncontrol.StepSubtypeAuthorization,
+					ApprovalScope:     missioncontrol.ApprovalScopeOneJob,
+					AllowedTools:      []string{"read"},
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	revokedAt := time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			ApprovalRequests: []missioncontrol.ApprovalRequest{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeOneJob,
+					RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+					GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+					State:           missioncontrol.ApprovalStateRevoked,
+				},
+			},
+			ApprovalGrants: []missioncontrol.ApprovalGrant{
+				{
+					JobID:           job.ID,
+					StepID:          "build",
+					RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+					Scope:           missioncontrol.ApprovalScopeOneJob,
+					GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+					State:           missioncontrol.ApprovalStateRevoked,
+					RevokedAt:       revokedAt,
+				},
+			},
+		},
+	})
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	installMissionRuntimeChangeHook(cmd, ag)
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.ApprovalRequests[0].RevokedAt != revokedAt {
+		t.Fatalf("MissionRuntimeState().ApprovalRequests[0].RevokedAt = %v, want %v", runtime.ApprovalRequests[0].RevokedAt, revokedAt)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil {
+		t.Fatal("snapshot.Runtime = nil, want persisted runtime")
+	}
+	if snapshot.Runtime.ApprovalRequests[0].RevokedAt != revokedAt {
+		t.Fatalf("snapshot.Runtime.ApprovalRequests[0].RevokedAt = %v, want %v", snapshot.Runtime.ApprovalRequests[0].RevokedAt, revokedAt)
+	}
+}
+
 func TestMissionOperatorSetStepCommandActiveJobSucceedsThroughConfirmationPath(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()

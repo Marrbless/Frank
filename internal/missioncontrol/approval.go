@@ -215,10 +215,18 @@ func RefreshApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntime
 }
 
 func NormalizeHydratedApprovalRequests(current JobRuntimeState, now time.Time) (JobRuntimeState, bool) {
-	if current.State != JobStateWaitingUser {
-		return *CloneJobRuntimeState(&current), false
+	next := *CloneJobRuntimeState(&current)
+	changed := false
+	if current.State == JobStateWaitingUser {
+		var refreshed bool
+		next, refreshed = RefreshApprovalRequests(current, now)
+		changed = refreshed
 	}
-	return RefreshApprovalRequests(current, now)
+	if normalizeLegacyRevokedApprovalRequests(&next) {
+		changed = true
+		next.UpdatedAt = now
+	}
+	return next, changed
 }
 
 func ExpireActiveApprovalRequest(current JobRuntimeState, now time.Time, jobID, stepID, requestedAction, scope string) (JobRuntimeState, bool) {
@@ -484,6 +492,62 @@ func appendGrantedApprovalRequest(current JobRuntimeState, now time.Time, reques
 	next.ApprovalRequests = append(next.ApprovalRequests, request)
 	next.UpdatedAt = now
 	return next
+}
+
+func normalizeLegacyRevokedApprovalRequests(runtime *JobRuntimeState) bool {
+	if runtime == nil || len(runtime.ApprovalRequests) == 0 || len(runtime.ApprovalGrants) == 0 {
+		return false
+	}
+
+	changed := false
+	for i := range runtime.ApprovalRequests {
+		request := &runtime.ApprovalRequests[i]
+		if request.State != ApprovalStateRevoked || !request.RevokedAt.IsZero() {
+			continue
+		}
+		revokedAt := legacyApprovalRequestRevokedAt(*request, runtime.ApprovalGrants)
+		if revokedAt.IsZero() {
+			continue
+		}
+		request.RevokedAt = revokedAt
+		changed = true
+	}
+	return changed
+}
+
+func legacyApprovalRequestRevokedAt(request ApprovalRequest, grants []ApprovalGrant) time.Time {
+	if request.State != ApprovalStateRevoked {
+		return time.Time{}
+	}
+	if !request.RevokedAt.IsZero() {
+		return request.RevokedAt
+	}
+
+	for i := len(grants) - 1; i >= 0; i-- {
+		grant := grants[i]
+		if grant.State != ApprovalStateRevoked || grant.RevokedAt.IsZero() {
+			continue
+		}
+		if !approvalReusableBindingMatches(
+			request.JobID,
+			request.StepID,
+			request.RequestedAction,
+			request.Scope,
+			request.SessionChannel,
+			request.SessionChatID,
+			grant.JobID,
+			grant.StepID,
+			grant.RequestedAction,
+			grant.Scope,
+			grant.SessionChannel,
+			grant.SessionChatID,
+		) {
+			continue
+		}
+		return grant.RevokedAt
+	}
+
+	return time.Time{}
 }
 
 func normalizeApprovalScope(scope string) string {

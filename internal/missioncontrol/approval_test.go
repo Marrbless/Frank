@@ -923,6 +923,49 @@ func TestRefreshApprovalRequestsExpiresElapsedPendingRequest(t *testing.T) {
 	}
 }
 
+func TestNormalizeHydratedApprovalRequestsPopulatesLegacyRevokedAtFromGrant(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 15, 0, 0, 0, time.UTC)
+	revokedAt := now.Add(-time.Minute)
+	runtime, changed := NormalizeHydratedApprovalRequests(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateRevoked,
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeOneJob,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateRevoked,
+				RevokedAt:       revokedAt,
+			},
+		},
+	}, now)
+	if !changed {
+		t.Fatal("NormalizeHydratedApprovalRequests() changed = false, want true")
+	}
+	if runtime.ApprovalRequests[0].RevokedAt != revokedAt {
+		t.Fatalf("ApprovalRequests[0].RevokedAt = %v, want %v", runtime.ApprovalRequests[0].RevokedAt, revokedAt)
+	}
+	if runtime.UpdatedAt != now {
+		t.Fatalf("UpdatedAt = %v, want %v", runtime.UpdatedAt, now)
+	}
+}
+
 func TestAppendPendingApprovalRequestSupersedesOlderMatchingPendingRequest(t *testing.T) {
 	t.Parallel()
 

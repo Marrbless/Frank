@@ -253,34 +253,9 @@ func findOperatorStatusApprovalRevokedAt(grants []ApprovalGrant, request Approva
 	if request.State != ApprovalStateRevoked {
 		return nil
 	}
-	if revokedAt := formatOperatorStatusTime(request.RevokedAt); revokedAt != nil {
+	if revokedAt := formatOperatorStatusTime(legacyApprovalRequestRevokedAt(request, grants)); revokedAt != nil {
 		return revokedAt
 	}
-
-	for i := len(grants) - 1; i >= 0; i-- {
-		grant := grants[i]
-		if grant.State != ApprovalStateRevoked || grant.RevokedAt.IsZero() {
-			continue
-		}
-		if !approvalReusableBindingMatches(
-			request.JobID,
-			request.StepID,
-			request.RequestedAction,
-			request.Scope,
-			request.SessionChannel,
-			request.SessionChatID,
-			grant.JobID,
-			grant.StepID,
-			grant.RequestedAction,
-			grant.Scope,
-			grant.SessionChannel,
-			grant.SessionChatID,
-		) {
-			continue
-		}
-		return formatOperatorStatusTime(grant.RevokedAt)
-	}
-
 	return nil
 }
 
