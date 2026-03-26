@@ -304,6 +304,7 @@ Want to contribute? Open an issue or PR with your ideas!
 - [HOW_TO_START.md](docs/HOW_TO_START.md) — step-by-step getting started guide
 - [CONFIG.md](docs/CONFIG.md) — full configuration reference
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — development, testing, and Docker publishing
+- [FRANK_DEV_WORKFLOW.md](docs/FRANK_DEV_WORKFLOW.md) — desktop/laptop handoff workflow for Frank work
 - [docker/README.md](docker/README.md) — Docker deployment guide
 
 ## License
