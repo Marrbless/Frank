@@ -264,6 +264,40 @@ func TestCompleteRuntimeStepLongRunningCodeRequiresDeclaredArtifactPathEvidence(
 	}
 }
 
+func TestCompleteRuntimeStepRejectsCompletedReplayMarkerAtPrimitiveBoundary(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:              "build",
+		Type:            StepTypeOneShotCode,
+		SuccessCriteria: []string{"write code and validate it"},
+	}, JobStateRunning)
+	ec.Runtime.CompletedSteps = []RuntimeStepRecord{
+		{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+	}
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 27, 12, 5, 0, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Wrote and validated the code.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "main.go"}},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"go", "test", "./..."}}, Result: "ok"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want replay rejection")
+	}
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("CompleteRuntimeStep() error = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
 func TestCompleteRuntimeStepAuthorizationBindsReusableOneJobGrantInSameJob(t *testing.T) {
 	t.Parallel()
 

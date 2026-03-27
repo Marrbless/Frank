@@ -571,6 +571,9 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingAt = time.Time{}
 		next.AbortedAt = time.Time{}
 		if opts.validationResult != nil && opts.validationResult.recordCompletion {
+			if err := validateRuntimeActiveStepReplayMarkers(next, "complete"); err != nil {
+				return JobRuntimeState{}, err
+			}
 			if next.ActiveStepID == "" {
 				return JobRuntimeState{}, ValidationError{
 					Code:    RejectionCodeInvalidRuntimeState,
@@ -592,6 +595,9 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 				Code:    RejectionCodeValidationRequired,
 				Message: "completing a job runtime requires validation",
 			}
+		}
+		if err := validateRuntimeActiveStepReplayMarkers(next, "complete"); err != nil {
+			return JobRuntimeState{}, err
 		}
 		if next.ActiveStepID == "" {
 			return JobRuntimeState{}, ValidationError{
@@ -615,6 +621,9 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}
 	case JobStateFailed:
+		if err := validateRuntimeActiveStepReplayMarkers(next, "fail"); err != nil {
+			return JobRuntimeState{}, err
+		}
 		if next.ActiveStepID == "" {
 			return JobRuntimeState{}, ValidationError{
 				Code:    RejectionCodeInvalidRuntimeState,

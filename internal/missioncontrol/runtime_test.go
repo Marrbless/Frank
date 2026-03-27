@@ -160,6 +160,68 @@ func TestTransitionJobRuntimeCompletedRequiresValidation(t *testing.T) {
 	}
 }
 
+func TestTransitionJobRuntimeRejectsCompletedReplayMarkerWhenRecordingCompletion(t *testing.T) {
+	t.Parallel()
+
+	current := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+
+	_, err := TransitionJobRuntime(current, JobStateCompleted, time.Date(2026, 3, 27, 12, 5, 0, 0, time.UTC), RuntimeTransitionOptions{
+		validationResult: &stepValidationResult{recordCompletion: true},
+	})
+	if err == nil {
+		t.Fatal("TransitionJobRuntime() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("TransitionJobRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
+func TestTransitionJobRuntimeRejectsFailedReplayMarkerWhenRecordingFailure(t *testing.T) {
+	t.Parallel()
+
+	current := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		FailedSteps: []RuntimeStepRecord{
+			{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+
+	_, err := TransitionJobRuntime(current, JobStateFailed, time.Date(2026, 3, 27, 12, 5, 0, 0, time.UTC), RuntimeTransitionOptions{
+		FailureReason: "validator failed",
+	})
+	if err == nil {
+		t.Fatal("TransitionJobRuntime() error = nil, want failed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("TransitionJobRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
 func TestResumeJobRuntimeAfterBootRequiresApproval(t *testing.T) {
 	t.Parallel()
 

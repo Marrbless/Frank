@@ -81,6 +81,9 @@ func CompleteRuntimeStep(ec ExecutionContext, now time.Time, input StepValidatio
 			Message: fmt.Sprintf("runtime active step %q does not match active execution step %q", ec.Runtime.ActiveStepID, ec.Step.ID),
 		}
 	}
+	if err := validateRuntimeActiveStepReplayMarkers(*ec.Runtime, "complete"); err != nil {
+		return JobRuntimeState{}, err
+	}
 
 	if ec.Step != nil && ec.Step.Type == StepTypeWaitUser && ec.Runtime != nil && ec.Runtime.State == JobStateRunning {
 		return completeRunningStep(ec, now, input)
