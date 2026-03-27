@@ -174,12 +174,9 @@ func validateSystemActionCompletion(job Job, step Step, tools []RuntimeToolCallE
 			Message: err.Error(),
 		}
 	}
-	if _, ok := findExecEvidenceForCommand(tools, command); !ok {
-		return nil, ValidationError{
-			Code:    RejectionCodeStepValidationFailed,
-			StepID:  step.ID,
-			Message: fmt.Sprintf("system_action completion requires executing %q", commandLabel(command)),
-		}
+	actionExecuted := false
+	if _, ok := findExecEvidenceForCommand(tools, command); ok {
+		actionExecuted = true
 	}
 
 	output, err := verifySystemActionPostState(step, tools)
@@ -188,19 +185,35 @@ func validateSystemActionCompletion(job Job, step Step, tools []RuntimeToolCallE
 	}
 
 	spec := step.SystemAction
+	resultingState := &RuntimeResultingStateRecord{
+		Kind:                string(StepTypeSystemAction),
+		Target:              strings.TrimSpace(spec.Target),
+		Operation:           string(spec.Operation),
+		State:               systemActionVerifiedState(spec.Operation),
+		ActionCommand:       append([]string(nil), command...),
+		VerificationCommand: append([]string(nil), spec.PostState.Command...),
+		VerificationOutput:  output,
+		SourceStepID:        strings.TrimSpace(spec.SourceStepID),
+	}
+	if !actionExecuted {
+		if spec.Operation != SystemActionOperationStart && spec.Operation != SystemActionOperationStop {
+			return nil, ValidationError{
+				Code:    RejectionCodeStepValidationFailed,
+				StepID:  step.ID,
+				Message: fmt.Sprintf("system_action completion requires executing %q", commandLabel(command)),
+			}
+		}
+		resultingState.State = "already_present"
+		return &stepValidationResult{
+			recordCompletion: true,
+			resultingState:   resultingState,
+		}, nil
+	}
+
 	return &stepValidationResult{
 		recordCompletion: true,
-		resultingState: &RuntimeResultingStateRecord{
-			Kind:                string(StepTypeSystemAction),
-			Target:              strings.TrimSpace(spec.Target),
-			Operation:           string(spec.Operation),
-			State:               systemActionVerifiedState(spec.Operation),
-			ActionCommand:       append([]string(nil), command...),
-			VerificationCommand: append([]string(nil), spec.PostState.Command...),
-			VerificationOutput:  output,
-			SourceStepID:        strings.TrimSpace(spec.SourceStepID),
-		},
-		rollback: buildSystemActionRollbackRecord(*spec),
+		resultingState:   resultingState,
+		rollback:         buildSystemActionRollbackRecord(*spec),
 	}, nil
 }
 
