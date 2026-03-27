@@ -215,6 +215,37 @@ func TestTaskStateResumeRuntimeStoresExecutionContext(t *testing.T) {
 	}
 }
 
+func TestTaskStateResumeRuntimeRejectsCompletedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+
+	err := state.ResumeRuntime(job, runtimeState, nil, true)
+	if err == nil {
+		t.Fatal("ResumeRuntime() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ResumeRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want false after rejected replay resume")
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	t.Parallel()
 

@@ -356,6 +356,20 @@ func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved 
 			Message: "resuming a persisted runtime requires an active step",
 		}
 	}
+	if HasCompletedRuntimeStep(current, current.ActiveStepID) {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  current.ActiveStepID,
+			Message: fmt.Sprintf("cannot resume runtime for step %q because it is already recorded as completed", current.ActiveStepID),
+		}
+	}
+	if HasFailedRuntimeStep(current, current.ActiveStepID) {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  current.ActiveStepID,
+			Message: fmt.Sprintf("cannot resume runtime for step %q because it is already recorded as failed", current.ActiveStepID),
+		}
+	}
 
 	next := *CloneJobRuntimeState(&current)
 	switch next.State {
