@@ -103,6 +103,39 @@ func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t
 	}
 }
 
+func TestResolveExecutionContextWithRuntimeControlRejectsCompletedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	_, err = ResolveExecutionContextWithRuntimeControl(control, JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	})
+	if err == nil {
+		t.Fatal("ResolveExecutionContextWithRuntimeControl() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
 func TestTransitionJobRuntimeCompletedRequiresValidation(t *testing.T) {
 	t.Parallel()
 
@@ -576,6 +609,37 @@ func TestValidateRuntimeExecutionWaitingUserDenied(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeExecutionRejectsCompletedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateRuntimeExecution(ExecutionContext{
+		Job:  &Job{ID: "job-1"},
+		Step: &Step{ID: "build"},
+		Runtime: &JobRuntimeState{
+			JobID:        "job-1",
+			State:        JobStateRunning,
+			ActiveStepID: "build",
+			CompletedSteps: []RuntimeStepRecord{
+				{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("ValidateRuntimeExecution() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ValidateRuntimeExecution() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
 func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *testing.T) {
 	t.Parallel()
 
@@ -641,5 +705,34 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 	}
 	if runtime.ApprovalGrants[0].StepID != "draft" {
 		t.Fatalf("original approval grant step = %q, want %q", runtime.ApprovalGrants[0].StepID, "draft")
+	}
+}
+
+func TestResolveExecutionContextWithRuntimeRejectsFailedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+
+	_, err := ResolveExecutionContextWithRuntime(job, JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		FailedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	})
+	if err == nil {
+		t.Fatal("ResolveExecutionContextWithRuntime() error = nil, want failed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ResolveExecutionContextWithRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
 	}
 }

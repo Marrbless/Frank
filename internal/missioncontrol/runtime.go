@@ -220,6 +220,9 @@ func ResolveExecutionContextWithRuntime(job Job, runtime JobRuntimeState) (Execu
 			Message: "runtime execution requires an active step",
 		}
 	}
+	if err := validateRuntimeActiveStepReplayMarkers(runtime, "resolve"); err != nil {
+		return ExecutionContext{}, err
+	}
 
 	ec, err := ResolveExecutionContext(job, runtime.ActiveStepID)
 	if err != nil {
@@ -253,6 +256,9 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 			Code:    RejectionCodeInvalidRuntimeState,
 			Message: fmt.Sprintf("runtime active step %q does not match control step %q", runtime.ActiveStepID, control.Step.ID),
 		}
+	}
+	if err := validateRuntimeActiveStepReplayMarkers(runtime, "resolve"); err != nil {
+		return ExecutionContext{}, err
 	}
 
 	job := Job{
@@ -679,6 +685,9 @@ func ValidateRuntimeExecution(ec ExecutionContext) error {
 			Code:    RejectionCodeInvalidRuntimeState,
 			Message: fmt.Sprintf("runtime active step %q does not match active execution step %q", ec.Runtime.ActiveStepID, ec.Step.ID),
 		}
+	}
+	if err := validateRuntimeActiveStepReplayMarkers(*ec.Runtime, "execute"); err != nil {
+		return err
 	}
 
 	switch ec.Runtime.State {
