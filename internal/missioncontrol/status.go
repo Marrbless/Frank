@@ -25,6 +25,12 @@ type OperatorStatusSummary struct {
 	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
 	ApprovalHistory []OperatorApprovalHistoryEntry `json:"approval_history,omitempty"`
 	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
+	Truncation      *OperatorStatusTruncation      `json:"truncation,omitempty"`
+}
+
+type OperatorStatusTruncation struct {
+	ApprovalHistoryOmitted int `json:"approval_history_omitted,omitempty"`
+	RecentAuditOmitted     int `json:"recent_audit_omitted,omitempty"`
 }
 
 type OperatorApprovalRequestStatus struct {
@@ -163,6 +169,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	}
 	summary.ApprovalHistory = selectOperatorStatusApprovalHistory(runtime)
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
+	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit))
 
 	return summary
 }
@@ -278,6 +285,33 @@ func selectOperatorStatusApprovalHistory(runtime JobRuntimeState) []OperatorAppr
 		return nil
 	}
 	return history
+}
+
+func buildOperatorStatusTruncation(runtime JobRuntimeState, shownApprovalHistory int, shownRecentAudit int) *OperatorStatusTruncation {
+	truncation := OperatorStatusTruncation{}
+
+	approvalHistoryTotal := countOperatorStatusApprovalHistory(runtime)
+	if approvalHistoryTotal > shownApprovalHistory {
+		truncation.ApprovalHistoryOmitted = approvalHistoryTotal - shownApprovalHistory
+	}
+	if len(runtime.AuditHistory) > shownRecentAudit {
+		truncation.RecentAuditOmitted = len(runtime.AuditHistory) - shownRecentAudit
+	}
+	if truncation.ApprovalHistoryOmitted == 0 && truncation.RecentAuditOmitted == 0 {
+		return nil
+	}
+	return &truncation
+}
+
+func countOperatorStatusApprovalHistory(runtime JobRuntimeState) int {
+	count := 0
+	for _, request := range runtime.ApprovalRequests {
+		if runtime.JobID != "" && request.JobID != runtime.JobID {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func findOperatorStatusApprovalRevokedAt(grants []ApprovalGrant, request ApprovalRequest) *string {

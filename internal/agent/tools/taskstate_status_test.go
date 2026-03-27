@@ -380,6 +380,61 @@ func TestTaskStateOperatorStatusReturnsRecentAuditForPersistedRuntime(t *testing
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesTruncationMetadataForPersistedRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+
+	requests := make([]missioncontrol.ApprovalRequest, 0, missioncontrol.OperatorStatusApprovalHistoryLimit+2)
+	for i := 0; i < missioncontrol.OperatorStatusApprovalHistoryLimit+2; i++ {
+		requests = append(requests, missioncontrol.ApprovalRequest{
+			JobID:           "job-1",
+			StepID:          "step-" + string(rune('a'+i)),
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			State:           missioncontrol.ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, i, 0, 0, time.UTC),
+		})
+	}
+	history := make([]missioncontrol.AuditEvent, 0, missioncontrol.OperatorStatusRecentAuditLimit+1)
+	for i := 0; i < missioncontrol.OperatorStatusRecentAuditLimit+1; i++ {
+		history = append(history, missioncontrol.AuditEvent{
+			JobID:     "job-1",
+			StepID:    "build",
+			ToolName:  "status",
+			Allowed:   true,
+			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
+		})
+	}
+
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:            "job-1",
+		State:            missioncontrol.JobStateWaitingUser,
+		ActiveStepID:     "build",
+		ApprovalRequests: requests,
+		AuditHistory:     history,
+	}
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+	for _, want := range []string{
+		`"truncation": {`,
+		`"approval_history_omitted": 2`,
+		`"recent_audit_omitted": 1`,
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("OperatorStatus() = %q, want substring %q", summary, want)
+		}
+	}
+}
+
 func TestTaskStateOperatorStatusUsesPersistedRequestRevokedAtAfterRehydration(t *testing.T) {
 	t.Parallel()
 

@@ -274,6 +274,15 @@ func TestBuildOperatorStatusSummaryIncludesBoundedDeterministicApprovalHistory(t
 			t.Fatalf("ApprovalHistory[%d].StepID = %q, want %q", i, summary.ApprovalHistory[i].StepID, wantStep)
 		}
 	}
+	if summary.Truncation == nil {
+		t.Fatal("Truncation = nil, want approval_history truncation metadata")
+	}
+	if summary.Truncation.ApprovalHistoryOmitted != 2 {
+		t.Fatalf("Truncation.ApprovalHistoryOmitted = %d, want 2", summary.Truncation.ApprovalHistoryOmitted)
+	}
+	if summary.Truncation.RecentAuditOmitted != 0 {
+		t.Fatalf("Truncation.RecentAuditOmitted = %d, want 0", summary.Truncation.RecentAuditOmitted)
+	}
 }
 
 func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *testing.T) {
@@ -336,6 +345,15 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 		if got.Timestamp != want.at {
 			t.Fatalf("RecentAudit[%d].Timestamp = %q, want %q", i, got.Timestamp, want.at)
 		}
+	}
+	if summary.Truncation == nil {
+		t.Fatal("Truncation = nil, want recent_audit truncation metadata")
+	}
+	if summary.Truncation.RecentAuditOmitted != 1 {
+		t.Fatalf("Truncation.RecentAuditOmitted = %d, want 1", summary.Truncation.RecentAuditOmitted)
+	}
+	if summary.Truncation.ApprovalHistoryOmitted != 0 {
+		t.Fatalf("Truncation.ApprovalHistoryOmitted = %d, want 0", summary.Truncation.ApprovalHistoryOmitted)
 	}
 }
 
