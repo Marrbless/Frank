@@ -769,7 +769,26 @@ func NewRootCmd() *cobra.Command {
 	memoryCmd.AddCommand(rankCmd)
 
 	rootCmd.AddCommand(memoryCmd)
+
+	wrapCommandRunEWithSurfacedValidationErrors(rootCmd)
 	return rootCmd
+}
+
+func wrapCommandRunEWithSurfacedValidationErrors(cmd *cobra.Command) {
+	if cmd == nil {
+		return
+	}
+
+	if cmd.RunE != nil {
+		originalRunE := cmd.RunE
+		cmd.RunE = func(cmd *cobra.Command, args []string) error {
+			return missioncontrol.SurfaceValidationError(originalRunE(cmd, args))
+		}
+	}
+
+	for _, subcommand := range cmd.Commands() {
+		wrapCommandRunEWithSurfacedValidationErrors(subcommand)
+	}
 }
 
 func addMissionBootstrapFlags(cmd *cobra.Command) {

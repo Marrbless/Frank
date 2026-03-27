@@ -2,7 +2,9 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -155,5 +157,44 @@ func TestValidationErrorErrorIsNotEmpty(t *testing.T) {
 
 	if err.Error() == "" {
 		t.Fatal("ValidationError.Error() returned an empty string")
+	}
+}
+
+func TestSurfaceValidationErrorCanonicalizesCodeForDirectValidationError(t *testing.T) {
+	t.Parallel()
+
+	err := SurfaceValidationError(ValidationError{
+		Code:    RejectionCodeUnknownStep,
+		StepID:  "missing",
+		Message: `step "missing" not found in plan`,
+	})
+
+	if err == nil {
+		t.Fatal("SurfaceValidationError() = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
+		t.Fatalf("SurfaceValidationError() error = %q, want canonical unknown-step code", err)
+	}
+	if strings.Contains(err.Error(), string(RejectionCodeUnknownStep)) {
+		t.Fatalf("SurfaceValidationError() error = %q, want internal code hidden", err)
+	}
+}
+
+func TestSurfaceValidationErrorPreservesWrappedContext(t *testing.T) {
+	t.Parallel()
+
+	err := SurfaceValidationError(fmt.Errorf("failed to validate mission file %q: %w", "mission.json", ValidationError{
+		Code:    RejectionCodeMissingTerminalFinalStep,
+		Message: "plan must end with a final_response step",
+	}))
+
+	if err == nil {
+		t.Fatal("SurfaceValidationError() = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "failed to validate mission file \"mission.json\"") {
+		t.Fatalf("SurfaceValidationError() error = %q, want wrapper context preserved", err)
+	}
+	if !strings.Contains(err.Error(), "E_PLAN_INVALID") {
+		t.Fatalf("SurfaceValidationError() error = %q, want canonical plan-invalid code", err)
 	}
 }

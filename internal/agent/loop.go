@@ -248,7 +248,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				a.taskState.SetOperatorSession(msg.Channel, msg.ChatID)
 				if handled, content, err := a.processOperatorCommand(msg.Content); handled {
 					if err != nil {
-						content = err.Error()
+						content = missioncontrol.SurfacedValidationErrorString(err)
 					}
 					if !isSystemChannel(msg.Channel) {
 						sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
@@ -268,7 +268,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				}
 				if handled, content, err := a.taskState.ApplyNaturalApprovalDecision(msg.Content); handled {
 					if err != nil {
-						content = err.Error()
+						content = missioncontrol.SurfacedValidationErrorString(err)
 					}
 					if !isSystemChannel(msg.Channel) {
 						sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
@@ -456,10 +456,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
 		a.taskState.SetOperatorSession("cli", "direct")
 		if handled, response, err := a.processOperatorCommand(content); handled {
-			return response, err
+			return response, missioncontrol.SurfaceValidationError(err)
 		}
 		if handled, response, err := a.taskState.ApplyNaturalApprovalDecision(content); handled {
-			return response, err
+			return response, missioncontrol.SurfaceValidationError(err)
 		}
 		if inputKind, err := a.taskState.ApplyWaitingUserInput(content); err != nil {
 			log.Printf("mission runtime waiting_user input validation failed: %v", err)

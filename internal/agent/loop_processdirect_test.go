@@ -907,7 +907,7 @@ func TestProcessDirectInspectCommandRejectsUnknownStepDeterministically(t *testi
 	if err == nil {
 		t.Fatal("ProcessDirect(INSPECT missing) error = nil, want unknown-step failure")
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
 		t.Fatalf("ProcessDirect(INSPECT missing) error = %q, want unknown_step code", err)
 	}
 	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
@@ -1034,6 +1034,9 @@ func TestProcessDirectSetStepCommandWithoutHookRejectsDeterministically(t *testi
 	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
 	if err == nil {
 		t.Fatal("ProcessDirect(SET_STEP) error = nil, want deterministic rejection")
+	}
+	if !strings.Contains(err.Error(), "E_STEP_OUT_OF_ORDER") {
+		t.Fatalf("ProcessDirect(SET_STEP) error = %q, want canonical rejection code", err)
 	}
 	if !strings.Contains(err.Error(), "SET_STEP requires mission step control configuration") {
 		t.Fatalf("ProcessDirect(SET_STEP) error = %q, want configuration rejection", err)

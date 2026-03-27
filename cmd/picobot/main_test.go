@@ -440,7 +440,7 @@ func TestMissionInspectCommandWithUnknownStepReturnsClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to resolve mission inspection summary") {
 		t.Fatalf("Execute() error = %q, want clear inspect summary failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
 		t.Fatalf("Execute() error = %q, want unknown_step code", err)
 	}
 	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
@@ -633,7 +633,7 @@ func TestMissionInspectCommandWithInvalidMissionReturnsValidationError(t *testin
 	if !strings.Contains(err.Error(), "failed to validate mission file") {
 		t.Fatalf("Execute() error = %q, want validation failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+	if !strings.Contains(err.Error(), "E_PLAN_INVALID") {
 		t.Fatalf("Execute() error = %q, want validation error code", err)
 	}
 }
@@ -1468,7 +1468,7 @@ func TestMissionAssertStepCommandUnknownStepReturnsClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to validate mission file") {
 		t.Fatalf("Execute() error = %q, want validation failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
 		t.Fatalf("Execute() error = %q, want unknown_step code", err)
 	}
 	if !strings.Contains(err.Error(), `step "missing" not found in plan`) {
@@ -1573,7 +1573,7 @@ func TestMissionAssertStepCommandWithInvalidMissionReturnsValidationError(t *tes
 	if !strings.Contains(err.Error(), "failed to validate mission file") {
 		t.Fatalf("Execute() error = %q, want validation failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+	if !strings.Contains(err.Error(), "E_PLAN_INVALID") {
 		t.Fatalf("Execute() error = %q, want validation error code", err)
 	}
 }
@@ -2301,7 +2301,7 @@ func TestMissionSetStepCommandWithInvalidMissionReturnsError(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to validate mission file") {
 		t.Fatalf("Execute() error = %q, want mission validation failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissingTerminalFinalStep)) {
+	if !strings.Contains(err.Error(), "E_PLAN_INVALID") {
 		t.Fatalf("Execute() error = %q, want validation error code", err)
 	}
 
@@ -2329,7 +2329,7 @@ func TestMissionSetStepCommandWithUnknownMissionStepReturnsError(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to validate mission file") {
 		t.Fatalf("Execute() error = %q, want mission validation failure", err)
 	}
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeUnknownStep)) {
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
 		t.Fatalf("Execute() error = %q, want unknown step error code", err)
 	}
 
@@ -6184,8 +6184,12 @@ func TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsOperatorControl(t
 				if err == nil {
 					t.Fatalf("ProcessDirect(%s) error = nil, want invalid runtime state", command)
 				}
-				if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeInvalidRuntimeState)) {
-					t.Fatalf("ProcessDirect(%s) error = %q, want invalid runtime state", command, err)
+				wantCode := "E_STEP_OUT_OF_ORDER"
+				if runtimeState == missioncontrol.JobStateAborted {
+					wantCode = "E_ABORTED"
+				}
+				if !strings.Contains(err.Error(), wantCode) {
+					t.Fatalf("ProcessDirect(%s) error = %q, want canonical rejection code %q", command, err, wantCode)
 				}
 			}
 		})
