@@ -534,6 +534,9 @@ func TestCompleteRuntimeStepOneShotCodeUsesExplicitContractMetadata(t *testing.T
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
 		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
 	}
+	if runtime.CompletedSteps[0].ResultingState != nil {
+		t.Fatalf("CompletedSteps[0].ResultingState = %#v, want nil for newly created code artifact", runtime.CompletedSteps[0].ResultingState)
+	}
 }
 
 func TestCompleteRuntimeStepOneShotCodeRequiresDeclaredArtifactPathEvidence(t *testing.T) {
@@ -567,8 +570,52 @@ func TestCompleteRuntimeStepOneShotCodeRequiresDeclaredArtifactPathEvidence(t *t
 	if validationErr.Code != RejectionCodeStepValidationFailed {
 		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
 	}
-	if validationErr.Message != `one_shot_code completion requires writing "main.go"` {
+	if validationErr.Message != `one_shot_code completion requires proving "main.go" exists` {
 		t.Fatalf("ValidationError.Message = %q, want exact artifact-path failure", validationErr.Message)
+	}
+}
+
+func TestCompleteRuntimeStepOneShotCodeRecordsAlreadyPresentWhenArtifactAlreadyValidates(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContextForJob(testV2Job([]Step{
+		{
+			ID:                  "build",
+			Type:                StepTypeOneShotCode,
+			SuccessCriteria:     []string{"Write `wrong.go` and run `go test ./...`."},
+			OneShotArtifactPath: "main.go",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}), "build", JobStateRunning)
+	now := time.Date(2026, 3, 27, 12, 9, 0, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "The code artifact was already present and still validates.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "main.go"}, Result: "exists=true\nkind=file\nname=main.go\nsize=42\n"},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"go", "test", "./..."}}, Result: "ok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if runtime.CompletedSteps[0].ResultingState == nil {
+		t.Fatal("CompletedSteps[0].ResultingState = nil, want durable already_present marker")
+	}
+	if runtime.CompletedSteps[0].ResultingState.Kind != string(StepTypeOneShotCode) {
+		t.Fatalf("CompletedSteps[0].ResultingState.Kind = %q, want %q", runtime.CompletedSteps[0].ResultingState.Kind, StepTypeOneShotCode)
+	}
+	if runtime.CompletedSteps[0].ResultingState.Target != "main.go" {
+		t.Fatalf("CompletedSteps[0].ResultingState.Target = %q, want %q", runtime.CompletedSteps[0].ResultingState.Target, "main.go")
+	}
+	if runtime.CompletedSteps[0].ResultingState.State != "already_present" {
+		t.Fatalf("CompletedSteps[0].ResultingState.State = %q, want %q", runtime.CompletedSteps[0].ResultingState.State, "already_present")
 	}
 }
 

@@ -169,10 +169,11 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 		}
 		return pauseAfterValidatedCompletionWithResult(ec, now, result)
 	case StepTypeOneShotCode:
-		if err := validateOneShotCodeCompletion(*ec.Step, input.SuccessfulTools); err != nil {
+		result, err := validateOneShotCodeCompletion(*ec.Step, input.SuccessfulTools)
+		if err != nil {
 			return JobRuntimeState{}, err
 		}
-		return pauseAfterValidatedCompletion(ec, now)
+		return pauseAfterValidatedCompletionWithResult(ec, now, result)
 	case StepTypeFinalResponse:
 		finalResponse := strings.TrimSpace(input.FinalResponse)
 		if finalResponse == "" {
@@ -614,38 +615,34 @@ func isLongRunningStartCommand(cmd []string) bool {
 	return false
 }
 
-func validateOneShotCodeCompletion(step Step, tools []RuntimeToolCallEvidence) error {
+func validateOneShotCodeCompletion(step Step, tools []RuntimeToolCallEvidence) (*stepValidationResult, error) {
 	artifactPath := oneShotArtifactPath(step)
 	if artifactPath != "" {
-		if !hasExactArtifactWrite(tools, artifactPath) {
-			return ValidationError{
-				Code:    RejectionCodeStepValidationFailed,
-				StepID:  step.ID,
-				Message: fmt.Sprintf("one_shot_code completion requires writing %q", artifactPath),
-			}
-		}
 		if !hasExactArtifactExistenceEvidence(tools, artifactPath) {
-			return ValidationError{
+			return nil, ValidationError{
 				Code:    RejectionCodeStepValidationFailed,
 				StepID:  step.ID,
 				Message: fmt.Sprintf("one_shot_code completion requires proving %q exists", artifactPath),
 			}
 		}
 	} else if !hasOneShotCodeArtifactEvidence(tools) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "one_shot_code completion requires artifact or code-change evidence",
 		}
 	}
 	if !hasOneShotCodeVerificationEvidence(tools) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "one_shot_code completion requires validation, run, compile, read, or stat evidence",
 		}
 	}
-	return nil
+	if artifactPath != "" && !hasExactArtifactWrite(tools, artifactPath) {
+		return alreadyPresentStepValidationResult(StepTypeOneShotCode, artifactPath), nil
+	}
+	return &stepValidationResult{recordCompletion: true}, nil
 }
 
 func hasOneShotCodeArtifactEvidence(tools []RuntimeToolCallEvidence) bool {
