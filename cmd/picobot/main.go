@@ -1146,6 +1146,12 @@ func validatePersistedMissionRuntimeSnapshot(snapshot missionStatusSnapshot) err
 	if snapshot.Active && missioncontrol.IsTerminalJobState(runtime.State) {
 		return fmt.Errorf("persisted mission runtime snapshot marks terminal runtime state %q as active", runtime.State)
 	}
+	if runtime.ActiveStepID != "" && missioncontrol.HasCompletedRuntimeStep(*runtime, runtime.ActiveStepID) {
+		return fmt.Errorf("persisted mission runtime active_step_id %q is already recorded in completed_steps", runtime.ActiveStepID)
+	}
+	if runtime.ActiveStepID != "" && missioncontrol.HasFailedRuntimeStep(*runtime, runtime.ActiveStepID) {
+		return fmt.Errorf("persisted mission runtime active_step_id %q is already recorded in failed_steps", runtime.ActiveStepID)
+	}
 
 	control := snapshot.RuntimeControl
 	if control == nil {

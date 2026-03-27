@@ -367,6 +367,26 @@ func TestHasCompletedRuntimeStepMatchesRecordedCompletion(t *testing.T) {
 	}
 }
 
+func TestHasFailedRuntimeStepMatchesRecordedFailure(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "final",
+		FailedSteps: []RuntimeStepRecord{
+			{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 24, 12, 30, 0, 0, time.UTC)},
+		},
+	}
+
+	if !HasFailedRuntimeStep(runtime, "build") {
+		t.Fatal("HasFailedRuntimeStep(build) = false, want true")
+	}
+	if HasFailedRuntimeStep(runtime, "final") {
+		t.Fatal("HasFailedRuntimeStep(final) = true, want false")
+	}
+}
+
 func TestValidateRuntimeExecutionWaitingUserDenied(t *testing.T) {
 	t.Parallel()
 

@@ -4499,6 +4499,86 @@ func TestMissionStatusBootstrapRejectsInconsistentPersistedRuntimeControlStep(t 
 	}
 }
 
+func TestMissionStatusBootstrapRejectsPersistedRuntimeWithActiveCompletedStepRecord(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", At: time.Date(2026, 3, 27, 10, 0, 0, 0, time.UTC)},
+			},
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want completed-step replay marker failure")
+	}
+	if !strings.Contains(err.Error(), `active_step_id "build" is already recorded in completed_steps`) {
+		t.Fatalf("configureMissionBootstrap() error = %q, want completed-step replay marker mismatch", err)
+	}
+}
+
+func TestMissionStatusBootstrapRejectsPersistedRuntimeWithActiveFailedStepRecord(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       job.ID,
+		StepID:      "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			FailedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 27, 10, 0, 0, 0, time.UTC)},
+			},
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want failed-step replay marker failure")
+	}
+	if !strings.Contains(err.Error(), `active_step_id "build" is already recorded in failed_steps`) {
+		t.Fatalf("configureMissionBootstrap() error = %q, want failed-step replay marker mismatch", err)
+	}
+}
+
 func TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
