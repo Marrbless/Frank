@@ -522,6 +522,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 		{
 			JobID: "job-1",
 			State: missioncontrol.JobStateFailed,
+			FailedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)},
+			},
 			ApprovalRequests: []missioncontrol.ApprovalRequest{
 				{
 					JobID:           "job-1",
@@ -567,6 +570,14 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			}
 			if strings.Contains(summary, `"allowed_tools":`) {
 				t.Fatalf("OperatorStatus() = %q, want allowed_tools omitted without control context", summary)
+			}
+			if runtime.State == missioncontrol.JobStateFailed {
+				if !strings.Contains(summary, `"failed_step_id": "build"`) {
+					t.Fatalf("OperatorStatus() = %q, want failed step id", summary)
+				}
+				if !strings.Contains(summary, `"failure_reason": "validator failed"`) {
+					t.Fatalf("OperatorStatus() = %q, want failure reason", summary)
+				}
 			}
 		})
 	}

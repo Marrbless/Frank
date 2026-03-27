@@ -472,3 +472,32 @@ func TestFormatOperatorStatusSummaryProducesDeterministicJSONForTerminalRuntime(
 		t.Fatalf("allowed_tools = %#v, want omitted without active or persisted control context", got["allowed_tools"])
 	}
 }
+
+func TestFormatOperatorStatusSummaryIncludesFailedStepBlockerForFailedRuntime(t *testing.T) {
+	t.Parallel()
+
+	formatted, err := FormatOperatorStatusSummary(JobRuntimeState{
+		JobID: "job-1",
+		State: JobStateFailed,
+		FailedSteps: []RuntimeStepRecord{
+			{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 24, 12, 8, 0, 0, time.UTC)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummary() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(formatted), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got["state"] != string(JobStateFailed) {
+		t.Fatalf("state = %#v, want %q", got["state"], JobStateFailed)
+	}
+	if got["failed_step_id"] != "build" {
+		t.Fatalf("failed_step_id = %#v, want %q", got["failed_step_id"], "build")
+	}
+	if got["failure_reason"] != "validator failed" {
+		t.Fatalf("failure_reason = %#v, want %q", got["failure_reason"], "validator failed")
+	}
+}
