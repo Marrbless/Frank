@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -165,7 +166,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 				Timestamp: time.Now(),
 			}
 			emitAuditEvent(auditEmitter, event)
-			return "", fmt.Errorf("tool rejected: %s: %s", missioncontrol.RejectionCodeMissionContextRequired, "active mission step is required")
+			return "", fmt.Errorf("tool rejected: %s: %s", surfacedToolRejectionCode(missioncontrol.RejectionCodeMissionContextRequired, "active mission step is required"), "active mission step is required")
 		}
 	}
 
@@ -175,7 +176,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 			emitAuditEvent(auditEmitter, decision.Event)
 			if !decision.Allowed {
 				log.Printf("[tool] ! %s denied: code=%s reason=%s", name, decision.Code, decision.Reason)
-				return "", fmt.Errorf("tool rejected: %s: %s", decision.Code, decision.Reason)
+				return "", fmt.Errorf("tool rejected: %s: %s", surfacedToolRejectionCode(decision.Code, decision.Reason), decision.Reason)
 			}
 		}
 	}
@@ -206,4 +207,51 @@ func emitAuditEvent(emitter missioncontrol.AuditEmitter, event missioncontrol.Au
 		emitter.EmitAuditEvent(event)
 	}
 	logAuditEvent(event)
+}
+
+func surfacedToolRejectionCode(code missioncontrol.RejectionCode, reason string) missioncontrol.RejectionCode {
+	if code == "" {
+		return ""
+	}
+
+	raw := string(code)
+	if strings.HasPrefix(raw, "E_") {
+		return code
+	}
+
+	normalizedReason := strings.ToLower(strings.TrimSpace(reason))
+
+	switch code {
+	case missioncontrol.RejectionCodeApprovalRequired:
+		return missioncontrol.RejectionCode("E_APPROVAL_REQUIRED")
+	case missioncontrol.RejectionCodeAuthorityExceeded:
+		return missioncontrol.RejectionCode("E_AUTHORITY_EXCEEDED")
+	case missioncontrol.RejectionCodeToolNotAllowed, missioncontrol.RejectionCodeUnknownStep:
+		return missioncontrol.RejectionCode("E_INVALID_ACTION_FOR_STEP")
+	case missioncontrol.RejectionCodeMissionContextRequired:
+		return missioncontrol.RejectionCode("E_NO_ACTIVE_STEP")
+	case missioncontrol.RejectionCodeWaitingUser:
+		return missioncontrol.RejectionCode("E_WAITING_FOR_USER")
+	case missioncontrol.RejectionCodeLongRunningStartForbidden:
+		return missioncontrol.RejectionCode("E_LONGRUN_START_FORBIDDEN")
+	case missioncontrol.RejectionCodeResumeApprovalRequired:
+		return missioncontrol.RejectionCode("E_RESUME_REQUIRES_APPROVAL")
+	case missioncontrol.RejectionCodeStepValidationFailed,
+		missioncontrol.RejectionCodeFalseCompletionClaim,
+		missioncontrol.RejectionCodeValidationRequired:
+		return missioncontrol.RejectionCode("E_VALIDATION_FAILED")
+	case missioncontrol.RejectionCodeInvalidJobTransition:
+		return missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")
+	case missioncontrol.RejectionCodeInvalidRuntimeState:
+		switch {
+		case strings.Contains(normalizedReason, "requires an active step"), strings.Contains(normalizedReason, "active mission step is required"), strings.Contains(normalizedReason, "no active step"):
+			return missioncontrol.RejectionCode("E_NO_ACTIVE_STEP")
+		case strings.Contains(normalizedReason, "aborted"):
+			return missioncontrol.RejectionCode("E_ABORTED")
+		default:
+			return missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")
+		}
+	default:
+		return code
+	}
 }

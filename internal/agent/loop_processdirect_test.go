@@ -195,8 +195,8 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(resp, string(missioncontrol.RejectionCodeToolNotAllowed)) {
-		t.Fatalf("expected rejection code in response, got %q", resp)
+	if !strings.Contains(resp, "E_INVALID_ACTION_FOR_STEP") {
+		t.Fatalf("expected canonical rejection code in response, got %q", resp)
 	}
 
 	if !strings.Contains(resp, "tool is not allowed by job tool scope") {
@@ -229,8 +229,8 @@ func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *t
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !strings.Contains(resp, string(missioncontrol.RejectionCodeMissionContextRequired)) {
-		t.Fatalf("expected mission_context_required in response, got %q", resp)
+	if !strings.Contains(resp, "E_NO_ACTIVE_STEP") {
+		t.Fatalf("expected canonical no-active-step rejection in response, got %q", resp)
 	}
 
 	if !strings.Contains(resp, "active mission step is required") {

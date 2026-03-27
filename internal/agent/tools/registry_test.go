@@ -156,7 +156,7 @@ func TestRegistryExecuteGuardDenies(t *testing.T) {
 		t.Fatalf("guard calls = %d, want %d", guard.calls, 1)
 	}
 
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeToolNotAllowed)) {
+	if !strings.Contains(err.Error(), "E_INVALID_ACTION_FOR_STEP") {
 		t.Fatalf("error %q does not contain rejection code", err)
 	}
 
@@ -383,8 +383,8 @@ func TestRegistryExecuteMissionRequiredWithoutExecutionContextRejectsAndLogsAudi
 		t.Fatalf("tool executeCalls = %d, want %d", tool.executeCalls, 0)
 	}
 
-	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeMissionContextRequired)) {
-		t.Fatalf("error %q does not contain mission_context_required", err)
+	if !strings.Contains(err.Error(), "E_NO_ACTIVE_STEP") {
+		t.Fatalf("error %q does not contain canonical no-active-step code", err)
 	}
 
 	if !strings.Contains(err.Error(), "active mission step is required") {
@@ -477,6 +477,33 @@ func TestRegistryDefinitionsStepLevelIntersectionFiltering(t *testing.T) {
 	want := []string{"beta"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DefinitionsForExecutionContext(job+step) = %#v, want %#v", got, want)
+	}
+}
+
+func TestSurfacedToolRejectionCodeCanonicalizesFrozenV2Codes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		code   missioncontrol.RejectionCode
+		reason string
+		want   missioncontrol.RejectionCode
+	}{
+		{name: "already canonical", code: missioncontrol.RejectionCode("E_WAITING_FOR_USER"), want: missioncontrol.RejectionCode("E_WAITING_FOR_USER")},
+		{name: "tool not allowed", code: missioncontrol.RejectionCodeToolNotAllowed, reason: "tool is outside the step scope", want: missioncontrol.RejectionCode("E_INVALID_ACTION_FOR_STEP")},
+		{name: "mission context", code: missioncontrol.RejectionCodeMissionContextRequired, reason: "active mission step is required", want: missioncontrol.RejectionCode("E_NO_ACTIVE_STEP")},
+		{name: "approval required", code: missioncontrol.RejectionCodeApprovalRequired, reason: "step requires approval", want: missioncontrol.RejectionCode("E_APPROVAL_REQUIRED")},
+		{name: "waiting user", code: missioncontrol.RejectionCodeWaitingUser, reason: "job is waiting for user input", want: missioncontrol.RejectionCode("E_WAITING_FOR_USER")},
+		{name: "invalid runtime state", code: missioncontrol.RejectionCodeInvalidRuntimeState, reason: "job is not executable while in \"paused\" state", want: missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := surfacedToolRejectionCode(tc.code, tc.reason); got != tc.want {
+				t.Fatalf("surfacedToolRejectionCode(%q, %q) = %q, want %q", tc.code, tc.reason, got, tc.want)
+			}
+		})
 	}
 }
 
