@@ -17,6 +17,7 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 		State:         JobStateWaitingUser,
 		ActiveStepID:  "build",
 		WaitingReason: "discussion_authorization",
+		WaitingAt:     time.Date(2026, 3, 24, 12, 2, 30, 0, time.UTC),
 		ApprovalRequests: []ApprovalRequest{
 			{
 				JobID:           "job-1",
@@ -58,6 +59,9 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	}
 	if summary.WaitingReason != "discussion_authorization" {
 		t.Fatalf("WaitingReason = %q, want %q", summary.WaitingReason, "discussion_authorization")
+	}
+	if summary.WaitingAt == nil || *summary.WaitingAt != "2026-03-24T12:02:30Z" {
+		t.Fatalf("WaitingAt = %#v, want RFC3339 time", summary.WaitingAt)
 	}
 	if summary.ApprovalRequest == nil {
 		t.Fatal("ApprovalRequest = nil, want populated summary")
@@ -119,6 +123,7 @@ func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *tes
 		JobID:        "job-1",
 		State:        JobStatePaused,
 		ActiveStepID: "build",
+		PausedAt:     time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC),
 		ApprovalRequests: []ApprovalRequest{
 			{
 				JobID:           "job-1",
@@ -148,6 +153,9 @@ func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *tes
 	}
 	if summary.ApprovalRequest.SessionChatID != "C123::171234" {
 		t.Fatalf("ApprovalRequest.SessionChatID = %q, want %q", summary.ApprovalRequest.SessionChatID, "C123::171234")
+	}
+	if summary.PausedAt == nil || *summary.PausedAt != "2026-03-24T12:03:00Z" {
+		t.Fatalf("PausedAt = %#v, want RFC3339 time", summary.PausedAt)
 	}
 }
 
@@ -499,5 +507,8 @@ func TestFormatOperatorStatusSummaryIncludesFailedStepBlockerForFailedRuntime(t 
 	}
 	if got["failure_reason"] != "validator failed" {
 		t.Fatalf("failure_reason = %#v, want %q", got["failure_reason"], "validator failed")
+	}
+	if got["failed_at"] != "2026-03-24T12:08:00Z" {
+		t.Fatalf("failed_at = %#v, want %q", got["failed_at"], "2026-03-24T12:08:00Z")
 	}
 }

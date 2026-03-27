@@ -146,6 +146,7 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 		State:         missioncontrol.JobStateWaitingUser,
 		ActiveStepID:  "build",
 		WaitingReason: "discussion_authorization",
+		WaitingAt:     time.Date(2026, 3, 24, 12, 2, 30, 0, time.UTC),
 		ApprovalRequests: []missioncontrol.ApprovalRequest{
 			{
 				JobID:           "job-1",
@@ -183,6 +184,7 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 	for _, want := range []string{
 		`"state": "waiting_user"`,
 		`"waiting_reason": "discussion_authorization"`,
+		`"waiting_at": "2026-03-24T12:02:30Z"`,
 		`"requested_action": "step_complete"`,
 		`"scope": "mission_step"`,
 		`"requested_via": "runtime_waiting_user"`,
@@ -292,6 +294,7 @@ func TestTaskStateOperatorStatusReturnsPausedReason(t *testing.T) {
 		State:        missioncontrol.JobStatePaused,
 		ActiveStepID: "build",
 		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		PausedAt:     time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC),
 	}
 	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
 		t.Fatalf("HydrateRuntimeControl() error = %v", err)
@@ -304,6 +307,9 @@ func TestTaskStateOperatorStatusReturnsPausedReason(t *testing.T) {
 	}
 	if !strings.Contains(summary, `"paused_reason": "operator_command"`) {
 		t.Fatalf("OperatorStatus() = %q, want paused reason", summary)
+	}
+	if !strings.Contains(summary, `"paused_at": "2026-03-24T12:03:00Z"`) {
+		t.Fatalf("OperatorStatus() = %q, want paused timestamp", summary)
 	}
 	if !strings.Contains(summary, `"allowed_tools": [`) || !strings.Contains(summary, `"read"`) {
 		t.Fatalf("OperatorStatus() = %q, want effective allowed tools", summary)
@@ -520,8 +526,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 			},
 		},
 		{
-			JobID: "job-1",
-			State: missioncontrol.JobStateFailed,
+			JobID:    "job-1",
+			State:    missioncontrol.JobStateFailed,
+			FailedAt: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC),
 			FailedSteps: []missioncontrol.RuntimeStepRecord{
 				{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC)},
 			},
@@ -577,6 +584,9 @@ func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testi
 				}
 				if !strings.Contains(summary, `"failure_reason": "validator failed"`) {
 					t.Fatalf("OperatorStatus() = %q, want failure reason", summary)
+				}
+				if !strings.Contains(summary, `"failed_at": "2026-03-24T12:02:00Z"`) {
+					t.Fatalf("OperatorStatus() = %q, want failure timestamp", summary)
 				}
 			}
 		})

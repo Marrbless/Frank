@@ -15,10 +15,13 @@ type OperatorStatusSummary struct {
 	ActiveStepID    string                         `json:"active_step_id,omitempty"`
 	AllowedTools    []string                       `json:"allowed_tools,omitempty"`
 	WaitingReason   string                         `json:"waiting_reason,omitempty"`
+	WaitingAt       *string                        `json:"waiting_at,omitempty"`
 	PausedReason    string                         `json:"paused_reason,omitempty"`
+	PausedAt        *string                        `json:"paused_at,omitempty"`
 	AbortedReason   string                         `json:"aborted_reason,omitempty"`
 	FailedStepID    string                         `json:"failed_step_id,omitempty"`
 	FailureReason   string                         `json:"failure_reason,omitempty"`
+	FailedAt        *string                        `json:"failed_at,omitempty"`
 	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
 	ApprovalHistory []OperatorApprovalHistoryEntry `json:"approval_history,omitempty"`
 	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
@@ -115,7 +118,9 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		State:         runtime.State,
 		ActiveStepID:  runtime.ActiveStepID,
 		WaitingReason: runtime.WaitingReason,
+		WaitingAt:     formatOperatorStatusTime(runtime.WaitingAt),
 		PausedReason:  runtime.PausedReason,
+		PausedAt:      formatOperatorStatusTime(runtime.PausedAt),
 		AbortedReason: runtime.AbortedReason,
 	}
 	if runtime.State == JobStateFailed {
@@ -123,6 +128,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 			summary.FailedStepID = record.StepID
 			summary.FailureReason = record.Reason
 		}
+		summary.FailedAt = selectOperatorStatusFailedAt(runtime)
 	}
 	if allowedTools != nil {
 		summary.AllowedTools = append([]string(nil), allowedTools...)
@@ -166,6 +172,16 @@ func selectOperatorStatusLatestFailedStep(runtime JobRuntimeState) (RuntimeStepR
 		return RuntimeStepRecord{}, false
 	}
 	return cloneRuntimeStepRecord(runtime.FailedSteps[len(runtime.FailedSteps)-1]), true
+}
+
+func selectOperatorStatusFailedAt(runtime JobRuntimeState) *string {
+	if failedAt := formatOperatorStatusTime(runtime.FailedAt); failedAt != nil {
+		return failedAt
+	}
+	if record, ok := selectOperatorStatusLatestFailedStep(runtime); ok {
+		return formatOperatorStatusTime(record.At)
+	}
+	return nil
 }
 
 func formatOperatorStatusSummary(summary OperatorStatusSummary) (string, error) {
