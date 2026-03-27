@@ -1181,6 +1181,22 @@ func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.
 	if control.StepID == "" {
 		return "", false, fmt.Errorf("mission step control file %q is missing step_id", path)
 	}
+	if runtimeState, ok := ag.MissionRuntimeState(); ok {
+		if runtimeState.JobID != "" && runtimeState.JobID != job.ID {
+			return "", false, missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				StepID:  control.StepID,
+				Message: "operator command does not match the active job",
+			}
+		}
+		if missioncontrol.HasCompletedRuntimeStep(runtimeState, control.StepID) {
+			return "", false, missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  control.StepID,
+				Message: fmt.Sprintf("step %q is already recorded as completed in runtime state", control.StepID),
+			}
+		}
+	}
 
 	if err := ag.ActivateMissionStep(job, control.StepID); err != nil {
 		return "", false, fmt.Errorf("failed to activate mission step %q from control file %q: %w", control.StepID, path, err)

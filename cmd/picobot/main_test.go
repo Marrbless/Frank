@@ -4107,6 +4107,74 @@ func TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedSte
 	}
 }
 
+func TestRestoreMissionStepControlFileOnStartupRejectsPreviouslyCompletedStepReplay(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "build", UpdatedAt: "2026-03-19T12:00:00Z"})
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:         true,
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "final",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "final"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "final",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", At: time.Date(2026, 3, 19, 11, 30, 0, 0, time.UTC)},
+			},
+		},
+		UpdatedAt: "2026-03-19T12:00:00Z",
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "final"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	baseline := restoreMissionStepControlFileOnStartup(cmd, ag, bootstrappedJob)
+	if baseline != nil {
+		t.Fatalf("restoreMissionStepControlFileOnStartup() baseline = %q, want nil after completed-step replay rejection", string(baseline))
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want no live execution context after rehydrated replay rejection")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want persisted runtime state")
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want preserved build completion", runtime.CompletedSteps)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, `step "build" is already recorded as completed in runtime state`) {
+		t.Fatalf("log output = %q, want completed-step replay rejection", logOutput)
+	}
+}
+
 func TestRestoreMissionStepControlFileOnStartupThenWatcherDoesNotDuplicateUnchangedApply(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
@@ -4149,6 +4217,81 @@ func TestRestoreMissionStepControlFileOnStartupThenWatcherDoesNotDuplicateUnchan
 	}
 	if strings.Contains(logOutput, "mission step control apply succeeded") {
 		t.Fatalf("log output = %q, want no duplicate watcher apply success", logOutput)
+	}
+}
+
+func TestWatchMissionStepControlFileRejectsPreviouslyCompletedStepReplay(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	controlFile := writeMissionStepControlFile(t, missionStepControlFile{StepID: "build", UpdatedAt: "2026-03-19T12:00:00Z"})
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	logBuf, restoreLog := captureStandardLogger(t)
+	defer restoreLog()
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:         true,
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "final",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "final"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "final",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", At: time.Date(2026, 3, 19, 11, 30, 0, 0, time.UTC)},
+			},
+		},
+		UpdatedAt: "2026-03-19T12:00:00Z",
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "final"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go watchMissionStepControlFile(ctx, cmd, ag, bootstrappedJob, controlFile, 5*time.Millisecond, nil)
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want no live execution context after watcher replay rejection")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want persisted runtime state")
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want preserved build completion", runtime.CompletedSteps)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, `mission step control apply failed`) {
+		t.Fatalf("log output = %q, want watcher apply failure", logOutput)
+	}
+	if !strings.Contains(logOutput, `step "build" is already recorded as completed in runtime state`) {
+		t.Fatalf("log output = %q, want completed-step replay rejection", logOutput)
+	}
+	if strings.Contains(logOutput, `mission step control apply succeeded`) {
+		t.Fatalf("log output = %q, want no watcher apply success", logOutput)
 	}
 }
 
@@ -5387,6 +5530,72 @@ func TestMissionOperatorSetStepCommandRehydratedRuntimeSucceedsWhenAppropriate(t
 	}
 	if ec.Step.ID != "final" {
 		t.Fatalf("ActiveMissionStep().Step.ID = %q, want %q", ec.Step.ID, "final")
+	}
+}
+
+func TestMissionOperatorSetStepCommandRehydratedRuntimeRejectsPreviouslyCompletedStepReplay(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+	runtimeControl := runtimeControlForBootstrapStep(t, job, "final")
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:         true,
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "final",
+		RuntimeControl: runtimeControl,
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "final",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "build", At: time.Date(2026, 3, 19, 11, 30, 0, 0, time.UTC)},
+			},
+		},
+		UpdatedAt: "2026-03-19T12:00:00Z",
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "final"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	installMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, true)
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 build", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP completed step) error = nil, want replay rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" is already recorded as completed in runtime state`) {
+		t.Fatalf("ProcessDirect(SET_STEP completed step) error = %q, want completed-step replay rejection", err)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want rehydrated control context without live execution context")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want persisted runtime state")
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want preserved build completion", runtime.CompletedSteps)
 	}
 }
 

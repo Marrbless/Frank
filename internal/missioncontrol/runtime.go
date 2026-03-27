@@ -325,6 +325,15 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	}
 }
 
+func HasCompletedRuntimeStep(runtime JobRuntimeState, stepID string) bool {
+	for _, completed := range runtime.CompletedSteps {
+		if completed.StepID == stepID {
+			return true
+		}
+	}
+	return false
+}
+
 func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved bool) (JobRuntimeState, error) {
 	if !approved {
 		return JobRuntimeState{}, ValidationError{

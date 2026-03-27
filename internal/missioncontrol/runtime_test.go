@@ -347,6 +347,26 @@ func TestSetJobRuntimeActiveStepRejectsAbortedRuntime(t *testing.T) {
 	}
 }
 
+func TestHasCompletedRuntimeStepMatchesRecordedCompletion(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "final",
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 24, 12, 30, 0, 0, time.UTC)},
+		},
+	}
+
+	if !HasCompletedRuntimeStep(runtime, "build") {
+		t.Fatal("HasCompletedRuntimeStep(build) = false, want true")
+	}
+	if HasCompletedRuntimeStep(runtime, "final") {
+		t.Fatal("HasCompletedRuntimeStep(final) = true, want false")
+	}
+}
+
 func TestValidateRuntimeExecutionWaitingUserDenied(t *testing.T) {
 	t.Parallel()
 
