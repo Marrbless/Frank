@@ -65,6 +65,8 @@ type Step struct {
 	AllowedTools              []string      `json:"allowed_tools"`
 	RequiresApproval          bool          `json:"requires_approval"`
 	SuccessCriteria           []string      `json:"success_criteria"`
+	StaticArtifactPath        string        `json:"static_artifact_path,omitempty"`
+	StaticArtifactFormat      string        `json:"static_artifact_format,omitempty"`
 	LongRunningStartupCommand []string      `json:"long_running_startup_command,omitempty"`
 	LongRunningArtifactPath   string        `json:"long_running_artifact_path,omitempty"`
 	SystemAction              *SystemAction `json:"system_action,omitempty"`

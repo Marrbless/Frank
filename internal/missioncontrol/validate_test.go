@@ -178,6 +178,74 @@ func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
 	}
 }
 
+func TestValidatePlanRejectsV2StaticArtifactWithoutExplicitPathMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                   "artifact",
+			Type:                 StepTypeStaticArtifact,
+			SuccessCriteria:      []string{"Write `report.json` as valid JSON."},
+			StaticArtifactFormat: "json",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"artifact"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "artifact",
+			Message: "static_artifact step requires explicit static_artifact_path metadata for frank_v2",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsV2StaticArtifactWithoutExplicitFormatMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                 "artifact",
+			Type:               StepTypeStaticArtifact,
+			SuccessCriteria:    []string{"Write `report.json` as valid JSON."},
+			StaticArtifactPath: "report.json",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"artifact"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "artifact",
+			Message: "static_artifact step requires explicit static_artifact_format metadata for frank_v2",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsV2StaticArtifactWithExplicitContractMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                   "artifact",
+			Type:                 StepTypeStaticArtifact,
+			SuccessCriteria:      []string{"Write a report artifact."},
+			StaticArtifactPath:   "report.json",
+			StaticArtifactFormat: "json",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"artifact"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsLongRunningCodeWithoutV2SpecVersion(t *testing.T) {
 	t.Parallel()
 

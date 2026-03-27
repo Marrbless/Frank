@@ -699,12 +699,18 @@ func validateStaticArtifactCompletion(step Step, tools []RuntimeToolCallEvidence
 }
 
 func inferStaticArtifactSpec(step Step, tools []RuntimeToolCallEvidence) staticArtifactSpec {
-	path := extractExpectedArtifactPath(step.SuccessCriteria)
+	path := staticArtifactPath(step)
+	if path == "" {
+		path = extractExpectedArtifactPath(step.SuccessCriteria)
+	}
 	if path == "" {
 		path = singleArtifactPath(tools)
 	}
 
-	format := inferArtifactFormat(path, step.SuccessCriteria)
+	format := staticArtifactFormat(step)
+	if format == "" {
+		format = inferArtifactFormat(path, step.SuccessCriteria)
+	}
 	if format == "" {
 		format = "text"
 	}

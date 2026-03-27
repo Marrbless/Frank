@@ -85,6 +85,20 @@ func ValidatePlan(job Job) []ValidationError {
 				Message: "wait_user step requires blocker, authorization, or definition subtype",
 			})
 		}
+		if job.SpecVersion == JobSpecVersionV2 && step.Type == StepTypeStaticArtifact && staticArtifactPath(step) == "" {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "static_artifact step requires explicit static_artifact_path metadata for frank_v2",
+			})
+		}
+		if job.SpecVersion == JobSpecVersionV2 && step.Type == StepTypeStaticArtifact && staticArtifactFormat(step) == "" {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "static_artifact step requires explicit static_artifact_format metadata for frank_v2",
+			})
+		}
 		if step.Type == StepTypeLongRunningCode && hasLongRunningStartIntent(step) {
 			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
 				Code:    RejectionCodeLongRunningStartForbidden,
@@ -246,6 +260,25 @@ func longRunningStartupCommand(step Step) []string {
 
 func longRunningArtifactPath(step Step) string {
 	return cleanedArtifactPath(step.LongRunningArtifactPath)
+}
+
+func staticArtifactPath(step Step) string {
+	return cleanedArtifactPath(step.StaticArtifactPath)
+}
+
+func staticArtifactFormat(step Step) string {
+	switch strings.ToLower(strings.TrimSpace(step.StaticArtifactFormat)) {
+	case "json":
+		return "json"
+	case "yaml", "yml":
+		return "yaml"
+	case "markdown", "md":
+		return "markdown"
+	case "text", "txt":
+		return "text"
+	default:
+		return ""
+	}
 }
 
 func normalizeIntentText(input string) string {

@@ -74,6 +74,45 @@ func TestBuildInspectablePlanContextCapturesValidatedPlan(t *testing.T) {
 	}
 }
 
+func TestBuildInspectablePlanContextPreservesStaticArtifactContractMetadata(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		SpecVersion:  JobSpecVersionV2,
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                   "artifact",
+					Type:                 StepTypeStaticArtifact,
+					SuccessCriteria:      []string{"write a report"},
+					StaticArtifactPath:   "report.json",
+					StaticArtifactFormat: "json",
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"artifact"},
+				},
+			},
+		},
+	}
+
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	if plan.Steps[0].StaticArtifactPath != "report.json" {
+		t.Fatalf("Steps[0].StaticArtifactPath = %q, want %q", plan.Steps[0].StaticArtifactPath, "report.json")
+	}
+	if plan.Steps[0].StaticArtifactFormat != "json" {
+		t.Fatalf("Steps[0].StaticArtifactFormat = %q, want %q", plan.Steps[0].StaticArtifactFormat, "json")
+	}
+}
+
 func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t *testing.T) {
 	t.Parallel()
 
