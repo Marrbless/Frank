@@ -1821,10 +1821,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnaps
 	logBuf, restoreLog := captureStandardLogger(t)
 	defer restoreLog()
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     "other-job",
-		StepID:    "build",
-		UpdatedAt: "2026-03-20T12:00:00Z",
+		Active:       true,
+		JobID:        "other-job",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:00Z",
 	})
 
 	done := make(chan error, 1)
@@ -1850,10 +1852,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnaps
 	}
 
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     job.ID,
-		StepID:    "final",
-		UpdatedAt: "2026-03-20T12:00:01Z",
+		Active:       true,
+		JobID:        job.ID,
+		StepID:       "final",
+		StepType:     string(missioncontrol.StepTypeFinalResponse),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:01Z",
 	})
 
 	select {
@@ -1889,10 +1893,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileWaitsWhenStepMatchesBu
 	job := testMissionBootstrapJob()
 	missionPath := writeMissionBootstrapJobFile(t, job)
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     "other-job",
-		StepID:    "build",
-		UpdatedAt: "2026-03-20T12:00:00Z",
+		Active:       true,
+		JobID:        "other-job",
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:00Z",
 	})
 
 	done := make(chan error, 1)
@@ -1918,10 +1924,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileWaitsWhenStepMatchesBu
 	}
 
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     "other-job",
-		StepID:    "final",
-		UpdatedAt: "2026-03-20T12:00:01Z",
+		Active:       true,
+		JobID:        "other-job",
+		StepID:       "final",
+		StepType:     string(missioncontrol.StepTypeFinalResponse),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:01Z",
 	})
 
 	select {
@@ -1931,10 +1939,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileWaitsWhenStepMatchesBu
 	}
 
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     job.ID,
-		StepID:    "final",
-		UpdatedAt: "2026-03-20T12:00:02Z",
+		Active:       true,
+		JobID:        job.ID,
+		StepID:       "final",
+		StepType:     string(missioncontrol.StepTypeFinalResponse),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:02Z",
 	})
 
 	select {
@@ -1953,10 +1963,12 @@ func TestMissionSetStepCommandWithMissionFileAndStatusFileTimesOutWhenJobIDNever
 	job := testMissionBootstrapJob()
 	missionPath := writeMissionBootstrapJobFile(t, job)
 	writeMissionStatusSnapshotFile(t, statusPath, missionStatusSnapshot{
-		Active:    true,
-		JobID:     "other-job",
-		StepID:    "final",
-		UpdatedAt: "2026-03-20T12:00:00Z",
+		Active:       true,
+		JobID:        "other-job",
+		StepID:       "final",
+		StepType:     string(missioncontrol.StepTypeFinalResponse),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-20T12:00:00Z",
 	})
 
 	cmd := NewRootCmd()
@@ -5138,11 +5150,13 @@ func TestMissionOperatorSetStepCommandStaleMatchingStatusSnapshotDoesNotConfirmS
 	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
 	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 150*time.Millisecond))
 	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
-		Active:      true,
-		MissionFile: missionFile,
-		JobID:       job.ID,
-		StepID:      "final",
-		UpdatedAt:   "2026-03-19T12:00:00Z",
+		Active:       true,
+		MissionFile:  missionFile,
+		JobID:        job.ID,
+		StepID:       "final",
+		StepType:     string(missioncontrol.StepTypeFinalResponse),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-19T12:00:00Z",
 	})
 
 	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
@@ -5151,6 +5165,116 @@ func TestMissionOperatorSetStepCommandStaleMatchingStatusSnapshotDoesNotConfirmS
 	}
 	if !strings.Contains(err.Error(), "want a fresh matching update") {
 		t.Fatalf("ProcessDirect(SET_STEP stale status) error = %q, want stale snapshot rejection", err)
+	}
+}
+
+func TestMissionOperatorSetStepCommandFreshStatusWithWrongStepTypeDoesNotConfirmSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 150*time.Millisecond))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:       true,
+		MissionFile:  missionFile,
+		JobID:        job.ID,
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-19T12:00:00Z",
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+			Active:       true,
+			MissionFile:  missionFile,
+			JobID:        job.ID,
+			StepID:       "final",
+			StepType:     string(missioncontrol.StepTypeDiscussion),
+			AllowedTools: []string{"read"},
+			UpdatedAt:    "2026-03-19T12:00:01Z",
+		})
+	}()
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP wrong step type) error = nil, want confirmation failure")
+	}
+	if !strings.Contains(err.Error(), `has step_type="discussion", want step_type="final_response"`) {
+		t.Fatalf("ProcessDirect(SET_STEP wrong step type) error = %q, want step_type mismatch", err)
+	}
+}
+
+func TestMissionOperatorSetStepCommandFreshStatusWithWrongAllowedToolsDoesNotConfirmSuccess(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	controlFile := filepath.Join(t.TempDir(), "control.json")
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step-control-file", controlFile); err != nil {
+		t.Fatalf("Flags().Set(mission-step-control-file) error = %v", err)
+	}
+
+	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
+	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 150*time.Millisecond))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		Active:       true,
+		MissionFile:  missionFile,
+		JobID:        job.ID,
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-19T12:00:00Z",
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+			Active:       true,
+			MissionFile:  missionFile,
+			JobID:        job.ID,
+			StepID:       "final",
+			StepType:     string(missioncontrol.StepTypeFinalResponse),
+			AllowedTools: []string{},
+			UpdatedAt:    "2026-03-19T12:00:01Z",
+		})
+	}()
+
+	_, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(SET_STEP wrong allowed tools) error = nil, want confirmation failure")
+	}
+	if !strings.Contains(err.Error(), `has allowed_tools=[], want allowed_tools=["read"]`) {
+		t.Fatalf("ProcessDirect(SET_STEP wrong allowed tools) error = %q, want allowed_tools mismatch", err)
 	}
 }
 
@@ -5178,21 +5302,25 @@ func TestMissionOperatorSetStepCommandFreshMatchingStatusSnapshotConfirmsSuccess
 	bootstrappedJob := configureMissionBootstrapJobForStartupTest(t, cmd, ag)
 	ag.SetOperatorSetStepHook(newMissionOperatorSetStepHook(cmd, ag, &bootstrappedJob, false, 500*time.Millisecond))
 	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
-		Active:      true,
-		MissionFile: missionFile,
-		JobID:       job.ID,
-		StepID:      "build",
-		UpdatedAt:   "2026-03-19T12:00:00Z",
+		Active:       true,
+		MissionFile:  missionFile,
+		JobID:        job.ID,
+		StepID:       "build",
+		StepType:     string(missioncontrol.StepTypeOneShotCode),
+		AllowedTools: []string{"read"},
+		UpdatedAt:    "2026-03-19T12:00:00Z",
 	})
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
-			Active:      true,
-			MissionFile: missionFile,
-			JobID:       job.ID,
-			StepID:      "final",
-			UpdatedAt:   "2026-03-19T12:00:01Z",
+			Active:       true,
+			MissionFile:  missionFile,
+			JobID:        job.ID,
+			StepID:       "final",
+			StepType:     string(missioncontrol.StepTypeFinalResponse),
+			AllowedTools: []string{"read"},
+			UpdatedAt:    "2026-03-19T12:00:01Z",
 		})
 	}()
 
