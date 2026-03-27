@@ -246,6 +246,47 @@ func TestValidatePlanAcceptsV2StaticArtifactWithExplicitContractMetadata(t *test
 	}
 }
 
+func TestValidatePlanRejectsV2OneShotCodeWithoutExplicitArtifactPathMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:              "build",
+			Type:            StepTypeOneShotCode,
+			SuccessCriteria: []string{"Write `main.go` and run `go test ./...`."},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidStepType,
+			StepID:  "build",
+			Message: "one_shot_code step requires explicit one_shot_artifact_path metadata for frank_v2",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsV2OneShotCodeWithExplicitArtifactPathMetadata(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV2Job([]Step{
+		{
+			ID:                  "build",
+			Type:                StepTypeOneShotCode,
+			SuccessCriteria:     []string{"Write code and validate it."},
+			OneShotArtifactPath: "main.go",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsLongRunningCodeWithoutV2SpecVersion(t *testing.T) {
 	t.Parallel()
 

@@ -115,6 +115,16 @@ func TestJobJSONRoundTrip(t *testing.T) {
 					StaticArtifactPath:   "dist/report.json",
 					StaticArtifactFormat: "json",
 				},
+				{
+					ID:                  "step-2",
+					Type:                StepTypeOneShotCode,
+					DependsOn:           []string{"step-1"},
+					RequiredAuthority:   AuthorityTierLow,
+					AllowedTools:        []string{"shell"},
+					RequiresApproval:    false,
+					SuccessCriteria:     []string{"write the code and run validation"},
+					OneShotArtifactPath: "dist/main.go",
+				},
 			},
 		},
 	}

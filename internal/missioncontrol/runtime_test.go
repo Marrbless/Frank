@@ -113,6 +113,41 @@ func TestBuildInspectablePlanContextPreservesStaticArtifactContractMetadata(t *t
 	}
 }
 
+func TestBuildInspectablePlanContextPreservesOneShotCodeContractMetadata(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		SpecVersion:  JobSpecVersionV2,
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                  "build",
+					Type:                StepTypeOneShotCode,
+					SuccessCriteria:     []string{"write code"},
+					OneShotArtifactPath: "main.go",
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	if plan.Steps[0].OneShotArtifactPath != "main.go" {
+		t.Fatalf("Steps[0].OneShotArtifactPath = %q, want %q", plan.Steps[0].OneShotArtifactPath, "main.go")
+	}
+}
+
 func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t *testing.T) {
 	t.Parallel()
 

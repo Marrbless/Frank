@@ -503,6 +503,75 @@ func TestCompleteRuntimeStepOneShotCodePausesAndRecordsCompletion(t *testing.T) 
 	}
 }
 
+func TestCompleteRuntimeStepOneShotCodeUsesExplicitContractMetadata(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContextForJob(testV2Job([]Step{
+		{
+			ID:                  "build",
+			Type:                StepTypeOneShotCode,
+			SuccessCriteria:     []string{"Write `wrong.go` and run `go test ./...`."},
+			OneShotArtifactPath: "main.go",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}), "build", JobStateRunning)
+	now := time.Date(2026, 3, 27, 12, 8, 0, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "Implemented the code change.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "main.go"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "main.go"}, Result: "exists=true\nkind=file\nname=main.go\nsize=42\n"},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"go", "test", "./..."}}, Result: "ok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+}
+
+func TestCompleteRuntimeStepOneShotCodeRequiresDeclaredArtifactPathEvidence(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContextForJob(testV2Job([]Step{
+		{
+			ID:                  "build",
+			Type:                StepTypeOneShotCode,
+			SuccessCriteria:     []string{"Write code and validate it."},
+			OneShotArtifactPath: "main.go",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	}), "build", JobStateRunning)
+
+	_, err := CompleteRuntimeStep(ec, time.Date(2026, 3, 27, 12, 8, 30, 0, time.UTC), StepValidationInput{
+		FinalResponse: "Implemented the change.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "wrong.go"}},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "wrong.go"}, Result: "exists=true\nkind=file\nname=wrong.go\nsize=42\n"},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"go", "test", "./..."}}, Result: "ok"},
+		},
+	})
+	if err == nil {
+		t.Fatal("CompleteRuntimeStep() error = nil, want exact artifact-path failure")
+	}
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("CompleteRuntimeStep() error = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeStepValidationFailed {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
+	}
+	if validationErr.Message != `one_shot_code completion requires writing "main.go"` {
+		t.Fatalf("ValidationError.Message = %q, want exact artifact-path failure", validationErr.Message)
+	}
+}
+
 func TestCompleteRuntimeStepStaticArtifactPausesWhenExactFileAndStructureAreValidated(t *testing.T) {
 	t.Parallel()
 

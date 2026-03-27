@@ -99,6 +99,13 @@ func ValidatePlan(job Job) []ValidationError {
 				Message: "static_artifact step requires explicit static_artifact_format metadata for frank_v2",
 			})
 		}
+		if job.SpecVersion == JobSpecVersionV2 && step.Type == StepTypeOneShotCode && oneShotArtifactPath(step) == "" {
+			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
+				Code:    RejectionCodeInvalidStepType,
+				StepID:  step.ID,
+				Message: "one_shot_code step requires explicit one_shot_artifact_path metadata for frank_v2",
+			})
+		}
 		if step.Type == StepTypeLongRunningCode && hasLongRunningStartIntent(step) {
 			invalidTypeErrors = append(invalidTypeErrors, ValidationError{
 				Code:    RejectionCodeLongRunningStartForbidden,
@@ -279,6 +286,10 @@ func staticArtifactFormat(step Step) string {
 	default:
 		return ""
 	}
+}
+
+func oneShotArtifactPath(step Step) string {
+	return cleanedArtifactPath(step.OneShotArtifactPath)
 }
 
 func normalizeIntentText(input string) string {
