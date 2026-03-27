@@ -1055,6 +1055,7 @@ type missionStatusSnapshot struct {
 	RequiresApproval  bool                                  `json:"requires_approval"`
 	AllowedTools      []string                              `json:"allowed_tools"`
 	Runtime           *missioncontrol.JobRuntimeState       `json:"runtime,omitempty"`
+	RuntimeSummary    *missioncontrol.OperatorStatusSummary `json:"runtime_summary,omitempty"`
 	RuntimeControl    *missioncontrol.RuntimeControlContext `json:"runtime_control,omitempty"`
 	UpdatedAt         string                                `json:"updated_at"`
 }
@@ -1585,6 +1586,20 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 	} else if runtimeState != nil {
 		snapshot.JobID = runtimeState.JobID
 		snapshot.StepID = runtimeState.ActiveStepID
+	}
+
+	if runtimeState != nil {
+		var summaryAllowedTools []string
+		if snapshot.Active {
+			summaryAllowedTools = append([]string(nil), snapshot.AllowedTools...)
+		} else if runtimeControl != nil {
+			summaryAllowedTools = missioncontrol.EffectiveAllowedTools(
+				&missioncontrol.Job{AllowedTools: append([]string(nil), runtimeControl.AllowedTools...)},
+				&runtimeControl.Step,
+			)
+		}
+		summary := missioncontrol.BuildOperatorStatusSummaryWithAllowedTools(*runtimeState, summaryAllowedTools)
+		snapshot.RuntimeSummary = &summary
 	}
 
 	return writeJSONAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")

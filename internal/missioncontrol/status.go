@@ -81,6 +81,10 @@ func BuildOperatorStatusSummary(runtime JobRuntimeState) OperatorStatusSummary {
 	return buildOperatorStatusSummary(runtime, nil)
 }
 
+func BuildOperatorStatusSummaryWithAllowedTools(runtime JobRuntimeState, allowedTools []string) OperatorStatusSummary {
+	return buildOperatorStatusSummary(runtime, allowedTools)
+}
+
 func FormatOperatorStatusSummary(runtime JobRuntimeState) (string, error) {
 	return formatOperatorStatusSummary(buildOperatorStatusSummary(runtime, nil))
 }

@@ -2657,6 +2657,18 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	if got.Runtime.ActiveStepID != "build" {
 		t.Fatalf("Runtime.ActiveStepID = %q, want %q", got.Runtime.ActiveStepID, "build")
 	}
+	if got.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want non-nil")
+	}
+	if got.RuntimeSummary.State != missioncontrol.JobStateRunning {
+		t.Fatalf("RuntimeSummary.State = %q, want %q", got.RuntimeSummary.State, missioncontrol.JobStateRunning)
+	}
+	if got.RuntimeSummary.ActiveStepID != "build" {
+		t.Fatalf("RuntimeSummary.ActiveStepID = %q, want %q", got.RuntimeSummary.ActiveStepID, "build")
+	}
+	if !reflect.DeepEqual(got.RuntimeSummary.AllowedTools, []string{"read"}) {
+		t.Fatalf("RuntimeSummary.AllowedTools = %#v, want %#v", got.RuntimeSummary.AllowedTools, []string{"read"})
+	}
 	if got.Runtime.InspectablePlan == nil {
 		t.Fatal("Runtime.InspectablePlan = nil, want non-nil")
 	}
@@ -2674,6 +2686,82 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 	if got.RuntimeControl.Step.Type != missioncontrol.StepTypeOneShotCode {
 		t.Fatalf("RuntimeControl.Step.Type = %q, want %q", got.RuntimeControl.Step.Type, missioncontrol.StepTypeOneShotCode)
+	}
+}
+
+func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedRuntime(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	job := testMissionBootstrapJob()
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	requests := make([]missioncontrol.ApprovalRequest, 0, missioncontrol.OperatorStatusApprovalHistoryLimit+2)
+	for i := 0; i < missioncontrol.OperatorStatusApprovalHistoryLimit+2; i++ {
+		requests = append(requests, missioncontrol.ApprovalRequest{
+			JobID:           job.ID,
+			StepID:          "step-" + string(rune('a'+i)),
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			State:           missioncontrol.ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, i, 0, 0, time.UTC),
+		})
+	}
+	history := make([]missioncontrol.AuditEvent, 0, missioncontrol.OperatorStatusRecentAuditLimit+1)
+	for i := 0; i < missioncontrol.OperatorStatusRecentAuditLimit+1; i++ {
+		history = append(history, missioncontrol.AuditEvent{
+			JobID:     job.ID,
+			StepID:    "build",
+			ToolName:  "status",
+			Allowed:   true,
+			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
+		})
+	}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:            job.ID,
+		State:            missioncontrol.JobStatePaused,
+		ActiveStepID:     "build",
+		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
+		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		ApprovalRequests: requests,
+		AuditHistory:     history,
+	}
+	if err := ag.HydrateMissionRuntimeControl(job, runtime, &control); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := writeMissionStatusSnapshot(path, "mission.json", ag, time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshot() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	if got.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want persisted runtime summary")
+	}
+	if got.Active {
+		t.Fatal("Active = true, want false for persisted-only runtime snapshot")
+	}
+	if got.RuntimeSummary.State != missioncontrol.JobStatePaused {
+		t.Fatalf("RuntimeSummary.State = %q, want %q", got.RuntimeSummary.State, missioncontrol.JobStatePaused)
+	}
+	if got.RuntimeSummary.PausedReason != missioncontrol.RuntimePauseReasonOperatorCommand {
+		t.Fatalf("RuntimeSummary.PausedReason = %q, want %q", got.RuntimeSummary.PausedReason, missioncontrol.RuntimePauseReasonOperatorCommand)
+	}
+	if got.RuntimeSummary.PausedAt == nil || *got.RuntimeSummary.PausedAt != "2026-03-24T13:30:00Z" {
+		t.Fatalf("RuntimeSummary.PausedAt = %#v, want RFC3339 pause time", got.RuntimeSummary.PausedAt)
+	}
+	if !reflect.DeepEqual(got.RuntimeSummary.AllowedTools, []string{"read"}) {
+		t.Fatalf("RuntimeSummary.AllowedTools = %#v, want %#v", got.RuntimeSummary.AllowedTools, []string{"read"})
+	}
+	if got.RuntimeSummary.Truncation == nil {
+		t.Fatal("RuntimeSummary.Truncation = nil, want truncation metadata")
+	}
+	if got.RuntimeSummary.Truncation.ApprovalHistoryOmitted != 2 {
+		t.Fatalf("RuntimeSummary.Truncation.ApprovalHistoryOmitted = %d, want 2", got.RuntimeSummary.Truncation.ApprovalHistoryOmitted)
+	}
+	if got.RuntimeSummary.Truncation.RecentAuditOmitted != 1 {
+		t.Fatalf("RuntimeSummary.Truncation.RecentAuditOmitted = %d, want 1", got.RuntimeSummary.Truncation.RecentAuditOmitted)
 	}
 }
 
