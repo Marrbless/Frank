@@ -246,6 +246,68 @@ func TestTaskStateResumeRuntimeRejectsCompletedActiveStepReplay(t *testing.T) {
 	}
 }
 
+func TestTaskStateActivateStepRejectsPreviouslyCompletedStepReplay(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.HydrateRuntimeControl(job, missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "final",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() setup error = %v", err)
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ActivateStep() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+}
+
+func TestTaskStateActivateStepRejectsPreviouslyFailedStepReplay(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.HydrateRuntimeControl(job, missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "final",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		FailedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", Reason: "validator failed", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() setup error = %v", err)
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want failed-step replay rejection")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ActivateStep() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	t.Parallel()
 

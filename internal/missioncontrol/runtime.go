@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -303,6 +304,9 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	case JobStatePending:
 		return TransitionJobRuntime(next, JobStateRunning, now, RuntimeTransitionOptions{StepID: stepID})
 	case JobStateRunning:
+		if err := validateRuntimeStepReplayMarkers(next, stepID, "activate"); err != nil {
+			return JobRuntimeState{}, err
+		}
 		next.ActiveStepID = stepID
 		next.ActiveStepAt = now
 		next.UpdatedAt = now
@@ -312,6 +316,9 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 		next.PausedAt = time.Time{}
 		return next, nil
 	case JobStateWaitingUser, JobStatePaused:
+		if err := validateRuntimeStepReplayMarkers(next, stepID, "activate"); err != nil {
+			return JobRuntimeState{}, err
+		}
 		next.ActiveStepID = stepID
 		return TransitionJobRuntime(next, JobStateRunning, now, RuntimeTransitionOptions{StepID: stepID})
 	default:
@@ -343,23 +350,32 @@ func HasFailedRuntimeStep(runtime JobRuntimeState, stepID string) bool {
 	return false
 }
 
-func validateRuntimeActiveStepReplayMarkers(current JobRuntimeState, action string) error {
-	if current.ActiveStepID == "" {
+func validateRuntimeStepReplayMarkers(current JobRuntimeState, stepID string, action string) error {
+	if strings.TrimSpace(stepID) == "" {
 		return nil
 	}
-	if HasCompletedRuntimeStep(current, current.ActiveStepID) {
+	if HasCompletedRuntimeStep(current, stepID) {
 		return ValidationError{
 			Code:    RejectionCodeInvalidRuntimeState,
-			StepID:  current.ActiveStepID,
-			Message: fmt.Sprintf("cannot %s runtime for step %q because it is already recorded as completed", action, current.ActiveStepID),
+			StepID:  stepID,
+			Message: fmt.Sprintf("cannot %s step %q because it is already recorded as completed", action, stepID),
 		}
 	}
-	if HasFailedRuntimeStep(current, current.ActiveStepID) {
+	if HasFailedRuntimeStep(current, stepID) {
 		return ValidationError{
 			Code:    RejectionCodeInvalidRuntimeState,
-			StepID:  current.ActiveStepID,
-			Message: fmt.Sprintf("cannot %s runtime for step %q because it is already recorded as failed", action, current.ActiveStepID),
+			StepID:  stepID,
+			Message: fmt.Sprintf("cannot %s step %q because it is already recorded as failed", action, stepID),
 		}
+	}
+	return nil
+}
+
+func validateRuntimeActiveStepReplayMarkers(current JobRuntimeState, action string) error {
+	if err := validateRuntimeStepReplayMarkers(current, current.ActiveStepID, action); err != nil {
+		validationErr := err.(ValidationError)
+		validationErr.Message = strings.Replace(validationErr.Message, "cannot "+action+" step", "cannot "+action+" runtime for step", 1)
+		return validationErr
 	}
 	return nil
 }
