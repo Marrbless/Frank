@@ -299,7 +299,7 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 	}{
 		{action: "set_step", stepID: "final", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:05:00Z"},
 		{action: "status", stepID: "final", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:04:00Z"},
-		{action: "abort", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultRejected, code: RejectionCodeInvalidRuntimeState, at: "2026-03-24T12:03:00Z"},
+		{action: "abort", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultRejected, code: RejectionCode("E_STEP_OUT_OF_ORDER"), at: "2026-03-24T12:03:00Z"},
 		{action: "resume", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:02:00Z"},
 		{action: "pause", stepID: "build", class: AuditActionClassOperatorCommand, result: AuditResultApplied, at: "2026-03-24T12:01:00Z"},
 	} {

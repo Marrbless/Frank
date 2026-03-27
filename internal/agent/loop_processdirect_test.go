@@ -213,7 +213,7 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 	if len(audits) != 1 {
 		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
 	}
-	assertAuditEvent(t, audits[0], "job-1", "build", "message", false, missioncontrol.RejectionCodeToolNotAllowed)
+	assertAuditEvent(t, audits[0], "job-1", "build", "message", false, missioncontrol.RejectionCode("E_INVALID_ACTION_FOR_STEP"))
 }
 
 func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *testing.T) {
@@ -247,7 +247,7 @@ func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *t
 	if len(audits) != 1 {
 		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
 	}
-	assertAuditEvent(t, audits[0], "", "", "message", false, missioncontrol.RejectionCodeMissionContextRequired)
+	assertAuditEvent(t, audits[0], "", "", "message", false, missioncontrol.RejectionCode("E_NO_ACTIVE_STEP"))
 }
 
 func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.T) {
@@ -1221,7 +1221,7 @@ func TestProcessDirectPauseCommandWrongJobDoesNotBind(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
 	}
-	assertAuditEvent(t, audits[0], "job-1", "build", "pause", false, missioncontrol.RejectionCodeStepValidationFailed)
+	assertAuditEvent(t, audits[0], "job-1", "build", "pause", false, missioncontrol.RejectionCode("E_VALIDATION_FAILED"))
 }
 
 func TestProcessDirectDenyCommandKeepsPendingApprovalStepWaiting(t *testing.T) {

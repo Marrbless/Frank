@@ -109,8 +109,8 @@ func TestTaskStateOperatorStatusIncludesRecentAuditForActiveRuntime(t *testing.T
 	if first["result"] != string(expected.Result) {
 		t.Fatalf("recent_audit[0].result = %#v, want %q", first["result"], expected.Result)
 	}
-	if first["error_code"] != string(missioncontrol.RejectionCodeInvalidRuntimeState) {
-		t.Fatalf("recent_audit[0].error_code = %#v, want %q", first["error_code"], missioncontrol.RejectionCodeInvalidRuntimeState)
+	if first["error_code"] != "E_STEP_OUT_OF_ORDER" {
+		t.Fatalf("recent_audit[0].error_code = %#v, want %q", first["error_code"], "E_STEP_OUT_OF_ORDER")
 	}
 	if first["timestamp"] != "2026-03-24T12:01:00Z" {
 		t.Fatalf("recent_audit[0].timestamp = %#v, want %q", first["timestamp"], "2026-03-24T12:01:00Z")
