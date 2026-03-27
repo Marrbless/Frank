@@ -1202,6 +1202,13 @@ func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.
 				Message: fmt.Sprintf("step %q is already recorded as completed in runtime state", control.StepID),
 			}
 		}
+		if missioncontrol.HasFailedRuntimeStep(runtimeState, control.StepID) {
+			return "", false, missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				StepID:  control.StepID,
+				Message: fmt.Sprintf("step %q is already recorded as failed in runtime state", control.StepID),
+			}
+		}
 	}
 
 	if err := ag.ActivateMissionStep(job, control.StepID); err != nil {
