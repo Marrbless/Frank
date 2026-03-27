@@ -150,10 +150,11 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 				Message: "long_running_code must not start a process; move start/stop semantics to system_action",
 			}
 		}
-		if err := validateLongRunningCodeCompletion(*ec.Step, input.SuccessfulTools); err != nil {
+		result, err := validateLongRunningCodeCompletion(*ec.Step, input.SuccessfulTools)
+		if err != nil {
 			return JobRuntimeState{}, err
 		}
-		return pauseAfterValidatedCompletion(ec, now)
+		return pauseAfterValidatedCompletionWithResult(ec, now, result)
 	case StepTypeSystemAction:
 		result, err := validateSystemActionCompletion(*ec.Job, *ec.Step, input.SuccessfulTools)
 		if err != nil {
@@ -557,9 +558,9 @@ func hasLongRunningStartEvidence(tools []RuntimeToolCallEvidence) bool {
 	return false
 }
 
-func validateLongRunningCodeCompletion(step Step, tools []RuntimeToolCallEvidence) error {
+func validateLongRunningCodeCompletion(step Step, tools []RuntimeToolCallEvidence) (*stepValidationResult, error) {
 	if !hasLongRunningStartupCommand(step) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "long_running_code completion requires explicit startup command metadata",
@@ -567,34 +568,30 @@ func validateLongRunningCodeCompletion(step Step, tools []RuntimeToolCallEvidenc
 	}
 	artifactPath := longRunningArtifactPath(step)
 	if artifactPath == "" {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "long_running_code completion requires explicit artifact contract metadata",
 		}
 	}
-	if !hasExactArtifactWrite(tools, artifactPath) {
-		return ValidationError{
-			Code:    RejectionCodeStepValidationFailed,
-			StepID:  step.ID,
-			Message: fmt.Sprintf("long_running_code completion requires writing %q", artifactPath),
-		}
-	}
 	if !hasExactArtifactExistenceEvidence(tools, artifactPath) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: fmt.Sprintf("long_running_code completion requires proving %q exists", artifactPath),
 		}
 	}
 	if !hasOneShotCodeVerificationEvidence(tools) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "long_running_code completion requires validation, compile, read, or stat evidence",
 		}
 	}
-	return nil
+	if !hasExactArtifactWrite(tools, artifactPath) {
+		return alreadyPresentStepValidationResult(StepTypeLongRunningCode, artifactPath), nil
+	}
+	return &stepValidationResult{recordCompletion: true}, nil
 }
 
 func isLongRunningStartCommand(cmd []string) bool {

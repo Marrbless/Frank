@@ -174,6 +174,9 @@ func TestCompleteRuntimeStepLongRunningCodePausesAfterBuildAndValidation(t *test
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
 		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
 	}
+	if runtime.CompletedSteps[0].ResultingState != nil {
+		t.Fatalf("CompletedSteps[0].ResultingState = %#v, want nil for newly built long-running artifact", runtime.CompletedSteps[0].ResultingState)
+	}
 }
 
 func TestCompleteRuntimeStepLongRunningCodeRejectsStartEvidence(t *testing.T) {
@@ -209,7 +212,7 @@ func TestCompleteRuntimeStepLongRunningCodeRejectsStartEvidence(t *testing.T) {
 func TestValidateLongRunningCodeCompletionRejectsMissingStartupMetadata(t *testing.T) {
 	t.Parallel()
 
-	err := validateLongRunningCodeCompletion(Step{
+	_, err := validateLongRunningCodeCompletion(Step{
 		ID:                      "build",
 		Type:                    StepTypeLongRunningCode,
 		LongRunningArtifactPath: "service.bin",
@@ -259,8 +262,49 @@ func TestCompleteRuntimeStepLongRunningCodeRequiresDeclaredArtifactPathEvidence(
 	if validationErr.Code != RejectionCodeStepValidationFailed {
 		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeStepValidationFailed)
 	}
-	if validationErr.Message != `long_running_code completion requires writing "service.bin"` {
+	if validationErr.Message != `long_running_code completion requires proving "service.bin" exists` {
 		t.Fatalf("ValidationError.Message = %q, want exact artifact path failure", validationErr.Message)
+	}
+}
+
+func TestCompleteRuntimeStepLongRunningCodeRecordsAlreadyPresentWhenArtifactAlreadyValidates(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:                        "build",
+		Type:                      StepTypeLongRunningCode,
+		LongRunningStartupCommand: []string{"npm", "start"},
+		LongRunningArtifactPath:   "service.bin",
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 27, 12, 10, 0, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "The long-running artifact was already present and still valid.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "service.bin"}, Result: "exists=true\nkind=file\nname=service.bin\nsize=42\n"},
+			{ToolName: "exec", Arguments: map[string]interface{}{"cmd": []string{"go", "test", "./..."}}, Result: "ok"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	if runtime.CompletedSteps[0].ResultingState == nil {
+		t.Fatal("CompletedSteps[0].ResultingState = nil, want durable already_present marker")
+	}
+	if runtime.CompletedSteps[0].ResultingState.Kind != string(StepTypeLongRunningCode) {
+		t.Fatalf("CompletedSteps[0].ResultingState.Kind = %q, want %q", runtime.CompletedSteps[0].ResultingState.Kind, StepTypeLongRunningCode)
+	}
+	if runtime.CompletedSteps[0].ResultingState.Target != "service.bin" {
+		t.Fatalf("CompletedSteps[0].ResultingState.Target = %q, want %q", runtime.CompletedSteps[0].ResultingState.Target, "service.bin")
+	}
+	if runtime.CompletedSteps[0].ResultingState.State != "already_present" {
+		t.Fatalf("CompletedSteps[0].ResultingState.State = %q, want %q", runtime.CompletedSteps[0].ResultingState.State, "already_present")
 	}
 }
 
