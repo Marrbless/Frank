@@ -253,6 +253,60 @@ func TestResumePausedJobRuntimeRequiresPausedState(t *testing.T) {
 	}
 }
 
+func TestResumePausedJobRuntimeRejectsCompletedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResumePausedJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}, time.Date(2026, 3, 27, 12, 5, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("ResumePausedJobRuntime() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ResumePausedJobRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
+func TestResumePausedJobRuntimeRejectsFailedActiveStepReplay(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResumePausedJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		FailedSteps: []RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}, time.Date(2026, 3, 27, 12, 5, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("ResumePausedJobRuntime() error = nil, want failed-step replay rejection")
+	}
+
+	validationErr, ok := err.(ValidationError)
+	if !ok {
+		t.Fatalf("ResumePausedJobRuntime() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, RejectionCodeInvalidRuntimeState)
+	}
+	if validationErr.StepID != "build" {
+		t.Fatalf("ValidationError.StepID = %q, want %q", validationErr.StepID, "build")
+	}
+}
+
 func TestAbortJobRuntimeTransitionsToTerminalAbortedState(t *testing.T) {
 	t.Parallel()
 

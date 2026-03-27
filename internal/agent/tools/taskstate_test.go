@@ -475,6 +475,42 @@ func TestTaskStateHydrateRuntimeControlResumesPausedRuntimeAfterRehydration(t *t
 	}
 }
 
+func TestTaskStateResumeRuntimeControlRejectsCompletedActiveStepReplayAfterRehydration(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 3, 27, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+
+	err := state.ResumeRuntimeControl(job.ID)
+	if err == nil {
+		t.Fatal("ResumeRuntimeControl() error = nil, want completed-step replay rejection")
+	}
+
+	validationErr, ok := err.(missioncontrol.ValidationError)
+	if !ok {
+		t.Fatalf("ResumeRuntimeControl() error type = %T, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("ValidationError.Code = %q, want %q", validationErr.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want no active context after rejected replay resume")
+	}
+}
+
 func TestTaskStateResumeRuntimePreservesReusableOneJobApprovalAfterReboot(t *testing.T) {
 	t.Parallel()
 

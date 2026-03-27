@@ -343,6 +343,27 @@ func HasFailedRuntimeStep(runtime JobRuntimeState, stepID string) bool {
 	return false
 }
 
+func validateRuntimeActiveStepReplayMarkers(current JobRuntimeState, action string) error {
+	if current.ActiveStepID == "" {
+		return nil
+	}
+	if HasCompletedRuntimeStep(current, current.ActiveStepID) {
+		return ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  current.ActiveStepID,
+			Message: fmt.Sprintf("cannot %s runtime for step %q because it is already recorded as completed", action, current.ActiveStepID),
+		}
+	}
+	if HasFailedRuntimeStep(current, current.ActiveStepID) {
+		return ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  current.ActiveStepID,
+			Message: fmt.Sprintf("cannot %s runtime for step %q because it is already recorded as failed", action, current.ActiveStepID),
+		}
+	}
+	return nil
+}
+
 func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved bool) (JobRuntimeState, error) {
 	if !approved {
 		return JobRuntimeState{}, ValidationError{
@@ -356,19 +377,8 @@ func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved 
 			Message: "resuming a persisted runtime requires an active step",
 		}
 	}
-	if HasCompletedRuntimeStep(current, current.ActiveStepID) {
-		return JobRuntimeState{}, ValidationError{
-			Code:    RejectionCodeInvalidRuntimeState,
-			StepID:  current.ActiveStepID,
-			Message: fmt.Sprintf("cannot resume runtime for step %q because it is already recorded as completed", current.ActiveStepID),
-		}
-	}
-	if HasFailedRuntimeStep(current, current.ActiveStepID) {
-		return JobRuntimeState{}, ValidationError{
-			Code:    RejectionCodeInvalidRuntimeState,
-			StepID:  current.ActiveStepID,
-			Message: fmt.Sprintf("cannot resume runtime for step %q because it is already recorded as failed", current.ActiveStepID),
-		}
+	if err := validateRuntimeActiveStepReplayMarkers(current, "resume"); err != nil {
+		return JobRuntimeState{}, err
 	}
 
 	next := *CloneJobRuntimeState(&current)
@@ -429,6 +439,9 @@ func ResumePausedJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeS
 			Code:    RejectionCodeInvalidRuntimeState,
 			Message: "resume requires a paused active step",
 		}
+	}
+	if err := validateRuntimeActiveStepReplayMarkers(current, "resume"); err != nil {
+		return JobRuntimeState{}, err
 	}
 	return TransitionJobRuntime(current, JobStateRunning, now, RuntimeTransitionOptions{
 		StepID: current.ActiveStepID,
