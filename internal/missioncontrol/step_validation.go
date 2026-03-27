@@ -163,10 +163,11 @@ func completeRunningStep(ec ExecutionContext, now time.Time, input StepValidatio
 	case StepTypeWaitUser:
 		return enterWaitUserStep(ec, now, input)
 	case StepTypeStaticArtifact:
-		if err := validateStaticArtifactCompletion(*ec.Step, input.SuccessfulTools); err != nil {
+		result, err := validateStaticArtifactCompletion(*ec.Step, input.SuccessfulTools)
+		if err != nil {
 			return JobRuntimeState{}, err
 		}
-		return pauseAfterValidatedCompletion(ec, now)
+		return pauseAfterValidatedCompletionWithResult(ec, now, result)
 	case StepTypeOneShotCode:
 		if err := validateOneShotCodeCompletion(*ec.Step, input.SuccessfulTools); err != nil {
 			return JobRuntimeState{}, err
@@ -414,6 +415,17 @@ func pauseAfterValidatedCompletionWithResult(ec ExecutionContext, now time.Time,
 		PausedReason:     RuntimePauseReasonStepComplete,
 		validationResult: result,
 	})
+}
+
+func alreadyPresentStepValidationResult(kind StepType, target string) *stepValidationResult {
+	return &stepValidationResult{
+		recordCompletion: true,
+		resultingState: &RuntimeResultingStateRecord{
+			Kind:   string(kind),
+			Target: target,
+			State:  "already_present",
+		},
+	}
 }
 
 func discussionWaitingReason(subtype StepSubtype) (string, bool) {
@@ -679,24 +691,17 @@ type staticArtifactSpec struct {
 	format string
 }
 
-func validateStaticArtifactCompletion(step Step, tools []RuntimeToolCallEvidence) error {
+func validateStaticArtifactCompletion(step Step, tools []RuntimeToolCallEvidence) (*stepValidationResult, error) {
 	spec := inferStaticArtifactSpec(step, tools)
 	if spec.path == "" {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: "static_artifact completion requires an exact artifact file path",
 		}
 	}
-	if !hasExactArtifactWrite(tools, spec.path) {
-		return ValidationError{
-			Code:    RejectionCodeStepValidationFailed,
-			StepID:  step.ID,
-			Message: fmt.Sprintf("static_artifact completion requires writing %q", spec.path),
-		}
-	}
 	if !hasExactArtifactExistenceEvidence(tools, spec.path) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: fmt.Sprintf("static_artifact completion requires proving %q exists", spec.path),
@@ -705,20 +710,23 @@ func validateStaticArtifactCompletion(step Step, tools []RuntimeToolCallEvidence
 
 	readResult, ok := exactArtifactReadResult(tools, spec.path)
 	if !ok {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: fmt.Sprintf("static_artifact completion requires a successful structure check for %q", spec.path),
 		}
 	}
 	if !matchesArtifactStructure(spec.format, readResult) {
-		return ValidationError{
+		return nil, ValidationError{
 			Code:    RejectionCodeStepValidationFailed,
 			StepID:  step.ID,
 			Message: fmt.Sprintf("static_artifact completion requires %q to match the expected %s structure", spec.path, spec.format),
 		}
 	}
-	return nil
+	if !hasExactArtifactWrite(tools, spec.path) {
+		return alreadyPresentStepValidationResult(StepTypeStaticArtifact, spec.path), nil
+	}
+	return &stepValidationResult{recordCompletion: true}, nil
 }
 
 func inferStaticArtifactSpec(step Step, tools []RuntimeToolCallEvidence) staticArtifactSpec {

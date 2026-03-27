@@ -635,6 +635,55 @@ func TestCompleteRuntimeStepStaticArtifactUsesExplicitContractMetadata(t *testin
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "artifact" {
 		t.Fatalf("CompletedSteps = %#v, want artifact completion", runtime.CompletedSteps)
 	}
+	if runtime.CompletedSteps[0].ResultingState != nil {
+		t.Fatalf("CompletedSteps[0].ResultingState = %#v, want nil for newly created artifact", runtime.CompletedSteps[0].ResultingState)
+	}
+}
+
+func TestCompleteRuntimeStepStaticArtifactRecordsAlreadyPresentWhenArtifactAlreadyValidates(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContextForJob(testV2Job([]Step{
+		{
+			ID:                   "artifact",
+			Type:                 StepTypeStaticArtifact,
+			SuccessCriteria:      []string{"Write `wrong.json` as valid JSON."},
+			StaticArtifactPath:   "report.json",
+			StaticArtifactFormat: "json",
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"artifact"}},
+	}), "artifact", JobStateRunning)
+	now := time.Date(2026, 3, 27, 12, 8, 0, 0, time.UTC)
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{
+		FinalResponse: "The artifact was already present and still valid.",
+		SuccessfulTools: []RuntimeToolCallEvidence{
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "stat", "path": "report.json"}, Result: "exists=true\nkind=file\nname=report.json\nsize=17\n"},
+			{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "read", "path": "report.json"}, Result: "{\n  \"ok\": true\n}\n"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "artifact" {
+		t.Fatalf("CompletedSteps = %#v, want artifact completion", runtime.CompletedSteps)
+	}
+	if runtime.CompletedSteps[0].ResultingState == nil {
+		t.Fatal("CompletedSteps[0].ResultingState = nil, want durable already_present marker")
+	}
+	if runtime.CompletedSteps[0].ResultingState.Kind != string(StepTypeStaticArtifact) {
+		t.Fatalf("CompletedSteps[0].ResultingState.Kind = %q, want %q", runtime.CompletedSteps[0].ResultingState.Kind, StepTypeStaticArtifact)
+	}
+	if runtime.CompletedSteps[0].ResultingState.Target != "report.json" {
+		t.Fatalf("CompletedSteps[0].ResultingState.Target = %q, want %q", runtime.CompletedSteps[0].ResultingState.Target, "report.json")
+	}
+	if runtime.CompletedSteps[0].ResultingState.State != "already_present" {
+		t.Fatalf("CompletedSteps[0].ResultingState.State = %q, want %q", runtime.CompletedSteps[0].ResultingState.State, "already_present")
+	}
 }
 
 func TestCompleteRuntimeStepStaticArtifactRequiresStructureCheck(t *testing.T) {
