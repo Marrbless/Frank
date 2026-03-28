@@ -490,8 +490,9 @@ func TestProcessDirectOneShotCodeThenFinalResponseCompletesJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final ProcessDirect() error = %v", err)
 	}
-	if resp != finalProv.content {
-		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, finalProv.content)
+	want := finalProv.content + "\n\nMission summary:\nArtifacts: result.txt"
+	if resp != want {
+		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, want)
 	}
 
 	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
@@ -539,8 +540,9 @@ func TestProcessDirectStaticArtifactThenFinalResponseCompletesJob(t *testing.T) 
 	if err != nil {
 		t.Fatalf("final ProcessDirect() error = %v", err)
 	}
-	if resp != finalProv.content {
-		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, finalProv.content)
+	want := finalProv.content + "\n\nMission summary:\nArtifacts: report.json"
+	if resp != want {
+		t.Fatalf("final ProcessDirect() response = %q, want %q", resp, want)
 	}
 
 	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
@@ -1798,9 +1800,10 @@ func testFilesystemMissionJob() missioncontrol.Job {
 			ID: "plan-1",
 			Steps: []missioncontrol.Step{
 				{
-					ID:           "build",
-					Type:         missioncontrol.StepTypeOneShotCode,
-					AllowedTools: []string{"filesystem"},
+					ID:                  "build",
+					Type:                missioncontrol.StepTypeOneShotCode,
+					AllowedTools:        []string{"filesystem"},
+					OneShotArtifactPath: "result.txt",
 				},
 				{
 					ID:        "final",
@@ -1821,10 +1824,12 @@ func testStaticArtifactMissionJob() missioncontrol.Job {
 			ID: "plan-1",
 			Steps: []missioncontrol.Step{
 				{
-					ID:              "build",
-					Type:            missioncontrol.StepTypeStaticArtifact,
-					AllowedTools:    []string{"filesystem"},
-					SuccessCriteria: []string{"Write `report.json` as valid JSON."},
+					ID:                   "build",
+					Type:                 missioncontrol.StepTypeStaticArtifact,
+					AllowedTools:         []string{"filesystem"},
+					SuccessCriteria:      []string{"Write `report.json` as valid JSON."},
+					StaticArtifactPath:   "report.json",
+					StaticArtifactFormat: "json",
 				},
 				{
 					ID:        "final",

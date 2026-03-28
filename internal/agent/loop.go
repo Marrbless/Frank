@@ -65,6 +65,27 @@ func activeToolDefinitions(reg *tools.Registry, taskState *tools.TaskState) []pr
 	return reg.Definitions()
 }
 
+func currentExecutionContext(taskState *tools.TaskState) (missioncontrol.ExecutionContext, bool) {
+	if taskState == nil {
+		return missioncontrol.ExecutionContext{}, false
+	}
+	return taskState.ExecutionContext()
+}
+
+func completeMissionStepOutput(taskState *tools.TaskState, finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) string {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return finalContent
+	}
+
+	if err := taskState.ApplyStepOutput(finalContent, successfulTools); err != nil {
+		log.Printf("mission runtime step completion validation failed: %v", err)
+		return finalContent
+	}
+
+	return missioncontrol.NormalizeFinalResponse(ec, finalContent)
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -419,11 +440,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			} else if finalContent == "" {
 				finalContent = "I've completed processing but have no response to give."
 			}
-			if a.taskState != nil {
-				if err := a.taskState.ApplyStepOutput(finalContent, successfulTools); err != nil {
-					log.Printf("mission runtime step completion validation failed: %v", err)
-				}
-			}
+			finalContent = completeMissionStepOutput(a.taskState, finalContent, successfulTools)
 
 			if !isSystemChannel(msg.Channel) {
 				sess.AddMessage("user", msg.Content)
@@ -500,20 +517,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 		if !resp.HasToolCalls {
 			if resp.Content != "" {
-				if a.taskState != nil {
-					if err := a.taskState.ApplyStepOutput(resp.Content, successfulTools); err != nil {
-						log.Printf("mission runtime step completion validation failed: %v", err)
-					}
-				}
-				return resp.Content, nil
+				return completeMissionStepOutput(a.taskState, resp.Content, successfulTools), nil
 			}
 			if lastToolResult != "" {
-				if a.taskState != nil {
-					if err := a.taskState.ApplyStepOutput(lastToolResult, successfulTools); err != nil {
-						log.Printf("mission runtime step completion validation failed: %v", err)
-					}
-				}
-				return lastToolResult, nil
+				return completeMissionStepOutput(a.taskState, lastToolResult, successfulTools), nil
 			}
 			return resp.Content, nil
 		}
