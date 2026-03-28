@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +42,23 @@ func TestNormalizeFinalResponseAppendsDeterministicMissionSummary(t *testing.T) 
 	want := "Here is the final answer with the requested outputs.\n\nMission summary:\n" +
 		"Artifacts: alpha.txt; beta.txt (already present); gamma.txt; delta.txt; epsilon.txt; +1 more omitted\n" +
 		"Pending/blocked steps: review (blocked); hold; followup; verify; publish; +1 more omitted"
+	if got != want {
+		t.Fatalf("NormalizeFinalResponse() = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeFinalResponseTruncatesRawBodyWithOmissionMarker(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:   "final",
+		Type: StepTypeFinalResponse,
+	}, JobStateRunning)
+
+	raw := strings.Repeat("a", finalResponseBodyRuneLimit+7)
+	got := NormalizeFinalResponse(ec, raw)
+	want := strings.Repeat("a", finalResponseBodyRuneLimit) +
+		"\n\n[final response body truncated; 7 characters omitted]"
 	if got != want {
 		t.Fatalf("NormalizeFinalResponse() = %q, want %q", got, want)
 	}

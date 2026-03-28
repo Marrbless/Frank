@@ -3,6 +3,8 @@ package missioncontrol
 import "strings"
 
 const finalResponseSummaryMarker = "\n\nMission summary:\n"
+const finalResponseBodyOmissionMarker = "\n\n[final response body truncated; "
+const finalResponseBodyRuneLimit = 1200
 const FinalResponseSummaryArtifactLimit = OperatorStatusArtifactLimit
 const FinalResponseSummaryPendingLimit = 5
 
@@ -18,11 +20,26 @@ func NormalizeFinalResponse(ec ExecutionContext, response string) string {
 		return trimmed
 	}
 
+	trimmed = truncateFinalResponseBody(trimmed)
 	lines := finalResponseSummaryLines(ec)
 	if len(lines) == 0 {
 		return trimmed
 	}
 	return trimmed + finalResponseSummaryMarker + strings.Join(lines, "\n")
+}
+
+func truncateFinalResponseBody(body string) string {
+	runes := []rune(body)
+	if len(runes) <= finalResponseBodyRuneLimit {
+		return body
+	}
+
+	omitted := len(runes) - finalResponseBodyRuneLimit
+	truncated := strings.TrimRight(string(runes[:finalResponseBodyRuneLimit]), " \t\r\n")
+	if truncated == "" {
+		truncated = string(runes[:finalResponseBodyRuneLimit])
+	}
+	return truncated + finalResponseBodyOmissionMarker + itoa(omitted) + " characters omitted]"
 }
 
 func finalResponseSummaryLines(ec ExecutionContext) []string {

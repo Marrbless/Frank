@@ -548,6 +548,46 @@ func TestProcessDirectStaticArtifactThenFinalResponseCompletesJob(t *testing.T) 
 	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
 }
 
+func TestProcessDirectFinalResponseTruncatesRawBodyBeforeMissionSummary(t *testing.T) {
+	t.Parallel()
+
+	job := testFilesystemMissionJob()
+
+	b := chat.NewHub(10)
+	buildProv := &filesystemArtifactProvider{}
+	ag := NewAgentLoop(b, buildProv, buildProv.GetDefaultModel(), 5, t.TempDir(), nil)
+	ag.SetMissionRequired(true)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("make the file", 2*time.Second); err != nil {
+		t.Fatalf("build ProcessDirect() error = %v", err)
+	}
+
+	finalProv := &finalResponseProvider{content: "Here is the requested artifact output. " + strings.Repeat("A", 5000)}
+	ag.provider = finalProv
+	if err := ag.ActivateMissionStep(job, "final"); err != nil {
+		t.Fatalf("ActivateMissionStep(final) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("final ProcessDirect() error = %v", err)
+	}
+	if !strings.Contains(resp, "[final response body truncated; ") {
+		t.Fatalf("final ProcessDirect() response = %q, want truncation omission marker", resp)
+	}
+	if !strings.Contains(resp, "\n\nMission summary:\nArtifacts: result.txt") {
+		t.Fatalf("final ProcessDirect() response = %q, want mission summary artifact line", resp)
+	}
+	if strings.Contains(resp, finalProv.content) {
+		t.Fatalf("final ProcessDirect() response unexpectedly preserved the full raw body")
+	}
+
+	assertMissionRuntimeCompletedWithSteps(t, ag, []string{"build", "final"})
+}
+
 func TestProcessDirectDiscussionSubtypeTransitionsToWaitingUser(t *testing.T) {
 	t.Parallel()
 
