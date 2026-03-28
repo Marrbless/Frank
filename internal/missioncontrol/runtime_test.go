@@ -401,6 +401,100 @@ func TestPauseJobRuntimeDoesNotCompleteActiveStep(t *testing.T) {
 	}
 }
 
+func TestPauseJobRuntimeForBudgetExhaustionPersistsBudgetBlockerAndAudit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	runtime, err := PauseJobRuntimeForBudgetExhaustion(JobRuntimeState{
+		JobID:         "job-1",
+		State:         JobStateWaitingUser,
+		ActiveStepID:  "final",
+		WaitingReason: "discussion_authorization",
+		WaitingAt:     time.Date(2026, 3, 28, 11, 58, 0, 0, time.UTC),
+	}, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  "owner_messages",
+		Limit:    20,
+		Observed: 20,
+		Message:  "owner-facing message budget exhausted",
+	})
+	if err != nil {
+		t.Fatalf("PauseJobRuntimeForBudgetExhaustion() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.PausedReason != RuntimePauseReasonBudgetExhausted {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonBudgetExhausted)
+	}
+	if runtime.WaitingReason != "" {
+		t.Fatalf("WaitingReason = %q, want empty after budget pause", runtime.WaitingReason)
+	}
+	if runtime.BudgetBlocker == nil {
+		t.Fatal("BudgetBlocker = nil, want persisted blocker")
+	}
+	if runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "owner_messages")
+	}
+	if runtime.BudgetBlocker.Limit != 20 || runtime.BudgetBlocker.Observed != 20 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=20 observed=20", runtime.BudgetBlocker)
+	}
+	if runtime.BudgetBlocker.Message != "owner-facing message budget exhausted" {
+		t.Fatalf("BudgetBlocker.Message = %q, want exact blocker message", runtime.BudgetBlocker.Message)
+	}
+	if runtime.BudgetBlocker.TriggeredAt != now {
+		t.Fatalf("BudgetBlocker.TriggeredAt = %v, want %v", runtime.BudgetBlocker.TriggeredAt, now)
+	}
+	if len(runtime.AuditHistory) != 1 {
+		t.Fatalf("AuditHistory count = %d, want 1", len(runtime.AuditHistory))
+	}
+	if runtime.AuditHistory[0].ToolName != "budget_exhausted" {
+		t.Fatalf("AuditHistory[0].ToolName = %q, want %q", runtime.AuditHistory[0].ToolName, "budget_exhausted")
+	}
+	if runtime.AuditHistory[0].ActionClass != AuditActionClassRuntime {
+		t.Fatalf("AuditHistory[0].ActionClass = %q, want %q", runtime.AuditHistory[0].ActionClass, AuditActionClassRuntime)
+	}
+	if runtime.AuditHistory[0].Result != AuditResultApplied {
+		t.Fatalf("AuditHistory[0].Result = %q, want %q", runtime.AuditHistory[0].Result, AuditResultApplied)
+	}
+	if !runtime.AuditHistory[0].Allowed {
+		t.Fatal("AuditHistory[0].Allowed = false, want true")
+	}
+	if runtime.AuditHistory[0].StepID != "final" {
+		t.Fatalf("AuditHistory[0].StepID = %q, want %q", runtime.AuditHistory[0].StepID, "final")
+	}
+}
+
+func TestResumePausedJobRuntimeClearsBudgetBlocker(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 28, 12, 5, 0, 0, time.UTC)
+	runtime, err := ResumePausedJobRuntime(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: RuntimePauseReasonBudgetExhausted,
+		PausedAt:     time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		BudgetBlocker: &RuntimeBudgetBlockerRecord{
+			Ceiling:     "owner_messages",
+			Limit:       20,
+			Observed:    20,
+			Message:     "owner-facing message budget exhausted",
+			TriggeredAt: time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		},
+	}, now)
+	if err != nil {
+		t.Fatalf("ResumePausedJobRuntime() error = %v", err)
+	}
+
+	if runtime.State != JobStateRunning {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStateRunning)
+	}
+	if runtime.BudgetBlocker != nil {
+		t.Fatalf("BudgetBlocker = %#v, want nil after resume", runtime.BudgetBlocker)
+	}
+}
+
 func TestSetJobRuntimeActiveStepRejectsPreviouslyCompletedStepReplay(t *testing.T) {
 	t.Parallel()
 
@@ -784,6 +878,13 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 		JobID:        job.ID,
 		State:        JobStateRunning,
 		ActiveStepID: "build",
+		BudgetBlocker: &RuntimeBudgetBlockerRecord{
+			Ceiling:     "owner_messages",
+			Limit:       20,
+			Observed:    20,
+			Message:     "owner-facing message budget exhausted",
+			TriggeredAt: time.Date(2026, 3, 23, 11, 20, 0, 0, time.UTC),
+		},
 		CompletedSteps: []RuntimeStepRecord{
 			{StepID: "draft", At: time.Date(2026, 3, 23, 11, 0, 0, 0, time.UTC)},
 		},
@@ -827,11 +928,15 @@ func TestResolveExecutionContextWithRuntimeIncludesIndependentRuntimeCopy(t *tes
 	}
 
 	ec.Runtime.CompletedSteps[0].StepID = "mutated"
+	ec.Runtime.BudgetBlocker.Ceiling = "mutated-budget"
 	ec.Runtime.ApprovalRequests[0].StepID = "mutated-request"
 	ec.Runtime.ApprovalRequests[0].Content.ProposedAction = "mutated-content"
 	ec.Runtime.ApprovalGrants[0].StepID = "mutated-grant"
 	if runtime.CompletedSteps[0].StepID != "draft" {
 		t.Fatalf("original runtime step = %q, want %q", runtime.CompletedSteps[0].StepID, "draft")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("original runtime budget blocker = %#v, want preserved blocker", runtime.BudgetBlocker)
 	}
 	if runtime.ApprovalRequests[0].StepID != "build" {
 		t.Fatalf("original approval request step = %q, want %q", runtime.ApprovalRequests[0].StepID, "build")

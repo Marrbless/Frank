@@ -15,6 +15,7 @@ const (
 
 const (
 	RuntimePauseReasonOperatorCommand = "operator_command"
+	RuntimePauseReasonBudgetExhausted = "budget_exhausted"
 	RuntimeAbortReasonOperatorCommand = "operator_command"
 )
 
@@ -33,6 +34,14 @@ type RuntimeStepRecord struct {
 	Rollback       *RuntimeRollbackRecord       `json:"rollback,omitempty"`
 }
 
+type RuntimeBudgetBlockerRecord struct {
+	Ceiling     string    `json:"ceiling"`
+	Limit       int       `json:"limit,omitempty"`
+	Observed    int       `json:"observed,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	TriggeredAt time.Time `json:"triggered_at,omitempty"`
+}
+
 type InspectablePlanContext struct {
 	MaxAuthority AuthorityTier `json:"max_authority"`
 	AllowedTools []string      `json:"allowed_tools,omitempty"`
@@ -40,27 +49,28 @@ type InspectablePlanContext struct {
 }
 
 type JobRuntimeState struct {
-	JobID            string                  `json:"job_id"`
-	State            JobState                `json:"state"`
-	ActiveStepID     string                  `json:"active_step_id,omitempty"`
-	InspectablePlan  *InspectablePlanContext `json:"inspectable_plan,omitempty"`
-	CompletedSteps   []RuntimeStepRecord     `json:"completed_steps,omitempty"`
-	FailedSteps      []RuntimeStepRecord     `json:"failed_steps,omitempty"`
-	AuditHistory     []AuditEvent            `json:"audit_history,omitempty"`
-	ApprovalRequests []ApprovalRequest       `json:"approval_requests,omitempty"`
-	ApprovalGrants   []ApprovalGrant         `json:"approval_grants,omitempty"`
-	WaitingReason    string                  `json:"waiting_reason,omitempty"`
-	PausedReason     string                  `json:"paused_reason,omitempty"`
-	AbortedReason    string                  `json:"aborted_reason,omitempty"`
-	CreatedAt        time.Time               `json:"created_at,omitempty"`
-	UpdatedAt        time.Time               `json:"updated_at,omitempty"`
-	StartedAt        time.Time               `json:"started_at,omitempty"`
-	ActiveStepAt     time.Time               `json:"active_step_at,omitempty"`
-	WaitingAt        time.Time               `json:"waiting_at,omitempty"`
-	PausedAt         time.Time               `json:"paused_at,omitempty"`
-	AbortedAt        time.Time               `json:"aborted_at,omitempty"`
-	CompletedAt      time.Time               `json:"completed_at,omitempty"`
-	FailedAt         time.Time               `json:"failed_at,omitempty"`
+	JobID            string                      `json:"job_id"`
+	State            JobState                    `json:"state"`
+	ActiveStepID     string                      `json:"active_step_id,omitempty"`
+	InspectablePlan  *InspectablePlanContext     `json:"inspectable_plan,omitempty"`
+	CompletedSteps   []RuntimeStepRecord         `json:"completed_steps,omitempty"`
+	FailedSteps      []RuntimeStepRecord         `json:"failed_steps,omitempty"`
+	AuditHistory     []AuditEvent                `json:"audit_history,omitempty"`
+	ApprovalRequests []ApprovalRequest           `json:"approval_requests,omitempty"`
+	ApprovalGrants   []ApprovalGrant             `json:"approval_grants,omitempty"`
+	BudgetBlocker    *RuntimeBudgetBlockerRecord `json:"budget_blocker,omitempty"`
+	WaitingReason    string                      `json:"waiting_reason,omitempty"`
+	PausedReason     string                      `json:"paused_reason,omitempty"`
+	AbortedReason    string                      `json:"aborted_reason,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at,omitempty"`
+	UpdatedAt        time.Time                   `json:"updated_at,omitempty"`
+	StartedAt        time.Time                   `json:"started_at,omitempty"`
+	ActiveStepAt     time.Time                   `json:"active_step_at,omitempty"`
+	WaitingAt        time.Time                   `json:"waiting_at,omitempty"`
+	PausedAt         time.Time                   `json:"paused_at,omitempty"`
+	AbortedAt        time.Time                   `json:"aborted_at,omitempty"`
+	CompletedAt      time.Time                   `json:"completed_at,omitempty"`
+	FailedAt         time.Time                   `json:"failed_at,omitempty"`
 }
 
 type RuntimeControlContext struct {
@@ -112,6 +122,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 		cloned.ApprovalRequests = nil
 	}
 	cloned.ApprovalGrants = append([]ApprovalGrant(nil), runtime.ApprovalGrants...)
+	cloned.BudgetBlocker = cloneRuntimeBudgetBlockerRecord(runtime.BudgetBlocker)
 	return &cloned
 }
 
@@ -120,6 +131,15 @@ func cloneRuntimeStepRecord(record RuntimeStepRecord) RuntimeStepRecord {
 	cloned.ResultingState = cloneRuntimeResultingStateRecord(record.ResultingState)
 	cloned.Rollback = cloneRuntimeRollbackRecord(record.Rollback)
 	return cloned
+}
+
+func cloneRuntimeBudgetBlockerRecord(record *RuntimeBudgetBlockerRecord) *RuntimeBudgetBlockerRecord {
+	if record == nil {
+		return nil
+	}
+
+	cloned := *record
+	return &cloned
 }
 
 func CloneInspectablePlanContext(plan *InspectablePlanContext) *InspectablePlanContext {
@@ -318,6 +338,7 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 		next.UpdatedAt = now
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		return next, nil
@@ -419,6 +440,7 @@ func ResumeJobRuntimeAfterBoot(current JobRuntimeState, now time.Time, approved 
 		}
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		return next, nil
@@ -447,6 +469,71 @@ func PauseJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, e
 		StepID:       current.ActiveStepID,
 		PausedReason: RuntimePauseReasonOperatorCommand,
 	})
+}
+
+func PauseJobRuntimeForBudgetExhaustion(current JobRuntimeState, now time.Time, blocker RuntimeBudgetBlockerRecord) (JobRuntimeState, error) {
+	if current.JobID == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "budget exhaustion requires a runtime job ID",
+		}
+	}
+
+	blocker.Ceiling = strings.TrimSpace(blocker.Ceiling)
+	blocker.Message = strings.TrimSpace(blocker.Message)
+	if blocker.Ceiling == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "budget exhaustion requires a budget ceiling name",
+		}
+	}
+	if blocker.TriggeredAt.IsZero() {
+		blocker.TriggeredAt = now
+	}
+
+	var next JobRuntimeState
+	switch current.State {
+	case JobStateRunning, JobStateWaitingUser:
+		var err error
+		next, err = TransitionJobRuntime(current, JobStatePaused, now, RuntimeTransitionOptions{
+			StepID:       current.ActiveStepID,
+			PausedReason: RuntimePauseReasonBudgetExhausted,
+		})
+		if err != nil {
+			return JobRuntimeState{}, err
+		}
+	case JobStatePaused:
+		next = *CloneJobRuntimeState(&current)
+		next.State = JobStatePaused
+		next.UpdatedAt = now
+		if next.CreatedAt.IsZero() {
+			next.CreatedAt = now
+		}
+		next.PausedReason = RuntimePauseReasonBudgetExhausted
+		next.PausedAt = now
+		next.WaitingReason = ""
+		next.AbortedReason = ""
+		next.WaitingAt = time.Time{}
+		next.AbortedAt = time.Time{}
+	default:
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("budget exhaustion requires running, waiting_user, or paused runtime state, got %q", current.State),
+		}
+	}
+
+	next.BudgetBlocker = cloneRuntimeBudgetBlockerRecord(&blocker)
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    "budget_exhausted",
+		ActionClass: AuditActionClassRuntime,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Reason:      blocker.Message,
+		Timestamp:   blocker.TriggeredAt,
+	})
+	return next, nil
 }
 
 func ResumePausedJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {
@@ -530,6 +617,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}
@@ -555,6 +643,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingAt = now
 		next.PausedReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}
 	case JobStatePaused:
@@ -568,6 +657,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.PausedAt = now
 		next.WaitingReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.AbortedAt = time.Time{}
 		if opts.validationResult != nil && opts.validationResult.recordCompletion {
@@ -617,6 +707,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}
@@ -641,6 +732,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}
@@ -657,6 +749,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.ActiveStepAt = time.Time{}
 		next.WaitingReason = ""
 		next.PausedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 	case JobStateRejected:
@@ -665,6 +758,7 @@ func TransitionJobRuntime(current JobRuntimeState, to JobState, now time.Time, o
 		next.WaitingReason = ""
 		next.PausedReason = ""
 		next.AbortedReason = ""
+		next.BudgetBlocker = nil
 		next.WaitingAt = time.Time{}
 		next.PausedAt = time.Time{}
 		next.AbortedAt = time.Time{}

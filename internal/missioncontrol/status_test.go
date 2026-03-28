@@ -159,6 +159,41 @@ func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *tes
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesBudgetBlocker(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "final",
+		PausedReason: RuntimePauseReasonBudgetExhausted,
+		PausedAt:     time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC),
+		BudgetBlocker: &RuntimeBudgetBlockerRecord{
+			Ceiling:     "owner_messages",
+			Limit:       20,
+			Observed:    20,
+			Message:     "owner-facing message budget exhausted",
+			TriggeredAt: time.Date(2026, 3, 28, 11, 59, 0, 0, time.UTC),
+		},
+	})
+
+	if summary.BudgetBlocker == nil {
+		t.Fatal("BudgetBlocker = nil, want surfaced blocker")
+	}
+	if summary.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", summary.BudgetBlocker.Ceiling, "owner_messages")
+	}
+	if summary.BudgetBlocker.Limit != 20 || summary.BudgetBlocker.Observed != 20 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=20 observed=20", summary.BudgetBlocker)
+	}
+	if summary.BudgetBlocker.Message != "owner-facing message budget exhausted" {
+		t.Fatalf("BudgetBlocker.Message = %q, want exact blocker message", summary.BudgetBlocker.Message)
+	}
+	if summary.BudgetBlocker.TriggeredAt == nil || *summary.BudgetBlocker.TriggeredAt != "2026-03-28T11:59:00Z" {
+		t.Fatalf("BudgetBlocker.TriggeredAt = %#v, want RFC3339 time", summary.BudgetBlocker.TriggeredAt)
+	}
+}
+
 func TestBuildOperatorStatusSummaryIncludesRevokedApprovalState(t *testing.T) {
 	t.Parallel()
 

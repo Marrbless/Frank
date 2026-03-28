@@ -15,6 +15,7 @@ type OperatorStatusSummary struct {
 	State           JobState                       `json:"state"`
 	ActiveStepID    string                         `json:"active_step_id,omitempty"`
 	AllowedTools    []string                       `json:"allowed_tools,omitempty"`
+	BudgetBlocker   *OperatorBudgetBlockerStatus   `json:"budget_blocker,omitempty"`
 	WaitingReason   string                         `json:"waiting_reason,omitempty"`
 	WaitingAt       *string                        `json:"waiting_at,omitempty"`
 	PausedReason    string                         `json:"paused_reason,omitempty"`
@@ -41,6 +42,14 @@ type OperatorArtifactStatus struct {
 	StepType StepType `json:"step_type"`
 	Path     string   `json:"path"`
 	State    string   `json:"state,omitempty"`
+}
+
+type OperatorBudgetBlockerStatus struct {
+	Ceiling     string  `json:"ceiling"`
+	Limit       int     `json:"limit,omitempty"`
+	Observed    int     `json:"observed,omitempty"`
+	Message     string  `json:"message,omitempty"`
+	TriggeredAt *string `json:"triggered_at,omitempty"`
 }
 
 type OperatorApprovalRequestStatus struct {
@@ -142,6 +151,15 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		PausedReason:  runtime.PausedReason,
 		PausedAt:      formatOperatorStatusTime(runtime.PausedAt),
 		AbortedReason: runtime.AbortedReason,
+	}
+	if runtime.BudgetBlocker != nil {
+		summary.BudgetBlocker = &OperatorBudgetBlockerStatus{
+			Ceiling:     runtime.BudgetBlocker.Ceiling,
+			Limit:       runtime.BudgetBlocker.Limit,
+			Observed:    runtime.BudgetBlocker.Observed,
+			Message:     runtime.BudgetBlocker.Message,
+			TriggeredAt: formatOperatorStatusTime(runtime.BudgetBlocker.TriggeredAt),
+		}
 	}
 	if runtime.State == JobStateFailed {
 		if record, ok := selectOperatorStatusLatestFailedStep(runtime); ok {

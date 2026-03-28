@@ -27,6 +27,7 @@ const (
 	AuditActionClassToolCall         AuditActionClass = "tool_call"
 	AuditActionClassOperatorCommand  AuditActionClass = "operator_command"
 	AuditActionClassApprovalDecision AuditActionClass = "approval_decision"
+	AuditActionClassRuntime          AuditActionClass = "runtime"
 )
 
 const (
@@ -157,7 +158,7 @@ func inferAuditResult(actionClass AuditActionClass, allowed bool) AuditResult {
 		return AuditResultRejected
 	}
 	switch actionClass {
-	case AuditActionClassOperatorCommand, AuditActionClassApprovalDecision:
+	case AuditActionClassOperatorCommand, AuditActionClassApprovalDecision, AuditActionClassRuntime:
 		return AuditResultApplied
 	default:
 		return AuditResultAllowed
