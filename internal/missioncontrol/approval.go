@@ -34,6 +34,7 @@ const (
 	ApprovalGrantedViaOperatorCommand   = "operator_command"
 	ApprovalGrantedViaOperatorReply     = "operator_reply"
 	defaultApprovalRequestTTL           = 5 * time.Minute
+	maxPendingApprovalRequestsPerJob    = 3
 )
 
 const (
@@ -285,6 +286,37 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 	next.ApprovalRequests = append(next.ApprovalRequests, request)
 	next.UpdatedAt = now
 	return next
+}
+
+func appendPendingApprovalRequestWithinBudget(current JobRuntimeState, now time.Time, request ApprovalRequest) (JobRuntimeState, bool, error) {
+	next, _ := RefreshApprovalRequests(current, now)
+	observed := countPendingApprovalRequests(next, request.JobID)
+	if observed >= maxPendingApprovalRequestsPerJob {
+		paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+			Ceiling:  "pending_approvals",
+			Limit:    maxPendingApprovalRequestsPerJob,
+			Observed: observed,
+			Message:  "pending approval request budget exhausted",
+		})
+		return paused, true, err
+	}
+
+	return appendPendingApprovalRequest(next, now, request), false, nil
+}
+
+func countPendingApprovalRequests(runtime JobRuntimeState, jobID string) int {
+	if strings.TrimSpace(jobID) == "" {
+		return 0
+	}
+
+	count := 0
+	for _, request := range runtime.ApprovalRequests {
+		if request.JobID != jobID || request.State != ApprovalStatePending {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func ApplyApprovalDecision(ec ExecutionContext, now time.Time, decision ApprovalDecision, via string) (JobRuntimeState, error) {

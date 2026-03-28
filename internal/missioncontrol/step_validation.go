@@ -251,7 +251,9 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 					Runtime: &nextRuntime,
 				}, now)
 			}
-			nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
+			var budgetExhausted bool
+			var err error
+			nextRuntime, budgetExhausted, err = appendPendingApprovalRequestWithinBudget(nextRuntime, now, ApprovalRequest{
 				JobID:           ec.Job.ID,
 				StepID:          ec.Step.ID,
 				RequestedAction: requestedAction,
@@ -260,6 +262,12 @@ func completeDiscussionStep(ec ExecutionContext, now time.Time, input StepValida
 				RequestedVia:    ApprovalRequestedViaRuntime,
 				Reason:          waitingReason,
 			})
+			if err != nil {
+				return JobRuntimeState{}, err
+			}
+			if budgetExhausted {
+				return nextRuntime, nil
+			}
 		}
 
 		return TransitionJobRuntime(nextRuntime, JobStateWaitingUser, now, RuntimeTransitionOptions{
@@ -299,7 +307,9 @@ func enterWaitUserStep(ec ExecutionContext, now time.Time, input StepValidationI
 	nextRuntime := *CloneJobRuntimeState(ec.Runtime)
 	if requestedAction, scope, requiresApproval := approvalBindingForStep(*ec.Step); requiresApproval {
 		content, _ := approvalRequestContentForStep(*ec.Job, *ec.Step)
-		nextRuntime = appendPendingApprovalRequest(nextRuntime, now, ApprovalRequest{
+		var budgetExhausted bool
+		var err error
+		nextRuntime, budgetExhausted, err = appendPendingApprovalRequestWithinBudget(nextRuntime, now, ApprovalRequest{
 			JobID:           ec.Job.ID,
 			StepID:          ec.Step.ID,
 			RequestedAction: requestedAction,
@@ -308,6 +318,12 @@ func enterWaitUserStep(ec ExecutionContext, now time.Time, input StepValidationI
 			RequestedVia:    ApprovalRequestedViaRuntime,
 			Reason:          waitingReason,
 		})
+		if err != nil {
+			return JobRuntimeState{}, err
+		}
+		if budgetExhausted {
+			return nextRuntime, nil
+		}
 	}
 
 	return TransitionJobRuntime(nextRuntime, JobStateWaitingUser, now, RuntimeTransitionOptions{

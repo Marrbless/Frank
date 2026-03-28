@@ -88,6 +88,49 @@ func TestCompleteRuntimeStepAuthorizationTransitionsToWaitingUserWithPendingAppr
 	}
 }
 
+func TestCompleteRuntimeStepAuthorizationPausesWhenPendingApprovalBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 28, 12, 2, 0, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{JobID: "job-1", StepID: "authorize-1", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-3 * time.Minute)},
+		{JobID: "job-1", StepID: "authorize-2", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-2 * time.Minute)},
+		{JobID: "job-1", StepID: "authorize-3", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-time.Minute)},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.PausedReason != RuntimePauseReasonBudgetExhausted {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonBudgetExhausted)
+	}
+	if runtime.BudgetBlocker == nil {
+		t.Fatal("BudgetBlocker = nil, want pending-approval budget blocker")
+	}
+	if runtime.BudgetBlocker.Ceiling != "pending_approvals" {
+		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "pending_approvals")
+	}
+	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 3 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=3", runtime.BudgetBlocker)
+	}
+	if len(runtime.ApprovalRequests) != 3 {
+		t.Fatalf("ApprovalRequests = %#v, want unchanged three pending approvals", runtime.ApprovalRequests)
+	}
+	if len(runtime.AuditHistory) != 1 || runtime.AuditHistory[0].ToolName != "budget_exhausted" {
+		t.Fatalf("AuditHistory = %#v, want one budget_exhausted event", runtime.AuditHistory)
+	}
+}
+
 func TestCompleteRuntimeStepWaitUserSubtypeTransitionsToWaitingUser(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +184,46 @@ func TestCompleteRuntimeStepWaitUserAuthorizationTransitionsToWaitingUserWithPen
 	}
 	if runtime.ApprovalRequests[0].State != ApprovalStatePending {
 		t.Fatalf("ApprovalRequests[0].State = %q, want %q", runtime.ApprovalRequests[0].State, ApprovalStatePending)
+	}
+}
+
+func TestCompleteRuntimeStepWaitUserAuthorizationPausesWhenPendingApprovalBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "wait",
+		Type:    StepTypeWaitUser,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateRunning)
+	now := time.Date(2026, 3, 28, 12, 3, 0, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{JobID: "job-1", StepID: "authorize-1", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-3 * time.Minute)},
+		{JobID: "job-1", StepID: "authorize-2", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-2 * time.Minute)},
+		{JobID: "job-1", StepID: "authorize-3", RequestedAction: ApprovalRequestedActionStepComplete, Scope: ApprovalScopeMissionStep, State: ApprovalStatePending, RequestedAt: now.Add(-time.Minute)},
+	}
+
+	runtime, err := CompleteRuntimeStep(ec, now, StepValidationInput{FinalResponse: "Need approval before continuing."})
+	if err != nil {
+		t.Fatalf("CompleteRuntimeStep() error = %v", err)
+	}
+
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.PausedReason != RuntimePauseReasonBudgetExhausted {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonBudgetExhausted)
+	}
+	if runtime.BudgetBlocker == nil {
+		t.Fatal("BudgetBlocker = nil, want pending-approval budget blocker")
+	}
+	if runtime.BudgetBlocker.Ceiling != "pending_approvals" {
+		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "pending_approvals")
+	}
+	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 3 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=3", runtime.BudgetBlocker)
+	}
+	if len(runtime.ApprovalRequests) != 3 {
+		t.Fatalf("ApprovalRequests = %#v, want unchanged three pending approvals", runtime.ApprovalRequests)
 	}
 }
 
