@@ -357,6 +357,106 @@ func TestBuildOperatorStatusSummaryIncludesDeterministicRecentAuditSubset(t *tes
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesArtifactsInPlanOrder(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		SpecVersion:  JobSpecVersionV2,
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{ID: "gamma", Type: StepTypeOneShotCode, OneShotArtifactPath: "zeta.txt"},
+				{ID: "alpha", Type: StepTypeStaticArtifact, StaticArtifactPath: "alpha.json", StaticArtifactFormat: "json"},
+				{ID: "beta", Type: StepTypeLongRunningCode, LongRunningArtifactPath: "service.bin", LongRunningStartupCommand: []string{"go", "build", "./cmd/service"}},
+				{ID: "delta", Type: StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
+				{ID: "epsilon", Type: StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
+				{ID: "zeta", Type: StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+			},
+		},
+	}
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:           "job-1",
+		State:           JobStatePaused,
+		InspectablePlan: &plan,
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "zeta", At: time.Date(2026, 3, 24, 12, 5, 0, 0, time.UTC)},
+			{StepID: "gamma", At: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)},
+			{StepID: "beta", At: time.Date(2026, 3, 24, 12, 2, 0, 0, time.UTC), ResultingState: &RuntimeResultingStateRecord{Kind: string(StepTypeLongRunningCode), Target: "service.bin", State: "already_present"}},
+			{StepID: "alpha", At: time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC)},
+			{StepID: "epsilon", At: time.Date(2026, 3, 24, 12, 4, 0, 0, time.UTC)},
+			{StepID: "delta", At: time.Date(2026, 3, 24, 12, 3, 0, 0, time.UTC)},
+		},
+	})
+
+	if len(summary.Artifacts) != OperatorStatusArtifactLimit {
+		t.Fatalf("Artifacts count = %d, want %d", len(summary.Artifacts), OperatorStatusArtifactLimit)
+	}
+	for i, want := range []struct {
+		stepID   string
+		stepType StepType
+		path     string
+		state    string
+	}{
+		{stepID: "gamma", stepType: StepTypeOneShotCode, path: "zeta.txt"},
+		{stepID: "alpha", stepType: StepTypeStaticArtifact, path: "alpha.json"},
+		{stepID: "beta", stepType: StepTypeLongRunningCode, path: "service.bin", state: "already_present"},
+		{stepID: "delta", stepType: StepTypeStaticArtifact, path: "delta.md"},
+		{stepID: "epsilon", stepType: StepTypeOneShotCode, path: "epsilon.go"},
+	} {
+		got := summary.Artifacts[i]
+		if got.StepID != want.stepID {
+			t.Fatalf("Artifacts[%d].StepID = %q, want %q", i, got.StepID, want.stepID)
+		}
+		if got.StepType != want.stepType {
+			t.Fatalf("Artifacts[%d].StepType = %q, want %q", i, got.StepType, want.stepType)
+		}
+		if got.Path != want.path {
+			t.Fatalf("Artifacts[%d].Path = %q, want %q", i, got.Path, want.path)
+		}
+		if got.State != want.state {
+			t.Fatalf("Artifacts[%d].State = %q, want %q", i, got.State, want.state)
+		}
+	}
+	if summary.Truncation == nil {
+		t.Fatal("Truncation = nil, want artifact truncation metadata")
+	}
+	if summary.Truncation.ArtifactsOmitted != 1 {
+		t.Fatalf("Truncation.ArtifactsOmitted = %d, want 1", summary.Truncation.ArtifactsOmitted)
+	}
+}
+
+func TestBuildOperatorStatusSummaryFallsBackToLexicographicArtifactsWithoutPlan(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID: "job-1",
+		State: JobStatePaused,
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "step-b", ResultingState: &RuntimeResultingStateRecord{Kind: string(StepTypeOneShotCode), Target: "b.go", State: "already_present"}},
+			{StepID: "step-a", ResultingState: &RuntimeResultingStateRecord{Kind: string(StepTypeStaticArtifact), Target: "a.json", State: "already_present"}},
+		},
+	})
+
+	if len(summary.Artifacts) != 2 {
+		t.Fatalf("Artifacts count = %d, want 2", len(summary.Artifacts))
+	}
+	if summary.Artifacts[0].Path != "a.json" || summary.Artifacts[1].Path != "b.go" {
+		t.Fatalf("Artifacts paths = (%q, %q), want (%q, %q)", summary.Artifacts[0].Path, summary.Artifacts[1].Path, "a.json", "b.go")
+	}
+	if summary.Truncation != nil {
+		t.Fatalf("Truncation = %#v, want nil without omissions", summary.Truncation)
+	}
+}
+
 func TestFormatOperatorStatusSummaryWithAllowedToolsUsesSortedUniqueIntersection(t *testing.T) {
 	t.Parallel()
 

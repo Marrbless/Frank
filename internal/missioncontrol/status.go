@@ -8,6 +8,7 @@ import (
 
 const OperatorStatusRecentAuditLimit = 5
 const OperatorStatusApprovalHistoryLimit = 5
+const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
 	JobID           string                         `json:"job_id"`
@@ -25,12 +26,21 @@ type OperatorStatusSummary struct {
 	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
 	ApprovalHistory []OperatorApprovalHistoryEntry `json:"approval_history,omitempty"`
 	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
+	Artifacts       []OperatorArtifactStatus       `json:"artifacts,omitempty"`
 	Truncation      *OperatorStatusTruncation      `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
 	ApprovalHistoryOmitted int `json:"approval_history_omitted,omitempty"`
 	RecentAuditOmitted     int `json:"recent_audit_omitted,omitempty"`
+	ArtifactsOmitted       int `json:"artifacts_omitted,omitempty"`
+}
+
+type OperatorArtifactStatus struct {
+	StepID   string   `json:"step_id"`
+	StepType StepType `json:"step_type"`
+	Path     string   `json:"path"`
+	State    string   `json:"state,omitempty"`
 }
 
 type OperatorApprovalRequestStatus struct {
@@ -173,7 +183,8 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	}
 	summary.ApprovalHistory = selectOperatorStatusApprovalHistory(runtime)
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
-	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit))
+	summary.Artifacts = selectOperatorStatusArtifacts(runtime)
+	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit), len(summary.Artifacts))
 
 	return summary
 }
@@ -291,7 +302,160 @@ func selectOperatorStatusApprovalHistory(runtime JobRuntimeState) []OperatorAppr
 	return history
 }
 
-func buildOperatorStatusTruncation(runtime JobRuntimeState, shownApprovalHistory int, shownRecentAudit int) *OperatorStatusTruncation {
+func selectOperatorStatusArtifacts(runtime JobRuntimeState) []OperatorArtifactStatus {
+	candidates := collectOperatorStatusArtifactCandidates(runtime)
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := candidates[i]
+		right := candidates[j]
+		if left.planIndex != right.planIndex {
+			return left.planIndex < right.planIndex
+		}
+		if left.Path != right.Path {
+			return left.Path < right.Path
+		}
+		if left.StepID != right.StepID {
+			return left.StepID < right.StepID
+		}
+		return left.StepType < right.StepType
+	})
+
+	if len(candidates) > OperatorStatusArtifactLimit {
+		candidates = candidates[:OperatorStatusArtifactLimit]
+	}
+
+	artifacts := make([]OperatorArtifactStatus, len(candidates))
+	for i, candidate := range candidates {
+		artifacts[i] = OperatorArtifactStatus{
+			StepID:   candidate.StepID,
+			StepType: candidate.StepType,
+			Path:     candidate.Path,
+			State:    candidate.State,
+		}
+	}
+	return artifacts
+}
+
+type operatorArtifactCandidate struct {
+	StepID    string
+	StepType  StepType
+	Path      string
+	State     string
+	planIndex int
+}
+
+func collectOperatorStatusArtifactCandidates(runtime JobRuntimeState) []operatorArtifactCandidate {
+	if len(runtime.CompletedSteps) == 0 {
+		return nil
+	}
+
+	stepByID := make(map[string]Step, len(runtime.CompletedSteps))
+	stepOrderIndex := make(map[string]int, len(runtime.CompletedSteps))
+	defaultPlanIndex := len(runtime.CompletedSteps) + 1
+	if runtime.InspectablePlan != nil {
+		for i, step := range runtime.InspectablePlan.Steps {
+			stepByID[step.ID] = copyStep(step)
+			stepOrderIndex[step.ID] = i
+		}
+		defaultPlanIndex = len(runtime.InspectablePlan.Steps) + 1
+	}
+
+	seen := make(map[string]struct{}, len(runtime.CompletedSteps))
+	candidates := make([]operatorArtifactCandidate, 0, len(runtime.CompletedSteps))
+	for i := len(runtime.CompletedSteps) - 1; i >= 0; i-- {
+		record := runtime.CompletedSteps[i]
+		step, hasStep := stepByID[record.StepID]
+
+		stepType, path, ok := operatorStatusArtifactRecord(record, step, hasStep)
+		if !ok {
+			continue
+		}
+
+		key := string(stepType) + "\x1f" + record.StepID + "\x1f" + path
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		state := ""
+		if record.ResultingState != nil {
+			state = record.ResultingState.State
+		}
+
+		planIndex := defaultPlanIndex
+		if index, ok := stepOrderIndex[record.StepID]; ok {
+			planIndex = index
+		}
+		candidates = append(candidates, operatorArtifactCandidate{
+			StepID:    record.StepID,
+			StepType:  stepType,
+			Path:      path,
+			State:     state,
+			planIndex: planIndex,
+		})
+	}
+
+	return candidates
+}
+
+func operatorStatusArtifactRecord(record RuntimeStepRecord, step Step, hasStep bool) (StepType, string, bool) {
+	if hasStep {
+		if path, ok := operatorStatusArtifactPathForStep(step); ok {
+			if record.ResultingState != nil && isOperatorStatusArtifactStepType(StepType(record.ResultingState.Kind)) {
+				if target := cleanedArtifactPath(record.ResultingState.Target); target != "" {
+					return step.Type, target, true
+				}
+			}
+			return step.Type, path, true
+		}
+	}
+
+	if record.ResultingState == nil {
+		return "", "", false
+	}
+
+	stepType := StepType(record.ResultingState.Kind)
+	if !isOperatorStatusArtifactStepType(stepType) {
+		return "", "", false
+	}
+	path := cleanedArtifactPath(record.ResultingState.Target)
+	if path == "" {
+		return "", "", false
+	}
+	return stepType, path, true
+}
+
+func operatorStatusArtifactPathForStep(step Step) (string, bool) {
+	switch step.Type {
+	case StepTypeStaticArtifact:
+		if path := staticArtifactPath(step); path != "" {
+			return path, true
+		}
+	case StepTypeOneShotCode:
+		if path := oneShotArtifactPath(step); path != "" {
+			return path, true
+		}
+	case StepTypeLongRunningCode:
+		if path := longRunningArtifactPath(step); path != "" {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func isOperatorStatusArtifactStepType(stepType StepType) bool {
+	switch stepType {
+	case StepTypeStaticArtifact, StepTypeOneShotCode, StepTypeLongRunningCode:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildOperatorStatusTruncation(runtime JobRuntimeState, shownApprovalHistory int, shownRecentAudit int, shownArtifacts int) *OperatorStatusTruncation {
 	truncation := OperatorStatusTruncation{}
 
 	approvalHistoryTotal := countOperatorStatusApprovalHistory(runtime)
@@ -301,7 +465,10 @@ func buildOperatorStatusTruncation(runtime JobRuntimeState, shownApprovalHistory
 	if len(runtime.AuditHistory) > shownRecentAudit {
 		truncation.RecentAuditOmitted = len(runtime.AuditHistory) - shownRecentAudit
 	}
-	if truncation.ApprovalHistoryOmitted == 0 && truncation.RecentAuditOmitted == 0 {
+	if artifactsTotal := len(collectOperatorStatusArtifactCandidates(runtime)); artifactsTotal > shownArtifacts {
+		truncation.ArtifactsOmitted = artifactsTotal - shownArtifacts
+	}
+	if truncation.ApprovalHistoryOmitted == 0 && truncation.RecentAuditOmitted == 0 && truncation.ArtifactsOmitted == 0 {
 		return nil
 	}
 	return &truncation

@@ -2691,10 +2691,31 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 
 func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedRuntime(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
-	job := testMissionBootstrapJob()
-	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{ID: "gamma", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "zeta.txt"},
+				{ID: "alpha", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "alpha.json", StaticArtifactFormat: "json"},
+				{ID: "beta", Type: missioncontrol.StepTypeLongRunningCode, LongRunningArtifactPath: "service.bin", LongRunningStartupCommand: []string{"go", "build", "./cmd/service"}},
+				{ID: "delta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
+				{ID: "epsilon", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
+				{ID: "zeta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
+				{ID: "final", Type: missioncontrol.StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "final")
 	if err != nil {
 		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	plan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
 	}
 	requests := make([]missioncontrol.ApprovalRequest, 0, missioncontrol.OperatorStatusApprovalHistoryLimit+2)
 	for i := 0; i < missioncontrol.OperatorStatusApprovalHistoryLimit+2; i++ {
@@ -2720,11 +2741,20 @@ func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedR
 	runtime := missioncontrol.JobRuntimeState{
 		JobID:            job.ID,
 		State:            missioncontrol.JobStatePaused,
-		ActiveStepID:     "build",
+		ActiveStepID:     "final",
+		InspectablePlan:  &plan,
 		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
 		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
 		ApprovalRequests: requests,
 		AuditHistory:     history,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "zeta"},
+			{StepID: "gamma"},
+			{StepID: "beta", ResultingState: &missioncontrol.RuntimeResultingStateRecord{Kind: string(missioncontrol.StepTypeLongRunningCode), Target: "service.bin", State: "already_present"}},
+			{StepID: "alpha"},
+			{StepID: "epsilon"},
+			{StepID: "delta"},
+		},
 	}
 	if err := ag.HydrateMissionRuntimeControl(job, runtime, &control); err != nil {
 		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
@@ -2754,6 +2784,15 @@ func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedR
 	if !reflect.DeepEqual(got.RuntimeSummary.AllowedTools, []string{"read"}) {
 		t.Fatalf("RuntimeSummary.AllowedTools = %#v, want %#v", got.RuntimeSummary.AllowedTools, []string{"read"})
 	}
+	if len(got.RuntimeSummary.Artifacts) != missioncontrol.OperatorStatusArtifactLimit {
+		t.Fatalf("RuntimeSummary.Artifacts = %#v, want %d deterministic entries", got.RuntimeSummary.Artifacts, missioncontrol.OperatorStatusArtifactLimit)
+	}
+	if got.RuntimeSummary.Artifacts[0].StepID != "gamma" || got.RuntimeSummary.Artifacts[0].Path != "zeta.txt" {
+		t.Fatalf("RuntimeSummary.Artifacts[0] = %#v, want step_id=%q path=%q", got.RuntimeSummary.Artifacts[0], "gamma", "zeta.txt")
+	}
+	if got.RuntimeSummary.Artifacts[2].StepID != "beta" || got.RuntimeSummary.Artifacts[2].State != "already_present" {
+		t.Fatalf("RuntimeSummary.Artifacts[2] = %#v, want step_id=%q state=%q", got.RuntimeSummary.Artifacts[2], "beta", "already_present")
+	}
 	if got.RuntimeSummary.Truncation == nil {
 		t.Fatal("RuntimeSummary.Truncation = nil, want truncation metadata")
 	}
@@ -2762,6 +2801,9 @@ func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedR
 	}
 	if got.RuntimeSummary.Truncation.RecentAuditOmitted != 1 {
 		t.Fatalf("RuntimeSummary.Truncation.RecentAuditOmitted = %d, want 1", got.RuntimeSummary.Truncation.RecentAuditOmitted)
+	}
+	if got.RuntimeSummary.Truncation.ArtifactsOmitted != 1 {
+		t.Fatalf("RuntimeSummary.Truncation.ArtifactsOmitted = %d, want 1", got.RuntimeSummary.Truncation.ArtifactsOmitted)
 	}
 }
 

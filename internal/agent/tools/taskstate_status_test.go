@@ -527,6 +527,89 @@ func TestTaskStateOperatorStatusShowsNormalizedLegacyRevokedAtAfterRehydration(t
 	}
 }
 
+func TestTaskStateOperatorStatusIncludesDeterministicArtifactsForPersistedRuntime(t *testing.T) {
+	t.Parallel()
+
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{ID: "gamma", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "zeta.txt"},
+				{ID: "alpha", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "alpha.json", StaticArtifactFormat: "json"},
+				{ID: "beta", Type: missioncontrol.StepTypeLongRunningCode, LongRunningArtifactPath: "service.bin", LongRunningStartupCommand: []string{"go", "build", "./cmd/service"}},
+				{ID: "delta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
+				{ID: "epsilon", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
+				{ID: "zeta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
+				{ID: "final", Type: missioncontrol.StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+			},
+		},
+	}
+	plan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStatePaused,
+		ActiveStepID:    "final",
+		PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+		InspectablePlan: &plan,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "zeta"},
+			{StepID: "gamma"},
+			{StepID: "beta", ResultingState: &missioncontrol.RuntimeResultingStateRecord{Kind: string(missioncontrol.StepTypeLongRunningCode), Target: "service.bin", State: "already_present"}},
+			{StepID: "alpha"},
+			{StepID: "epsilon"},
+			{StepID: "delta"},
+		},
+	}
+
+	state := NewTaskState()
+	if err := state.HydrateRuntimeControl(job, runtime, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(summary), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	artifacts, ok := got["artifacts"].([]any)
+	if !ok || len(artifacts) != missioncontrol.OperatorStatusArtifactLimit {
+		t.Fatalf("artifacts = %#v, want %d deterministic entries", got["artifacts"], missioncontrol.OperatorStatusArtifactLimit)
+	}
+	first, ok := artifacts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("artifacts[0] = %#v, want object", artifacts[0])
+	}
+	if first["step_id"] != "gamma" || first["path"] != "zeta.txt" {
+		t.Fatalf("artifacts[0] = %#v, want step_id=%q path=%q", first, "gamma", "zeta.txt")
+	}
+	third, ok := artifacts[2].(map[string]any)
+	if !ok {
+		t.Fatalf("artifacts[2] = %#v, want object", artifacts[2])
+	}
+	if third["step_id"] != "beta" || third["state"] != "already_present" {
+		t.Fatalf("artifacts[2] = %#v, want step_id=%q state=%q", third, "beta", "already_present")
+	}
+	truncation, ok := got["truncation"].(map[string]any)
+	if !ok {
+		t.Fatalf("truncation = %#v, want object", got["truncation"])
+	}
+	if truncation["artifacts_omitted"] != float64(1) {
+		t.Fatalf("truncation.artifacts_omitted = %#v, want 1", truncation["artifacts_omitted"])
+	}
+}
+
 func TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically(t *testing.T) {
 	t.Parallel()
 
