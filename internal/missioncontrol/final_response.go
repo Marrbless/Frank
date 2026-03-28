@@ -43,7 +43,10 @@ func truncateFinalResponseBody(body string) string {
 }
 
 func finalResponseSummaryLines(ec ExecutionContext) []string {
-	lines := make([]string, 0, 2)
+	lines := make([]string, 0, 3)
+	if blocked := finalResponseBlockedStepsLine(ec); blocked != "" {
+		lines = append(lines, blocked)
+	}
 	if artifacts := finalResponseArtifactsLine(ec); artifacts != "" {
 		lines = append(lines, artifacts)
 	}
@@ -82,6 +85,37 @@ func finalResponseArtifactsLine(ec ExecutionContext) string {
 	return "Artifacts: " + strings.Join(parts, "; ")
 }
 
+func finalResponseBlockedStepsLine(ec ExecutionContext) string {
+	if ec.Job == nil {
+		return ""
+	}
+
+	failed := make(map[string]string, len(ec.Runtime.FailedSteps))
+	for _, record := range ec.Runtime.FailedSteps {
+		failed[record.StepID] = strings.TrimSpace(record.Reason)
+	}
+	if len(failed) == 0 {
+		return ""
+	}
+
+	blocked := make([]string, 0, len(ec.Runtime.FailedSteps))
+	for _, step := range ec.Job.Plan.Steps {
+		reason, ok := failed[step.ID]
+		if !ok {
+			continue
+		}
+		label := step.ID + " (blocked)"
+		if reason != "" {
+			label = step.ID + " (" + reason + ")"
+		}
+		blocked = append(blocked, label)
+	}
+	if len(blocked) == 0 {
+		return ""
+	}
+	return "Blocked steps: " + strings.Join(blocked, "; ")
+}
+
 func finalResponsePendingStepsLine(ec ExecutionContext) string {
 	if ec.Job == nil {
 		return ""
@@ -104,11 +138,10 @@ func finalResponsePendingStepsLine(ec ExecutionContext) string {
 		if _, ok := completed[step.ID]; ok {
 			continue
 		}
-		label := step.ID
 		if _, ok := failed[step.ID]; ok {
-			label += " (blocked)"
+			continue
 		}
-		pending = append(pending, label)
+		pending = append(pending, step.ID)
 	}
 	if len(pending) == 0 {
 		return ""
@@ -119,7 +152,7 @@ func finalResponsePendingStepsLine(ec ExecutionContext) string {
 		visible = append(visible, "+"+itoa(len(pending)-FinalResponseSummaryPendingLimit)+" more omitted")
 		pending = visible
 	}
-	return "Pending/blocked steps: " + strings.Join(pending, "; ")
+	return "Pending steps: " + strings.Join(pending, "; ")
 }
 
 func itoa(v int) string {
