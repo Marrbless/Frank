@@ -83,7 +83,27 @@ func completeMissionStepOutput(taskState *tools.TaskState, finalContent string, 
 		return finalContent
 	}
 
+	if runtime, ok := taskState.MissionRuntimeState(); ok && runtime.PausedReason == missioncontrol.RuntimePauseReasonBudgetExhausted && runtime.BudgetBlocker != nil {
+		return formatBudgetBlockedResponse(ec, runtime)
+	}
+
 	return missioncontrol.NormalizeFinalResponse(ec, finalContent)
+}
+
+func formatBudgetBlockedResponse(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState) string {
+	message := "Mission paused: budget exhausted."
+	if runtime.BudgetBlocker != nil {
+		if blocker := strings.TrimSpace(runtime.BudgetBlocker.Message); blocker != "" {
+			message = "Mission paused: " + blocker
+			if !strings.HasSuffix(message, ".") {
+				message += "."
+			}
+		}
+	}
+
+	updated := ec
+	updated.Runtime = &runtime
+	return missioncontrol.NormalizeFinalResponse(updated, message)
 }
 
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.

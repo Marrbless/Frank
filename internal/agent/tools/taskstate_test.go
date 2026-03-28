@@ -339,6 +339,61 @@ func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	}
 }
 
+func TestTaskStateApplyStepOutputPausesForUnattendedWallClockBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	now := time.Now().UTC()
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ExecutionContext() = (%#v, %t), want active runtime", ec, ok)
+	}
+	ec.Runtime.CreatedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.UpdatedAt = now.Add(-2 * time.Minute)
+	ec.Runtime.StartedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.ActiveStepAt = now.Add(-2 * time.Minute)
+	state.SetExecutionContext(ec)
+
+	if err := state.ApplyStepOutput("Implemented the change.", []missioncontrol.RuntimeToolCallEvidence{
+		{ToolName: "filesystem", Arguments: map[string]interface{}{"action": "write", "path": "result.txt"}},
+	}); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	ec, ok = state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want paused execution context")
+	}
+	if ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("ExecutionContext().Runtime = %#v, want paused runtime", ec.Runtime)
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.PausedReason != missioncontrol.RuntimePauseReasonBudgetExhausted {
+		t.Fatalf("MissionRuntimeState().PausedReason = %q, want %q", runtime.PausedReason, missioncontrol.RuntimePauseReasonBudgetExhausted)
+	}
+	if runtime.BudgetBlocker == nil {
+		t.Fatal("MissionRuntimeState().BudgetBlocker = nil, want blocker")
+	}
+	if runtime.BudgetBlocker.Ceiling != "unattended_wall_clock" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "unattended_wall_clock")
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want empty after budget pause", runtime.CompletedSteps)
+	}
+	if len(runtime.AuditHistory) != 1 || runtime.AuditHistory[0].ToolName != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().AuditHistory = %#v, want one budget_exhausted event", runtime.AuditHistory)
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 

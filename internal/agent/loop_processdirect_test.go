@@ -1692,6 +1692,54 @@ func TestProcessDirectFinalResponseFalseCompletionClaimLeavesRuntimeRunning(t *t
 	}
 }
 
+func TestProcessDirectFinalResponseReturnsBudgetBlockerWhenUnattendedWallClockIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Here is the final answer."}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testFinalMissionJob()
+	now := time.Now().UTC()
+	if err := ag.ActivateMissionStep(job, "final"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	ec.Runtime.CreatedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.UpdatedAt = now.Add(-1 * time.Minute)
+	ec.Runtime.StartedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.ActiveStepAt = now.Add(-1 * time.Minute)
+	ec.Runtime.CompletedSteps = []missioncontrol.RuntimeStepRecord{
+		{StepID: "build", At: now.Add(-2 * time.Hour)},
+	}
+	ag.taskState.SetExecutionContext(ec)
+
+	resp, err := ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Mission paused: unattended wall-clock budget exhausted." {
+		t.Fatalf("ProcessDirect() response = %q, want budget pause response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "unattended_wall_clock" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want unattended_wall_clock blocker", runtime.BudgetBlocker)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want only preexisting build completion", runtime.CompletedSteps)
+	}
+}
+
 func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
 	t.Parallel()
 

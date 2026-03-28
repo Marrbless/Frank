@@ -465,6 +465,50 @@ func TestPauseJobRuntimeForBudgetExhaustionPersistsBudgetBlockerAndAudit(t *test
 	}
 }
 
+func TestPauseJobRuntimeForUnattendedWallClockPausesAtCeiling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	runtime, exhausted, err := PauseJobRuntimeForUnattendedWallClock(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    now.Add(-5 * time.Hour),
+		StartedAt:    now.Add(-5 * time.Hour),
+		ActiveStepAt: now.Add(-30 * time.Minute),
+	}, now)
+	if err != nil {
+		t.Fatalf("PauseJobRuntimeForUnattendedWallClock() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("PauseJobRuntimeForUnattendedWallClock() exhausted = false, want true")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.PausedReason != RuntimePauseReasonBudgetExhausted {
+		t.Fatalf("PausedReason = %q, want %q", runtime.PausedReason, RuntimePauseReasonBudgetExhausted)
+	}
+	if runtime.BudgetBlocker == nil {
+		t.Fatal("BudgetBlocker = nil, want persisted blocker")
+	}
+	if runtime.BudgetBlocker.Ceiling != unattendedWallClockBudgetCeiling {
+		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, unattendedWallClockBudgetCeiling)
+	}
+	if runtime.BudgetBlocker.Limit != maxUnattendedWallClockPerJobInMinutes {
+		t.Fatalf("BudgetBlocker.Limit = %d, want %d", runtime.BudgetBlocker.Limit, maxUnattendedWallClockPerJobInMinutes)
+	}
+	if runtime.BudgetBlocker.Observed != 300 {
+		t.Fatalf("BudgetBlocker.Observed = %d, want %d", runtime.BudgetBlocker.Observed, 300)
+	}
+	if runtime.BudgetBlocker.Message != "unattended wall-clock budget exhausted" {
+		t.Fatalf("BudgetBlocker.Message = %q, want exact budget message", runtime.BudgetBlocker.Message)
+	}
+	if len(runtime.CompletedSteps) != 0 {
+		t.Fatalf("CompletedSteps = %#v, want empty", runtime.CompletedSteps)
+	}
+}
+
 func TestResumePausedJobRuntimeClearsBudgetBlocker(t *testing.T) {
 	t.Parallel()
 

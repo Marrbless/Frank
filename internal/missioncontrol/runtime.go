@@ -20,6 +20,12 @@ const (
 )
 
 const (
+	unattendedWallClockBudgetCeiling      = "unattended_wall_clock"
+	maxUnattendedWallClockPerJob          = 4 * time.Hour
+	maxUnattendedWallClockPerJobInMinutes = int(maxUnattendedWallClockPerJob / time.Minute)
+)
+
+const (
 	RejectionCodeInvalidRuntimeState    RejectionCode = "invalid_runtime_state"
 	RejectionCodeResumeApprovalRequired RejectionCode = "resume_approval_required"
 	RejectionCodeValidationRequired     RejectionCode = "validation_required"
@@ -534,6 +540,29 @@ func PauseJobRuntimeForBudgetExhaustion(current JobRuntimeState, now time.Time, 
 		Timestamp:   blocker.TriggeredAt,
 	})
 	return next, nil
+}
+
+func PauseJobRuntimeForUnattendedWallClock(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	anchor := current.StartedAt
+	if anchor.IsZero() {
+		anchor = current.CreatedAt
+	}
+	if anchor.IsZero() {
+		return current, false, nil
+	}
+
+	elapsed := now.Sub(anchor)
+	if elapsed < maxUnattendedWallClockPerJob {
+		return current, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(current, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  unattendedWallClockBudgetCeiling,
+		Limit:    maxUnattendedWallClockPerJobInMinutes,
+		Observed: int(elapsed / time.Minute),
+		Message:  "unattended wall-clock budget exhausted",
+	})
+	return paused, true, err
 }
 
 func ResumePausedJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {

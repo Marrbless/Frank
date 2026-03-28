@@ -263,7 +263,22 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 		return nil
 	}
 
-	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, time.Now(), missioncontrol.StepValidationInput{
+	now := time.Now()
+	nextRuntime, exhausted, err := missioncontrol.PauseJobRuntimeForUnattendedWallClock(*ec.Runtime, now)
+	if err != nil {
+		return err
+	}
+	if exhausted {
+		s.mu.Lock()
+		err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+		s.mu.Unlock()
+		if err == nil {
+			s.notifyRuntimeChanged()
+		}
+		return err
+	}
+
+	nextRuntime, err = missioncontrol.CompleteRuntimeStep(ec, now, missioncontrol.StepValidationInput{
 		FinalResponse:   finalContent,
 		SessionChannel:  operatorChannel,
 		SessionChatID:   operatorChatID,
