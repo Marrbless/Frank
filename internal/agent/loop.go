@@ -106,6 +106,28 @@ func formatBudgetBlockedResponse(ec missioncontrol.ExecutionContext, runtime mis
 	return missioncontrol.NormalizeFinalResponse(updated, message)
 }
 
+func checkActiveBudgetBeforeToolCall(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.EnforceUnattendedWallClockBudget()
+	if err != nil {
+		log.Printf("mission runtime budget enforcement failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -413,6 +435,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 					})
 
 					for _, tc := range resp.ToolCalls {
+						if budgetResponse, blocked := checkActiveBudgetBeforeToolCall(a.taskState); blocked {
+							finalContent = budgetResponse
+							break
+						}
+
 						argsJSON, _ := json.Marshal(tc.Arguments)
 						sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 							fmt.Sprintf("🤖 Running: %s %s", tc.Name, argsJSON))
@@ -447,6 +474,9 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							Content:    res,
 							ToolCallID: tc.ID,
 						})
+					}
+					if finalContent != "" {
+						break
 					}
 					continue
 				}
@@ -552,6 +582,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 		})
 
 		for _, tc := range resp.ToolCalls {
+			if budgetResponse, blocked := checkActiveBudgetBeforeToolCall(a.taskState); blocked {
+				return budgetResponse, nil
+			}
+
 			execCtx := ctx
 			if a.taskState != nil {
 				if ec, ok := a.taskState.ExecutionContext(); ok {

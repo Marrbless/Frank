@@ -263,22 +263,14 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 		return nil
 	}
 
-	now := time.Now()
-	nextRuntime, exhausted, err := missioncontrol.PauseJobRuntimeForUnattendedWallClock(*ec.Runtime, now)
-	if err != nil {
+	if exhausted, err := s.EnforceUnattendedWallClockBudget(); err != nil {
 		return err
-	}
-	if exhausted {
-		s.mu.Lock()
-		err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
-		s.mu.Unlock()
-		if err == nil {
-			s.notifyRuntimeChanged()
-		}
-		return err
+	} else if exhausted {
+		return nil
 	}
 
-	nextRuntime, err = missioncontrol.CompleteRuntimeStep(ec, now, missioncontrol.StepValidationInput{
+	now := time.Now()
+	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, now, missioncontrol.StepValidationInput{
 		FinalResponse:   finalContent,
 		SessionChannel:  operatorChannel,
 		SessionChatID:   operatorChatID,
@@ -295,6 +287,33 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 		s.notifyRuntimeChanged()
 	}
 	return err
+}
+
+func (s *TaskState) EnforceUnattendedWallClockBudget() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return false, nil
+	}
+
+	nextRuntime, exhausted, err := missioncontrol.PauseJobRuntimeForUnattendedWallClock(*ec.Runtime, time.Now())
+	if err != nil || !exhausted {
+		return exhausted, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return true, err
 }
 
 func (s *TaskState) ApplyWaitingUserInput(input string) (missioncontrol.WaitingUserInputKind, error) {

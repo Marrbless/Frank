@@ -137,6 +137,23 @@ func (p *filesystemArtifactProvider) Chat(ctx context.Context, messages []provid
 
 func (p *filesystemArtifactProvider) GetDefaultModel() string { return "test" }
 
+type writeMemoryToolCallProvider struct{}
+
+func (p *writeMemoryToolCallProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	return providers.LLMResponse{
+		HasToolCalls: true,
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:        "1",
+				Name:      "write_memory",
+				Arguments: map[string]interface{}{"target": "today", "content": "budget overrun", "append": true},
+			},
+		},
+	}, nil
+}
+
+func (p *writeMemoryToolCallProvider) GetDefaultModel() string { return "test" }
+
 type filesystemStaticArtifactProvider struct {
 	calls int
 }
@@ -1737,6 +1754,56 @@ func TestProcessDirectFinalResponseReturnsBudgetBlockerWhenUnattendedWallClockIs
 	}
 	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
 		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want only preexisting build completion", runtime.CompletedSteps)
+	}
+}
+
+func TestProcessDirectDoesNotExecuteToolAfterUnattendedWallClockBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &writeMemoryToolCallProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, t.TempDir(), nil)
+	job := testMissionJob([]string{"write_memory"}, []string{"write_memory"})
+	now := time.Now().UTC()
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	ec.Runtime.CreatedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.UpdatedAt = now.Add(-1 * time.Minute)
+	ec.Runtime.StartedAt = now.Add(-5 * time.Hour)
+	ec.Runtime.ActiveStepAt = now.Add(-1 * time.Minute)
+	ag.taskState.SetExecutionContext(ec)
+
+	resp, err := ag.ProcessDirect("keep going", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Mission paused: unattended wall-clock budget exhausted." {
+		t.Fatalf("ProcessDirect() response = %q, want budget pause response", resp)
+	}
+
+	td, readErr := ag.memory.ReadToday()
+	if readErr != nil {
+		t.Fatalf("ReadToday() error = %v", readErr)
+	}
+	if strings.Contains(td, "budget overrun") {
+		t.Fatalf("today memory = %q, want write_memory tool not to run", td)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "unattended_wall_clock" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want unattended_wall_clock blocker", runtime.BudgetBlocker)
 	}
 }
 
