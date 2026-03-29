@@ -1429,6 +1429,92 @@ func TestProcessDirectApproveCommandUsesPersistedWaitingRuntimeAfterExecutionCon
 	}
 }
 
+func TestProcessDirectApproveCommandClearsPendingApprovalBudgetPause(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job, runtimeState, control := testPendingApprovalBudgetPausedDiscussionRuntime(t)
+	if err := ag.HydrateMissionRuntimeControl(job, runtimeState, &control); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("APPROVE job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(APPROVE) error = %v", err)
+	}
+	if resp != "Approved job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(APPROVE) response = %q, want approval acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after approval completion")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.PausedReason != missioncontrol.RuntimePauseReasonStepComplete {
+		t.Fatalf("MissionRuntimeState().PausedReason = %q, want %q", runtime.PausedReason, missioncontrol.RuntimePauseReasonStepComplete)
+	}
+	if runtime.BudgetBlocker != nil {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want nil after approval completion", runtime.BudgetBlocker)
+	}
+	if len(runtime.CompletedSteps) != 1 || runtime.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("MissionRuntimeState().CompletedSteps = %#v, want build completion", runtime.CompletedSteps)
+	}
+	lastRequest := runtime.ApprovalRequests[len(runtime.ApprovalRequests)-1]
+	if lastRequest.StepID != "build" || lastRequest.State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("latest ApprovalRequest = %#v, want granted build approval", lastRequest)
+	}
+}
+
+func TestProcessDirectDenyCommandClearsPendingApprovalBudgetPause(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job, runtimeState, control := testPendingApprovalBudgetPausedDiscussionRuntime(t)
+	if err := ag.HydrateMissionRuntimeControl(job, runtimeState, &control); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("DENY job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(DENY) error = %v", err)
+	}
+	if resp != "Denied job=job-1 step=build." {
+		t.Fatalf("ProcessDirect(DENY) response = %q, want denial acknowledgement", resp)
+	}
+
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want persisted waiting runtime after denial")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateWaitingUser)
+	}
+	if runtime.WaitingReason != "discussion_authorization" {
+		t.Fatalf("MissionRuntimeState().WaitingReason = %q, want %q", runtime.WaitingReason, "discussion_authorization")
+	}
+	if runtime.BudgetBlocker != nil {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want nil after denial", runtime.BudgetBlocker)
+	}
+	lastRequest := runtime.ApprovalRequests[len(runtime.ApprovalRequests)-1]
+	if lastRequest.StepID != "build" || lastRequest.State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("latest ApprovalRequest = %#v, want denied build approval", lastRequest)
+	}
+}
+
 func TestProcessDirectRevokeApprovalCommandRevokesMatchingGrant(t *testing.T) {
 	t.Parallel()
 
@@ -2139,6 +2225,40 @@ func testDiscussionMissionJob() missioncontrol.Job {
 			},
 		},
 	}
+}
+
+func testPendingApprovalBudgetPausedDiscussionRuntime(t *testing.T) (missioncontrol.Job, missioncontrol.JobRuntimeState, missioncontrol.RuntimeControlContext) {
+	t.Helper()
+
+	job := testDiscussionMissionJob()
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonBudgetExhausted,
+		PausedAt:     now,
+		BudgetBlocker: &missioncontrol.RuntimeBudgetBlockerRecord{
+			Ceiling:     "pending_approvals",
+			Limit:       3,
+			Observed:    4,
+			Message:     "pending approval request budget exhausted",
+			TriggeredAt: now,
+		},
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{JobID: job.ID, StepID: "authorize-1", RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete, Scope: missioncontrol.ApprovalScopeMissionStep, State: missioncontrol.ApprovalStatePending, RequestedVia: missioncontrol.ApprovalRequestedViaRuntime, Reason: "discussion_authorization", RequestedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(2 * time.Minute)},
+			{JobID: job.ID, StepID: "authorize-2", RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete, Scope: missioncontrol.ApprovalScopeMissionStep, State: missioncontrol.ApprovalStatePending, RequestedVia: missioncontrol.ApprovalRequestedViaRuntime, Reason: "discussion_authorization", RequestedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(2 * time.Minute)},
+			{JobID: job.ID, StepID: "authorize-3", RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete, Scope: missioncontrol.ApprovalScopeMissionStep, State: missioncontrol.ApprovalStatePending, RequestedVia: missioncontrol.ApprovalRequestedViaRuntime, Reason: "discussion_authorization", RequestedAt: now.Add(-time.Minute), ExpiresAt: now.Add(2 * time.Minute)},
+			{JobID: job.ID, StepID: "build", RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete, Scope: missioncontrol.ApprovalScopeMissionStep, State: missioncontrol.ApprovalStatePending, RequestedVia: missioncontrol.ApprovalRequestedViaRuntime, Reason: "discussion_authorization", RequestedAt: now, ExpiresAt: now.Add(2 * time.Minute)},
+		},
+	}
+
+	return job, runtimeState, control
 }
 
 func testReusableApprovalMissionJob(scope string) missioncontrol.Job {

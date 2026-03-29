@@ -335,7 +335,11 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 			Message: "approval decision requires active job, step, and runtime state",
 		}
 	}
-	if ec.Runtime.State != JobStateWaitingUser {
+	pausedPendingApprovalBudget := ec.Runtime.State == JobStatePaused &&
+		ec.Runtime.PausedReason == RuntimePauseReasonBudgetExhausted &&
+		ec.Runtime.BudgetBlocker != nil &&
+		ec.Runtime.BudgetBlocker.Ceiling == "pending_approvals"
+	if ec.Runtime.State != JobStateWaitingUser && !pausedPendingApprovalBudget {
 		return JobRuntimeState{}, ValidationError{
 			Code:    RejectionCodeInvalidRuntimeState,
 			StepID:  ec.Step.ID,
@@ -390,6 +394,13 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 			GrantedAt:       now,
 			ExpiresAt:       next.ApprovalRequests[requestIndex].ExpiresAt,
 		})
+		if pausedPendingApprovalBudget {
+			var err error
+			next, err = restoreWaitingUserStateAfterPendingApprovalBudget(next, *ec.Step, requestIndex, now)
+			if err != nil {
+				return JobRuntimeState{}, err
+			}
+		}
 
 		return pauseAfterValidatedCompletion(ExecutionContext{
 			Job:     ec.Job,
@@ -398,6 +409,14 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 		}, now)
 	case ApprovalDecisionDeny:
 		next.ApprovalRequests[requestIndex].State = ApprovalStateDenied
+		if pausedPendingApprovalBudget {
+			var err error
+			next, err = restoreWaitingUserStateAfterPendingApprovalBudget(next, *ec.Step, requestIndex, now)
+			if err != nil {
+				return JobRuntimeState{}, err
+			}
+			return next, nil
+		}
 		next.UpdatedAt = now
 		return next, nil
 	default:
@@ -407,6 +426,39 @@ func ApplyApprovalDecisionWithSession(ec ExecutionContext, now time.Time, decisi
 			Message: fmt.Sprintf("unsupported approval decision %q", decision),
 		}
 	}
+}
+
+func restoreWaitingUserStateAfterPendingApprovalBudget(next JobRuntimeState, step Step, requestIndex int, now time.Time) (JobRuntimeState, error) {
+	waitingReason := ""
+	if requestIndex >= 0 && requestIndex < len(next.ApprovalRequests) {
+		waitingReason = strings.TrimSpace(next.ApprovalRequests[requestIndex].Reason)
+	}
+	if waitingReason == "" {
+		switch step.Type {
+		case StepTypeDiscussion:
+			waitingReason, _ = discussionWaitingReason(step.Subtype)
+		case StepTypeWaitUser:
+			waitingReason, _ = waitUserWaitingReason(step.Subtype)
+		}
+	}
+	if waitingReason == "" {
+		return JobRuntimeState{}, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			StepID:  step.ID,
+			Message: "approval decision requires a waiting reason when clearing pending approval budget pause",
+		}
+	}
+
+	next.State = JobStateWaitingUser
+	next.WaitingReason = waitingReason
+	next.WaitingAt = now
+	next.PausedReason = ""
+	next.PausedAt = time.Time{}
+	next.AbortedReason = ""
+	next.AbortedAt = time.Time{}
+	next.BudgetBlocker = nil
+	next.UpdatedAt = now
+	return next, nil
 }
 
 func RevokeLatestApprovalGrantWithSession(ec ExecutionContext, now time.Time, sessionChannel string, sessionChatID string) (JobRuntimeState, error) {

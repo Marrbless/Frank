@@ -574,7 +574,11 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 				Message: "approval command does not match the active job and step",
 			}
 		}
-		if runtimeState.State != missioncontrol.JobStateWaitingUser {
+		pausedPendingApprovalBudget := runtimeState.State == missioncontrol.JobStatePaused &&
+			runtimeState.PausedReason == missioncontrol.RuntimePauseReasonBudgetExhausted &&
+			runtimeState.BudgetBlocker != nil &&
+			runtimeState.BudgetBlocker.Ceiling == "pending_approvals"
+		if runtimeState.State != missioncontrol.JobStateWaitingUser && !pausedPendingApprovalBudget {
 			return missioncontrol.ValidationError{
 				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
 				StepID:  stepID,
