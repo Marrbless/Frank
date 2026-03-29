@@ -509,6 +509,45 @@ func TestPauseJobRuntimeForUnattendedWallClockPausesAtCeiling(t *testing.T) {
 	}
 }
 
+func TestRecordFailedToolActionPausesAtCeiling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+
+	var exhausted bool
+	var err error
+	for i := 0; i < maxFailedActionsBeforePause; i++ {
+		runtime, exhausted, err = RecordFailedToolAction(runtime, now.Add(time.Duration(i)*time.Minute), "message", "message tool: 'content' argument required")
+		if err != nil {
+			t.Fatalf("RecordFailedToolAction() step %d error = %v", i, err)
+		}
+	}
+
+	if !exhausted {
+		t.Fatal("RecordFailedToolAction() exhausted = false, want true on threshold")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != failedActionsBudgetCeiling {
+		t.Fatalf("BudgetBlocker = %#v, want failed_actions blocker", runtime.BudgetBlocker)
+	}
+	if runtime.BudgetBlocker.Observed != maxFailedActionsBeforePause {
+		t.Fatalf("BudgetBlocker.Observed = %d, want %d", runtime.BudgetBlocker.Observed, maxFailedActionsBeforePause)
+	}
+	if len(runtime.AuditHistory) != maxFailedActionsBeforePause+1 {
+		t.Fatalf("AuditHistory count = %d, want %d including budget event", len(runtime.AuditHistory), maxFailedActionsBeforePause+1)
+	}
+	if runtime.AuditHistory[maxFailedActionsBeforePause].ToolName != "budget_exhausted" {
+		t.Fatalf("final audit event tool = %q, want budget_exhausted", runtime.AuditHistory[maxFailedActionsBeforePause].ToolName)
+	}
+}
+
 func TestResumePausedJobRuntimeClearsBudgetBlocker(t *testing.T) {
 	t.Parallel()
 

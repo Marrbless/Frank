@@ -128,6 +128,31 @@ func checkActiveBudgetBeforeToolCall(taskState *tools.TaskState) (string, bool) 
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordFailedToolAction(taskState *tools.TaskState, toolName string, toolErr error) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok || toolErr == nil {
+		return "", false
+	}
+	if strings.HasPrefix(toolErr.Error(), "tool rejected: ") {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordFailedToolAction(toolName, toolErr.Error())
+	if err != nil {
+		log.Printf("mission runtime failed-action accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -455,6 +480,10 @@ func (a *AgentLoop) Run(ctx context.Context) {
 						elapsed := time.Since(start).Round(time.Millisecond)
 
 						if err != nil {
+							if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
+								finalContent = budgetResponse
+								break
+							}
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 								fmt.Sprintf("📢 %s failed (%s): %v", tc.Name, elapsed, err))
 							res = "(tool error) " + err.Error()
@@ -594,6 +623,9 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 			}
 			result, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
 			if err != nil {
+				if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
+					return budgetResponse, nil
+				}
 				result = "(tool error) " + err.Error()
 			} else {
 				successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{

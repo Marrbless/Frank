@@ -23,6 +23,8 @@ const (
 	unattendedWallClockBudgetCeiling      = "unattended_wall_clock"
 	maxUnattendedWallClockPerJob          = 4 * time.Hour
 	maxUnattendedWallClockPerJobInMinutes = int(maxUnattendedWallClockPerJob / time.Minute)
+	failedActionsBudgetCeiling            = "failed_actions"
+	maxFailedActionsBeforePause           = 5
 )
 
 const (
@@ -563,6 +565,67 @@ func PauseJobRuntimeForUnattendedWallClock(current JobRuntimeState, now time.Tim
 		Message:  "unattended wall-clock budget exhausted",
 	})
 	return paused, true, err
+}
+
+func RecordFailedToolAction(current JobRuntimeState, now time.Time, toolName string, reason string) (JobRuntimeState, bool, error) {
+	if current.State != JobStateRunning {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("failed action budget requires running runtime state, got %q", current.State),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "failed action budget requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "failed action budget requires an active step",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    strings.TrimSpace(toolName),
+		ActionClass: AuditActionClassToolCall,
+		Result:      AuditResultRejected,
+		Allowed:     true,
+		Reason:      strings.TrimSpace(reason),
+		Timestamp:   now,
+	})
+
+	observed := countFailedToolActions(next)
+	if observed < maxFailedActionsBeforePause {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  failedActionsBudgetCeiling,
+		Limit:    maxFailedActionsBeforePause,
+		Observed: observed,
+		Message:  "failed action budget exhausted",
+	})
+	return paused, true, err
+}
+
+func countFailedToolActions(runtime JobRuntimeState) int {
+	count := 0
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != AuditActionClassToolCall || !event.Allowed || event.Result != AuditResultRejected {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func ResumePausedJobRuntime(current JobRuntimeState, now time.Time) (JobRuntimeState, error) {

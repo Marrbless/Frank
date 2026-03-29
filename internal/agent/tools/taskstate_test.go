@@ -434,6 +434,43 @@ func TestTaskStateEnforceUnattendedWallClockBudgetPausesRunningExecution(t *test
 	}
 }
 
+func TestTaskStateRecordFailedToolActionPausesAtBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	var exhausted bool
+	var err error
+	for i := 0; i < 5; i++ {
+		exhausted, err = state.RecordFailedToolAction("message", "message tool: 'content' argument required")
+		if err != nil {
+			t.Fatalf("RecordFailedToolAction() step %d error = %v", i, err)
+		}
+	}
+
+	if !exhausted {
+		t.Fatal("RecordFailedToolAction() exhausted = false, want true on threshold")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "failed_actions" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want failed_actions blocker", runtime.BudgetBlocker)
+	}
+	if len(runtime.AuditHistory) != 6 {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want 6", len(runtime.AuditHistory))
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 

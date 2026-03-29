@@ -154,6 +154,23 @@ func (p *writeMemoryToolCallProvider) Chat(ctx context.Context, messages []provi
 
 func (p *writeMemoryToolCallProvider) GetDefaultModel() string { return "test" }
 
+type repeatedFailingMessageToolProvider struct{}
+
+func (p *repeatedFailingMessageToolProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	return providers.LLMResponse{
+		HasToolCalls: true,
+		ToolCalls: []providers.ToolCall{
+			{ID: "1", Name: "message", Arguments: map[string]interface{}{}},
+			{ID: "2", Name: "message", Arguments: map[string]interface{}{}},
+			{ID: "3", Name: "message", Arguments: map[string]interface{}{}},
+			{ID: "4", Name: "message", Arguments: map[string]interface{}{}},
+			{ID: "5", Name: "message", Arguments: map[string]interface{}{}},
+		},
+	}, nil
+}
+
+func (p *repeatedFailingMessageToolProvider) GetDefaultModel() string { return "test" }
+
 type filesystemStaticArtifactProvider struct {
 	calls int
 }
@@ -1804,6 +1821,55 @@ func TestProcessDirectDoesNotExecuteToolAfterUnattendedWallClockBudgetIsExhauste
 	}
 	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "unattended_wall_clock" {
 		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want unattended_wall_clock blocker", runtime.BudgetBlocker)
+	}
+}
+
+func TestProcessDirectPausesAfterFailedActionBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &repeatedFailingMessageToolProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, t.TempDir(), nil)
+	job := testMissionJob([]string{"message"}, []string{"message"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("keep going", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Mission paused: failed action budget exhausted." {
+		t.Fatalf("ProcessDirect() response = %q, want failed-action budget response", resp)
+	}
+
+	select {
+	case out := <-b.Out:
+		t.Fatalf("unexpected outbound message despite failing message tool: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "failed_actions" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want failed_actions blocker", runtime.BudgetBlocker)
+	}
+	rejectedFailures := 0
+	for _, event := range runtime.AuditHistory {
+		if event.ActionClass == missioncontrol.AuditActionClassToolCall && event.Allowed && event.Result == missioncontrol.AuditResultRejected {
+			rejectedFailures++
+		}
+	}
+	if rejectedFailures != 5 {
+		t.Fatalf("MissionRuntimeState().failed rejected tool actions = %d, want 5", rejectedFailures)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want budget_exhausted", got)
 	}
 }
 
