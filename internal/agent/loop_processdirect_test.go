@@ -196,6 +196,32 @@ func (p *repeatedSuccessfulMessageToolProvider) Chat(ctx context.Context, messag
 
 func (p *repeatedSuccessfulMessageToolProvider) GetDefaultModel() string { return "test" }
 
+type finalResponseAfterNMessagesProvider struct {
+	calls    int
+	messages int
+}
+
+func (p *finalResponseAfterNMessagesProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	if p.calls >= p.messages {
+		return providers.LLMResponse{Content: "Done", HasToolCalls: false}, nil
+	}
+	p.calls++
+	return providers.LLMResponse{
+		HasToolCalls: true,
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   "1",
+				Name: "message",
+				Arguments: map[string]interface{}{
+					"content": "budget check",
+				},
+			},
+		},
+	}, nil
+}
+
+func (p *finalResponseAfterNMessagesProvider) GetDefaultModel() string { return "test" }
+
 type filesystemStaticArtifactProvider struct {
 	calls int
 }
@@ -269,10 +295,11 @@ func TestProcessDirectRejectsDisallowedToolWhenExecutionContextPresent(t *testin
 	}
 
 	audits := ag.taskState.AuditEvents()
-	if len(audits) != 1 {
-		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	if len(audits) != 2 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 2)
 	}
 	assertAuditEvent(t, audits[0], "job-1", "build", "message", false, missioncontrol.RejectionCode("E_INVALID_ACTION_FOR_STEP"))
+	assertAuditEvent(t, audits[1], "job-1", "build", "step_output", true, "")
 }
 
 func TestProcessDirectMissionRequiredWithoutExecutionContextRejectsToolCall(t *testing.T) {
@@ -349,10 +376,11 @@ func TestProcessDirectMissionRequiredWithActiveMissionStepAllowsTool(t *testing.
 	}
 
 	audits := ag.taskState.AuditEvents()
-	if len(audits) != 1 {
-		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 1)
+	if len(audits) != 2 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 2)
 	}
 	assertAuditEvent(t, audits[0], "job-1", "build", "write_memory", true, "")
+	assertAuditEvent(t, audits[1], "job-1", "build", "step_output", true, "")
 }
 
 func assertAuditEvent(t *testing.T, event missioncontrol.AuditEvent, wantJobID, wantStepID, wantAction string, wantAllowed bool, wantCode missioncontrol.RejectionCode) {
@@ -1953,6 +1981,74 @@ drained:
 	}
 	if appliedMessages != 20 {
 		t.Fatalf("MissionRuntimeState().applied message events = %d, want 20", appliedMessages)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want budget_exhausted", got)
+	}
+}
+
+func TestProcessDirectCountsFinalStepOutputTowardOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(32)
+	prov := &finalResponseAfterNMessagesProvider{messages: 19}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 25, t.TempDir(), nil)
+	job := testMissionJob([]string{"message"}, []string{"message"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("keep going", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Mission paused: owner-facing message budget exhausted." {
+		t.Fatalf("ProcessDirect() response = %q, want owner-message budget response", resp)
+	}
+
+	outbound := 0
+	for {
+		select {
+		case out := <-b.Out:
+			outbound++
+			if out.Content != "budget check" {
+				t.Fatalf("unexpected outbound message content: %#v", out)
+			}
+		default:
+			goto drainedFinalStepOutputBudget
+		}
+	}
+
+drainedFinalStepOutputBudget:
+	if outbound != 19 {
+		t.Fatalf("outbound message count = %d, want 19 before final step output budget pause", outbound)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	appliedMessages := 0
+	stepOutputs := 0
+	for _, event := range runtime.AuditHistory {
+		if event.ToolName == "message" && event.ActionClass == missioncontrol.AuditActionClassToolCall && event.Allowed && event.Result == missioncontrol.AuditResultApplied {
+			appliedMessages++
+		}
+		if event.ToolName == "step_output" && event.ActionClass == missioncontrol.AuditActionClassRuntime && event.Allowed && event.Result == missioncontrol.AuditResultApplied {
+			stepOutputs++
+		}
+	}
+	if appliedMessages != 19 {
+		t.Fatalf("MissionRuntimeState().applied message events = %d, want 19", appliedMessages)
+	}
+	if stepOutputs != 1 {
+		t.Fatalf("MissionRuntimeState().step output events = %d, want 1", stepOutputs)
 	}
 	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
 		t.Fatalf("MissionRuntimeState().last audit tool = %q, want budget_exhausted", got)

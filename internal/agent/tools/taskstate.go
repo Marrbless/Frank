@@ -270,6 +270,21 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 	}
 
 	now := time.Now()
+	runtimeWithOutput, exhausted, err := missioncontrol.RecordOwnerFacingStepOutput(*ec.Runtime, now)
+	if err != nil {
+		return err
+	}
+	if exhausted {
+		s.mu.Lock()
+		err = s.storeRuntimeStateLocked(ec.Job, runtimeWithOutput, nil)
+		s.mu.Unlock()
+		if err == nil {
+			s.notifyRuntimeChanged()
+		}
+		return err
+	}
+	ec.Runtime = &runtimeWithOutput
+
 	nextRuntime, err := missioncontrol.CompleteRuntimeStep(ec, now, missioncontrol.StepValidationInput{
 		FinalResponse:   finalContent,
 		SessionChannel:  operatorChannel,
@@ -277,6 +292,15 @@ func (s *TaskState) ApplyStepOutput(finalContent string, successfulTools []missi
 		SuccessfulTools: successfulTools,
 	})
 	if err != nil {
+		s.mu.Lock()
+		storeErr := s.storeRuntimeStateLocked(ec.Job, runtimeWithOutput, nil)
+		s.mu.Unlock()
+		if storeErr == nil {
+			s.notifyRuntimeChanged()
+		}
+		if storeErr != nil {
+			return storeErr
+		}
 		return err
 	}
 

@@ -30,6 +30,11 @@ const (
 )
 
 const (
+	ownerFacingMessageAction    = "message"
+	ownerFacingStepOutputAction = "step_output"
+)
+
+const (
 	RejectionCodeInvalidRuntimeState    RejectionCode = "invalid_runtime_state"
 	RejectionCodeResumeApprovalRequired RejectionCode = "resume_approval_required"
 	RejectionCodeValidationRequired     RejectionCode = "validation_required"
@@ -617,6 +622,14 @@ func RecordFailedToolAction(current JobRuntimeState, now time.Time, toolName str
 }
 
 func RecordOwnerFacingMessage(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	return recordOwnerFacingOutput(current, now, ownerFacingMessageAction, AuditActionClassToolCall)
+}
+
+func RecordOwnerFacingStepOutput(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	return recordOwnerFacingOutput(current, now, ownerFacingStepOutputAction, AuditActionClassRuntime)
+}
+
+func recordOwnerFacingOutput(current JobRuntimeState, now time.Time, action string, actionClass AuditActionClass) (JobRuntimeState, bool, error) {
 	if current.State != JobStateRunning {
 		return JobRuntimeState{}, false, ValidationError{
 			Code:    RejectionCodeInvalidRuntimeState,
@@ -641,8 +654,8 @@ func RecordOwnerFacingMessage(current JobRuntimeState, now time.Time) (JobRuntim
 	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
 		JobID:       next.JobID,
 		StepID:      next.ActiveStepID,
-		ToolName:    "message",
-		ActionClass: AuditActionClassToolCall,
+		ToolName:    action,
+		ActionClass: actionClass,
 		Result:      AuditResultApplied,
 		Allowed:     true,
 		Timestamp:   now,
@@ -682,10 +695,13 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		if runtime.JobID != "" && event.JobID != runtime.JobID {
 			continue
 		}
-		if event.ActionClass != AuditActionClassToolCall || !event.Allowed || event.Result != AuditResultApplied {
+		if !event.Allowed || event.Result != AuditResultApplied {
 			continue
 		}
-		if event.ToolName != "message" {
+		switch {
+		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingStepOutputAction:
+		default:
 			continue
 		}
 		count++
