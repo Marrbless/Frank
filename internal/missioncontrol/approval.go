@@ -290,8 +290,13 @@ func appendPendingApprovalRequest(current JobRuntimeState, now time.Time, reques
 
 func appendPendingApprovalRequestWithinBudget(current JobRuntimeState, now time.Time, request ApprovalRequest) (JobRuntimeState, bool, error) {
 	next, _ := RefreshApprovalRequests(current, now)
+	next = appendPendingApprovalRequest(next, now, request)
 	observed := countPendingApprovalRequests(next, request.JobID)
-	if observed >= maxPendingApprovalRequestsPerJob {
+	if observed <= maxPendingApprovalRequestsPerJob {
+		return next, false, nil
+	}
+
+	if observed > maxPendingApprovalRequestsPerJob {
 		paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
 			Ceiling:  "pending_approvals",
 			Limit:    maxPendingApprovalRequestsPerJob,
@@ -301,7 +306,7 @@ func appendPendingApprovalRequestWithinBudget(current JobRuntimeState, now time.
 		return paused, true, err
 	}
 
-	return appendPendingApprovalRequest(next, now, request), false, nil
+	return next, false, nil
 }
 
 func countPendingApprovalRequests(runtime JobRuntimeState, jobID string) int {

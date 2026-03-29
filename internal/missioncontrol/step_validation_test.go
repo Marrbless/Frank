@@ -120,11 +120,18 @@ func TestCompleteRuntimeStepAuthorizationPausesWhenPendingApprovalBudgetIsExhaus
 	if runtime.BudgetBlocker.Ceiling != "pending_approvals" {
 		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "pending_approvals")
 	}
-	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 3 {
-		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=3", runtime.BudgetBlocker)
+	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 4 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=4", runtime.BudgetBlocker)
 	}
-	if len(runtime.ApprovalRequests) != 3 {
-		t.Fatalf("ApprovalRequests = %#v, want unchanged three pending approvals", runtime.ApprovalRequests)
+	if len(runtime.ApprovalRequests) != 4 {
+		t.Fatalf("ApprovalRequests = %#v, want four pending approvals including the active step", runtime.ApprovalRequests)
+	}
+	latest := runtime.ApprovalRequests[len(runtime.ApprovalRequests)-1]
+	if latest.StepID != "discuss" || latest.State != ApprovalStatePending {
+		t.Fatalf("latest ApprovalRequest = %#v, want pending request for discuss", latest)
+	}
+	if latest.RequestedVia != ApprovalRequestedViaRuntime {
+		t.Fatalf("latest ApprovalRequest.RequestedVia = %q, want %q", latest.RequestedVia, ApprovalRequestedViaRuntime)
 	}
 	if len(runtime.AuditHistory) != 1 || runtime.AuditHistory[0].ToolName != "budget_exhausted" {
 		t.Fatalf("AuditHistory = %#v, want one budget_exhausted event", runtime.AuditHistory)
@@ -219,11 +226,18 @@ func TestCompleteRuntimeStepWaitUserAuthorizationPausesWhenPendingApprovalBudget
 	if runtime.BudgetBlocker.Ceiling != "pending_approvals" {
 		t.Fatalf("BudgetBlocker.Ceiling = %q, want %q", runtime.BudgetBlocker.Ceiling, "pending_approvals")
 	}
-	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 3 {
-		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=3", runtime.BudgetBlocker)
+	if runtime.BudgetBlocker.Limit != 3 || runtime.BudgetBlocker.Observed != 4 {
+		t.Fatalf("BudgetBlocker limits = %#v, want limit=3 observed=4", runtime.BudgetBlocker)
 	}
-	if len(runtime.ApprovalRequests) != 3 {
-		t.Fatalf("ApprovalRequests = %#v, want unchanged three pending approvals", runtime.ApprovalRequests)
+	if len(runtime.ApprovalRequests) != 4 {
+		t.Fatalf("ApprovalRequests = %#v, want four pending approvals including the active step", runtime.ApprovalRequests)
+	}
+	latest := runtime.ApprovalRequests[len(runtime.ApprovalRequests)-1]
+	if latest.StepID != "wait" || latest.State != ApprovalStatePending {
+		t.Fatalf("latest ApprovalRequest = %#v, want pending request for wait", latest)
+	}
+	if latest.RequestedVia != ApprovalRequestedViaRuntime {
+		t.Fatalf("latest ApprovalRequest.RequestedVia = %q, want %q", latest.RequestedVia, ApprovalRequestedViaRuntime)
 	}
 }
 

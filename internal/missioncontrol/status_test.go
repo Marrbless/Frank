@@ -116,6 +116,81 @@ func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testin
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesBudgetExhaustedApprovalForPausedActiveStep(t *testing.T) {
+	t.Parallel()
+
+	requestedAt := time.Date(2026, 3, 28, 12, 2, 0, 0, time.UTC)
+	triggeredAt := time.Date(2026, 3, 28, 12, 2, 30, 0, time.UTC)
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStatePaused,
+		ActiveStepID: "wait",
+		PausedReason: RuntimePauseReasonBudgetExhausted,
+		PausedAt:     triggeredAt,
+		BudgetBlocker: &RuntimeBudgetBlockerRecord{
+			Ceiling:     "pending_approvals",
+			Limit:       3,
+			Observed:    4,
+			Message:     "pending approval request budget exhausted",
+			TriggeredAt: triggeredAt,
+		},
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStatePending,
+				RequestedAt:     requestedAt.Add(-2 * time.Minute),
+			},
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-2",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStatePending,
+				RequestedAt:     requestedAt.Add(-time.Minute),
+			},
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-3",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStatePending,
+				RequestedAt:     requestedAt.Add(-30 * time.Second),
+			},
+			{
+				JobID:           "job-1",
+				StepID:          "wait",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				RequestedVia:    ApprovalRequestedViaRuntime,
+				State:           ApprovalStatePending,
+				RequestedAt:     requestedAt,
+				Content: &ApprovalRequestContent{
+					ProposedAction:   "Continue wait step.",
+					WhyNeeded:        "Operator approval is required before proceeding.",
+					AuthorityTier:    AuthorityTierLow,
+					FallbackIfDenied: "Keep the mission paused until an operator resolves the approval backlog.",
+				},
+			},
+		},
+	})
+
+	if summary.ApprovalRequest == nil {
+		t.Fatal("ApprovalRequest = nil, want pending request for paused active step")
+	}
+	if summary.ApprovalRequest.StepID != "wait" {
+		t.Fatalf("ApprovalRequest.StepID = %q, want %q", summary.ApprovalRequest.StepID, "wait")
+	}
+	if summary.ApprovalRequest.State != ApprovalStatePending {
+		t.Fatalf("ApprovalRequest.State = %q, want %q", summary.ApprovalRequest.State, ApprovalStatePending)
+	}
+	if summary.BudgetBlocker == nil || summary.BudgetBlocker.Observed != 4 {
+		t.Fatalf("BudgetBlocker = %#v, want pending-approval blocker with observed=4", summary.BudgetBlocker)
+	}
+}
+
 func TestBuildOperatorStatusSummaryIncludesGrantedApprovalBindingMetadata(t *testing.T) {
 	t.Parallel()
 
