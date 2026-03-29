@@ -32,6 +32,7 @@ const (
 const (
 	ownerFacingMessageAction    = "message"
 	ownerFacingStepOutputAction = "step_output"
+	ownerFacingSetStepAckAction = "set_step_ack"
 )
 
 const (
@@ -629,6 +630,10 @@ func RecordOwnerFacingStepOutput(current JobRuntimeState, now time.Time) (JobRun
 	return recordOwnerFacingOutput(current, now, ownerFacingStepOutputAction, AuditActionClassRuntime)
 }
 
+func RecordOwnerFacingSetStepAck(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	return recordOwnerFacingOutput(current, now, ownerFacingSetStepAckAction, AuditActionClassRuntime)
+}
+
 func recordOwnerFacingOutput(current JobRuntimeState, now time.Time, action string, actionClass AuditActionClass) (JobRuntimeState, bool, error) {
 	if current.State != JobStateRunning {
 		return JobRuntimeState{}, false, ValidationError{
@@ -701,6 +706,7 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		switch {
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingStepOutputAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingSetStepAckAction:
 		default:
 			continue
 		}

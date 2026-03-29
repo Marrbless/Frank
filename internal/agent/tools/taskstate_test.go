@@ -558,6 +558,58 @@ func TestTaskStateApplyStepOutputPausesAtOwnerMessageBudget(t *testing.T) {
 	}
 }
 
+func TestTaskStateRecordOwnerFacingSetStepAckPausesAtOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(build) error = %v", err)
+	}
+
+	for i := 0; i < 19; i++ {
+		exhausted, err := state.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before set-step acknowledgement", i)
+		}
+	}
+
+	if err := state.ActivateStep(job, "final"); err != nil {
+		t.Fatalf("ActivateStep(final) error = %v", err)
+	}
+
+	exhausted, err := state.RecordOwnerFacingSetStepAck()
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingSetStepAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingSetStepAck() exhausted = false, want true at threshold")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "set_step_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "set_step_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 

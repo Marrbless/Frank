@@ -175,6 +175,28 @@ func recordOwnerFacingMessage(taskState *tools.TaskState, toolName string) (stri
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingSetStepAck()
+	if err != nil {
+		log.Printf("mission runtime set-step acknowledgement accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -691,7 +713,13 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			}
 		}
 		response, err := a.operatorSetStepHook(setStepMatches[2], setStepMatches[3])
-		return true, response, err
+		if err != nil {
+			return true, response, err
+		}
+		if budgetResponse, blocked := recordOperatorSetStepAcknowledgement(a.taskState); blocked {
+			return true, budgetResponse, nil
+		}
+		return true, response, nil
 	}
 
 	inspectMatches := inspectCommandRE.FindStringSubmatch(trimmed)

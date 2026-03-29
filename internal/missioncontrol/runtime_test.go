@@ -548,6 +548,50 @@ func TestRecordFailedToolActionPausesAtCeiling(t *testing.T) {
 	}
 }
 
+func TestRecordOwnerFacingSetStepAckPausesAtCeiling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "final",
+	}
+	for i := 0; i < 19; i++ {
+		next, exhausted, err := RecordOwnerFacingMessage(runtime, now.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before set-step acknowledgement", i)
+		}
+		runtime = next
+	}
+
+	runtime, exhausted, err := RecordOwnerFacingSetStepAck(runtime, now.Add(19*time.Second))
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingSetStepAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingSetStepAck() exhausted = false, want true at threshold")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != ownerMessagesBudgetCeiling {
+		t.Fatalf("BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != ownerFacingSetStepAckAction {
+		t.Fatalf("penultimate audit tool = %q, want %q", got, ownerFacingSetStepAckAction)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestRecordOwnerFacingMessagePausesAtCeiling(t *testing.T) {
 	t.Parallel()
 

@@ -2141,6 +2141,65 @@ drainedFinalStepOutputBudget:
 	}
 }
 
+func TestProcessDirectCountsSetStepAcknowledgementTowardOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+	for i := 0; i < 19; i++ {
+		exhausted, err := ag.taskState.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before set-step acknowledgement", i)
+		}
+	}
+
+	ag.SetOperatorSetStepHook(func(jobID string, stepID string) (string, error) {
+		if err := ag.ActivateMissionStep(job, stepID); err != nil {
+			return "", err
+		}
+		return "Set step job=job-1 step=final.", nil
+	})
+
+	resp, err := ag.ProcessDirect("SET_STEP job-1 final", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(SET_STEP) error = %v", err)
+	}
+	if !strings.Contains(resp, "Mission paused: owner-facing message budget exhausted.") {
+		t.Fatalf("ProcessDirect(SET_STEP) response = %q, want owner-message budget response", resp)
+	}
+	if !strings.Contains(resp, "\n\nMission summary:\nPending steps: build") {
+		t.Fatalf("ProcessDirect(SET_STEP) response = %q, want deterministic mission summary for final step", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "final" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "final")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "set_step_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "set_step_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
 	t.Parallel()
 
