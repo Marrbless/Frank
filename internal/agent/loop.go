@@ -153,6 +153,28 @@ func recordFailedToolAction(taskState *tools.TaskState, toolName string, toolErr
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOwnerFacingMessage(taskState *tools.TaskState, toolName string) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok || toolName != "message" {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingMessage()
+	if err != nil {
+		log.Printf("mission runtime owner-message accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -493,6 +515,10 @@ func (a *AgentLoop) Run(ctx context.Context) {
 								Arguments: cloneToolArguments(tc.Arguments),
 								Result:    res,
 							})
+							if budgetResponse, blocked := recordOwnerFacingMessage(a.taskState, tc.Name); blocked {
+								finalContent = budgetResponse
+								break
+							}
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
 								fmt.Sprintf("📢 %s done (%s)", tc.Name, elapsed))
 						}
@@ -633,6 +659,9 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 					Arguments: cloneToolArguments(tc.Arguments),
 					Result:    result,
 				})
+				if budgetResponse, blocked := recordOwnerFacingMessage(a.taskState, tc.Name); blocked {
+					return budgetResponse, nil
+				}
 			}
 			lastToolResult = result
 			messages = append(messages, providers.Message{

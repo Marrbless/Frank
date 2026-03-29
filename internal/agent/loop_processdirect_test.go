@@ -171,6 +171,31 @@ func (p *repeatedFailingMessageToolProvider) Chat(ctx context.Context, messages 
 
 func (p *repeatedFailingMessageToolProvider) GetDefaultModel() string { return "test" }
 
+type repeatedSuccessfulMessageToolProvider struct {
+	calls int
+}
+
+func (p *repeatedSuccessfulMessageToolProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	if p.calls >= 20 {
+		return providers.LLMResponse{Content: "Done", HasToolCalls: false}, nil
+	}
+	p.calls++
+	return providers.LLMResponse{
+		HasToolCalls: true,
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   "1",
+				Name: "message",
+				Arguments: map[string]interface{}{
+					"content": "budget check",
+				},
+			},
+		},
+	}, nil
+}
+
+func (p *repeatedSuccessfulMessageToolProvider) GetDefaultModel() string { return "test" }
+
 type filesystemStaticArtifactProvider struct {
 	calls int
 }
@@ -1867,6 +1892,67 @@ func TestProcessDirectPausesAfterFailedActionBudgetIsExhausted(t *testing.T) {
 	}
 	if rejectedFailures != 5 {
 		t.Fatalf("MissionRuntimeState().failed rejected tool actions = %d, want 5", rejectedFailures)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want budget_exhausted", got)
+	}
+}
+
+func TestProcessDirectPausesAfterOwnerMessageBudgetIsExhausted(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(32)
+	prov := &repeatedSuccessfulMessageToolProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 25, t.TempDir(), nil)
+	job := testMissionJob([]string{"message"}, []string{"message"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("keep going", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Mission paused: owner-facing message budget exhausted." {
+		t.Fatalf("ProcessDirect() response = %q, want owner-message budget response", resp)
+	}
+
+	outbound := 0
+	for {
+		select {
+		case out := <-b.Out:
+			outbound++
+			if out.Content != "budget check" {
+				t.Fatalf("unexpected outbound message content: %#v", out)
+			}
+		default:
+			goto drained
+		}
+	}
+
+drained:
+	if outbound != 20 {
+		t.Fatalf("outbound message count = %d, want 20", outbound)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	appliedMessages := 0
+	for _, event := range runtime.AuditHistory {
+		if event.ToolName == "message" && event.ActionClass == missioncontrol.AuditActionClassToolCall && event.Allowed && event.Result == missioncontrol.AuditResultApplied {
+			appliedMessages++
+		}
+	}
+	if appliedMessages != 20 {
+		t.Fatalf("MissionRuntimeState().applied message events = %d, want 20", appliedMessages)
 	}
 	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
 		t.Fatalf("MissionRuntimeState().last audit tool = %q, want budget_exhausted", got)

@@ -23,6 +23,8 @@ const (
 	unattendedWallClockBudgetCeiling      = "unattended_wall_clock"
 	maxUnattendedWallClockPerJob          = 4 * time.Hour
 	maxUnattendedWallClockPerJobInMinutes = int(maxUnattendedWallClockPerJob / time.Minute)
+	ownerMessagesBudgetCeiling            = "owner_messages"
+	maxOwnerFacingMessagesPerJob          = 20
 	failedActionsBudgetCeiling            = "failed_actions"
 	maxFailedActionsBeforePause           = 5
 )
@@ -614,6 +616,52 @@ func RecordFailedToolAction(current JobRuntimeState, now time.Time, toolName str
 	return paused, true, err
 }
 
+func RecordOwnerFacingMessage(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	if current.State != JobStateRunning {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("owner-facing message budget requires running runtime state, got %q", current.State),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "owner-facing message budget requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "owner-facing message budget requires an active step",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    "message",
+		ActionClass: AuditActionClassToolCall,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   now,
+	})
+
+	observed := countOwnerFacingMessages(next)
+	if observed < maxOwnerFacingMessagesPerJob {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  ownerMessagesBudgetCeiling,
+		Limit:    maxOwnerFacingMessagesPerJob,
+		Observed: observed,
+		Message:  "owner-facing message budget exhausted",
+	})
+	return paused, true, err
+}
+
 func countFailedToolActions(runtime JobRuntimeState) int {
 	count := 0
 	for _, event := range runtime.AuditHistory {
@@ -621,6 +669,23 @@ func countFailedToolActions(runtime JobRuntimeState) int {
 			continue
 		}
 		if event.ActionClass != AuditActionClassToolCall || !event.Allowed || event.Result != AuditResultRejected {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func countOwnerFacingMessages(runtime JobRuntimeState) int {
+	count := 0
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != AuditActionClassToolCall || !event.Allowed || event.Result != AuditResultApplied {
+			continue
+		}
+		if event.ToolName != "message" {
 			continue
 		}
 		count++

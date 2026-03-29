@@ -471,6 +471,43 @@ func TestTaskStateRecordFailedToolActionPausesAtBudget(t *testing.T) {
 	}
 }
 
+func TestTaskStateRecordOwnerFacingMessagePausesAtBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	var exhausted bool
+	var err error
+	for i := 0; i < 20; i++ {
+		exhausted, err = state.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+	}
+
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingMessage() exhausted = false, want true on threshold")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if len(runtime.AuditHistory) != 21 {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want 21", len(runtime.AuditHistory))
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 
