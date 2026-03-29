@@ -610,6 +610,61 @@ func TestTaskStateRecordOwnerFacingSetStepAckPausesAtOwnerMessageBudget(t *testi
 	}
 }
 
+func TestTaskStateRecordOwnerFacingResumeAckPausesAtOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(build) error = %v", err)
+	}
+
+	for i := 0; i < 19; i++ {
+		exhausted, err := state.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before resume acknowledgement", i)
+		}
+	}
+
+	if err := state.PauseRuntime(job.ID); err != nil {
+		t.Fatalf("PauseRuntime() error = %v", err)
+	}
+	if err := state.ResumeRuntimeControl(job.ID); err != nil {
+		t.Fatalf("ResumeRuntimeControl() error = %v", err)
+	}
+
+	exhausted, err := state.RecordOwnerFacingResumeAck()
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingResumeAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingResumeAck() exhausted = false, want true at threshold")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "resume_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "resume_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 

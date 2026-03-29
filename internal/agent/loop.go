@@ -197,6 +197,28 @@ func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, b
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOperatorResumeAcknowledgement(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingResumeAck()
+	if err != nil {
+		log.Printf("mission runtime resume acknowledgement accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -763,6 +785,11 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 		}
 		if err != nil {
 			return true, "", err
+		}
+		if action == "resume" {
+			if budgetResponse, blocked := recordOperatorResumeAcknowledgement(a.taskState); blocked {
+				return true, budgetResponse, nil
+			}
 		}
 
 		verb := strings.ToUpper(action[:1]) + action[1:] + "d"
