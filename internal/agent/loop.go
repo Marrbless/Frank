@@ -197,6 +197,28 @@ func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, b
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOperatorRevokeApprovalAcknowledgement(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingRevokeApprovalAck()
+	if err != nil {
+		log.Printf("mission runtime revoke-approval acknowledgement accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 func recordOperatorResumeAcknowledgement(taskState *tools.TaskState) (string, bool) {
 	ec, ok := currentExecutionContext(taskState)
 	if taskState == nil || !ok {
@@ -756,6 +778,9 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 		stepID := revokeMatches[3]
 		if err := a.taskState.RevokeApproval(jobID, stepID); err != nil {
 			return true, "", err
+		}
+		if budgetResponse, blocked := recordOperatorRevokeApprovalAcknowledgement(a.taskState); blocked {
+			return true, budgetResponse, nil
 		}
 		return true, fmt.Sprintf("Revoked approval job=%s step=%s.", jobID, stepID), nil
 	}

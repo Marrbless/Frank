@@ -644,6 +644,50 @@ func TestRecordOwnerFacingResumeAckPausesAtCeiling(t *testing.T) {
 	}
 }
 
+func TestRecordOwnerFacingRevokeApprovalAckPausesAtCeiling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 29, 12, 45, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "authorize-2",
+	}
+	for i := 0; i < 19; i++ {
+		next, exhausted, err := RecordOwnerFacingMessage(runtime, now.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before revoke acknowledgement", i)
+		}
+		runtime = next
+	}
+
+	runtime, exhausted, err := RecordOwnerFacingRevokeApprovalAck(runtime, now.Add(19*time.Second))
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingRevokeApprovalAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingRevokeApprovalAck() exhausted = false, want true at threshold")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.ActiveStepID != "authorize-2" {
+		t.Fatalf("ActiveStepID = %q, want %q", runtime.ActiveStepID, "authorize-2")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != ownerMessagesBudgetCeiling {
+		t.Fatalf("BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != ownerFacingRevokeAckAction {
+		t.Fatalf("penultimate audit tool = %q, want %q", got, ownerFacingRevokeAckAction)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestRecordOwnerFacingMessagePausesAtCeiling(t *testing.T) {
 	t.Parallel()
 

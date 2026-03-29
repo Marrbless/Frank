@@ -2259,6 +2259,86 @@ func TestProcessDirectCountsResumeAcknowledgementTowardOwnerMessageBudget(t *tes
 	}
 }
 
+func TestProcessDirectCountsRevokeApprovalAcknowledgementTowardOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testReusableApprovalMissionJob(missioncontrol.ApprovalScopeOneJob)
+	now := time.Now().UTC()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "authorize-2",
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []missioncontrol.ApprovalGrant{
+			{
+				JobID:           job.ID,
+				StepID:          "authorize-1",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeOneJob,
+				GrantedVia:      missioncontrol.ApprovalGrantedViaOperatorCommand,
+				State:           missioncontrol.ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}
+	if err := ag.taskState.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+	for i := 0; i < 19; i++ {
+		exhausted, err := ag.taskState.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before revoke acknowledgement", i)
+		}
+	}
+
+	resp, err := ag.ProcessDirect("REVOKE_APPROVAL job-1 authorize-2", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(REVOKE_APPROVAL) error = %v", err)
+	}
+	if resp != "Mission paused: owner-facing message budget exhausted." {
+		t.Fatalf("ProcessDirect(REVOKE_APPROVAL) response = %q, want owner-message budget response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "authorize-2" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "authorize-2")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "revoke_approval_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "revoke_approval_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
 	t.Parallel()
 
