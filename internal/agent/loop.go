@@ -197,6 +197,28 @@ func recordOperatorDenyAcknowledgement(taskState *tools.TaskState) (string, bool
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOperatorPauseAcknowledgement(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingPauseAck()
+	if err != nil {
+		log.Printf("mission runtime pause acknowledgement accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, bool) {
 	ec, ok := currentExecutionContext(taskState)
 	if taskState == nil || !ok {
@@ -832,6 +854,11 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 		}
 		if err != nil {
 			return true, "", err
+		}
+		if action == "pause" {
+			if budgetResponse, blocked := recordOperatorPauseAcknowledgement(a.taskState); blocked {
+				return true, budgetResponse, nil
+			}
 		}
 		if action == "resume" {
 			if budgetResponse, blocked := recordOperatorResumeAcknowledgement(a.taskState); blocked {

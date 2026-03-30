@@ -32,6 +32,7 @@ const (
 const (
 	ownerFacingDenyAckAction    = "deny_ack"
 	ownerFacingMessageAction    = "message"
+	ownerFacingPauseAckAction   = "pause_ack"
 	ownerFacingRevokeAckAction  = "revoke_approval_ack"
 	ownerFacingStepOutputAction = "step_output"
 	ownerFacingResumeAckAction  = "resume_ack"
@@ -675,6 +676,52 @@ func RecordOwnerFacingDenyAck(current JobRuntimeState, now time.Time) (JobRuntim
 	return paused, true, err
 }
 
+func RecordOwnerFacingPauseAck(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	if current.State != JobStatePaused {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("pause acknowledgement budget requires paused runtime state, got %q", current.State),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "pause acknowledgement budget requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "pause acknowledgement budget requires an active step",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    ownerFacingPauseAckAction,
+		ActionClass: AuditActionClassRuntime,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   now,
+	})
+
+	observed := countOwnerFacingMessages(next)
+	if observed < maxOwnerFacingMessagesPerJob {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  ownerMessagesBudgetCeiling,
+		Limit:    maxOwnerFacingMessagesPerJob,
+		Observed: observed,
+		Message:  "owner-facing message budget exhausted",
+	})
+	return paused, true, err
+}
+
 func RecordOwnerFacingRevokeApprovalAck(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
 	return recordOwnerFacingOutput(current, now, ownerFacingRevokeAckAction, AuditActionClassRuntime)
 }
@@ -763,6 +810,7 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		switch {
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDenyAckAction:
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingPauseAckAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingRevokeAckAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingStepOutputAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingResumeAckAction:

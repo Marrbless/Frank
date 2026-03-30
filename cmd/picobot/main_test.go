@@ -2833,18 +2833,29 @@ func TestMissionStatusSnapshotWritePersistsAuditHistory(t *testing.T) {
 	if got.Runtime.State != missioncontrol.JobStatePaused {
 		t.Fatalf("Runtime.State = %q, want %q", got.Runtime.State, missioncontrol.JobStatePaused)
 	}
-	if len(got.Runtime.AuditHistory) != 1 {
-		t.Fatalf("Runtime.AuditHistory count = %d, want 1", len(got.Runtime.AuditHistory))
+	if len(got.Runtime.AuditHistory) != 2 {
+		t.Fatalf("Runtime.AuditHistory count = %d, want 2", len(got.Runtime.AuditHistory))
 	}
 	expectedAudit := missioncontrol.AppendAuditHistory(nil, missioncontrol.AuditEvent{
-		JobID:     "job-1",
-		StepID:    "build",
-		ToolName:  "pause",
-		Allowed:   true,
-		Timestamp: got.Runtime.AuditHistory[0].Timestamp,
+		JobID:       "job-1",
+		StepID:      "build",
+		ToolName:    "pause",
+		ActionClass: missioncontrol.AuditActionClassOperatorCommand,
+		Result:      missioncontrol.AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   got.Runtime.AuditHistory[0].Timestamp,
+	})
+	expectedAudit = missioncontrol.AppendAuditHistory(expectedAudit, missioncontrol.AuditEvent{
+		JobID:       "job-1",
+		StepID:      "build",
+		ToolName:    "pause_ack",
+		ActionClass: missioncontrol.AuditActionClassRuntime,
+		Result:      missioncontrol.AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   got.Runtime.AuditHistory[1].Timestamp,
 	})
 	if !reflect.DeepEqual(got.Runtime.AuditHistory, expectedAudit) {
-		t.Fatalf("Runtime.AuditHistory = %#v, want one persisted pause audit", got.Runtime.AuditHistory)
+		t.Fatalf("Runtime.AuditHistory = %#v, want persisted pause and pause_ack audits", got.Runtime.AuditHistory)
 	}
 }
 

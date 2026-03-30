@@ -816,22 +816,24 @@ func TestProcessDirectPauseResumeAbortCommandsControlActiveJob(t *testing.T) {
 	if runtime.State != missioncontrol.JobStateAborted {
 		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateAborted)
 	}
-	if len(runtime.AuditHistory) != 4 {
-		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want %d", len(runtime.AuditHistory), 4)
+	if len(runtime.AuditHistory) != 5 {
+		t.Fatalf("MissionRuntimeState().AuditHistory count = %d, want %d", len(runtime.AuditHistory), 5)
 	}
 	assertAuditEvent(t, runtime.AuditHistory[0], "job-1", "build", "pause", true, "")
-	assertAuditEvent(t, runtime.AuditHistory[1], "job-1", "build", "resume", true, "")
-	assertAuditEvent(t, runtime.AuditHistory[2], "job-1", "build", "resume_ack", true, "")
-	assertAuditEvent(t, runtime.AuditHistory[3], "job-1", "build", "abort", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[1], "job-1", "build", "pause_ack", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[2], "job-1", "build", "resume", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[3], "job-1", "build", "resume_ack", true, "")
+	assertAuditEvent(t, runtime.AuditHistory[4], "job-1", "build", "abort", true, "")
 
 	audits := ag.taskState.AuditEvents()
-	if len(audits) != 4 {
-		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 4)
+	if len(audits) != 5 {
+		t.Fatalf("AuditEvents() count = %d, want %d", len(audits), 5)
 	}
 	assertAuditEvent(t, audits[0], "job-1", "build", "pause", true, "")
-	assertAuditEvent(t, audits[1], "job-1", "build", "resume", true, "")
-	assertAuditEvent(t, audits[2], "job-1", "build", "resume_ack", true, "")
-	assertAuditEvent(t, audits[3], "job-1", "build", "abort", true, "")
+	assertAuditEvent(t, audits[1], "job-1", "build", "pause_ack", true, "")
+	assertAuditEvent(t, audits[2], "job-1", "build", "resume", true, "")
+	assertAuditEvent(t, audits[3], "job-1", "build", "resume_ack", true, "")
+	assertAuditEvent(t, audits[4], "job-1", "build", "abort", true, "")
 }
 
 func TestProcessDirectStatusCommandReturnsDeterministicSummary(t *testing.T) {
@@ -2212,7 +2214,7 @@ func TestProcessDirectCountsResumeAcknowledgementTowardOwnerMessageBudget(t *tes
 	if err := ag.ActivateMissionStep(job, "build"); err != nil {
 		t.Fatalf("ActivateMissionStep(build) error = %v", err)
 	}
-	for i := 0; i < 19; i++ {
+	for i := 0; i < 18; i++ {
 		exhausted, err := ag.taskState.RecordOwnerFacingMessage()
 		if err != nil {
 			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
@@ -2253,6 +2255,55 @@ func TestProcessDirectCountsResumeAcknowledgementTowardOwnerMessageBudget(t *tes
 	}
 	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "resume_ack" {
 		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "resume_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
+func TestProcessDirectCountsPauseAcknowledgementTowardOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+	for i := 0; i < 19; i++ {
+		exhausted, err := ag.taskState.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before pause acknowledgement", i)
+		}
+	}
+
+	resp, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+	if resp != "Mission paused: owner-facing message budget exhausted." {
+		t.Fatalf("ProcessDirect(PAUSE) response = %q, want owner-message budget response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "pause_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "pause_ack")
 	}
 	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
 		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
