@@ -688,6 +688,58 @@ func TestRecordOwnerFacingRevokeApprovalAckPausesAtCeiling(t *testing.T) {
 	}
 }
 
+func TestRecordOwnerFacingDenyAckPausesWaitingRuntimeAtCeiling(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 29, 13, 0, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+	for i := 0; i < 19; i++ {
+		next, exhausted, err := RecordOwnerFacingMessage(runtime, now.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before deny acknowledgement", i)
+		}
+		runtime = next
+	}
+
+	waiting, err := TransitionJobRuntime(runtime, JobStateWaitingUser, now.Add(19*time.Second), RuntimeTransitionOptions{
+		StepID:        "build",
+		WaitingReason: "discussion_authorization",
+	})
+	if err != nil {
+		t.Fatalf("TransitionJobRuntime(waiting_user) error = %v", err)
+	}
+
+	runtime, exhausted, err := RecordOwnerFacingDenyAck(waiting, now.Add(20*time.Second))
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingDenyAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingDenyAck() exhausted = false, want true at threshold")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != ownerMessagesBudgetCeiling {
+		t.Fatalf("BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != ownerFacingDenyAckAction {
+		t.Fatalf("penultimate audit tool = %q, want %q", got, ownerFacingDenyAckAction)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestRecordOwnerFacingMessagePausesAtCeiling(t *testing.T) {
 	t.Parallel()
 

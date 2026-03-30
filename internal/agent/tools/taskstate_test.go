@@ -747,6 +747,65 @@ func TestTaskStateRecordOwnerFacingRevokeApprovalAckPausesAtOwnerMessageBudget(t
 	}
 }
 
+func TestTaskStateRecordOwnerFacingDenyAckPausesAtOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0] = missioncontrol.Step{
+		ID:      "build",
+		Type:    missioncontrol.StepTypeDiscussion,
+		Subtype: missioncontrol.StepSubtypeAuthorization,
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	for i := 0; i < 18; i++ {
+		exhausted, err := state.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before deny acknowledgement", i)
+		}
+	}
+	if err := state.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+	if err := state.ApplyApprovalDecision("job-1", "build", missioncontrol.ApprovalDecisionDeny, missioncontrol.ApprovalGrantedViaOperatorCommand); err != nil {
+		t.Fatalf("ApplyApprovalDecision() error = %v", err)
+	}
+
+	exhausted, err := state.RecordOwnerFacingDenyAck()
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingDenyAck() error = %v", err)
+	}
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingDenyAck() exhausted = false, want true at threshold")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "deny_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "deny_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedStaticArtifactStep(t *testing.T) {
 	t.Parallel()
 

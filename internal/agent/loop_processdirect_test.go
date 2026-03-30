@@ -2339,6 +2339,58 @@ func TestProcessDirectCountsRevokeApprovalAcknowledgementTowardOwnerMessageBudge
 	}
 }
 
+func TestProcessDirectCountsDenyAcknowledgementTowardOwnerMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	job := testDiscussionMissionJob()
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep(build) error = %v", err)
+	}
+	for i := 0; i < 18; i++ {
+		exhausted, err := ag.taskState.RecordOwnerFacingMessage()
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingMessage() step %d error = %v", i, err)
+		}
+		if exhausted {
+			t.Fatalf("RecordOwnerFacingMessage() step %d exhausted = true, want false before deny acknowledgement", i)
+		}
+	}
+	if err := ag.taskState.ApplyStepOutput("Waiting for approval.", nil); err != nil {
+		t.Fatalf("ApplyStepOutput() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("DENY job-1 build", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(DENY) error = %v", err)
+	}
+	if resp != "Mission paused: owner-facing message budget exhausted." {
+		t.Fatalf("ProcessDirect(DENY) response = %q, want owner-message budget response", resp)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != "owner_messages" {
+		t.Fatalf("MissionRuntimeState().BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-2].ToolName; got != "deny_ack" {
+		t.Fatalf("MissionRuntimeState().penultimate audit tool = %q, want %q", got, "deny_ack")
+	}
+	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "budget_exhausted" {
+		t.Fatalf("MissionRuntimeState().last audit tool = %q, want %q", got, "budget_exhausted")
+	}
+}
+
 func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
 	t.Parallel()
 

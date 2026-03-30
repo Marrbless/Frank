@@ -175,6 +175,28 @@ func recordOwnerFacingMessage(taskState *tools.TaskState, toolName string) (stri
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func recordOperatorDenyAcknowledgement(taskState *tools.TaskState) (string, bool) {
+	ec, ok := currentExecutionContext(taskState)
+	if taskState == nil || !ok {
+		return "", false
+	}
+
+	exhausted, err := taskState.RecordOwnerFacingDenyAck()
+	if err != nil {
+		log.Printf("mission runtime deny acknowledgement accounting failed: %v", err)
+		return "", false
+	}
+	if !exhausted {
+		return "", false
+	}
+
+	runtime, ok := taskState.MissionRuntimeState()
+	if !ok {
+		return "Mission paused: budget exhausted.", true
+	}
+	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
 func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, bool) {
 	ec, ok := currentExecutionContext(taskState)
 	if taskState == nil || !ok {
@@ -835,6 +857,9 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 
 	verb := "Approved"
 	if decision == missioncontrol.ApprovalDecisionDeny {
+		if budgetResponse, blocked := recordOperatorDenyAcknowledgement(a.taskState); blocked {
+			return true, budgetResponse, nil
+		}
 		verb = "Denied"
 	}
 	return true, fmt.Sprintf("%s job=%s step=%s.", verb, jobID, stepID), nil
