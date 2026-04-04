@@ -795,8 +795,19 @@ func addMissionBootstrapFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("mission-required", false, "Require an active mission step before tool execution")
 	cmd.Flags().String("mission-file", "", "Path to a mission job JSON file to activate at startup")
 	cmd.Flags().String("mission-step", "", "Mission step ID to activate from the mission file")
+	cmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
 	cmd.Flags().String("mission-status-file", "", "Path to write a mission status snapshot after startup")
 	cmd.Flags().Bool("mission-resume-approved", false, "Approve resuming a persisted mission runtime after reboot")
+}
+
+func resolveMissionStoreRoot(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+
+	storeRoot, _ := cmd.Flags().GetString("mission-store-root")
+	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	return missioncontrol.ResolveStoreRoot(storeRoot, statusFile)
 }
 
 func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
