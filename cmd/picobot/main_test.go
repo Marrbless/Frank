@@ -221,6 +221,37 @@ func TestMissionStatusCommandWithActiveStepFieldsPrintsExpectedJSON(t *testing.T
 	}
 }
 
+func TestMissionStatusCommandUsesSharedObservationReader(t *testing.T) {
+	original := loadMissionStatusObservationFile
+	t.Cleanup(func() { loadMissionStatusObservationFile = original })
+
+	want := []byte("{\"job_id\":\"job-1\"}\n")
+	called := 0
+	loadMissionStatusObservationFile = func(path string) ([]byte, error) {
+		called++
+		if path != "status.json" {
+			t.Fatalf("shared observation path = %q, want %q", path, "status.json")
+		}
+		return want, nil
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "status", "--status-file", "status.json"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("shared observation calls = %d, want 1", called)
+	}
+	if out.String() != string(want) {
+		t.Fatalf("stdout = %q, want %q", out.String(), string(want))
+	}
+}
+
 func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	job := missioncontrol.Job{
 		ID:           "job-1",
@@ -1228,6 +1259,36 @@ func TestMissionAssertCommandWithInvalidJSONReturnsClearError(t *testing.T) {
 	}
 }
 
+func TestMissionAssertCommandUsesSharedObservationReader(t *testing.T) {
+	original := loadMissionStatusObservation
+	t.Cleanup(func() { loadMissionStatusObservation = original })
+
+	called := 0
+	loadMissionStatusObservation = func(path string) (missioncontrol.MissionStatusSnapshot, error) {
+		called++
+		if path != "status.json" {
+			t.Fatalf("shared observation path = %q, want %q", path, "status.json")
+		}
+		return missioncontrol.MissionStatusSnapshot{
+			Active: true,
+			JobID:  "job-1",
+			StepID: "build",
+		}, nil
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert", "--status-file", "status.json", "--job-id", "job-1", "--step-id", "build", "--active=true"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("shared observation calls = %d, want 1", called)
+	}
+}
+
 func TestMissionAssertCommandNoToolsAndHasToolReturnsClearArgumentError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	writeMissionStatusSnapshotFile(t, path, missionStatusSnapshot{
@@ -2141,6 +2202,57 @@ func TestMissionSetStepCommandWithNoPriorValidStatusSnapshotSucceedsWhenMatching
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("status update error = %v", err)
+	}
+
+	control := readMissionStepControlFile(t, controlPath)
+	if control.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", control.StepID, "final")
+	}
+}
+
+func TestMissionSetStepCommandConfirmationUsesSharedObservationReader(t *testing.T) {
+	original := loadMissionStatusObservation
+	t.Cleanup(func() { loadMissionStatusObservation = original })
+
+	controlPath := filepath.Join(t.TempDir(), "control.json")
+	called := 0
+	loadMissionStatusObservation = func(path string) (missioncontrol.MissionStatusSnapshot, error) {
+		called++
+		if path != "status.json" {
+			t.Fatalf("shared observation path = %q, want %q", path, "status.json")
+		}
+		switch called {
+		case 1:
+			return missioncontrol.MissionStatusSnapshot{
+				Active:    true,
+				StepID:    "build",
+				UpdatedAt: "2026-03-20T12:00:00Z",
+			}, nil
+		default:
+			return missioncontrol.MissionStatusSnapshot{
+				Active:    true,
+				StepID:    "final",
+				UpdatedAt: "2026-03-20T12:00:01Z",
+			}, nil
+		}
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "set-step",
+		"--control-file", controlPath,
+		"--step-id", "final",
+		"--status-file", "status.json",
+		"--wait-timeout", "75ms",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if called < 2 {
+		t.Fatalf("shared observation calls = %d, want at least 2", called)
 	}
 
 	control := readMissionStepControlFile(t, controlPath)
@@ -7079,6 +7191,93 @@ func TestLoadPersistedMissionRuntimeUsesSnapshotWhenStoreRootUnconfigured(t *tes
 	}
 }
 
+func TestLoadPersistedMissionRuntimeSnapshotUsesSharedLegacyHelper(t *testing.T) {
+	job := testMissionBootstrapJob()
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+
+	original := loadValidatedLegacyMissionStatusSnapshot
+	t.Cleanup(func() { loadValidatedLegacyMissionStatusSnapshot = original })
+	called := 0
+	loadValidatedLegacyMissionStatusSnapshot = func(path string, jobID string) (missioncontrol.MissionStatusSnapshot, bool, error) {
+		called++
+		if path != statusFile {
+			t.Fatalf("legacy helper path = %q, want %q", path, statusFile)
+		}
+		if jobID != job.ID {
+			t.Fatalf("legacy helper jobID = %q, want %q", jobID, job.ID)
+		}
+		return missioncontrol.MissionStatusSnapshot{
+			JobID:  job.ID,
+			StepID: "build",
+			Runtime: &missioncontrol.JobRuntimeState{
+				JobID:        job.ID,
+				State:        missioncontrol.JobStatePaused,
+				ActiveStepID: "build",
+			},
+			RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		}, true, nil
+	}
+
+	runtime, control, ok, err := loadPersistedMissionRuntimeSnapshot(statusFile, job)
+	if err != nil {
+		t.Fatalf("loadPersistedMissionRuntimeSnapshot() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("loadPersistedMissionRuntimeSnapshot() ok = false, want true")
+	}
+	if called != 1 {
+		t.Fatalf("legacy helper calls = %d, want 1", called)
+	}
+	if runtime.State != missioncontrol.JobStatePaused || runtime.ActiveStepID != "build" {
+		t.Fatalf("loadPersistedMissionRuntimeSnapshot() runtime = %#v, want paused build runtime", runtime)
+	}
+	if control == nil || control.Step.ID != "build" {
+		t.Fatalf("loadPersistedMissionRuntimeSnapshot() control = %#v, want build control", control)
+	}
+}
+
+func TestLoadPersistedMissionRuntimeUsesSharedFallbackWhenStoreRootUnconfigured(t *testing.T) {
+	job := testMissionBootstrapJob()
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+
+	original := loadValidatedLegacyMissionStatusSnapshot
+	t.Cleanup(func() { loadValidatedLegacyMissionStatusSnapshot = original })
+	called := 0
+	loadValidatedLegacyMissionStatusSnapshot = func(path string, jobID string) (missioncontrol.MissionStatusSnapshot, bool, error) {
+		called++
+		return missioncontrol.MissionStatusSnapshot{
+			JobID:  job.ID,
+			StepID: "build",
+			Runtime: &missioncontrol.JobRuntimeState{
+				JobID:        job.ID,
+				State:        missioncontrol.JobStatePaused,
+				ActiveStepID: "build",
+			},
+			RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		}, true, nil
+	}
+
+	runtime, control, source, ok, err := loadPersistedMissionRuntime(statusFile, "", job, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("loadPersistedMissionRuntime() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("loadPersistedMissionRuntime() ok = false, want true")
+	}
+	if source != statusFile {
+		t.Fatalf("loadPersistedMissionRuntime() source = %q, want %q", source, statusFile)
+	}
+	if called != 1 {
+		t.Fatalf("legacy helper calls = %d, want 1", called)
+	}
+	if runtime.State != missioncontrol.JobStatePaused || runtime.ActiveStepID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() runtime = %#v, want paused build runtime", runtime)
+	}
+	if control == nil || control.Step.ID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() control = %#v, want build control", control)
+	}
+}
+
 func TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreEmptyForJob(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	cmd := newMissionBootstrapTestCommand()
@@ -7122,6 +7321,52 @@ func TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreEmptyForJob(t 
 	}
 	if runtime.State != missioncontrol.JobStatePaused {
 		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+}
+
+func TestLoadPersistedMissionRuntimeUsesSharedFallbackWhenDurableStoreEmptyForJob(t *testing.T) {
+	job := testMissionBootstrapJob()
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 13, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, "other-job", 3, 1, now, missioncontrol.JobStatePaused, "build")
+
+	original := loadValidatedLegacyMissionStatusSnapshot
+	t.Cleanup(func() { loadValidatedLegacyMissionStatusSnapshot = original })
+	called := 0
+	loadValidatedLegacyMissionStatusSnapshot = func(path string, jobID string) (missioncontrol.MissionStatusSnapshot, bool, error) {
+		called++
+		return missioncontrol.MissionStatusSnapshot{
+			JobID:  job.ID,
+			StepID: "build",
+			Runtime: &missioncontrol.JobRuntimeState{
+				JobID:        job.ID,
+				State:        missioncontrol.JobStatePaused,
+				ActiveStepID: "build",
+			},
+			RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		}, true, nil
+	}
+
+	runtime, control, source, ok, err := loadPersistedMissionRuntime(statusFile, storeRoot, job, now)
+	if err != nil {
+		t.Fatalf("loadPersistedMissionRuntime() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("loadPersistedMissionRuntime() ok = false, want true")
+	}
+	if source != statusFile {
+		t.Fatalf("loadPersistedMissionRuntime() source = %q, want %q", source, statusFile)
+	}
+	if called != 1 {
+		t.Fatalf("legacy helper calls = %d, want 1", called)
+	}
+	if runtime.State != missioncontrol.JobStatePaused || runtime.ActiveStepID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() runtime = %#v, want paused build runtime", runtime)
+	}
+	if control == nil || control.Step.ID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() control = %#v, want build control", control)
 	}
 }
 
@@ -7169,6 +7414,35 @@ func TestMissionStatusBootstrapPrefersDurableRuntimeOverConflictingSnapshot(t *t
 	}
 	if runtime.ActiveStepID != "build" {
 		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want durable %q", runtime.ActiveStepID, "build")
+	}
+}
+
+func TestLoadPersistedMissionRuntimeDoesNotFallbackWhenDurableHydrationFails(t *testing.T) {
+	job := testMissionBootstrapJob()
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 15, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 6, 1, now, missioncontrol.JobStatePaused, "build")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 6, 1, runtimeControlForBootstrapStep(t, job, "final"))
+
+	original := loadValidatedLegacyMissionStatusSnapshot
+	t.Cleanup(func() { loadValidatedLegacyMissionStatusSnapshot = original })
+	called := 0
+	loadValidatedLegacyMissionStatusSnapshot = func(path string, jobID string) (missioncontrol.MissionStatusSnapshot, bool, error) {
+		called++
+		return missioncontrol.MissionStatusSnapshot{}, false, nil
+	}
+
+	_, _, _, ok, err := loadPersistedMissionRuntime(statusFile, storeRoot, job, now)
+	if err == nil {
+		t.Fatal("loadPersistedMissionRuntime() error = nil, want durable hydration failure")
+	}
+	if ok {
+		t.Fatal("loadPersistedMissionRuntime() ok = true, want false")
+	}
+	if called != 0 {
+		t.Fatalf("legacy helper calls = %d, want 0 on durable failure", called)
 	}
 }
 

@@ -318,14 +318,9 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("--status-file is required")
 			}
 
-			data, err := os.ReadFile(statusFile)
+			data, err := loadMissionStatusObservationFile(statusFile)
 			if err != nil {
-				return fmt.Errorf("failed to read mission status file %q: %w", statusFile, err)
-			}
-
-			var snapshot any
-			if err := json.Unmarshal(data, &snapshot); err != nil {
-				return fmt.Errorf("failed to decode mission status file %q: %w", statusFile, err)
+				return err
 			}
 
 			if _, err := cmd.OutOrStdout().Write(data); err != nil {
@@ -1132,6 +1127,10 @@ type missionStatusAssertionExpectation struct {
 
 type missionInspectSummary = missioncontrol.InspectSummary
 
+var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
+var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
+var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
+
 func validateMissionJob(job missioncontrol.Job) error {
 	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
 		return validationErrors[0]
@@ -1209,78 +1208,18 @@ func loadCommittedMissionRuntime(storeRoot string, job missioncontrol.Job, now t
 }
 
 func loadPersistedMissionRuntimeSnapshot(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, bool, error) {
-	if path == "" {
-		return missioncontrol.JobRuntimeState{}, nil, false, nil
-	}
-
-	snapshot, err := loadMissionStatusSnapshot(path)
+	snapshot, ok, err := loadValidatedLegacyMissionStatusSnapshot(path, job.ID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return missioncontrol.JobRuntimeState{}, nil, false, nil
-		}
 		return missioncontrol.JobRuntimeState{}, nil, false, err
 	}
-	if snapshot.Runtime == nil {
-		return missioncontrol.JobRuntimeState{}, nil, false, nil
-	}
-	if err := validatePersistedMissionRuntimeSnapshot(snapshot); err != nil {
-		return missioncontrol.JobRuntimeState{}, nil, false, err
-	}
-	if snapshot.Runtime.JobID != "" && snapshot.Runtime.JobID != job.ID {
+	if !ok {
 		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
 	var runtimeControl *missioncontrol.RuntimeControlContext
 	if snapshot.RuntimeControl != nil {
-		if snapshot.RuntimeControl.JobID != "" && snapshot.RuntimeControl.JobID != job.ID {
-			return missioncontrol.JobRuntimeState{}, nil, false, nil
-		}
 		runtimeControl = missioncontrol.CloneRuntimeControlContext(snapshot.RuntimeControl)
 	}
 	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), runtimeControl, true, nil
-}
-
-func validatePersistedMissionRuntimeSnapshot(snapshot missionStatusSnapshot) error {
-	if snapshot.Runtime == nil {
-		return nil
-	}
-
-	runtime := snapshot.Runtime
-	if snapshot.JobID != "" && runtime.JobID != "" && snapshot.JobID != runtime.JobID {
-		return fmt.Errorf("persisted mission runtime snapshot job_id %q does not match runtime job_id %q", snapshot.JobID, runtime.JobID)
-	}
-	if snapshot.StepID != "" && runtime.ActiveStepID != "" && snapshot.StepID != runtime.ActiveStepID {
-		return fmt.Errorf("persisted mission runtime snapshot step_id %q does not match runtime active_step_id %q", snapshot.StepID, runtime.ActiveStepID)
-	}
-	if snapshot.Active && missioncontrol.IsTerminalJobState(runtime.State) {
-		return fmt.Errorf("persisted mission runtime snapshot marks terminal runtime state %q as active", runtime.State)
-	}
-	if runtime.ActiveStepID != "" && missioncontrol.HasCompletedRuntimeStep(*runtime, runtime.ActiveStepID) {
-		return fmt.Errorf("persisted mission runtime active_step_id %q is already recorded in completed_steps", runtime.ActiveStepID)
-	}
-	if runtime.ActiveStepID != "" && missioncontrol.HasFailedRuntimeStep(*runtime, runtime.ActiveStepID) {
-		return fmt.Errorf("persisted mission runtime active_step_id %q is already recorded in failed_steps", runtime.ActiveStepID)
-	}
-
-	control := snapshot.RuntimeControl
-	if control == nil {
-		return nil
-	}
-	if control.JobID != "" && runtime.JobID != "" && control.JobID != runtime.JobID {
-		return fmt.Errorf("persisted mission runtime control job_id %q does not match runtime job_id %q", control.JobID, runtime.JobID)
-	}
-	if runtime.ActiveStepID == "" {
-		if control.Step.ID != "" {
-			return fmt.Errorf("persisted mission runtime control step_id %q requires runtime active_step_id", control.Step.ID)
-		}
-		return nil
-	}
-	if control.Step.ID == "" {
-		return fmt.Errorf("persisted mission runtime active_step_id %q requires runtime control step_id", runtime.ActiveStepID)
-	}
-	if control.Step.ID != runtime.ActiveStepID {
-		return fmt.Errorf("persisted mission runtime control step_id %q does not match runtime active_step_id %q", control.Step.ID, runtime.ActiveStepID)
-	}
-	return nil
 }
 
 func newMissionInspectSummary(job missioncontrol.Job, stepID string) (missionInspectSummary, error) {
@@ -1590,20 +1529,7 @@ func equalAllowedToolsExact(got []string, want []string) bool {
 }
 
 func loadMissionStatusSnapshot(path string) (missionStatusSnapshot, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return missionStatusSnapshot{}, fmt.Errorf("mission status file %q not found", path)
-		}
-		return missionStatusSnapshot{}, fmt.Errorf("failed to read mission status file %q: %w", path, err)
-	}
-
-	var snapshot missionStatusSnapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return missionStatusSnapshot{}, fmt.Errorf("failed to decode mission status file %q: %w", path, err)
-	}
-
-	return snapshot, nil
+	return loadMissionStatusObservation(path)
 }
 
 func valueOrNilString(value string) *string {
