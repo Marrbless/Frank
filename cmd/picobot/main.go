@@ -211,10 +211,10 @@ func NewRootCmd() *cobra.Command {
 			if bootstrappedJob != nil {
 				missionStepControlBaseline = restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
 			}
-			statusFile, _ := cmd.Flags().GetString("mission-status-file")
-			if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
+			if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
 				return err
 			}
+			statusFile, _ := cmd.Flags().GetString("mission-status-file")
 			if statusFile != "" {
 				defer func() {
 					if err == nil {
@@ -834,10 +834,46 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 	}
 
 	if statusFile == "" {
+		ag.SetMissionRuntimeProjectionHook(nil)
 		ag.SetMissionRuntimeChangeHook(nil)
 		return
 	}
 
+	if storeRoot != "" {
+		missionRequired, _ := cmd.Flags().GetBool("mission-required")
+		ag.SetMissionRuntimeProjectionHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, _ *missioncontrol.RuntimeControlContext) error {
+			jobID := runtime.JobID
+			if strings.TrimSpace(jobID) == "" && job != nil {
+				jobID = job.ID
+			}
+			return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now())
+		})
+		ag.SetMissionRuntimeChangeHook(func() {
+			jobID := ""
+			if runtimeState, ok := ag.MissionRuntimeState(); ok {
+				jobID = runtimeState.JobID
+			}
+			if jobID == "" {
+				if ec, ok := ag.ActiveMissionStep(); ok && ec.Job != nil {
+					jobID = ec.Job.ID
+				}
+			}
+			if jobID != "" {
+				if _, err := missioncontrol.LoadCommittedJobRuntimeRecord(storeRoot, jobID); err == nil {
+					return
+				} else if !errors.Is(err, missioncontrol.ErrJobRuntimeRecordNotFound) {
+					log.Printf("mission runtime status snapshot durable availability check failed for %q: %v", statusFile, err)
+					return
+				}
+			}
+			if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
+				log.Printf("mission runtime status snapshot update failed for %q: %v", statusFile, err)
+			}
+		})
+		return
+	}
+
+	ag.SetMissionRuntimeProjectionHook(nil)
 	ag.SetMissionRuntimeChangeHook(func() {
 		if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
 			log.Printf("mission runtime status snapshot update failed for %q: %v", statusFile, err)
@@ -1074,21 +1110,7 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 	return &job, nil
 }
 
-type missionStatusSnapshot struct {
-	MissionRequired   bool                                  `json:"mission_required"`
-	Active            bool                                  `json:"active"`
-	MissionFile       string                                `json:"mission_file"`
-	JobID             string                                `json:"job_id"`
-	StepID            string                                `json:"step_id"`
-	StepType          string                                `json:"step_type"`
-	RequiredAuthority missioncontrol.AuthorityTier          `json:"required_authority"`
-	RequiresApproval  bool                                  `json:"requires_approval"`
-	AllowedTools      []string                              `json:"allowed_tools"`
-	Runtime           *missioncontrol.JobRuntimeState       `json:"runtime,omitempty"`
-	RuntimeSummary    *missioncontrol.OperatorStatusSummary `json:"runtime_summary,omitempty"`
-	RuntimeControl    *missioncontrol.RuntimeControlContext `json:"runtime_control,omitempty"`
-	UpdatedAt         string                                `json:"updated_at"`
-}
+type missionStatusSnapshot = missioncontrol.MissionStatusSnapshot
 
 type missionStepControlFile struct {
 	StepID    string `json:"step_id"`
@@ -1109,7 +1131,6 @@ type missionStatusAssertionExpectation struct {
 }
 
 type missionInspectSummary = missioncontrol.InspectSummary
-type missionInspectStepSummary = missioncontrol.InspectStep
 
 func validateMissionJob(job missioncontrol.Job) error {
 	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
@@ -1342,6 +1363,8 @@ func restoreMissionStepControlFileOnStartup(cmd *cobra.Command, ag *agent.AgentL
 	return data
 }
 
+// mission-step-control-file is an operator control input surface, not a derived
+// runtime projection. Slice 3c intentionally leaves its file semantics unchanged.
 func applyMissionStepControlFile(cmd *cobra.Command, ag *agent.AgentLoop, job missioncontrol.Job, path string) (string, bool, error) {
 	stepID, changed, err := activateMissionStepFromControlFile(ag, job, path)
 	if err != nil || !changed {
@@ -1391,7 +1414,36 @@ func watchMissionStepControlFile(ctx context.Context, cmd *cobra.Command, ag *ag
 
 func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLoop, now time.Time) error {
 	statusFile, _ := cmd.Flags().GetString("mission-status-file")
-	return writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, now)
+	if statusFile == "" {
+		return nil
+	}
+
+	storeRoot := resolveMissionStoreRoot(cmd)
+	if storeRoot == "" {
+		return writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, now)
+	}
+
+	jobID := ""
+	if runtimeState, ok := ag.MissionRuntimeState(); ok {
+		jobID = runtimeState.JobID
+	}
+	if jobID == "" {
+		if ec, ok := ag.ActiveMissionStep(); ok && ec.Job != nil {
+			jobID = ec.Job.ID
+		}
+	}
+	if jobID == "" {
+		return writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, now)
+	}
+	if _, err := missioncontrol.LoadCommittedJobRuntimeRecord(storeRoot, jobID); err != nil {
+		if errors.Is(err, missioncontrol.ErrJobRuntimeRecordNotFound) {
+			return writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, now)
+		}
+		return fmt.Errorf("failed to inspect committed mission runtime for status snapshot in durable store %q: %w", storeRoot, err)
+	}
+
+	missionRequired, _ := cmd.Flags().GetBool("mission-required")
+	return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, now)
 }
 
 func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
@@ -1567,6 +1619,8 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+var writeMissionStatusSnapshotAtomic = writeJSONAtomic
+
 func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -1669,7 +1723,39 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		snapshot.RuntimeSummary = &summary
 	}
 
-	return writeJSONAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
+	return writeMissionStatusSnapshotAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
+}
+
+func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time) error {
+	if path == "" {
+		return nil
+	}
+	if strings.TrimSpace(storeRoot) == "" {
+		return fmt.Errorf("mission status snapshot projection requires a durable store root")
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return fmt.Errorf("mission status snapshot projection requires a job_id")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	snapshot, err := missioncontrol.BuildCommittedMissionStatusSnapshot(
+		storeRoot,
+		jobID,
+		missioncontrol.MissionStatusSnapshotOptions{
+			MissionRequired: missionRequired,
+			MissionFile:     missionFile,
+			UpdatedAt:       now,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to build committed mission status snapshot from durable store %q: %w", storeRoot, err)
+	}
+
+	return writeMissionStatusSnapshotAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
 }
 
 func intersectAllowedTools(ec missioncontrol.ExecutionContext) []string {

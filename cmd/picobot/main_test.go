@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -2689,6 +2690,219 @@ func TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields(t *testing.
 	}
 }
 
+func TestWriteMissionStatusSnapshotFromCommandUsesCommittedDurableProjectionWhenPresent(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 19, 0, 0, 0, time.UTC)
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 4, 1, now, missioncontrol.JobStatePaused, "final")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 4, 1, runtimeControlForBootstrapStep(t, job, "final"))
+
+	liveControl := runtimeControlForBootstrapStep(t, job, "build")
+	liveRuntime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+		ActiveStepAt: now.Add(time.Minute),
+	}
+	if err := ag.HydrateMissionRuntimeControl(job, liveRuntime, liveControl); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, statusFile)
+	if got.Active {
+		t.Fatal("Active = true, want false from committed paused durable projection")
+	}
+	if got.JobID != job.ID {
+		t.Fatalf("JobID = %q, want %q", got.JobID, job.ID)
+	}
+	if got.StepID != "final" {
+		t.Fatalf("StepID = %q, want %q", got.StepID, "final")
+	}
+	if got.StepType != string(missioncontrol.StepTypeFinalResponse) {
+		t.Fatalf("StepType = %q, want %q", got.StepType, missioncontrol.StepTypeFinalResponse)
+	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, got, storeRoot, job.ID, now.Add(2*time.Minute))
+}
+
+func TestStartupAndRuntimeChangeDurableProjectionUseSameSharedBuilder(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{ID: "gamma", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "zeta.txt"},
+				{ID: "alpha", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "alpha.json", StaticArtifactFormat: "json"},
+				{ID: "beta", Type: missioncontrol.StepTypeLongRunningCode, LongRunningArtifactPath: "service.bin", LongRunningStartupCommand: []string{"go", "build", "./cmd/service"}},
+				{ID: "delta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
+				{ID: "epsilon", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
+				{ID: "zeta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
+				{ID: "final", Type: missioncontrol.StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "final")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	plan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	requests := make([]missioncontrol.ApprovalRequest, 0, missioncontrol.OperatorStatusApprovalHistoryLimit+2)
+	for i := 0; i < missioncontrol.OperatorStatusApprovalHistoryLimit+2; i++ {
+		requests = append(requests, missioncontrol.ApprovalRequest{
+			JobID:           job.ID,
+			StepID:          "step-" + string(rune('a'+i)),
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			State:           missioncontrol.ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, i, 0, 0, time.UTC),
+		})
+	}
+	history := make([]missioncontrol.AuditEvent, 0, missioncontrol.OperatorStatusRecentAuditLimit+1)
+	for i := 0; i < missioncontrol.OperatorStatusRecentAuditLimit+1; i++ {
+		history = append(history, missioncontrol.AuditEvent{
+			JobID:     job.ID,
+			StepID:    "build",
+			ToolName:  "status",
+			Allowed:   true,
+			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
+		})
+	}
+	now := time.Date(2026, 4, 5, 19, 30, 0, 0, time.UTC)
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:            job.ID,
+		State:            missioncontrol.JobStatePaused,
+		ActiveStepID:     "final",
+		InspectablePlan:  &plan,
+		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
+		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		ApprovalRequests: requests,
+		AuditHistory:     history,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "zeta"},
+			{StepID: "gamma"},
+			{StepID: "beta", ResultingState: &missioncontrol.RuntimeResultingStateRecord{Kind: string(missioncontrol.StepTypeLongRunningCode), Target: "service.bin", State: "already_present"}},
+			{StepID: "alpha"},
+			{StepID: "epsilon"},
+			{StepID: "delta"},
+		},
+	}
+
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	runtimePath := filepath.Join(t.TempDir(), "runtime.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	if err := missioncontrol.PersistProjectedRuntimeState(storeRoot, missioncontrol.WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	cmd := newMissionBootstrapTestCommand()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	liveControl := runtimeControlForBootstrapStep(t, testMissionBootstrapJob(), "build")
+	liveRuntime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+		ActiveStepAt: now.Add(time.Minute),
+	}
+	if err := ag.HydrateMissionRuntimeControl(testMissionBootstrapJob(), liveRuntime, liveControl); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+	if err := writeProjectedMissionStatusSnapshot(runtimePath, missionFile, storeRoot, false, job.ID, now); err != nil {
+		t.Fatalf("writeProjectedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if !bytes.Equal(mustReadFile(t, statusFile), mustReadFile(t, runtimePath)) {
+		t.Fatalf("durable startup/runtime projection bytes differ:\nstartup=%s\nruntime=%s", string(mustReadFile(t, statusFile)), string(mustReadFile(t, runtimePath)))
+	}
+}
+
+func TestWriteMissionStatusSnapshotFromCommandFallsBackToLiveWhenDurableStoreEmptyForJob(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	now := time.Date(2026, 4, 5, 19, 45, 0, 0, time.UTC)
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	control := runtimeControlForBootstrapStep(t, job, "build")
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		PausedAt:     now.Add(-time.Minute),
+	}
+	if err := ag.HydrateMissionRuntimeControl(job, runtime, control); err != nil {
+		t.Fatalf("HydrateMissionRuntimeControl() error = %v", err)
+	}
+
+	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, now); err != nil {
+		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, statusFile)
+	if got.StepID != "build" {
+		t.Fatalf("StepID = %q, want %q", got.StepID, "build")
+	}
+	if got.StepType != "" {
+		t.Fatalf("StepType = %q, want empty live fallback step metadata", got.StepType)
+	}
+	if got.Runtime == nil || got.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("Runtime = %#v, want live paused runtime", got.Runtime)
+	}
+	if got.RuntimeControl == nil || got.RuntimeControl.Step.ID != "build" {
+		t.Fatalf("RuntimeControl = %#v, want live build control", got.RuntimeControl)
+	}
+}
+
 func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedRuntime(t *testing.T) {
 	ag := newMissionBootstrapTestLoop()
 	job := missioncontrol.Job{
@@ -2805,6 +3019,126 @@ func TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedR
 	if got.RuntimeSummary.Truncation.ArtifactsOmitted != 1 {
 		t.Fatalf("RuntimeSummary.Truncation.ArtifactsOmitted = %d, want 1", got.RuntimeSummary.Truncation.ArtifactsOmitted)
 	}
+}
+
+func TestWriteProjectedMissionStatusSnapshotIncludesCommittedRuntimeSummaryTruncation(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{ID: "gamma", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "zeta.txt"},
+				{ID: "alpha", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "alpha.json", StaticArtifactFormat: "json"},
+				{ID: "beta", Type: missioncontrol.StepTypeLongRunningCode, LongRunningArtifactPath: "service.bin", LongRunningStartupCommand: []string{"go", "build", "./cmd/service"}},
+				{ID: "delta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
+				{ID: "epsilon", Type: missioncontrol.StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
+				{ID: "zeta", Type: missioncontrol.StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
+				{ID: "final", Type: missioncontrol.StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "final")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	plan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	requests := make([]missioncontrol.ApprovalRequest, 0, missioncontrol.OperatorStatusApprovalHistoryLimit+2)
+	for i := 0; i < missioncontrol.OperatorStatusApprovalHistoryLimit+2; i++ {
+		requests = append(requests, missioncontrol.ApprovalRequest{
+			JobID:           job.ID,
+			StepID:          "step-" + string(rune('a'+i)),
+			RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+			Scope:           missioncontrol.ApprovalScopeMissionStep,
+			State:           missioncontrol.ApprovalStatePending,
+			RequestedAt:     time.Date(2026, 3, 24, 12, i, 0, 0, time.UTC),
+		})
+	}
+	history := make([]missioncontrol.AuditEvent, 0, missioncontrol.OperatorStatusRecentAuditLimit+1)
+	for i := 0; i < missioncontrol.OperatorStatusRecentAuditLimit+1; i++ {
+		history = append(history, missioncontrol.AuditEvent{
+			JobID:     job.ID,
+			StepID:    "build",
+			ToolName:  "status",
+			Allowed:   true,
+			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
+		})
+	}
+	now := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:            job.ID,
+		State:            missioncontrol.JobStatePaused,
+		ActiveStepID:     "final",
+		InspectablePlan:  &plan,
+		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
+		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		ApprovalRequests: requests,
+		AuditHistory:     history,
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "zeta"},
+			{StepID: "gamma"},
+			{StepID: "beta", ResultingState: &missioncontrol.RuntimeResultingStateRecord{Kind: string(missioncontrol.StepTypeLongRunningCode), Target: "service.bin", State: "already_present"}},
+			{StepID: "alpha"},
+			{StepID: "epsilon"},
+			{StepID: "delta"},
+		},
+	}
+	storeRoot := filepath.Join(t.TempDir(), "status.store")
+	if err := missioncontrol.PersistProjectedRuntimeState(storeRoot, missioncontrol.WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := writeProjectedMissionStatusSnapshot(path, "mission.json", storeRoot, false, job.ID, now); err != nil {
+		t.Fatalf("writeProjectedMissionStatusSnapshot() error = %v", err)
+	}
+
+	got := readMissionStatusSnapshotFile(t, path)
+	if got.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want persisted runtime summary")
+	}
+	if got.RuntimeSummary.State != missioncontrol.JobStatePaused {
+		t.Fatalf("RuntimeSummary.State = %q, want %q", got.RuntimeSummary.State, missioncontrol.JobStatePaused)
+	}
+	if got.RuntimeSummary.PausedReason != missioncontrol.RuntimePauseReasonOperatorCommand {
+		t.Fatalf("RuntimeSummary.PausedReason = %q, want %q", got.RuntimeSummary.PausedReason, missioncontrol.RuntimePauseReasonOperatorCommand)
+	}
+	if got.RuntimeSummary.PausedAt == nil || *got.RuntimeSummary.PausedAt != "2026-03-24T13:30:00Z" {
+		t.Fatalf("RuntimeSummary.PausedAt = %#v, want RFC3339 pause time", got.RuntimeSummary.PausedAt)
+	}
+	if !reflect.DeepEqual(got.AllowedTools, []string{"read"}) {
+		t.Fatalf("AllowedTools = %#v, want %#v", got.AllowedTools, []string{"read"})
+	}
+	if !reflect.DeepEqual(got.RuntimeSummary.AllowedTools, []string{"read"}) {
+		t.Fatalf("RuntimeSummary.AllowedTools = %#v, want %#v", got.RuntimeSummary.AllowedTools, []string{"read"})
+	}
+	if len(got.RuntimeSummary.Artifacts) != missioncontrol.OperatorStatusArtifactLimit {
+		t.Fatalf("RuntimeSummary.Artifacts = %#v, want %d deterministic entries", got.RuntimeSummary.Artifacts, missioncontrol.OperatorStatusArtifactLimit)
+	}
+	if got.RuntimeSummary.Artifacts[0].StepID != "gamma" || got.RuntimeSummary.Artifacts[0].Path != "zeta.txt" {
+		t.Fatalf("RuntimeSummary.Artifacts[0] = %#v, want step_id=%q path=%q", got.RuntimeSummary.Artifacts[0], "gamma", "zeta.txt")
+	}
+	if got.RuntimeSummary.Artifacts[2].StepID != "beta" || got.RuntimeSummary.Artifacts[2].State != "already_present" {
+		t.Fatalf("RuntimeSummary.Artifacts[2] = %#v, want step_id=%q state=%q", got.RuntimeSummary.Artifacts[2], "beta", "already_present")
+	}
+	if got.RuntimeSummary.Truncation == nil {
+		t.Fatal("RuntimeSummary.Truncation = nil, want truncation metadata")
+	}
+	if got.RuntimeSummary.Truncation.ApprovalHistoryOmitted != 2 {
+		t.Fatalf("RuntimeSummary.Truncation.ApprovalHistoryOmitted = %d, want 2", got.RuntimeSummary.Truncation.ApprovalHistoryOmitted)
+	}
+	if got.RuntimeSummary.Truncation.RecentAuditOmitted != 1 {
+		t.Fatalf("RuntimeSummary.Truncation.RecentAuditOmitted = %d, want 1", got.RuntimeSummary.Truncation.RecentAuditOmitted)
+	}
+	if got.RuntimeSummary.Truncation.ArtifactsOmitted != 1 {
+		t.Fatalf("RuntimeSummary.Truncation.ArtifactsOmitted = %d, want 1", got.RuntimeSummary.Truncation.ArtifactsOmitted)
+	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, got, storeRoot, job.ID, now)
 }
 
 func TestMissionStatusSnapshotWritePersistsAuditHistory(t *testing.T) {
@@ -3165,6 +3499,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	if len(durableDenied.ApprovalRequests) != 1 || durableDenied.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
 		t.Fatalf("HydrateCommittedJobRuntimeState(denied).ApprovalRequests = %#v, want one denied approval", durableDenied.ApprovalRequests)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, deniedSnapshot, resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
 
 	statusFile = filepath.Join(t.TempDir(), "status.json")
 	cmd = newMissionBootstrapTestCommand()
@@ -3223,6 +3558,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	if len(durableApproved.ApprovalGrants) != 1 || durableApproved.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
 		t.Fatalf("HydrateCommittedJobRuntimeState(approved).ApprovalGrants = %#v, want one granted approval", durableApproved.ApprovalGrants)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, approvedSnapshot, resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
 }
 
 func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycle(t *testing.T) {
@@ -3319,6 +3655,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	if deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, deniedSnapshot, resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
 
 	statusFile = filepath.Join(t.TempDir(), "status.json")
 	cmd = newMissionBootstrapTestCommand()
@@ -3354,6 +3691,7 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 	if len(approvedSnapshot.Runtime.ApprovalRequests) != 1 || approvedSnapshot.Runtime.ApprovalRequests[0].Content == nil || *approvedSnapshot.Runtime.ApprovalRequests[0].Content != content {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests = %#v, want persisted enriched request content", approvedSnapshot.Runtime.ApprovalRequests)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, approvedSnapshot, resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
 	if approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, approvedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
@@ -3814,6 +4152,7 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if pausedSnapshot.RuntimeControl == nil || pausedSnapshot.RuntimeControl.Step.ID != "build" {
 		t.Fatalf("pausedSnapshot.RuntimeControl = %#v, want persisted build control", pausedSnapshot.RuntimeControl)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, pausedSnapshot, resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 
 	ag.ClearMissionStep()
 
@@ -3833,6 +4172,7 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if tornDownSnapshot.RuntimeControl == nil || tornDownSnapshot.RuntimeControl.Step.ID != "build" {
 		t.Fatalf("tornDownSnapshot.RuntimeControl = %#v, want persisted build control", tornDownSnapshot.RuntimeControl)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, tornDownSnapshot, resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 
 	if _, err := ag.ProcessDirect("RESUME job-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(RESUME) error = %v", err)
@@ -3851,6 +4191,7 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if resumedSnapshot.RuntimeControl == nil || resumedSnapshot.RuntimeControl.Step.ID != "build" {
 		t.Fatalf("resumedSnapshot.RuntimeControl = %#v, want persisted build control", resumedSnapshot.RuntimeControl)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, resumedSnapshot, resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 	durableResumed, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 	if err != nil {
 		t.Fatalf("HydrateCommittedJobRuntimeState(resumed) error = %v", err)
@@ -3887,6 +4228,7 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if abortedSnapshot.RuntimeControl != nil {
 		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)
 	}
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, abortedSnapshot, resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 	durableAborted, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
 	if err != nil {
 		t.Fatalf("HydrateCommittedJobRuntimeState(aborted) error = %v", err)
@@ -4139,6 +4481,7 @@ func TestApplyMissionStepControlFileRewritesStatusSnapshotOnSuccess(t *testing.T
 	if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("writeMissionStatusSnapshotFromCommand() error = %v", err)
 	}
+	beforeControl := mustReadFile(t, controlFile)
 
 	before := readMissionStatusSnapshotFile(t, statusFile)
 	if before.StepID != "build" {
@@ -4162,6 +4505,9 @@ func TestApplyMissionStepControlFileRewritesStatusSnapshotOnSuccess(t *testing.T
 	}
 	if after.UpdatedAt == before.UpdatedAt {
 		t.Fatalf("rewritten snapshot UpdatedAt = %q, want changed timestamp", after.UpdatedAt)
+	}
+	if !bytes.Equal(mustReadFile(t, controlFile), beforeControl) {
+		t.Fatalf("mission step control input changed from %q to %q, want unchanged input semantics", string(beforeControl), string(mustReadFile(t, controlFile)))
 	}
 }
 
@@ -6974,6 +7320,8 @@ func TestMissionStatusRuntimePersistenceUpdatesDurableStoreAndSnapshotTogether(t
 	}
 
 	storeRoot := resolveMissionStoreRoot(cmd)
+	assertMissionStatusSnapshotMatchesCommittedDurableState(t, snapshot, storeRoot, job.ID, time.Now().UTC())
+
 	runtime, err := missioncontrol.HydrateCommittedJobRuntimeState(storeRoot, job.ID, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
@@ -7019,6 +7367,70 @@ func TestMissionStatusRuntimePersistenceDurableWriteFailureLeavesSnapshotUnchang
 	}
 	if _, ok := ag.MissionRuntimeState(); ok {
 		t.Fatal("MissionRuntimeState() ok = true, want false after failed durable persist")
+	}
+}
+
+func TestMissionStatusRuntimePersistenceProjectionFailureLeavesSnapshotUnchanged(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+
+	previous := missionStatusSnapshot{
+		MissionFile: missionFile,
+		JobID:       "previous-job",
+		StepID:      "previous-step",
+		UpdatedAt:   "2026-04-05T18:00:00Z",
+	}
+	writeMissionStatusSnapshotFile(t, statusFile, previous)
+
+	originalWrite := writeMissionStatusSnapshotAtomic
+	t.Cleanup(func() { writeMissionStatusSnapshotAtomic = originalWrite })
+	writeMissionStatusSnapshotAtomic = func(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
+		if path == statusFile {
+			return errors.New("forced projection write failure")
+		}
+		return originalWrite(path, value, encodeErrPrefix, writeErrPrefix)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	err := ag.ActivateMissionStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateMissionStep() error = nil, want projection failure")
+	}
+	if !strings.Contains(err.Error(), "forced projection write failure") {
+		t.Fatalf("ActivateMissionStep() error = %q, want projection failure", err)
+	}
+
+	if got := readMissionStatusSnapshotFile(t, statusFile); !reflect.DeepEqual(got, previous) {
+		t.Fatalf("status snapshot = %#v, want unchanged %#v", got, previous)
+	}
+
+	storeRoot := resolveMissionStoreRoot(cmd)
+	durableRuntime, err := missioncontrol.HydrateCommittedJobRuntimeState(storeRoot, job.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
+	}
+	if durableRuntime.State != missioncontrol.JobStateRunning || durableRuntime.ActiveStepID != "build" {
+		t.Fatalf("HydrateCommittedJobRuntimeState() = %#v, want committed running build runtime", durableRuntime)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want in-memory runtime preserved")
+	}
+	if runtime.State != missioncontrol.JobStateRunning || runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState() = %#v, want running build runtime", runtime)
 	}
 }
 
@@ -7181,6 +7593,30 @@ func seedIncoherentMissionStore(t *testing.T, root string, now time.Time) {
 		JobID:          "job-1",
 	}); err != nil {
 		t.Fatalf("StoreWriterLockRecord() error = %v", err)
+	}
+}
+
+func assertMissionStatusSnapshotMatchesCommittedDurableState(t *testing.T, snapshot missionStatusSnapshot, storeRoot string, jobID string, now time.Time) {
+	t.Helper()
+
+	updatedAt, err := time.Parse(time.RFC3339Nano, snapshot.UpdatedAt)
+	if err != nil {
+		t.Fatalf("time.Parse(snapshot.UpdatedAt=%q) error = %v", snapshot.UpdatedAt, err)
+	}
+	expected, err := missioncontrol.BuildCommittedMissionStatusSnapshot(
+		storeRoot,
+		jobID,
+		missioncontrol.MissionStatusSnapshotOptions{
+			MissionRequired: snapshot.MissionRequired,
+			MissionFile:     snapshot.MissionFile,
+			UpdatedAt:       updatedAt,
+		},
+	)
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot(%q) error = %v", jobID, err)
+	}
+	if !reflect.DeepEqual(snapshot, expected) {
+		t.Fatalf("snapshot = %#v, want durable %#v", snapshot, expected)
 	}
 }
 
