@@ -75,6 +75,7 @@ type ActiveJobRecord struct {
 	JobID          string    `json:"job_id"`
 	State          JobState  `json:"state"`
 	ActiveStepID   string    `json:"active_step_id,omitempty"`
+	AttemptID      string    `json:"attempt_id,omitempty"`
 	LeaseHolderID  string    `json:"lease_holder_id"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -84,6 +85,8 @@ type ActiveJobRecord struct {
 var (
 	ErrActiveJobRecordNotFound = errors.New("mission store active job record not found")
 	ErrStoreManifestNotFound   = errors.New("mission store manifest not found")
+	ErrWriterEpochIncoherent   = errors.New("mission store writer epoch is incoherent")
+	ErrWriterLockExpired       = errors.New("mission store writer lock lease has expired")
 	ErrWriterLockHeld          = errors.New("mission store writer lock is already held")
 	ErrWriterLockNotFound      = errors.New("mission store writer lock not found")
 )

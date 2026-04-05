@@ -1,22 +1,32 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"time"
 )
 
-const (
+var (
 	storeWriterGuardRetryDelay = 2 * time.Millisecond
 	storeWriterGuardMaxWait    = time.Second
+	storeWriterGuardStaleAfter = 5 * time.Second
+	storeWriterGuardSleep      = time.Sleep
+	storeWriterGuardNow        = time.Now
 )
-
-var storeWriterGuardSleep = time.Sleep
 
 type storeWriterGuard struct {
 	root string
 	path string
+}
+
+type writerGuardRecord struct {
+	RecordVersion int       `json:"record_version"`
+	LeaseHolderID string    `json:"lease_holder_id,omitempty"`
+	PID           int       `json:"pid,omitempty"`
+	Hostname      string    `json:"hostname,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func LoadWriterLock(root string) (WriterLockRecord, error) {
@@ -106,15 +116,44 @@ func acquireWriterLock(root string, now time.Time, leaseDuration time.Duration, 
 	current, err := LoadWriterLock(root)
 	switch {
 	case err == nil:
-		if current.LeaseHolderID == lease.LeaseHolderID {
-			renewed := current
-			renewed.RenewedAt = now.UTC()
-			renewed.LeaseExpiresAt = now.UTC().Add(leaseDuration)
-			renewed.JobID = lease.JobID
-			if err := StoreWriterLockRecord(root, renewed); err != nil {
+		if current.WriterEpoch != manifest.CurrentWriterEpoch {
+			if !allowTakeover || !IsWriterLockStale(current, now.UTC()) {
+				return WriterLockRecord{}, false, newWriterEpochIncoherentError(manifest.CurrentWriterEpoch, current.WriterEpoch)
+			}
+
+			nextEpoch := maxWriterEpoch(current.WriterEpoch, manifest.CurrentWriterEpoch) + 1
+			takenOver := newWriterLockRecord(nextEpoch, now, leaseDuration, lease)
+			if err := StoreWriterLockRecord(root, takenOver); err != nil {
 				return WriterLockRecord{}, false, err
 			}
-			return renewed, false, nil
+			manifest.CurrentWriterEpoch = nextEpoch
+			manifest.LastRecoveredAt = now.UTC()
+			if err := StoreManifestRecord(root, manifest); err != nil {
+				return WriterLockRecord{}, false, err
+			}
+			if err := ValidateWriterEpochCoherence(root); err != nil {
+				return WriterLockRecord{}, false, err
+			}
+			return takenOver, true, nil
+		}
+		if current.LeaseHolderID == lease.LeaseHolderID {
+			if IsWriterLockStale(current, now.UTC()) {
+				if !allowTakeover {
+					return WriterLockRecord{}, false, ErrWriterLockExpired
+				}
+			} else {
+				renewed := current
+				renewed.RenewedAt = now.UTC()
+				renewed.LeaseExpiresAt = now.UTC().Add(leaseDuration)
+				renewed.JobID = lease.JobID
+				if err := StoreWriterLockRecord(root, renewed); err != nil {
+					return WriterLockRecord{}, false, err
+				}
+				if err := ValidateWriterEpochCoherence(root); err != nil {
+					return WriterLockRecord{}, false, err
+				}
+				return renewed, false, nil
+			}
 		}
 		if !IsWriterLockStale(current, now.UTC()) {
 			return WriterLockRecord{}, false, ErrWriterLockHeld
@@ -129,7 +168,11 @@ func acquireWriterLock(root string, now time.Time, leaseDuration time.Duration, 
 			return WriterLockRecord{}, false, err
 		}
 		manifest.CurrentWriterEpoch = nextEpoch
+		manifest.LastRecoveredAt = now.UTC()
 		if err := StoreManifestRecord(root, manifest); err != nil {
+			return WriterLockRecord{}, false, err
+		}
+		if err := ValidateWriterEpochCoherence(root); err != nil {
 			return WriterLockRecord{}, false, err
 		}
 		return takenOver, true, nil
@@ -141,6 +184,9 @@ func acquireWriterLock(root string, now time.Time, leaseDuration time.Duration, 
 		}
 		manifest.CurrentWriterEpoch = nextEpoch
 		if err := StoreManifestRecord(root, manifest); err != nil {
+			return WriterLockRecord{}, false, err
+		}
+		if err := ValidateWriterEpochCoherence(root); err != nil {
 			return WriterLockRecord{}, false, err
 		}
 		return record, false, nil
@@ -155,7 +201,11 @@ func acquireWriterLock(root string, now time.Time, leaseDuration time.Duration, 
 			return WriterLockRecord{}, false, err
 		}
 		manifest.CurrentWriterEpoch = nextEpoch
+		manifest.LastRecoveredAt = now.UTC()
 		if err := StoreManifestRecord(root, manifest); err != nil {
+			return WriterLockRecord{}, false, err
+		}
+		if err := ValidateWriterEpochCoherence(root); err != nil {
 			return WriterLockRecord{}, false, err
 		}
 		return record, true, nil
@@ -180,13 +230,26 @@ func RenewWriterLock(root string, current WriterLockRecord, now time.Time, lease
 	if err != nil {
 		return WriterLockRecord{}, err
 	}
+	manifest, err := LoadStoreManifest(root)
+	if err != nil {
+		return WriterLockRecord{}, err
+	}
+	if stored.WriterEpoch != manifest.CurrentWriterEpoch {
+		return WriterLockRecord{}, newWriterEpochIncoherentError(manifest.CurrentWriterEpoch, stored.WriterEpoch)
+	}
 	if stored.LeaseHolderID != current.LeaseHolderID || stored.WriterEpoch != current.WriterEpoch {
 		return WriterLockRecord{}, ErrWriterLockHeld
+	}
+	if !stored.LeaseExpiresAt.After(now.UTC()) {
+		return WriterLockRecord{}, ErrWriterLockExpired
 	}
 
 	stored.RenewedAt = now.UTC()
 	stored.LeaseExpiresAt = now.UTC().Add(leaseDuration)
 	if err := StoreWriterLockRecord(root, stored); err != nil {
+		return WriterLockRecord{}, err
+	}
+	if err := ValidateWriterEpochCoherence(root); err != nil {
 		return WriterLockRecord{}, err
 	}
 	return stored, nil
@@ -217,12 +280,55 @@ func newWriterLockRecord(epoch uint64, now time.Time, leaseDuration time.Duratio
 	}
 }
 
+func ValidateWriterEpochCoherence(root string) error {
+	manifest, err := LoadStoreManifest(root)
+	if err != nil {
+		return err
+	}
+	lock, err := LoadWriterLock(root)
+	if err != nil {
+		return err
+	}
+	if manifest.CurrentWriterEpoch != lock.WriterEpoch {
+		return newWriterEpochIncoherentError(manifest.CurrentWriterEpoch, lock.WriterEpoch)
+	}
+	return nil
+}
+
+func newWriterEpochIncoherentError(manifestEpoch uint64, lockEpoch uint64) error {
+	return fmt.Errorf("%w: manifest=%d lock=%d", ErrWriterEpochIncoherent, manifestEpoch, lockEpoch)
+}
+
+func maxWriterEpoch(left uint64, right uint64) uint64 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
 func acquireStoreWriterGuard(root string) (*storeWriterGuard, error) {
-	deadline := time.Now().Add(storeWriterGuardMaxWait)
+	deadline := storeWriterGuardNow().Add(storeWriterGuardMaxWait)
 	path := StoreWriterGuardPath(root)
 	for {
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
+			record := writerGuardRecord{
+				RecordVersion: StoreRecordVersion,
+				CreatedAt:     storeWriterGuardNow().UTC(),
+			}
+			data, marshalErr := json.Marshal(record)
+			if marshalErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				_ = storeSyncDir(root)
+				return nil, marshalErr
+			}
+			if _, writeErr := file.Write(append(data, '\n')); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				_ = storeSyncDir(root)
+				return nil, writeErr
+			}
 			if syncErr := storeSyncFile(file); syncErr != nil {
 				_ = file.Close()
 				_ = os.Remove(path)
@@ -244,7 +350,14 @@ func acquireStoreWriterGuard(root string) (*storeWriterGuard, error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if !time.Now().Before(deadline) {
+		recovered, recoverErr := recoverStaleStoreWriterGuard(root, storeWriterGuardNow())
+		if recoverErr != nil {
+			return nil, recoverErr
+		}
+		if recovered {
+			continue
+		}
+		if !storeWriterGuardNow().Before(deadline) {
 			return nil, ErrWriterLockHeld
 		}
 		storeWriterGuardSleep(storeWriterGuardRetryDelay)
@@ -259,4 +372,35 @@ func (g *storeWriterGuard) release() error {
 		return err
 	}
 	return storeSyncDir(g.root)
+}
+
+func recoverStaleStoreWriterGuard(root string, now time.Time) (bool, error) {
+	path := StoreWriterGuardPath(root)
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !guardFileIsProvablyStale(info, now) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := storeSyncDir(root); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func guardFileIsProvablyStale(info os.FileInfo, now time.Time) bool {
+	if info == nil {
+		return false
+	}
+	return !info.ModTime().Add(storeWriterGuardStaleAfter).After(now)
 }

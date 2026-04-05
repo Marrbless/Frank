@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+var storeManifestWriteJSONAtomic = WriteStoreJSONAtomic
+
 func LoadStoreManifest(root string) (StoreManifest, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return StoreManifest{}, err
@@ -62,7 +64,7 @@ func StoreManifestRecord(root string, manifest StoreManifest) error {
 	if err := ValidateStoreManifest(manifest); err != nil {
 		return err
 	}
-	return WriteStoreJSONAtomic(StoreManifestPath(root), manifest)
+	return storeManifestWriteJSONAtomic(StoreManifestPath(root), manifest)
 }
 
 func ValidateStoreManifest(manifest StoreManifest) error {
