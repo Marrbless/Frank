@@ -1028,6 +1028,51 @@ func writeMissionStepControlAndConfirm(controlFile string, statusFile string, st
 	return waitForMissionStatusStepConfirmation(statusFile, stepID, expectedJobID, expected, previousStatusUpdatedAt, waitTimeout)
 }
 
+func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", encodeErrPrefix, path, err)
+	}
+	data = append(data, '\n')
+
+	if err := writeJSONBytesAtomic(path, data); err != nil {
+		return fmt.Errorf("%s %q: %w", writeErrPrefix, path, err)
+	}
+
+	return nil
+}
+
+func writeJSONBytesAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+
+	tempPath := tempFile.Name()
+	defer func() {
+		if err == nil {
+			return
+		}
+		if closeErr := tempFile.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		_ = os.Remove(tempPath)
+	}()
+
+	if _, err = tempFile.Write(data); err != nil {
+		return err
+	}
+	if err = tempFile.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tempPath, path); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func configureMissionBootstrap(cmd *cobra.Command, ag *agent.AgentLoop) error {
 	_, err := configureMissionBootstrapJob(cmd, ag)
 	return err
@@ -1130,6 +1175,7 @@ type missionInspectSummary = missioncontrol.InspectSummary
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
 var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
+var writeMissionStatusSnapshotAtomic = missioncontrol.WriteMissionStatusSnapshotAtomic
 
 func validateMissionJob(job missioncontrol.Job) error {
 	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
@@ -1545,53 +1591,6 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-var writeMissionStatusSnapshotAtomic = writeJSONAtomic
-
-func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("%s %q: %w", encodeErrPrefix, path, err)
-	}
-	data = append(data, '\n')
-
-	if err := writeJSONBytesAtomic(path, data); err != nil {
-		return fmt.Errorf("%s %q: %w", writeErrPrefix, path, err)
-	}
-
-	return nil
-}
-
-func writeJSONBytesAtomic(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-
-	tempPath := tempFile.Name()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if closeErr := tempFile.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		_ = os.Remove(tempPath)
-	}()
-
-	if _, err = tempFile.Write(data); err != nil {
-		return err
-	}
-	if err = tempFile.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tempPath, path); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.AgentLoop, now time.Time) error {
 	if path == "" {
 		return nil
@@ -1649,7 +1648,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		snapshot.RuntimeSummary = &summary
 	}
 
-	return writeMissionStatusSnapshotAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
+	return writeMissionStatusSnapshotAtomic(path, snapshot)
 }
 
 func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time) error {
@@ -1668,20 +1667,15 @@ func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeR
 		now = now.UTC()
 	}
 
-	snapshot, err := missioncontrol.BuildCommittedMissionStatusSnapshot(
-		storeRoot,
-		jobID,
-		missioncontrol.MissionStatusSnapshotOptions{
-			MissionRequired: missionRequired,
-			MissionFile:     missionFile,
-			UpdatedAt:       now,
-		},
-	)
+	snapshot, err := missioncontrol.BuildCommittedMissionStatusSnapshot(storeRoot, jobID, missioncontrol.MissionStatusSnapshotOptions{
+		MissionRequired: missionRequired,
+		MissionFile:     missionFile,
+		UpdatedAt:       now,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to build committed mission status snapshot from durable store %q: %w", storeRoot, err)
 	}
-
-	return writeMissionStatusSnapshotAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
+	return writeMissionStatusSnapshotAtomic(path, snapshot)
 }
 
 func intersectAllowedTools(ec missioncontrol.ExecutionContext) []string {

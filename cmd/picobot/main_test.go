@@ -2903,14 +2903,23 @@ func TestStartupAndRuntimeChangeDurableProjectionUseSameSharedBuilder(t *testing
 			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
 		})
 	}
-	now := time.Date(2026, 4, 5, 19, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
+	requestBase := now.Add(-8 * time.Hour)
+	auditBase := now.Add(-7 * time.Hour)
+	pausedAt := now.Add(-6 * time.Hour)
+	for i := range requests {
+		requests[i].RequestedAt = requestBase.Add(time.Duration(i) * time.Minute)
+	}
+	for i := range history {
+		history[i].Timestamp = auditBase.Add(time.Duration(i) * time.Minute)
+	}
 	runtime := missioncontrol.JobRuntimeState{
 		JobID:            job.ID,
 		State:            missioncontrol.JobStatePaused,
 		ActiveStepID:     "final",
 		InspectablePlan:  &plan,
 		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
-		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		PausedAt:         pausedAt,
 		ApprovalRequests: requests,
 		AuditHistory:     history,
 		CompletedSteps: []missioncontrol.RuntimeStepRecord{
@@ -3181,14 +3190,23 @@ func TestWriteProjectedMissionStatusSnapshotIncludesCommittedRuntimeSummaryTrunc
 			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
 		})
 	}
-	now := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+	now := time.Now().UTC().Truncate(time.Second)
+	requestBase := now.Add(-8 * time.Hour)
+	auditBase := now.Add(-7 * time.Hour)
+	pausedAt := now.Add(-6 * time.Hour)
+	for i := range requests {
+		requests[i].RequestedAt = requestBase.Add(time.Duration(i) * time.Minute)
+	}
+	for i := range history {
+		history[i].Timestamp = auditBase.Add(time.Duration(i) * time.Minute)
+	}
 	runtime := missioncontrol.JobRuntimeState{
 		JobID:            job.ID,
 		State:            missioncontrol.JobStatePaused,
 		ActiveStepID:     "final",
 		InspectablePlan:  &plan,
 		PausedReason:     missioncontrol.RuntimePauseReasonOperatorCommand,
-		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		PausedAt:         pausedAt,
 		ApprovalRequests: requests,
 		AuditHistory:     history,
 		CompletedSteps: []missioncontrol.RuntimeStepRecord{
@@ -3220,7 +3238,7 @@ func TestWriteProjectedMissionStatusSnapshotIncludesCommittedRuntimeSummaryTrunc
 	if got.RuntimeSummary.PausedReason != missioncontrol.RuntimePauseReasonOperatorCommand {
 		t.Fatalf("RuntimeSummary.PausedReason = %q, want %q", got.RuntimeSummary.PausedReason, missioncontrol.RuntimePauseReasonOperatorCommand)
 	}
-	if got.RuntimeSummary.PausedAt == nil || *got.RuntimeSummary.PausedAt != "2026-03-24T13:30:00Z" {
+	if got.RuntimeSummary.PausedAt == nil || *got.RuntimeSummary.PausedAt != pausedAt.Format(time.RFC3339) {
 		t.Fatalf("RuntimeSummary.PausedAt = %#v, want RFC3339 pause time", got.RuntimeSummary.PausedAt)
 	}
 	if !reflect.DeepEqual(got.AllowedTools, []string{"read"}) {
@@ -7666,11 +7684,11 @@ func TestMissionStatusRuntimePersistenceProjectionFailureLeavesSnapshotUnchanged
 
 	originalWrite := writeMissionStatusSnapshotAtomic
 	t.Cleanup(func() { writeMissionStatusSnapshotAtomic = originalWrite })
-	writeMissionStatusSnapshotAtomic = func(path string, value any, encodeErrPrefix string, writeErrPrefix string) error {
+	writeMissionStatusSnapshotAtomic = func(path string, snapshot missionStatusSnapshot) error {
 		if path == statusFile {
 			return errors.New("forced projection write failure")
 		}
-		return originalWrite(path, value, encodeErrPrefix, writeErrPrefix)
+		return originalWrite(path, snapshot)
 	}
 
 	hub := chat.NewHub(10)
