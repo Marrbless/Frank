@@ -26,6 +26,7 @@ type TaskState struct {
 	operatorChannel     string
 	operatorChatID      string
 	auditEvents         []missioncontrol.AuditEvent
+	runtimePersistHook  func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
 	runtimeChangeHook   func()
 }
 
@@ -135,6 +136,15 @@ func (s *TaskState) SetRuntimeChangeHook(hook func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtimeChangeHook = hook
+}
+
+func (s *TaskState) SetRuntimePersistHook(hook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runtimePersistHook = hook
 }
 
 func (s *TaskState) SetOperatorSession(channel string, chatID string) {
@@ -669,6 +679,8 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
+	missionJob := missioncontrol.CloneJob(&s.missionJob)
+	hasMissionJob := s.hasMissionJob
 	operatorChannel := s.operatorChannel
 	operatorChatID := s.operatorChatID
 	s.mu.Unlock()
@@ -775,11 +787,20 @@ func (s *TaskState) ApplyApprovalDecision(jobID string, stepID string, decision 
 		return err
 	}
 
+	hydrateJob := missioncontrol.Job{ID: jobID}
+	if hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+		hydrateJob = *missioncontrol.CloneJob(missionJob)
+	}
+
 	s.mu.Lock()
 	if rebootSafePath && nextRuntime.ActiveStepID != "" {
-		err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, storeControl)
+		err = s.persistHydratedRuntimeStateLocked(hydrateJob, nextRuntime, storeControl)
 	} else {
-		err = s.storeRuntimeStateLocked(storeJob, nextRuntime, storeControl)
+		liveJob := storeJob
+		if liveJob == nil && hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+			liveJob = missioncontrol.CloneJob(missionJob)
+		}
+		err = s.storeRuntimeStateLocked(liveJob, nextRuntime, storeControl)
 	}
 	s.mu.Unlock()
 	if err == nil {
@@ -800,6 +821,8 @@ func (s *TaskState) RevokeApproval(jobID string, stepID string) error {
 	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
+	missionJob := missioncontrol.CloneJob(&s.missionJob)
+	hasMissionJob := s.hasMissionJob
 	operatorChannel := s.operatorChannel
 	operatorChatID := s.operatorChatID
 	s.mu.Unlock()
@@ -895,11 +918,20 @@ func (s *TaskState) RevokeApproval(jobID string, stepID string) error {
 		return err
 	}
 
+	hydrateJob := missioncontrol.Job{ID: jobID}
+	if hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+		hydrateJob = *missioncontrol.CloneJob(missionJob)
+	}
+
 	s.mu.Lock()
 	if rebootSafePath && nextRuntime.ActiveStepID != "" {
-		err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, storeControl)
+		err = s.persistHydratedRuntimeStateLocked(hydrateJob, nextRuntime, storeControl)
 	} else {
-		err = s.storeRuntimeStateLocked(storeJob, nextRuntime, storeControl)
+		liveJob := storeJob
+		if liveJob == nil && hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+			liveJob = missioncontrol.CloneJob(missionJob)
+		}
+		err = s.storeRuntimeStateLocked(liveJob, nextRuntime, storeControl)
 	}
 	s.mu.Unlock()
 	if err == nil {
@@ -1193,7 +1225,10 @@ func (s *TaskState) ClearExecutionContext() {
 }
 
 func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
-	storedRuntime := *missioncontrol.CloneJobRuntimeState(&runtimeState)
+	storedRuntime, persistControl, err := s.persistPreparedRuntimeStateLocked(job, runtimeState, control)
+	if err != nil {
+		return err
+	}
 	if job != nil && storedRuntime.InspectablePlan == nil {
 		inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(*job)
 		if err != nil {
@@ -1202,67 +1237,110 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 		storedRuntime.InspectablePlan = &inspectablePlan
 	}
 
-	s.runtimeState = storedRuntime
-	s.hasRuntimeState = true
-	s.auditEvents = missioncontrol.CloneAuditHistory(storedRuntime.AuditHistory)
-
+	var storedControl *missioncontrol.RuntimeControlContext
+	var storedExecutionContext missioncontrol.ExecutionContext
+	hasExecutionContext := false
 	if storedRuntime.ActiveStepID != "" {
-		if control != nil {
-			if _, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, storedRuntime); err != nil {
-				return err
-			}
-			s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(control)
-			s.hasRuntimeControl = true
-		} else {
+		if control == nil {
 			if job == nil {
 				return missioncontrol.ValidationError{
 					Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
-					Message: "runtime control requires a mission job or persisted control context",
+					Message: "runtime execution requires a mission job or persisted control context",
 				}
 			}
-			builtControl, err := missioncontrol.BuildRuntimeControlContext(*job, runtimeState.ActiveStepID)
+			builtControl, err := missioncontrol.BuildRuntimeControlContext(*job, storedRuntime.ActiveStepID)
 			if err != nil {
 				return err
 			}
-			s.runtimeControl = builtControl
-			s.hasRuntimeControl = true
+			storedControl = &builtControl
+			if persistControl == nil {
+				persistControl = missioncontrol.CloneRuntimeControlContext(&builtControl)
+			}
+			resolved, err := missioncontrol.ResolveExecutionContextWithRuntime(*job, storedRuntime)
+			if err != nil {
+				return err
+			}
+			storedExecutionContext = resolved
+		} else {
+			if persistControl == nil {
+				return missioncontrol.ValidationError{
+					Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+					Message: "runtime execution requires a mission job or persisted control context",
+				}
+			}
+			resolved, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*persistControl, storedRuntime)
+			if err != nil {
+				return err
+			}
+			storedExecutionContext = resolved
+			storedControl = missioncontrol.CloneRuntimeControlContext(persistControl)
 		}
+		hasExecutionContext = true
+	}
+
+	s.runtimeState = storedRuntime
+	s.hasRuntimeState = true
+	s.auditEvents = missioncontrol.CloneAuditHistory(storedRuntime.AuditHistory)
+	if storedControl != nil {
+		s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(storedControl)
+		s.hasRuntimeControl = true
 	} else {
 		s.runtimeControl = missioncontrol.RuntimeControlContext{}
 		s.hasRuntimeControl = false
 	}
-
-	if storedRuntime.ActiveStepID == "" {
-		s.storeMissionJobLocked(job)
+	s.storeMissionJobLocked(job)
+	if hasExecutionContext {
+		s.executionContext = storedExecutionContext
+		s.hasExecutionContext = true
+	} else {
 		s.executionContext = missioncontrol.ExecutionContext{}
 		s.hasExecutionContext = false
-		return nil
 	}
+	return nil
+}
 
-	if control != nil {
-		ec, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, storedRuntime)
+func (s *TaskState) persistPreparedRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, error) {
+	storedRuntime := *missioncontrol.CloneJobRuntimeState(&runtimeState)
+	persistControl := missioncontrol.CloneRuntimeControlContext(control)
+	if s.runtimePersistHook == nil {
+		return storedRuntime, persistControl, nil
+	}
+	if job != nil && len(job.Plan.Steps) > 0 && storedRuntime.InspectablePlan == nil {
+		inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(*job)
 		if err != nil {
-			return err
+			return missioncontrol.JobRuntimeState{}, nil, err
 		}
-		s.storeMissionJobLocked(job)
-		s.executionContext = ec
-		s.hasExecutionContext = true
-		return nil
+		storedRuntime.InspectablePlan = &inspectablePlan
 	}
-	if job == nil {
-		return missioncontrol.ValidationError{
-			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
-			Message: "runtime execution requires a mission job or persisted control context",
+	if storedRuntime.ActiveStepID != "" && persistControl == nil {
+		if job == nil || len(job.Plan.Steps) == 0 {
+			return missioncontrol.JobRuntimeState{}, nil, missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "runtime control requires a mission job or persisted control context",
+			}
 		}
+		builtControl, err := missioncontrol.BuildRuntimeControlContext(*job, storedRuntime.ActiveStepID)
+		if err != nil {
+			return missioncontrol.JobRuntimeState{}, nil, err
+		}
+		persistControl = &builtControl
 	}
-	ec, err := missioncontrol.ResolveExecutionContextWithRuntime(*job, storedRuntime)
+	if err := s.runtimePersistHook(
+		missioncontrol.CloneJob(job),
+		*missioncontrol.CloneJobRuntimeState(&storedRuntime),
+		missioncontrol.CloneRuntimeControlContext(persistControl),
+	); err != nil {
+		return missioncontrol.JobRuntimeState{}, nil, err
+	}
+	return storedRuntime, persistControl, nil
+}
+
+func (s *TaskState) persistHydratedRuntimeStateLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+	storedRuntime, persistControl, err := s.persistPreparedRuntimeStateLocked(&job, runtimeState, control)
 	if err != nil {
 		return err
 	}
-	s.storeMissionJobLocked(job)
-	s.executionContext = ec
-	s.hasExecutionContext = true
-	return nil
+	return s.hydrateRuntimeControlLocked(job, storedRuntime, persistControl)
 }
 
 func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
@@ -1339,6 +1417,8 @@ func (s *TaskState) applyRuntimeControl(jobID string, action string, apply func(
 	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
+	missionJob := missioncontrol.CloneJob(&s.missionJob)
+	hasMissionJob := s.hasMissionJob
 	s.mu.Unlock()
 
 	if !hasExecutionContext {
@@ -1381,29 +1461,20 @@ func (s *TaskState) applyRuntimeControl(jobID string, action string, apply func(
 			return err
 		}
 
+		hydrateJob := missioncontrol.Job{ID: jobID}
+		if hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+			hydrateJob = *missioncontrol.CloneJob(missionJob)
+		}
+
 		s.mu.Lock()
 		if nextRuntime.State == missioncontrol.JobStateRunning {
-			if control == nil {
-				err = missioncontrol.ValidationError{
-					Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
-					Message: "operator command requires persisted mission control context",
-				}
-			} else {
-				resolved, resolveErr := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, nextRuntime)
-				if resolveErr != nil {
-					err = resolveErr
-				} else {
-					s.runtimeState = nextRuntime
-					s.hasRuntimeState = true
-					s.runtimeControl = *missioncontrol.CloneRuntimeControlContext(control)
-					s.hasRuntimeControl = true
-					s.executionContext = resolved
-					s.hasExecutionContext = true
-					err = nil
-				}
+			liveJob := (*missioncontrol.Job)(nil)
+			if hasMissionJob && missionJob != nil && missionJob.ID == jobID {
+				liveJob = missioncontrol.CloneJob(missionJob)
 			}
+			err = s.storeRuntimeStateLocked(liveJob, nextRuntime, control)
 		} else {
-			err = s.hydrateRuntimeControlLocked(missioncontrol.Job{ID: jobID}, nextRuntime, nil)
+			err = s.persistHydratedRuntimeStateLocked(hydrateJob, nextRuntime, control)
 		}
 		s.mu.Unlock()
 		if err != nil {

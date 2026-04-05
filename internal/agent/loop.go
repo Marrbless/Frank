@@ -421,6 +421,13 @@ func (a *AgentLoop) SetMissionRuntimeChangeHook(hook func()) {
 	a.taskState.SetRuntimeChangeHook(hook)
 }
 
+func (a *AgentLoop) SetMissionRuntimePersistHook(hook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+	a.taskState.SetRuntimePersistHook(hook)
+}
+
 func (a *AgentLoop) SetMissionRequired(required bool) {
 	if a == nil || a.tools == nil {
 		return

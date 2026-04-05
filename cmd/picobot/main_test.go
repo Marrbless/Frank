@@ -3155,8 +3155,29 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	if deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel != "cli" || deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID != "direct" {
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
+	durableDenied, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState(denied) error = %v", err)
+	}
+	if durableDenied.State != missioncontrol.JobStateWaitingUser {
+		t.Fatalf("HydrateCommittedJobRuntimeState(denied).State = %q, want %q", durableDenied.State, missioncontrol.JobStateWaitingUser)
+	}
+	if len(durableDenied.ApprovalRequests) != 1 || durableDenied.ApprovalRequests[0].State != missioncontrol.ApprovalStateDenied {
+		t.Fatalf("HydrateCommittedJobRuntimeState(denied).ApprovalRequests = %#v, want one denied approval", durableDenied.ApprovalRequests)
+	}
 
+	statusFile = filepath.Join(t.TempDir(), "status.json")
+	cmd = newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(second mission-status-file) error = %v", err)
+	}
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(second mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(second mission-step) error = %v", err)
+	}
 	ag = agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
 	installMissionRuntimeChangeHook(cmd, ag)
 	if err := configureMissionBootstrap(cmd, ag); err != nil {
@@ -3188,6 +3209,19 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle(t *te
 	}
 	if approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel != "cli" || approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID != "direct" {
 		t.Fatalf("approvedSnapshot.Runtime.ApprovalGrants[0] session = (%q, %q), want (%q, %q)", approvedSnapshot.Runtime.ApprovalGrants[0].SessionChannel, approvedSnapshot.Runtime.ApprovalGrants[0].SessionChatID, "cli", "direct")
+	}
+	durableApproved, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), job.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState(approved) error = %v", err)
+	}
+	if durableApproved.State != missioncontrol.JobStatePaused {
+		t.Fatalf("HydrateCommittedJobRuntimeState(approved).State = %q, want %q", durableApproved.State, missioncontrol.JobStatePaused)
+	}
+	if len(durableApproved.CompletedSteps) != 1 || durableApproved.CompletedSteps[0].StepID != "build" {
+		t.Fatalf("HydrateCommittedJobRuntimeState(approved).CompletedSteps = %#v, want build completion", durableApproved.CompletedSteps)
+	}
+	if len(durableApproved.ApprovalGrants) != 1 || durableApproved.ApprovalGrants[0].State != missioncontrol.ApprovalStateGranted {
+		t.Fatalf("HydrateCommittedJobRuntimeState(approved).ApprovalGrants = %#v, want one granted approval", durableApproved.ApprovalGrants)
 	}
 }
 
@@ -3286,7 +3320,18 @@ func TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycl
 		t.Fatalf("deniedSnapshot.Runtime.ApprovalRequests[0] session = (%q, %q), want (%q, %q)", deniedSnapshot.Runtime.ApprovalRequests[0].SessionChannel, deniedSnapshot.Runtime.ApprovalRequests[0].SessionChatID, "cli", "direct")
 	}
 
+	statusFile = filepath.Join(t.TempDir(), "status.json")
+	cmd = newMissionBootstrapTestCommand()
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(second mission-status-file) error = %v", err)
+	}
 	writeMissionStatusSnapshotFile(t, statusFile, initialSnapshot)
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(second mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(second mission-step) error = %v", err)
+	}
 	ag = agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
 	installMissionRuntimeChangeHook(cmd, ag)
 	if err := configureMissionBootstrap(cmd, ag); err != nil {
@@ -3806,6 +3851,13 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	if resumedSnapshot.RuntimeControl == nil || resumedSnapshot.RuntimeControl.Step.ID != "build" {
 		t.Fatalf("resumedSnapshot.RuntimeControl = %#v, want persisted build control", resumedSnapshot.RuntimeControl)
 	}
+	durableResumed, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState(resumed) error = %v", err)
+	}
+	if durableResumed.State != missioncontrol.JobStateRunning || durableResumed.ActiveStepID != "build" {
+		t.Fatalf("HydrateCommittedJobRuntimeState(resumed) = %#v, want running build runtime", durableResumed)
+	}
 
 	ag.ClearMissionStep()
 
@@ -3834,6 +3886,13 @@ func TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle(t *test
 	}
 	if abortedSnapshot.RuntimeControl != nil {
 		t.Fatalf("abortedSnapshot.RuntimeControl = %#v, want nil for terminal aborted snapshot", abortedSnapshot.RuntimeControl)
+	}
+	durableAborted, err := missioncontrol.HydrateCommittedJobRuntimeState(resolveMissionStoreRoot(cmd), "job-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState(aborted) error = %v", err)
+	}
+	if durableAborted.State != missioncontrol.JobStateAborted {
+		t.Fatalf("HydrateCommittedJobRuntimeState(aborted).State = %q, want %q", durableAborted.State, missioncontrol.JobStateAborted)
 	}
 }
 
@@ -6555,10 +6614,583 @@ func TestResolveMissionStoreRootReturnsEmptyWithoutInputs(t *testing.T) {
 	}
 }
 
+func TestMissionStatusBootstrapUsesCommittedDurableRuntimeWhenPresent(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 7, 1, now, missioncontrol.JobStatePaused, "build")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 7, 1, runtimeControlForBootstrapStep(t, job, "build"))
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	ag := newMissionBootstrapTestLoop()
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false after durable paused-runtime rehydration")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+}
+
+func TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreAbsent(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want %q", runtime.ActiveStepID, "build")
+	}
+}
+
+func TestLoadPersistedMissionRuntimeUsesSnapshotWhenStoreRootUnconfigured(t *testing.T) {
+	job := testMissionBootstrapJob()
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		JobID:  job.ID,
+		StepID: "build",
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+		},
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+	})
+
+	runtime, control, source, ok, err := loadPersistedMissionRuntime(statusFile, "", job, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("loadPersistedMissionRuntime() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("loadPersistedMissionRuntime() ok = false, want true")
+	}
+	if source != statusFile {
+		t.Fatalf("loadPersistedMissionRuntime() source = %q, want %q", source, statusFile)
+	}
+	if runtime.State != missioncontrol.JobStatePaused || runtime.ActiveStepID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() runtime = %#v, want paused build runtime", runtime)
+	}
+	if control == nil || control.Step.ID != "build" {
+		t.Fatalf("loadPersistedMissionRuntime() control = %#v, want build control", control)
+	}
+}
+
+func TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreEmptyForJob(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 13, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, "other-job", 3, 1, now, missioncontrol.JobStatePaused, "build")
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+}
+
+func TestMissionStatusBootstrapPrefersDurableRuntimeOverConflictingSnapshot(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 14, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 5, 1, now, missioncontrol.JobStatePaused, "build")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 5, 1, runtimeControlForBootstrapStep(t, job, "build"))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "final",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "final"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "final",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want durable %q", runtime.ActiveStepID, "build")
+	}
+}
+
+func TestMissionStatusBootstrapFailsClosedWhenDurableHydrationFails(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 15, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 6, 1, now, missioncontrol.JobStatePaused, "build")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 6, 1, runtimeControlForBootstrapStep(t, job, "final"))
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		},
+	})
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want durable hydration failure")
+	}
+	if !strings.Contains(err.Error(), "durable store") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want durable-store failure", err)
+	}
+}
+
+func TestMissionStatusBootstrapDurableTerminalStateDoesNotRestoreActiveControl(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 16, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 8, 2, now, missioncontrol.JobStateCompleted, "")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 8, 1, runtimeControlForBootstrapStep(t, job, "build"))
+	writeCommittedMissionBootstrapActiveJobRecord(t, storeRoot, 8, missioncontrol.JobStateRunning, "build", now, 1)
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, ok := ag.ActiveMissionStep(); ok {
+		t.Fatal("ActiveMissionStep() ok = true, want false for durable terminal state")
+	}
+	if _, ok := ag.MissionRuntimeControl(); ok {
+		t.Fatal("MissionRuntimeControl() ok = true, want false for durable terminal state")
+	}
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateCompleted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateCompleted)
+	}
+	if runtime.ActiveStepID != "" {
+		t.Fatalf("MissionRuntimeState().ActiveStepID = %q, want empty", runtime.ActiveStepID)
+	}
+}
+
+func TestMissionStatusBootstrapDurableRuntimeStillRequiresResumeApproval(t *testing.T) {
+	ag := newMissionBootstrapTestLoop()
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	storeRoot := missioncontrol.ResolveStoreRoot("", statusFile)
+	now := time.Date(2026, 4, 5, 17, 0, 0, 0, time.UTC)
+
+	writeCommittedMissionBootstrapJobRuntimeRecord(t, storeRoot, job.ID, 9, 1, now, missioncontrol.JobStateRunning, "build")
+	writeCommittedMissionBootstrapRuntimeControlRecord(t, storeRoot, 9, 1, runtimeControlForBootstrapStep(t, job, "build"))
+
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+
+	err := configureMissionBootstrap(cmd, ag)
+	if err == nil {
+		t.Fatal("configureMissionBootstrap() error = nil, want resume approval failure")
+	}
+	if !strings.Contains(err.Error(), "--mission-resume-approved") {
+		t.Fatalf("configureMissionBootstrap() error = %q, want resume approval message", err)
+	}
+}
+
+func TestMissionStatusRuntimePersistenceUpdatesDurableStoreAndSnapshotTogether(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+
+	snapshot := readMissionStatusSnapshotFile(t, statusFile)
+	if snapshot.Runtime == nil || snapshot.Runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("snapshot.Runtime = %#v, want paused runtime", snapshot.Runtime)
+	}
+
+	storeRoot := resolveMissionStoreRoot(cmd)
+	runtime, err := missioncontrol.HydrateCommittedJobRuntimeState(storeRoot, job.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("HydrateCommittedJobRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+	control, err := missioncontrol.HydrateCommittedRuntimeControlContext(storeRoot, job.ID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("HydrateCommittedRuntimeControlContext() error = %v", err)
+	}
+	if control == nil || control.Step.ID != "build" {
+		t.Fatalf("HydrateCommittedRuntimeControlContext() = %#v, want build control", control)
+	}
+}
+
+func TestMissionStatusRuntimePersistenceDurableWriteFailureLeavesSnapshotUnchanged(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+
+	storeRoot := resolveMissionStoreRoot(cmd)
+	seedIncoherentMissionStore(t, storeRoot, time.Date(2026, 4, 5, 18, 0, 0, 0, time.UTC))
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	err := ag.ActivateMissionStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateMissionStep() error = nil, want durable write failure")
+	}
+	if _, statErr := os.Stat(statusFile); !os.IsNotExist(statErr) {
+		t.Fatalf("status file stat error = %v, want not-exist", statErr)
+	}
+	if _, ok := ag.MissionRuntimeState(); ok {
+		t.Fatal("MissionRuntimeState() ok = true, want false after failed durable persist")
+	}
+}
+
+func TestMissionStatusBootstrapPrefersLatestDurableStateAfterMutation(t *testing.T) {
+	statusFile := filepath.Join(t.TempDir(), "status.json")
+	cmd := newMissionBootstrapTestCommand()
+	job := testMissionBootstrapJob()
+	missionFile := writeMissionBootstrapJobFile(t, job)
+	if err := cmd.Flags().Set("mission-status-file", statusFile); err != nil {
+		t.Fatalf("Flags().Set(mission-status-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-file", missionFile); err != nil {
+		t.Fatalf("Flags().Set(mission-file) error = %v", err)
+	}
+	if err := cmd.Flags().Set("mission-step", "build"); err != nil {
+		t.Fatalf("Flags().Set(mission-step) error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	provider := &missionStatusFixedResponseProvider{content: "unused"}
+	ag := agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+	installMissionRuntimeChangeHook(cmd, ag)
+
+	if err := configureMissionBootstrap(cmd, ag); err != nil {
+		t.Fatalf("configureMissionBootstrap() error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("PAUSE job-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(PAUSE) error = %v", err)
+	}
+
+	writeMissionStatusSnapshotFile(t, statusFile, missionStatusSnapshot{
+		MissionFile:    missionFile,
+		JobID:          job.ID,
+		StepID:         "build",
+		RuntimeControl: runtimeControlForBootstrapStep(t, job, "build"),
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        job.ID,
+			State:        missioncontrol.JobStateRunning,
+			ActiveStepID: "build",
+		},
+	})
+
+	ag2 := newMissionBootstrapTestLoop()
+	installMissionRuntimeChangeHook(cmd, ag2)
+	if err := configureMissionBootstrap(cmd, ag2); err != nil {
+		t.Fatalf("configureMissionBootstrap(second boot) error = %v", err)
+	}
+
+	runtime, ok := ag2.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStatePaused {
+		t.Fatalf("MissionRuntimeState().State = %q, want durable %q", runtime.State, missioncontrol.JobStatePaused)
+	}
+}
+
 func newMissionBootstrapTestLoop() *agent.AgentLoop {
 	hub := chat.NewHub(10)
 	provider := providers.NewStubProvider()
 	return agent.NewAgentLoop(hub, provider, provider.GetDefaultModel(), 3, "", nil)
+}
+
+func writeCommittedMissionBootstrapJobRuntimeRecord(t *testing.T, root string, jobID string, writerEpoch, appliedSeq uint64, at time.Time, state missioncontrol.JobState, activeStepID string) {
+	t.Helper()
+
+	record := missioncontrol.JobRuntimeRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		WriterEpoch:   writerEpoch,
+		AppliedSeq:    appliedSeq,
+		JobID:         jobID,
+		State:         state,
+		ActiveStepID:  activeStepID,
+		CreatedAt:     at.Add(-time.Minute).UTC(),
+		UpdatedAt:     at.UTC(),
+		StartedAt:     at.Add(-time.Minute).UTC(),
+	}
+	switch state {
+	case missioncontrol.JobStateRunning:
+		record.ActiveStepAt = at.UTC()
+	case missioncontrol.JobStateWaitingUser:
+		record.WaitingAt = at.UTC()
+		record.WaitingReason = "awaiting operator confirmation"
+	case missioncontrol.JobStatePaused:
+		record.PausedAt = at.UTC()
+		record.PausedReason = missioncontrol.RuntimePauseReasonOperatorCommand
+	case missioncontrol.JobStateAborted:
+		record.AbortedAt = at.UTC()
+		record.AbortedReason = "operator aborted"
+	case missioncontrol.JobStateCompleted:
+		record.CompletedAt = at.UTC()
+	case missioncontrol.JobStateFailed:
+		record.FailedAt = at.UTC()
+	}
+	if err := missioncontrol.StoreJobRuntimeRecord(root, record); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord() error = %v", err)
+	}
+}
+
+func writeCommittedMissionBootstrapRuntimeControlRecord(t *testing.T, root string, writerEpoch, seq uint64, control *missioncontrol.RuntimeControlContext) {
+	t.Helper()
+	if control == nil {
+		return
+	}
+
+	record := missioncontrol.RuntimeControlRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		WriterEpoch:   writerEpoch,
+		LastSeq:       seq,
+		JobID:         control.JobID,
+		StepID:        control.Step.ID,
+		MaxAuthority:  control.MaxAuthority,
+		AllowedTools:  append([]string(nil), control.AllowedTools...),
+		Step:          cloneMissionBootstrapStep(control.Step),
+	}
+	if err := missioncontrol.StoreRuntimeControlRecord(root, record); err != nil {
+		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
+	}
+}
+
+func writeCommittedMissionBootstrapActiveJobRecord(t *testing.T, root string, writerEpoch uint64, state missioncontrol.JobState, activeStepID string, at time.Time, activationSeq uint64) {
+	t.Helper()
+
+	record, err := missioncontrol.NewActiveJobRecord(
+		writerEpoch,
+		"job-1",
+		state,
+		activeStepID,
+		"holder-1",
+		at.Add(time.Minute),
+		at,
+		activationSeq,
+	)
+	if err != nil {
+		t.Fatalf("NewActiveJobRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreActiveJobRecord(root, record); err != nil {
+		t.Fatalf("StoreActiveJobRecord() error = %v", err)
+	}
+}
+
+func seedIncoherentMissionStore(t *testing.T, root string, now time.Time) {
+	t.Helper()
+
+	manifest, err := missioncontrol.InitStoreManifest(root, now)
+	if err != nil {
+		t.Fatalf("InitStoreManifest() error = %v", err)
+	}
+	manifest.CurrentWriterEpoch = 2
+	if err := missioncontrol.StoreManifestRecord(root, manifest); err != nil {
+		t.Fatalf("StoreManifestRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreWriterLockRecord(root, missioncontrol.WriterLockRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		WriterEpoch:    1,
+		LeaseHolderID:  "other-holder",
+		StartedAt:      now,
+		RenewedAt:      now,
+		LeaseExpiresAt: now.Add(time.Minute),
+		JobID:          "job-1",
+	}); err != nil {
+		t.Fatalf("StoreWriterLockRecord() error = %v", err)
+	}
+}
+
+func cloneMissionBootstrapStep(step missioncontrol.Step) missioncontrol.Step {
+	cloned := step
+	cloned.DependsOn = append([]string(nil), step.DependsOn...)
+	cloned.AllowedTools = append([]string(nil), step.AllowedTools...)
+	cloned.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
+	cloned.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
+	return cloned
 }
 
 func configureMissionBootstrapJobForStartupTest(t *testing.T, cmd *cobra.Command, ag *agent.AgentLoop) missioncontrol.Job {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -816,7 +817,24 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 	}
 
 	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	storeRoot := resolveMissionStoreRoot(cmd)
+
+	if storeRoot != "" {
+		hostname, _ := os.Hostname()
+		lease := missioncontrol.WriterLockLease{
+			LeaseHolderID: fmt.Sprintf("picobot-%d-%d", os.Getpid(), time.Now().UTC().UnixNano()),
+			PID:           os.Getpid(),
+			Hostname:      hostname,
+		}
+		ag.SetMissionRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+			return missioncontrol.PersistProjectedRuntimeState(storeRoot, lease, job, runtime, control, time.Now().UTC())
+		})
+	} else {
+		ag.SetMissionRuntimePersistHook(nil)
+	}
+
 	if statusFile == "" {
+		ag.SetMissionRuntimeChangeHook(nil)
 		return
 	}
 
@@ -1011,13 +1029,14 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 	}
 
 	statusFile, _ := cmd.Flags().GetString("mission-status-file")
+	storeRoot := resolveMissionStoreRoot(cmd)
 	resumeApproved, _ := cmd.Flags().GetBool("mission-resume-approved")
 	job, err := loadMissionJobFile(missionFile)
 	if err != nil {
 		return nil, err
 	}
 
-	if runtimeState, runtimeControl, ok, err := loadPersistedMissionRuntime(statusFile, job); err != nil {
+	if runtimeState, runtimeControl, sourcePath, ok, err := loadPersistedMissionRuntime(statusFile, storeRoot, job, time.Now().UTC()); err != nil {
 		return nil, err
 	} else if ok {
 		if runtimeState.ActiveStepID != "" && runtimeState.ActiveStepID != missionStep {
@@ -1025,19 +1044,19 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 		}
 		if resumeApproved {
 			if err := ag.ResumeMissionRuntime(job, runtimeState, runtimeControl, true); err != nil {
-				return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", statusFile, err)
+				return nil, fmt.Errorf("failed to resume persisted mission runtime from %q: %w", sourcePath, err)
 			}
 			return &job, nil
 		}
 		switch runtimeState.State {
 		case missioncontrol.JobStatePaused, missioncontrol.JobStateWaitingUser:
 			if err := ag.HydrateMissionRuntimeControl(job, runtimeState, runtimeControl); err != nil {
-				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime control from %q: %w", statusFile, err)
+				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime control from %q: %w", sourcePath, err)
 			}
 			return &job, nil
 		case missioncontrol.JobStateCompleted, missioncontrol.JobStateFailed, missioncontrol.JobStateRejected, missioncontrol.JobStateAborted:
 			if err := ag.HydrateMissionRuntimeControl(job, runtimeState, runtimeControl); err != nil {
-				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime terminal state from %q: %w", statusFile, err)
+				return nil, fmt.Errorf("failed to rehydrate persisted mission runtime terminal state from %q: %w", sourcePath, err)
 			}
 			return &job, nil
 		default:
@@ -1131,7 +1150,44 @@ func loadMissionJobFile(path string) (missioncontrol.Job, error) {
 	return job, nil
 }
 
-func loadPersistedMissionRuntime(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, bool, error) {
+func loadPersistedMissionRuntime(path string, storeRoot string, job missioncontrol.Job, now time.Time) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, string, bool, error) {
+	if runtimeState, runtimeControl, ok, err := loadCommittedMissionRuntime(storeRoot, job, now); err != nil {
+		return missioncontrol.JobRuntimeState{}, nil, "", false, err
+	} else if ok {
+		return runtimeState, runtimeControl, storeRoot, true, nil
+	}
+
+	if runtimeState, runtimeControl, ok, err := loadPersistedMissionRuntimeSnapshot(path, job); err != nil {
+		return missioncontrol.JobRuntimeState{}, nil, "", false, err
+	} else if ok {
+		return runtimeState, runtimeControl, path, true, nil
+	}
+
+	return missioncontrol.JobRuntimeState{}, nil, "", false, nil
+}
+
+func loadCommittedMissionRuntime(storeRoot string, job missioncontrol.Job, now time.Time) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, bool, error) {
+	if strings.TrimSpace(storeRoot) == "" {
+		return missioncontrol.JobRuntimeState{}, nil, false, nil
+	}
+
+	runtimeState, err := missioncontrol.HydrateCommittedJobRuntimeState(storeRoot, job.ID, now)
+	if err != nil {
+		if errors.Is(err, missioncontrol.ErrJobRuntimeRecordNotFound) {
+			return missioncontrol.JobRuntimeState{}, nil, false, nil
+		}
+		return missioncontrol.JobRuntimeState{}, nil, false, fmt.Errorf("failed to hydrate committed mission runtime from durable store %q: %w", storeRoot, err)
+	}
+
+	runtimeControl, err := missioncontrol.HydrateCommittedRuntimeControlContext(storeRoot, job.ID, now)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, nil, false, fmt.Errorf("failed to hydrate committed mission runtime control from durable store %q: %w", storeRoot, err)
+	}
+
+	return runtimeState, runtimeControl, true, nil
+}
+
+func loadPersistedMissionRuntimeSnapshot(path string, job missioncontrol.Job) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, bool, error) {
 	if path == "" {
 		return missioncontrol.JobRuntimeState{}, nil, false, nil
 	}
