@@ -299,6 +299,33 @@ func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
 	}
 }
 
+func TestMissionPackageLogsCommandPrunesExpiredPackagesAfterSuccessfulPackaging(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC()
+	oldPackageID := "20251230T120000.000000000Z-manual"
+	if err := writeCommandLogPackageForTest(root, oldPackageID, now.AddDate(0, 0, -91)); err != nil {
+		t.Fatalf("writeCommandLogPackageForTest() error = %v", err)
+	}
+	if _, err := missioncontrol.EnsureCurrentLogSegment(root, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(missioncontrol.StoreCurrentLogPath(root), []byte("gateway line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "package-logs", "--mission-store-root", root, "--reason", "manual"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	assertPathNotExists(t, missioncontrol.StoreLogPackageDir(root, oldPackageID))
+}
+
 func TestMissionPruneStoreCommandReturnsStableSummary(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now().UTC()
@@ -348,6 +375,46 @@ func TestMissionPruneStoreCommandReturnsStableSummary(t *testing.T) {
 	if summary.PrunedAuditFiles != 0 || summary.PrunedApprovalRequestFiles != 0 || summary.PrunedApprovalGrantFiles != 0 || summary.PrunedArtifactFiles != 0 || summary.SkippedNonterminalJobTrees != 0 {
 		t.Fatalf("summary = %#v, want only packaged dir count", summary)
 	}
+}
+
+func TestConfigureGatewayMissionStoreLoggingPrunesExpiredPackagesAfterStartupPackaging(t *testing.T) {
+	originalGatewayLogNow := gatewayLogNow
+	t.Cleanup(func() { gatewayLogNow = originalGatewayLogNow })
+
+	now := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	gatewayLogNow = func() time.Time { return now }
+
+	root := t.TempDir()
+	oldPackageID := "20251230T120000.000000000Z-reboot"
+	if err := writeCommandLogPackageForTest(root, oldPackageID, now.AddDate(0, 0, -91)); err != nil {
+		t.Fatalf("writeCommandLogPackageForTest() error = %v", err)
+	}
+	if _, err := missioncontrol.EnsureCurrentLogSegment(root, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(missioncontrol.StoreCurrentLogPath(root), []byte("startup line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	cmd := &cobra.Command{Use: "gateway"}
+	addMissionBootstrapFlags(cmd)
+	if err := cmd.Flags().Set("mission-store-root", root); err != nil {
+		t.Fatalf("Flags().Set(mission-store-root) error = %v", err)
+	}
+
+	storeRoot, lease, restore, err := configureGatewayMissionStoreLogging(cmd)
+	if err != nil {
+		t.Fatalf("configureGatewayMissionStoreLogging() error = %v", err)
+	}
+	defer restore()
+
+	if storeRoot != root {
+		t.Fatalf("configureGatewayMissionStoreLogging().storeRoot = %q, want %q", storeRoot, root)
+	}
+	if lease.LeaseHolderID == "" {
+		t.Fatal("configureGatewayMissionStoreLogging().lease.LeaseHolderID = empty, want gateway lease holder")
+	}
+	assertPathNotExists(t, missioncontrol.StoreLogPackageDir(root, oldPackageID))
 }
 
 func TestMissionPruneStoreCommandReturnsStableNoOpSummary(t *testing.T) {
@@ -413,6 +480,36 @@ func TestConfigureGatewayMissionStoreLoggingRoutesStdlibLoggerIntoActiveSegment(
 	if !strings.Contains(string(data), "gateway logger line") {
 		t.Fatalf("ReadFile(current.log) = %q, want logger line", string(data))
 	}
+}
+
+func writeCommandLogPackageForTest(root string, packageID string, createdAt time.Time) error {
+	if err := os.MkdirAll(missioncontrol.StoreLogPackageDir(root, packageID), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(missioncontrol.StoreLogPackageGatewayLogPath(root, packageID), []byte("gateway\n"), 0o644); err != nil {
+		return err
+	}
+	return missioncontrol.StoreLogPackageManifestRecord(root, missioncontrol.LogPackageManifest{
+		RecordVersion:   missioncontrol.StoreRecordVersion,
+		PackageID:       packageID,
+		Reason:          missioncontrol.LogPackageReasonManual,
+		CreatedAt:       createdAt,
+		SegmentOpenedAt: createdAt.Add(-time.Hour),
+		SegmentClosedAt: createdAt,
+		LogRelPath:      filepath.ToSlash(filepath.Join("log_packages", packageID, "gateway.log")),
+		ByteCount:       int64(len("gateway\n")),
+	})
+}
+
+func assertPathNotExists(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return
+	} else if err != nil {
+		t.Fatalf("Stat(%q) error = %v, want os.ErrNotExist", path, err)
+	}
+	t.Fatalf("Stat(%q) error = nil, want os.ErrNotExist", path)
 }
 
 func TestConfigureGatewayMissionStoreLoggingWithoutStoreRootPreservesExistingLoggerBehavior(t *testing.T) {

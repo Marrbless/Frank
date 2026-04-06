@@ -280,6 +280,34 @@ func TestPackageCurrentLogSegmentLeavesCurrentLogAndMetaPresentAfterSuccessfulPa
 	}
 }
 
+func TestPackageCurrentLogSegmentPrunesExpiredRetentionAfterSuccessfulPackaging(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+	expiredPackageID := "20251231T120000.000000000Z-manual"
+	writeLogPackageForTest(t, root, expiredPackageID, now.AddDate(0, 0, -91))
+
+	if _, err := EnsureCurrentLogSegment(root, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("current\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegment(root, LogPackageReasonManual, WriterLockLease{LeaseHolderID: "packager-1"}, now)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegment() error = %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("PackageCurrentLogSegment() = %#v, want packaged result", result)
+	}
+	assertPathNotExists(t, StoreLogPackageDir(root, expiredPackageID))
+	if _, err := os.Stat(StoreLogPackageDir(root, result.PackageID)); err != nil {
+		t.Fatalf("Stat(new log package dir) error = %v", err)
+	}
+}
+
 func TestPackageCurrentLogSegmentOnGatewayStartupPackagesPreExistingNonEmptySegmentOnceWithReasonReboot(t *testing.T) {
 	t.Parallel()
 
@@ -385,6 +413,34 @@ func TestPackageCurrentLogSegmentOnGatewayStartupNoOpWhenSegmentEmpty(t *testing
 	}
 }
 
+func TestPackageCurrentLogSegmentOnGatewayStartupPrunesExpiredRetentionAfterRebootPackaging(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	startupAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	expiredPackageID := "20251231T120000.000000000Z-manual"
+	writeLogPackageForTest(t, root, expiredPackageID, startupAt.AddDate(0, 0, -91))
+
+	if _, err := EnsureCurrentLogSegment(root, startupAt.Add(-time.Hour)); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("pre-reboot line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegmentOnGatewayStartup(root, WriterLockLease{LeaseHolderID: "gateway-1"}, startupAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() error = %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() = %#v, want packaged result", result)
+	}
+	assertPathNotExists(t, StoreLogPackageDir(root, expiredPackageID))
+	if _, err := os.Stat(StoreLogPackageDir(root, result.PackageID)); err != nil {
+		t.Fatalf("Stat(new startup package dir) error = %v", err)
+	}
+}
+
 func TestPackageCurrentLogSegmentOnUTCDayRolloverPackagesOnceWithReasonDailyAndOpensNewCurrentSegment(t *testing.T) {
 	t.Parallel()
 
@@ -473,6 +529,35 @@ func TestPackageCurrentLogSegmentOnUTCDayRolloverRepeatedChecksSameDayDoNotPacka
 	}
 	if string(currentData) != "day two\n" {
 		t.Fatalf("ReadFile(current.log) = %q, want %q", string(currentData), "day two\n")
+	}
+}
+
+func TestPackageCurrentLogSegmentOnUTCDayRolloverPrunesExpiredRetentionAfterSuccessfulPackaging(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 23, 58, 0, 0, time.UTC)
+	rolloverAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	expiredPackageID := "20251231T120000.000000000Z-manual"
+	writeLogPackageForTest(t, root, expiredPackageID, rolloverAt.AddDate(0, 0, -91))
+
+	if _, err := EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("day one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegmentOnUTCDayRollover(root, WriterLockLease{LeaseHolderID: "gateway-1"}, rolloverAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover() error = %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover() = %#v, want packaged result", result)
+	}
+	assertPathNotExists(t, StoreLogPackageDir(root, expiredPackageID))
+	if _, err := os.Stat(StoreLogPackageDir(root, result.PackageID)); err != nil {
+		t.Fatalf("Stat(new daily package dir) error = %v", err)
 	}
 }
 

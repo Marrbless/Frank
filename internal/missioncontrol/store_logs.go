@@ -206,7 +206,11 @@ func InspectCurrentLogSegment(root string) (CurrentLogSegmentState, error) {
 
 func PackageCurrentLogSegment(root string, reason LogPackageReason, lease WriterLockLease, now time.Time) (PackageCurrentLogResult, error) {
 	return withStoreLogIOMutex(root, func() (PackageCurrentLogResult, error) {
-		return packageCurrentLogSegmentLocked(root, reason, lease, now)
+		result, err := packageCurrentLogSegmentLocked(root, reason, lease, now)
+		if err != nil {
+			return PackageCurrentLogResult{}, err
+		}
+		return pruneStoreAfterSuccessfulLogPackage(root, lease, now, result)
 	})
 }
 
@@ -218,7 +222,7 @@ func PackageCurrentLogSegmentOnGatewayStartup(root string, lease WriterLockLease
 
 	return withStoreLogIOMutex(root, func() (PackageCurrentLogResult, error) {
 		result := newPackageCurrentLogResult(LogPackageReasonReboot)
-		return withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
+		result, err := withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
 			state, err := InspectCurrentLogSegment(root)
 			if err != nil {
 				return PackageCurrentLogResult{}, err
@@ -241,6 +245,10 @@ func PackageCurrentLogSegmentOnGatewayStartup(root string, lease WriterLockLease
 			}
 			return packageCurrentLogSegmentWithHeldMutation(root, LogPackageReasonReboot, now)
 		})
+		if err != nil {
+			return PackageCurrentLogResult{}, err
+		}
+		return pruneStoreAfterSuccessfulLogPackage(root, lease, now, result)
 	})
 }
 
@@ -261,7 +269,7 @@ func PackageCurrentLogSegmentOnUTCDayRollover(root string, lease WriterLockLease
 			result.NoOpCause = "same_day"
 			return result, nil
 		}
-		return withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
+		result, err = withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
 			recheckState, recheckMeta, err := inspectCurrentLogSegmentWithMeta(root)
 			if err != nil {
 				return PackageCurrentLogResult{}, err
@@ -289,6 +297,10 @@ func PackageCurrentLogSegmentOnUTCDayRollover(root string, lease WriterLockLease
 			}
 			return packageCurrentLogSegmentWithHeldMutation(root, LogPackageReasonDaily, now)
 		})
+		if err != nil {
+			return PackageCurrentLogResult{}, err
+		}
+		return pruneStoreAfterSuccessfulLogPackage(root, lease, now, result)
 	})
 }
 
@@ -445,6 +457,16 @@ func newPackageCurrentLogResult(reason LogPackageReason) PackageCurrentLogResult
 		CurrentLogRelPath:  storeCurrentLogRelPath(),
 		CurrentMetaRelPath: storeCurrentLogMetaRelPath(),
 	}
+}
+
+func pruneStoreAfterSuccessfulLogPackage(root string, lease WriterLockLease, now time.Time, result PackageCurrentLogResult) (PackageCurrentLogResult, error) {
+	if result.NoOp {
+		return result, nil
+	}
+	if _, err := PruneStore(root, lease, now); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func withLockedLogMutation(root string, lease WriterLockLease, now time.Time, fn func() (PackageCurrentLogResult, error)) (PackageCurrentLogResult, error) {
