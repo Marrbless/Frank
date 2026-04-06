@@ -418,6 +418,46 @@ func budgetPauseNotificationRecorded(runtime missioncontrol.JobRuntimeState) boo
 	return false
 }
 
+func waitingUserNotificationRecorded(runtime missioncontrol.JobRuntimeState) bool {
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "waiting_user_notification" {
+			continue
+		}
+		if !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		if runtime.ActiveStepID != "" && event.StepID != runtime.ActiveStepID {
+			continue
+		}
+		if !runtime.WaitingAt.IsZero() && event.Timestamp.Before(runtime.WaitingAt) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func buildMissionWaitingUserContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok := currentExecutionContext(taskState)
+	if ok && ec.Job != nil {
+		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		if err != nil {
+			return "", err
+		}
+		return "Waiting for user:\n" + summary, nil
+	}
+
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Waiting for user:\n" + summary, nil
+}
+
 func buildMissionBudgetPauseContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
@@ -522,12 +562,55 @@ func (a *AgentLoop) maybeEmitBudgetPauseNotification() {
 	}
 }
 
+func (a *AgentLoop) maybeEmitWaitingUserNotification() {
+	if a == nil || a.taskState == nil || a.hub == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStateWaitingUser {
+		return
+	}
+	if _, hasPendingApproval := selectPendingApprovalRequest(runtime); hasPendingApproval {
+		return
+	}
+	if waitingUserNotificationRecorded(runtime) {
+		return
+	}
+
+	channel, chatID, ok := a.taskState.OperatorSession()
+	if !ok {
+		return
+	}
+
+	exhausted, err := a.taskState.RecordOwnerFacingWaitingUser()
+	if err != nil {
+		log.Printf("mission runtime waiting-user notification accounting failed: %v", err)
+		return
+	}
+	if exhausted {
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	content, err := buildMissionWaitingUserContent(a.taskState, runtime)
+	if err != nil {
+		log.Printf("mission runtime waiting-user notification formatting failed: %v", err)
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
 func (a *AgentLoop) composeMissionRuntimeChangeHook(hook func()) func() {
 	return func() {
 		if hook != nil {
 			hook()
 		}
 		a.maybeEmitApprovalRequestNotification()
+		a.maybeEmitWaitingUserNotification()
 		a.maybeEmitBudgetPauseNotification()
 	}
 }

@@ -151,6 +151,58 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 	}
 }
 
+func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Waiting for your answer."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+	if err := ag.ActivateMissionStep(testWaitingUserNotificationMissionJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Waiting for your answer." {
+		t.Fatalf("ProcessDirect() response = %q, want waiting-user response", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "cli" || out.ChatID != "direct" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
+		}
+		if !strings.Contains(out.Content, "Waiting for user:") {
+			t.Fatalf("outbound content = %q, want waiting-user notification prefix", out.Content)
+		}
+		if !strings.Contains(out.Content, `"waiting_reason": "discussion_blocker"`) {
+			t.Fatalf("outbound content = %q, want waiting reason", out.Content)
+		}
+	default:
+		t.Fatal("expected a waiting-user outbound notification")
+	}
+
+	ag.maybeEmitWaitingUserNotification()
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected duplicate waiting-user notification: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	last := runtime.AuditHistory[len(runtime.AuditHistory)-1]
+	if last.ToolName != "waiting_user_notification" {
+		t.Fatalf("last audit tool = %q, want %q", last.ToolName, "waiting_user_notification")
+	}
+}
+
 func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T) {
 	t.Parallel()
 
@@ -214,5 +266,29 @@ func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T)
 	case out := <-hub.Out:
 		t.Fatalf("unexpected duplicate budget pause notification: %#v", out)
 	default:
+	}
+}
+
+func testWaitingUserNotificationMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:      "build",
+					Type:    missioncontrol.StepTypeDiscussion,
+					Subtype: missioncontrol.StepSubtypeBlocker,
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
 	}
 }

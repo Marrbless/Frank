@@ -972,6 +972,53 @@ func TestRecordOwnerFacingBudgetPauseCountsTowardOwnerFacingMessageBudget(t *tes
 	}
 }
 
+func TestRecordOwnerFacingWaitingUserCountsTowardOwnerFacingMessageBudget(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 13, 10, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:         "job-1",
+		State:         JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "discussion_blocker",
+		WaitingAt:     now.Add(-time.Minute),
+	}
+
+	var exhausted bool
+	var err error
+	for i := 0; i < maxOwnerFacingMessagesPerJob; i++ {
+		runtime, exhausted, err = RecordOwnerFacingWaitingUser(runtime, now.Add(time.Duration(i)*time.Minute))
+		if err != nil {
+			t.Fatalf("RecordOwnerFacingWaitingUser() step %d error = %v", i, err)
+		}
+	}
+
+	if !exhausted {
+		t.Fatal("RecordOwnerFacingWaitingUser() exhausted = false, want true on threshold")
+	}
+	if runtime.State != JobStatePaused {
+		t.Fatalf("State = %q, want %q", runtime.State, JobStatePaused)
+	}
+	if runtime.BudgetBlocker == nil || runtime.BudgetBlocker.Ceiling != ownerMessagesBudgetCeiling {
+		t.Fatalf("BudgetBlocker = %#v, want owner_messages blocker", runtime.BudgetBlocker)
+	}
+	if runtime.BudgetBlocker.Observed != maxOwnerFacingMessagesPerJob {
+		t.Fatalf("BudgetBlocker.Observed = %d, want %d", runtime.BudgetBlocker.Observed, maxOwnerFacingMessagesPerJob)
+	}
+	if len(runtime.AuditHistory) != maxOwnerFacingMessagesPerJob+1 {
+		t.Fatalf("AuditHistory count = %d, want %d including budget event", len(runtime.AuditHistory), maxOwnerFacingMessagesPerJob+1)
+	}
+	if runtime.AuditHistory[maxOwnerFacingMessagesPerJob-1].ToolName != ownerFacingWaitingUserAction {
+		t.Fatalf("waiting-user audit tool = %q, want %q", runtime.AuditHistory[maxOwnerFacingMessagesPerJob-1].ToolName, ownerFacingWaitingUserAction)
+	}
+	if runtime.AuditHistory[maxOwnerFacingMessagesPerJob-1].ActionClass != AuditActionClassRuntime {
+		t.Fatalf("waiting-user audit class = %q, want %q", runtime.AuditHistory[maxOwnerFacingMessagesPerJob-1].ActionClass, AuditActionClassRuntime)
+	}
+	if runtime.AuditHistory[maxOwnerFacingMessagesPerJob].ToolName != "budget_exhausted" {
+		t.Fatalf("final audit event tool = %q, want budget_exhausted", runtime.AuditHistory[maxOwnerFacingMessagesPerJob].ToolName)
+	}
+}
+
 func TestRecordOwnerFacingStepOutputPausesAtCeilingWithPriorMessages(t *testing.T) {
 	t.Parallel()
 

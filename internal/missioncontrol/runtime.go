@@ -40,6 +40,7 @@ const (
 	ownerFacingStepOutputAction      = "step_output"
 	ownerFacingResumeAckAction       = "resume_ack"
 	ownerFacingSetStepAckAction      = "set_step_ack"
+	ownerFacingWaitingUserAction     = "waiting_user_notification"
 )
 
 const (
@@ -683,6 +684,52 @@ func RecordOwnerFacingApprovalRequest(current JobRuntimeState, now time.Time) (J
 	return paused, true, err
 }
 
+func RecordOwnerFacingWaitingUser(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	if current.State != JobStateWaitingUser {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("waiting_user notification budget requires waiting_user runtime state, got %q", current.State),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "waiting_user notification budget requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "waiting_user notification budget requires an active step",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    ownerFacingWaitingUserAction,
+		ActionClass: AuditActionClassRuntime,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   now,
+	})
+
+	observed := countOwnerFacingMessages(next)
+	if observed < maxOwnerFacingMessagesPerJob {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  ownerMessagesBudgetCeiling,
+		Limit:    maxOwnerFacingMessagesPerJob,
+		Observed: observed,
+		Message:  "owner-facing message budget exhausted",
+	})
+	return paused, true, err
+}
+
 func RecordOwnerFacingBudgetPause(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
 	if current.State != JobStatePaused {
 		return JobRuntimeState{}, false, ValidationError{
@@ -920,6 +967,7 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		}
 		switch {
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingApprovalRequestAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingWaitingUserAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingBudgetPauseAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDenyAckAction:
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
