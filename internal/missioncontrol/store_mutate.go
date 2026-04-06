@@ -513,6 +513,10 @@ func projectArtifactRecords(runtime JobRuntimeState, plan *InspectablePlanContex
 	records := make([]ArtifactRecord, 0, len(candidates))
 	for _, candidate := range candidates {
 		format := ""
+		state := strings.TrimSpace(candidate.State)
+		if state == "" {
+			state = "verified"
+		}
 		if step, ok := stepByID[candidate.StepID]; ok && step.Type == StepTypeStaticArtifact {
 			format = step.StaticArtifactFormat
 		}
@@ -525,7 +529,7 @@ func projectArtifactRecords(runtime JobRuntimeState, plan *InspectablePlanContex
 			StepType:      candidate.StepType,
 			Path:          candidate.Path,
 			Format:        format,
-			State:         candidate.State,
+			State:         state,
 			SourceStepID:  candidate.StepID,
 		})
 	}

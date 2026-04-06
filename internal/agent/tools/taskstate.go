@@ -12,22 +12,23 @@ import (
 // The main use right now is enforcing that a new deliverable task must
 // initialize projects/current via frank_new_project before writing there.
 type TaskState struct {
-	mu                  sync.Mutex
-	currentTaskID       string
-	projectInitialized  bool
-	executionContext    missioncontrol.ExecutionContext
-	hasExecutionContext bool
-	missionJob          missioncontrol.Job
-	hasMissionJob       bool
-	runtimeControl      missioncontrol.RuntimeControlContext
-	hasRuntimeControl   bool
-	runtimeState        missioncontrol.JobRuntimeState
-	hasRuntimeState     bool
-	operatorChannel     string
-	operatorChatID      string
-	auditEvents         []missioncontrol.AuditEvent
-	runtimePersistHook  func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeChangeHook   func()
+	mu                    sync.Mutex
+	currentTaskID         string
+	projectInitialized    bool
+	executionContext      missioncontrol.ExecutionContext
+	hasExecutionContext   bool
+	missionJob            missioncontrol.Job
+	hasMissionJob         bool
+	runtimeControl        missioncontrol.RuntimeControlContext
+	hasRuntimeControl     bool
+	runtimeState          missioncontrol.JobRuntimeState
+	hasRuntimeState       bool
+	operatorChannel       string
+	operatorChatID        string
+	auditEvents           []missioncontrol.AuditEvent
+	runtimePersistHook    func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeProjectionHook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeChangeHook     func()
 }
 
 func NewTaskState() *TaskState {
@@ -145,6 +146,15 @@ func (s *TaskState) SetRuntimePersistHook(hook func(*missioncontrol.Job, mission
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtimePersistHook = hook
+}
+
+func (s *TaskState) SetRuntimeProjectionHook(hook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runtimeProjectionHook = hook
 }
 
 func (s *TaskState) SetOperatorSession(channel string, chatID string) {
@@ -1296,7 +1306,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 		s.executionContext = missioncontrol.ExecutionContext{}
 		s.hasExecutionContext = false
 	}
-	return nil
+	return s.projectRuntimeStateLocked(job, storedRuntime, storedControl)
 }
 
 func (s *TaskState) persistPreparedRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) (missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext, error) {
@@ -1340,7 +1350,10 @@ func (s *TaskState) persistHydratedRuntimeStateLocked(job missioncontrol.Job, ru
 	if err != nil {
 		return err
 	}
-	return s.hydrateRuntimeControlLocked(job, storedRuntime, persistControl)
+	if err := s.hydrateRuntimeControlLocked(job, storedRuntime, persistControl); err != nil {
+		return err
+	}
+	return s.projectRuntimeStateLocked(&job, storedRuntime, persistControl)
 }
 
 func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
@@ -1383,6 +1396,17 @@ func (s *TaskState) hydrateRuntimeControlLocked(job missioncontrol.Job, runtimeS
 	s.runtimeControl = builtControl
 	s.hasRuntimeControl = true
 	return nil
+}
+
+func (s *TaskState) projectRuntimeStateLocked(job *missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+	if s == nil || s.runtimeProjectionHook == nil {
+		return nil
+	}
+	return s.runtimeProjectionHook(
+		missioncontrol.CloneJob(job),
+		*missioncontrol.CloneJobRuntimeState(&runtimeState),
+		missioncontrol.CloneRuntimeControlContext(control),
+	)
 }
 
 func (s *TaskState) notifyRuntimeChanged() {

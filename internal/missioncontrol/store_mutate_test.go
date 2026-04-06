@@ -247,3 +247,50 @@ func TestPersistProjectedRuntimeStateDoesNotDuplicateCommittedAuditDelta(t *test
 		t.Fatalf("ListCommittedAuditEventRecords()[0].Event.EventID = %q, want %q", audits[0].Event.EventID, audit.EventID)
 	}
 }
+
+func TestPersistProjectedRuntimeStateNormalizesBlankArtifactState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateCompleted,
+		InspectablePlan: &inspectablePlan,
+		CreatedAt:       now.Add(-2 * time.Minute),
+		UpdatedAt:       now,
+		StartedAt:       now.Add(-2 * time.Minute),
+		CompletedAt:     now,
+		CompletedSteps: []RuntimeStepRecord{
+			{
+				StepID: "artifact",
+				At:     now.Add(-75 * time.Second),
+				ResultingState: &RuntimeResultingStateRecord{
+					Kind:   string(StepTypeStaticArtifact),
+					Target: "dist/report.json",
+					State:  "   ",
+				},
+			},
+		},
+	}
+
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, nil, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	artifacts, err := ListCommittedArtifactRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedArtifactRecords() error = %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("ListCommittedArtifactRecords() len = %d, want 1", len(artifacts))
+	}
+	if artifacts[0].State != "verified" {
+		t.Fatalf("ListCommittedArtifactRecords()[0].State = %q, want %q", artifacts[0].State, "verified")
+	}
+}
