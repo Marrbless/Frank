@@ -3,8 +3,10 @@ package missioncontrol
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -26,6 +28,12 @@ type PackageCurrentLogResult struct {
 	CurrentLogRelPath  string
 	CurrentMetaRelPath string
 }
+
+type StoreLogWriter struct {
+	root string
+}
+
+var storeLogIOMutexes sync.Map
 
 func ValidateLogPackageReason(reason LogPackageReason) error {
 	switch reason {
@@ -167,6 +175,12 @@ func EnsureCurrentLogSegment(root string, now time.Time) (LogSegmentMeta, error)
 	}
 }
 
+func EnsureFreshCurrentLogSegment(root string, now time.Time) (LogSegmentMeta, error) {
+	return withStoreLogIOMutex(root, func() (LogSegmentMeta, error) {
+		return ensureFreshCurrentLogSegmentLocked(root, now)
+	})
+}
+
 func InspectCurrentLogSegment(root string) (CurrentLogSegmentState, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return CurrentLogSegmentState{}, err
@@ -191,6 +205,133 @@ func InspectCurrentLogSegment(root string) (CurrentLogSegmentState, error) {
 }
 
 func PackageCurrentLogSegment(root string, reason LogPackageReason, lease WriterLockLease, now time.Time) (PackageCurrentLogResult, error) {
+	return withStoreLogIOMutex(root, func() (PackageCurrentLogResult, error) {
+		return packageCurrentLogSegmentLocked(root, reason, lease, now)
+	})
+}
+
+func PackageCurrentLogSegmentOnGatewayStartup(root string, lease WriterLockLease, now time.Time) (PackageCurrentLogResult, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return PackageCurrentLogResult{}, err
+	}
+	now = normalizeStoreLogTime(now)
+
+	return withStoreLogIOMutex(root, func() (PackageCurrentLogResult, error) {
+		result := newPackageCurrentLogResult(LogPackageReasonReboot)
+		return withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
+			state, err := InspectCurrentLogSegment(root)
+			if err != nil {
+				return PackageCurrentLogResult{}, err
+			}
+			if !state.Exists {
+				if _, err := ensureFreshCurrentLogSegmentLocked(root, now); err != nil {
+					return PackageCurrentLogResult{}, err
+				}
+				result.NoOp = true
+				result.NoOpCause = "absent"
+				return result, nil
+			}
+			if state.Empty {
+				if _, err := ensureFreshCurrentLogSegmentLocked(root, now); err != nil {
+					return PackageCurrentLogResult{}, err
+				}
+				result.NoOp = true
+				result.NoOpCause = "empty"
+				return result, nil
+			}
+			return packageCurrentLogSegmentWithHeldMutation(root, LogPackageReasonReboot, now)
+		})
+	})
+}
+
+func PackageCurrentLogSegmentOnUTCDayRollover(root string, lease WriterLockLease, now time.Time) (PackageCurrentLogResult, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return PackageCurrentLogResult{}, err
+	}
+	now = normalizeStoreLogTime(now)
+
+	return withStoreLogIOMutex(root, func() (PackageCurrentLogResult, error) {
+		result := newPackageCurrentLogResult(LogPackageReasonDaily)
+		_, meta, err := inspectCurrentLogSegmentWithMeta(root)
+		if err != nil {
+			return PackageCurrentLogResult{}, err
+		}
+		if meta.RecordVersion > 0 && sameUTCDay(meta.OpenedAt, now) {
+			result.NoOp = true
+			result.NoOpCause = "same_day"
+			return result, nil
+		}
+		return withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
+			recheckState, recheckMeta, err := inspectCurrentLogSegmentWithMeta(root)
+			if err != nil {
+				return PackageCurrentLogResult{}, err
+			}
+			if recheckMeta.RecordVersion > 0 && sameUTCDay(recheckMeta.OpenedAt, now) {
+				result.NoOp = true
+				result.NoOpCause = "same_day"
+				return result, nil
+			}
+			if !recheckState.Exists {
+				if _, err := ensureFreshCurrentLogSegmentLocked(root, now); err != nil {
+					return PackageCurrentLogResult{}, err
+				}
+				result.NoOp = true
+				result.NoOpCause = "absent"
+				return result, nil
+			}
+			if recheckState.Empty {
+				if _, err := ensureFreshCurrentLogSegmentLocked(root, now); err != nil {
+					return PackageCurrentLogResult{}, err
+				}
+				result.NoOp = true
+				result.NoOpCause = "empty"
+				return result, nil
+			}
+			return packageCurrentLogSegmentWithHeldMutation(root, LogPackageReasonDaily, now)
+		})
+	})
+}
+
+func NewStoreLogWriter(root string, now time.Time) (io.Writer, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, err
+	}
+	if _, err := EnsureCurrentLogSegment(root, now); err != nil {
+		return nil, err
+	}
+	return &StoreLogWriter{root: root}, nil
+}
+
+func (w *StoreLogWriter) Write(p []byte) (int, error) {
+	if w == nil {
+		return 0, fmt.Errorf("mission store log writer is nil")
+	}
+	if err := ValidateStoreRoot(w.root); err != nil {
+		return 0, err
+	}
+
+	return withStoreLogIOMutex(w.root, func() (int, error) {
+		file, err := os.OpenFile(StoreCurrentLogPath(w.root), os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			return 0, err
+		}
+		n, writeErr := file.Write(p)
+		if writeErr == nil {
+			writeErr = storeSyncFile(file)
+		}
+		closeErr := file.Close()
+		switch {
+		case writeErr != nil:
+			return n, writeErr
+		case closeErr != nil:
+			return n, closeErr
+		default:
+			return n, nil
+		}
+	})
+}
+
+func packageCurrentLogSegmentLocked(root string, reason LogPackageReason, lease WriterLockLease, now time.Time) (PackageCurrentLogResult, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return PackageCurrentLogResult{}, err
 	}
@@ -199,31 +340,18 @@ func PackageCurrentLogSegment(root string, reason LogPackageReason, lease Writer
 	}
 	now = normalizeStoreLogTime(now)
 
-	lock, err := acquireLogPackagingWriterLock(root, lease, now)
-	if err != nil {
-		return PackageCurrentLogResult{}, err
-	}
+	return withLockedLogMutation(root, lease, now, func() (PackageCurrentLogResult, error) {
+		return packageCurrentLogSegmentWithHeldMutation(root, reason, now)
+	})
+}
 
-	guard, err := acquireStoreWriterGuard(root)
-	if err != nil {
-		return PackageCurrentLogResult{}, err
-	}
-	defer func() { _ = guard.release() }()
-
-	if err := ValidateHeldWriterLock(root, lock, now); err != nil {
-		return PackageCurrentLogResult{}, err
-	}
-
+func packageCurrentLogSegmentWithHeldMutation(root string, reason LogPackageReason, now time.Time) (PackageCurrentLogResult, error) {
 	state, err := InspectCurrentLogSegment(root)
 	if err != nil {
 		return PackageCurrentLogResult{}, err
 	}
 
-	result := PackageCurrentLogResult{
-		Reason:             reason,
-		CurrentLogRelPath:  storeCurrentLogRelPath(),
-		CurrentMetaRelPath: storeCurrentLogMetaRelPath(),
-	}
+	result := newPackageCurrentLogResult(reason)
 	if !state.Exists {
 		if _, err := EnsureCurrentLogSegment(root, now); err != nil {
 			return PackageCurrentLogResult{}, err
@@ -309,6 +437,114 @@ func PackageCurrentLogSegment(root string, reason LogPackageReason, lease Writer
 	result.LogRelPath = manifest.LogRelPath
 	result.ByteCount = manifest.ByteCount
 	return result, nil
+}
+
+func newPackageCurrentLogResult(reason LogPackageReason) PackageCurrentLogResult {
+	return PackageCurrentLogResult{
+		Reason:             reason,
+		CurrentLogRelPath:  storeCurrentLogRelPath(),
+		CurrentMetaRelPath: storeCurrentLogMetaRelPath(),
+	}
+}
+
+func withLockedLogMutation(root string, lease WriterLockLease, now time.Time, fn func() (PackageCurrentLogResult, error)) (PackageCurrentLogResult, error) {
+	lock, err := acquireLogPackagingWriterLock(root, lease, now)
+	if err != nil {
+		return PackageCurrentLogResult{}, err
+	}
+
+	guard, err := acquireStoreWriterGuard(root)
+	if err != nil {
+		return PackageCurrentLogResult{}, err
+	}
+	defer func() { _ = guard.release() }()
+
+	if err := ValidateHeldWriterLock(root, lock, now); err != nil {
+		return PackageCurrentLogResult{}, err
+	}
+
+	return fn()
+}
+
+func inspectCurrentLogSegmentWithMeta(root string) (CurrentLogSegmentState, LogSegmentMeta, error) {
+	state, err := InspectCurrentLogSegment(root)
+	if err != nil {
+		return CurrentLogSegmentState{}, LogSegmentMeta{}, err
+	}
+	meta, err := LoadCurrentLogSegmentMeta(root)
+	switch {
+	case err == nil:
+		return state, meta, nil
+	case errors.Is(err, ErrLogSegmentMetaNotFound):
+		return state, LogSegmentMeta{}, nil
+	default:
+		return CurrentLogSegmentState{}, LogSegmentMeta{}, err
+	}
+}
+
+func ensureFreshCurrentLogSegmentLocked(root string, now time.Time) (LogSegmentMeta, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return LogSegmentMeta{}, err
+	}
+	now = normalizeStoreLogTime(now)
+
+	if err := ensureStoreChildDir(root, StoreLogsDir(root)); err != nil {
+		return LogSegmentMeta{}, err
+	}
+	created, err := ensureStoreFileExists(StoreCurrentLogPath(root))
+	if err != nil {
+		return LogSegmentMeta{}, err
+	}
+	if !created {
+		file, err := os.OpenFile(StoreCurrentLogPath(root), os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			return LogSegmentMeta{}, err
+		}
+		if err := storeSyncFile(file); err != nil {
+			_ = file.Close()
+			return LogSegmentMeta{}, err
+		}
+		if err := file.Close(); err != nil {
+			return LogSegmentMeta{}, err
+		}
+	}
+	if err := storeSyncDir(StoreLogsDir(root)); err != nil {
+		return LogSegmentMeta{}, err
+	}
+
+	meta := LogSegmentMeta{
+		RecordVersion: StoreRecordVersion,
+		OpenedAt:      now,
+	}
+	if err := StoreCurrentLogSegmentMeta(root, meta); err != nil {
+		return LogSegmentMeta{}, err
+	}
+	return meta, nil
+}
+
+func withStoreLogIOMutex[T any](root string, fn func() (T, error)) (T, error) {
+	mu := storeLogIOMutex(root)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
+}
+
+func storeLogIOMutex(root string) *sync.Mutex {
+	if existing, ok := storeLogIOMutexes.Load(root); ok {
+		return existing.(*sync.Mutex)
+	}
+	created := &sync.Mutex{}
+	actual, _ := storeLogIOMutexes.LoadOrStore(root, created)
+	return actual.(*sync.Mutex)
+}
+
+func sameUTCDay(left time.Time, right time.Time) bool {
+	if left.IsZero() || right.IsZero() {
+		return false
+	}
+	leftUTC := left.UTC()
+	rightUTC := right.UTC()
+	return leftUTC.Year() == rightUTC.Year() && leftUTC.YearDay() == rightUTC.YearDay()
 }
 
 func acquireLogPackagingWriterLock(root string, lease WriterLockLease, now time.Time) (WriterLockRecord, error) {

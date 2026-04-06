@@ -299,6 +299,68 @@ func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
 	}
 }
 
+func TestConfigureGatewayMissionStoreLoggingRoutesStdlibLoggerIntoActiveSegment(t *testing.T) {
+	root := t.TempDir()
+	cmd := &cobra.Command{Use: "gateway"}
+	addMissionBootstrapFlags(cmd)
+	if err := cmd.Flags().Set("mission-store-root", root); err != nil {
+		t.Fatalf("Flags().Set(mission-store-root) error = %v", err)
+	}
+
+	storeRoot, lease, restore, err := configureGatewayMissionStoreLogging(cmd)
+	if err != nil {
+		t.Fatalf("configureGatewayMissionStoreLogging() error = %v", err)
+	}
+	defer restore()
+
+	if storeRoot != root {
+		t.Fatalf("configureGatewayMissionStoreLogging().storeRoot = %q, want %q", storeRoot, root)
+	}
+	if lease.LeaseHolderID == "" {
+		t.Fatal("configureGatewayMissionStoreLogging().lease.LeaseHolderID = empty, want gateway lease holder")
+	}
+
+	log.Printf("gateway logger line")
+
+	data, err := os.ReadFile(missioncontrol.StoreCurrentLogPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(current.log) error = %v", err)
+	}
+	if !strings.Contains(string(data), "gateway logger line") {
+		t.Fatalf("ReadFile(current.log) = %q, want logger line", string(data))
+	}
+}
+
+func TestConfigureGatewayMissionStoreLoggingWithoutStoreRootPreservesExistingLoggerBehavior(t *testing.T) {
+	logBuf, restoreStandardLogger := captureStandardLogger(t)
+	defer restoreStandardLogger()
+
+	cmd := &cobra.Command{Use: "gateway"}
+	addMissionBootstrapFlags(cmd)
+	previousWriter := log.Writer()
+
+	storeRoot, lease, restore, err := configureGatewayMissionStoreLogging(cmd)
+	if err != nil {
+		t.Fatalf("configureGatewayMissionStoreLogging() error = %v", err)
+	}
+	defer restore()
+
+	if storeRoot != "" {
+		t.Fatalf("configureGatewayMissionStoreLogging().storeRoot = %q, want empty", storeRoot)
+	}
+	if lease.LeaseHolderID != "" {
+		t.Fatalf("configureGatewayMissionStoreLogging().lease = %#v, want zero lease", lease)
+	}
+	if log.Writer() != previousWriter {
+		t.Fatal("configureGatewayMissionStoreLogging() changed logger output without a store root")
+	}
+
+	log.Printf("fallback logger line")
+	if !strings.Contains(logBuf.String(), "fallback logger line") {
+		t.Fatalf("log output = %q, want fallback logger line", logBuf.String())
+	}
+}
+
 func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	job := missioncontrol.Job{
 		ID:           "job-1",

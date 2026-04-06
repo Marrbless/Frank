@@ -280,6 +280,223 @@ func TestPackageCurrentLogSegmentLeavesCurrentLogAndMetaPresentAfterSuccessfulPa
 	}
 }
 
+func TestPackageCurrentLogSegmentOnGatewayStartupPackagesPreExistingNonEmptySegmentOnceWithReasonReboot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 23, 55, 0, 0, time.UTC)
+	startupAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	if _, err := EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("pre-reboot line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegmentOnGatewayStartup(root, WriterLockLease{LeaseHolderID: "gateway-1"}, startupAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() error = %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() = %#v, want packaged result", result)
+	}
+
+	manifest, err := LoadLogPackageManifest(root, result.PackageID)
+	if err != nil {
+		t.Fatalf("LoadLogPackageManifest() error = %v", err)
+	}
+	if manifest.Reason != LogPackageReasonReboot {
+		t.Fatalf("manifest.Reason = %q, want %q", manifest.Reason, LogPackageReasonReboot)
+	}
+	if _, err := os.Stat(StoreCurrentLogPath(root)); err != nil {
+		t.Fatalf("Stat(current.log) error = %v", err)
+	}
+	info, err := os.Stat(StoreCurrentLogPath(root))
+	if err != nil {
+		t.Fatalf("Stat(current.log) error = %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("current.log size after startup packaging = %d, want 0", info.Size())
+	}
+	meta, err := LoadCurrentLogSegmentMeta(root)
+	if err != nil {
+		t.Fatalf("LoadCurrentLogSegmentMeta() error = %v", err)
+	}
+	if !meta.OpenedAt.Equal(startupAt) {
+		t.Fatalf("LoadCurrentLogSegmentMeta().OpenedAt = %s, want %s", meta.OpenedAt, startupAt)
+	}
+}
+
+func TestPackageCurrentLogSegmentOnGatewayStartupNoOpWhenSegmentAbsent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+
+	result, err := PackageCurrentLogSegmentOnGatewayStartup(root, WriterLockLease{LeaseHolderID: "gateway-1"}, now)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() error = %v", err)
+	}
+	if !result.NoOp || result.NoOpCause != "absent" {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() = %#v, want no-op cause absent", result)
+	}
+	if _, err := os.Stat(StoreCurrentLogPath(root)); err != nil {
+		t.Fatalf("Stat(current.log) error = %v", err)
+	}
+	meta, err := LoadCurrentLogSegmentMeta(root)
+	if err != nil {
+		t.Fatalf("LoadCurrentLogSegmentMeta() error = %v", err)
+	}
+	if !meta.OpenedAt.Equal(now) {
+		t.Fatalf("LoadCurrentLogSegmentMeta().OpenedAt = %s, want %s", meta.OpenedAt, now)
+	}
+}
+
+func TestPackageCurrentLogSegmentOnGatewayStartupNoOpWhenSegmentEmpty(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 23, 55, 0, 0, time.UTC)
+	startupAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	if _, err := EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegmentOnGatewayStartup(root, WriterLockLease{LeaseHolderID: "gateway-1"}, startupAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() error = %v", err)
+	}
+	if !result.NoOp || result.NoOpCause != "empty" {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() = %#v, want no-op cause empty", result)
+	}
+	info, err := os.Stat(StoreCurrentLogPath(root))
+	if err != nil {
+		t.Fatalf("Stat(current.log) error = %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("current.log size = %d, want 0", info.Size())
+	}
+	meta, err := LoadCurrentLogSegmentMeta(root)
+	if err != nil {
+		t.Fatalf("LoadCurrentLogSegmentMeta() error = %v", err)
+	}
+	if !meta.OpenedAt.Equal(startupAt) {
+		t.Fatalf("LoadCurrentLogSegmentMeta().OpenedAt = %s, want %s", meta.OpenedAt, startupAt)
+	}
+}
+
+func TestPackageCurrentLogSegmentOnUTCDayRolloverPackagesOnceWithReasonDailyAndOpensNewCurrentSegment(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 23, 55, 0, 0, time.UTC)
+	rolloverAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	if _, err := EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("day one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	result, err := PackageCurrentLogSegmentOnUTCDayRollover(root, WriterLockLease{LeaseHolderID: "gateway-1"}, rolloverAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover() error = %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover() = %#v, want packaged result", result)
+	}
+	manifest, err := LoadLogPackageManifest(root, result.PackageID)
+	if err != nil {
+		t.Fatalf("LoadLogPackageManifest() error = %v", err)
+	}
+	if manifest.Reason != LogPackageReasonDaily {
+		t.Fatalf("manifest.Reason = %q, want %q", manifest.Reason, LogPackageReasonDaily)
+	}
+	info, err := os.Stat(StoreCurrentLogPath(root))
+	if err != nil {
+		t.Fatalf("Stat(current.log) error = %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("current.log size after rollover packaging = %d, want 0", info.Size())
+	}
+	meta, err := LoadCurrentLogSegmentMeta(root)
+	if err != nil {
+		t.Fatalf("LoadCurrentLogSegmentMeta() error = %v", err)
+	}
+	if !meta.OpenedAt.Equal(rolloverAt) {
+		t.Fatalf("LoadCurrentLogSegmentMeta().OpenedAt = %s, want %s", meta.OpenedAt, rolloverAt)
+	}
+}
+
+func TestPackageCurrentLogSegmentOnUTCDayRolloverRepeatedChecksSameDayDoNotPackageAgain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 23, 55, 0, 0, time.UTC)
+	firstCheckAt := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	secondCheckAt := time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC)
+	if _, err := EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("day one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	first, err := PackageCurrentLogSegmentOnUTCDayRollover(root, WriterLockLease{LeaseHolderID: "gateway-1"}, firstCheckAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover(first) error = %v", err)
+	}
+	if first.NoOp {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover(first) = %#v, want packaged result", first)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("day two\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log day two) error = %v", err)
+	}
+
+	second, err := PackageCurrentLogSegmentOnUTCDayRollover(root, WriterLockLease{LeaseHolderID: "gateway-1"}, secondCheckAt)
+	if err != nil {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover(second) error = %v", err)
+	}
+	if !second.NoOp || second.NoOpCause != "same_day" {
+		t.Fatalf("PackageCurrentLogSegmentOnUTCDayRollover(second) = %#v, want no-op cause same_day", second)
+	}
+	entries, err := os.ReadDir(StoreLogPackagesDir(root))
+	if err != nil {
+		t.Fatalf("ReadDir(log_packages) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("log_packages entries = %d, want 1", len(entries))
+	}
+	currentData, err := os.ReadFile(StoreCurrentLogPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(current.log) error = %v", err)
+	}
+	if string(currentData) != "day two\n" {
+		t.Fatalf("ReadFile(current.log) = %q, want %q", string(currentData), "day two\n")
+	}
+}
+
+func TestAutomaticLogPackagingFailsClosedWhenLiveLockHeld(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 6, 0, 1, 0, 0, time.UTC)
+	if _, err := EnsureCurrentLogSegment(root, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(StoreCurrentLogPath(root), []byte("locked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+	if _, _, err := AcquireWriterLock(root, now, time.Minute, WriterLockLease{LeaseHolderID: "holder-1"}); err != nil {
+		t.Fatalf("AcquireWriterLock() error = %v", err)
+	}
+
+	_, err := PackageCurrentLogSegmentOnGatewayStartup(root, WriterLockLease{LeaseHolderID: "holder-2"}, now)
+	if !errors.Is(err, ErrWriterLockHeld) {
+		t.Fatalf("PackageCurrentLogSegmentOnGatewayStartup() error = %v, want %v", err, ErrWriterLockHeld)
+	}
+}
+
 func TestLoadLogPackageManifestRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 

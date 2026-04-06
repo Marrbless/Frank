@@ -32,6 +32,16 @@ import (
 
 const version = "0.1.10"
 
+var gatewayLogNow = time.Now
+var newGatewayLogTicker = func(interval time.Duration) *time.Ticker {
+	return time.NewTicker(interval)
+}
+var newStoreLogWriter = missioncontrol.NewStoreLogWriter
+var packageCurrentLogSegmentOnGatewayStartup = missioncontrol.PackageCurrentLogSegmentOnGatewayStartup
+var packageCurrentLogSegmentOnUTCDayRollover = missioncontrol.PackageCurrentLogSegmentOnUTCDayRollover
+
+const missionStoreWriterLeaseHolderAnnotation = "picobot/mission-store-writer-lease-holder"
+
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "picobot",
@@ -185,6 +195,12 @@ func NewRootCmd() *cobra.Command {
 				model = provider.GetDefaultModel()
 			}
 
+			storeRoot, logLease, restoreGatewayLogger, err := configureGatewayMissionStoreLogging(cmd)
+			if err != nil {
+				return err
+			}
+			defer restoreGatewayLogger()
+
 			// create scheduler with fire callback that routes back through the agent loop, so the LLM can process the reminder and respond naturally to the user.
 			scheduler := cron.NewScheduler(func(job cron.Job) {
 				log.Printf("cron fired: %s — %s", job.Name, job.Message)
@@ -224,6 +240,10 @@ func NewRootCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+
+			if storeRoot != "" {
+				go watchGatewayLogDayRollover(ctx, storeRoot, logLease, time.Minute)
+			}
 
 			// start agent loop
 			go ag.Run(ctx)
@@ -867,6 +887,75 @@ func resolveMissionStoreRoot(cmd *cobra.Command) string {
 	return missioncontrol.ResolveStoreRoot(storeRoot, statusFile)
 }
 
+func configureGatewayMissionStoreLogging(cmd *cobra.Command) (string, missioncontrol.WriterLockLease, func(), error) {
+	storeRoot := resolveMissionStoreRoot(cmd)
+	if storeRoot == "" {
+		return "", missioncontrol.WriterLockLease{}, func() {}, nil
+	}
+
+	lease := ensureMissionStoreWriterLease(cmd)
+	if _, err := packageCurrentLogSegmentOnGatewayStartup(storeRoot, lease, gatewayLogNow().UTC()); err != nil {
+		return "", missioncontrol.WriterLockLease{}, nil, err
+	}
+
+	writer, err := newStoreLogWriter(storeRoot, gatewayLogNow().UTC())
+	if err != nil {
+		return "", missioncontrol.WriterLockLease{}, nil, err
+	}
+
+	originalWriter := log.Writer()
+	log.SetOutput(writer)
+	return storeRoot, lease, func() { log.SetOutput(originalWriter) }, nil
+}
+
+func ensureMissionStoreWriterLease(cmd *cobra.Command) missioncontrol.WriterLockLease {
+	hostname, _ := os.Hostname()
+	if cmd != nil {
+		if cmd.Annotations == nil {
+			cmd.Annotations = make(map[string]string)
+		}
+		if holder := strings.TrimSpace(cmd.Annotations[missionStoreWriterLeaseHolderAnnotation]); holder != "" {
+			return missioncontrol.WriterLockLease{
+				LeaseHolderID: holder,
+				PID:           os.Getpid(),
+				Hostname:      hostname,
+			}
+		}
+		holder := fmt.Sprintf("picobot-%d-%d", os.Getpid(), time.Now().UTC().UnixNano())
+		cmd.Annotations[missionStoreWriterLeaseHolderAnnotation] = holder
+		return missioncontrol.WriterLockLease{
+			LeaseHolderID: holder,
+			PID:           os.Getpid(),
+			Hostname:      hostname,
+		}
+	}
+	return missioncontrol.WriterLockLease{
+		LeaseHolderID: fmt.Sprintf("picobot-%d-%d", os.Getpid(), time.Now().UTC().UnixNano()),
+		PID:           os.Getpid(),
+		Hostname:      hostname,
+	}
+}
+
+func watchGatewayLogDayRollover(ctx context.Context, storeRoot string, lease missioncontrol.WriterLockLease, interval time.Duration) {
+	if strings.TrimSpace(storeRoot) == "" || interval <= 0 {
+		return
+	}
+
+	ticker := newGatewayLogTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := packageCurrentLogSegmentOnUTCDayRollover(storeRoot, lease, gatewayLogNow().UTC()); err != nil {
+				log.Printf("gateway log day rollover packaging failed for %q: %v", storeRoot, err)
+			}
+		}
+	}
+}
+
 func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 	if cmd == nil || ag == nil {
 		return
@@ -876,12 +965,7 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 	storeRoot := resolveMissionStoreRoot(cmd)
 
 	if storeRoot != "" {
-		hostname, _ := os.Hostname()
-		lease := missioncontrol.WriterLockLease{
-			LeaseHolderID: fmt.Sprintf("picobot-%d-%d", os.Getpid(), time.Now().UTC().UnixNano()),
-			PID:           os.Getpid(),
-			Hostname:      hostname,
-		}
+		lease := ensureMissionStoreWriterLease(cmd)
 		ag.SetMissionRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 			return missioncontrol.PersistProjectedRuntimeState(storeRoot, lease, job, runtime, control, time.Now().UTC())
 		})
