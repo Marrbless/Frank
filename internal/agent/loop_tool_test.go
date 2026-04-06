@@ -81,6 +81,20 @@ func TestAgentExecutesToolCall(t *testing.T) {
 	}
 }
 
+func TestAgentLoopDoesNotExposeSpawnTool(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+
+	for _, name := range toolDefinitionNames(ag.tools.Definitions()) {
+		if name == "spawn" {
+			t.Fatal("Definitions() unexpectedly exposed spawn")
+		}
+	}
+}
+
 func TestAgentLoopMissionRequiredWithoutContextProviderSeesNoTools(t *testing.T) {
 	t.Parallel()
 
