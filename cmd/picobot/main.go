@@ -634,12 +634,69 @@ func NewRootCmd() *cobra.Command {
 	missionPackageLogsCmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
 	missionPackageLogsCmd.Flags().String("reason", string(missioncontrol.LogPackageReasonManual), "Packaging reason: manual, daily, or reboot")
 
+	missionPruneStoreCmd := &cobra.Command{
+		Use:          "prune-store",
+		Short:        "Prune expired retained mission store data",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storeRoot, _ := cmd.Flags().GetString("mission-store-root")
+			if storeRoot == "" {
+				return fmt.Errorf("--mission-store-root is required")
+			}
+
+			hostname, _ := os.Hostname()
+			result, err := missioncontrol.PruneStore(
+				storeRoot,
+				missioncontrol.WriterLockLease{
+					LeaseHolderID: fmt.Sprintf("picobot-mission-prune-store-%d", os.Getpid()),
+					PID:           os.Getpid(),
+					Hostname:      hostname,
+				},
+				time.Now().UTC(),
+			)
+			if err != nil {
+				return err
+			}
+
+			summary := missionPruneStoreSummary{
+				Action:                     "pruned",
+				StoreRoot:                  result.StoreRoot,
+				PrunedPackageDirs:          result.PrunedPackageDirs,
+				PrunedAuditFiles:           result.PrunedAuditFiles,
+				PrunedApprovalRequestFiles: result.PrunedApprovalRequestFiles,
+				PrunedApprovalGrantFiles:   result.PrunedApprovalGrantFiles,
+				PrunedArtifactFiles:        result.PrunedArtifactFiles,
+				SkippedNonterminalJobTrees: result.SkippedNonterminalJobTrees,
+			}
+			if result.PrunedPackageDirs == 0 &&
+				result.PrunedAuditFiles == 0 &&
+				result.PrunedApprovalRequestFiles == 0 &&
+				result.PrunedApprovalGrantFiles == 0 &&
+				result.PrunedArtifactFiles == 0 {
+				summary.Action = "noop"
+			}
+
+			data, err := json.MarshalIndent(summary, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode prune-store output: %w", err)
+			}
+			data = append(data, '\n')
+			if _, err := cmd.OutOrStdout().Write(data); err != nil {
+				return fmt.Errorf("failed to write prune-store output: %w", err)
+			}
+			return nil
+		},
+	}
+	missionPruneStoreCmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
+
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
 	missionCmd.AddCommand(missionAssertCmd)
 	missionCmd.AddCommand(missionAssertStepCmd)
 	missionCmd.AddCommand(missionSetStepCmd)
 	missionCmd.AddCommand(missionPackageLogsCmd)
+	missionCmd.AddCommand(missionPruneStoreCmd)
 	rootCmd.AddCommand(missionCmd)
 
 	// memory subcommands: read, append, write, recent
@@ -1324,6 +1381,17 @@ type missionPackageLogsSummary struct {
 	ByteCount          int64                           `json:"byte_count,omitempty"`
 	CurrentLogRelPath  string                          `json:"current_log_relpath"`
 	CurrentMetaRelPath string                          `json:"current_meta_relpath"`
+}
+
+type missionPruneStoreSummary struct {
+	Action                     string `json:"action"`
+	StoreRoot                  string `json:"store_root"`
+	PrunedPackageDirs          int    `json:"pruned_package_dirs"`
+	PrunedAuditFiles           int    `json:"pruned_audit_files"`
+	PrunedApprovalRequestFiles int    `json:"pruned_approval_request_files"`
+	PrunedApprovalGrantFiles   int    `json:"pruned_approval_grant_files"`
+	PrunedArtifactFiles        int    `json:"pruned_artifact_files"`
+	SkippedNonterminalJobTrees int    `json:"skipped_nonterminal_job_trees"`
 }
 
 type missionInspectSummary = missioncontrol.InspectSummary

@@ -299,6 +299,57 @@ func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
 	}
 }
 
+func TestMissionPruneStoreCommandReturnsStableSummary(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC()
+	packageID := "20251231T120000.000000000Z-manual"
+	if err := os.MkdirAll(missioncontrol.StoreLogPackageDir(root, packageID), 0o755); err != nil {
+		t.Fatalf("MkdirAll(package dir) error = %v", err)
+	}
+	if err := os.WriteFile(missioncontrol.StoreLogPackageGatewayLogPath(root, packageID), []byte("gateway\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(gateway.log) error = %v", err)
+	}
+	if err := missioncontrol.StoreLogPackageManifestRecord(root, missioncontrol.LogPackageManifest{
+		RecordVersion:   missioncontrol.StoreRecordVersion,
+		PackageID:       packageID,
+		Reason:          missioncontrol.LogPackageReasonManual,
+		CreatedAt:       now.AddDate(0, 0, -91),
+		SegmentOpenedAt: now.AddDate(0, 0, -91).Add(-time.Hour),
+		SegmentClosedAt: now.AddDate(0, 0, -91),
+		LogRelPath:      filepath.ToSlash(filepath.Join("log_packages", packageID, "gateway.log")),
+		ByteCount:       int64(len("gateway\n")),
+	}); err != nil {
+		t.Fatalf("StoreLogPackageManifestRecord() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "prune-store", "--mission-store-root", root})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var summary missionPruneStoreSummary
+	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(stdout) error = %v", err)
+	}
+	if summary.Action != "pruned" {
+		t.Fatalf("summary.Action = %q, want %q", summary.Action, "pruned")
+	}
+	if summary.StoreRoot != root {
+		t.Fatalf("summary.StoreRoot = %q, want %q", summary.StoreRoot, root)
+	}
+	if summary.PrunedPackageDirs != 1 {
+		t.Fatalf("summary.PrunedPackageDirs = %d, want 1", summary.PrunedPackageDirs)
+	}
+	if summary.PrunedAuditFiles != 0 || summary.PrunedApprovalRequestFiles != 0 || summary.PrunedApprovalGrantFiles != 0 || summary.PrunedArtifactFiles != 0 || summary.SkippedNonterminalJobTrees != 0 {
+		t.Fatalf("summary = %#v, want only packaged dir count", summary)
+	}
+}
+
 func TestConfigureGatewayMissionStoreLoggingRoutesStdlibLoggerIntoActiveSegment(t *testing.T) {
 	root := t.TempDir()
 	cmd := &cobra.Command{Use: "gateway"}
