@@ -326,6 +326,46 @@ func countMissionDailySummaries(runtime missioncontrol.JobRuntimeState) int {
 	return count
 }
 
+func missionCheckInDue(runtime missioncontrol.JobRuntimeState, now time.Time) bool {
+	if runtime.State != missioncontrol.JobStateRunning {
+		return false
+	}
+
+	anchor := runtime.StartedAt
+	if anchor.IsZero() {
+		anchor = runtime.CreatedAt
+	}
+	if anchor.IsZero() {
+		return false
+	}
+
+	elapsed := now.Sub(anchor)
+	if elapsed < missionCheckInInterval {
+		return false
+	}
+	return countMissionCheckIns(runtime) < int(elapsed/missionCheckInInterval)
+}
+
+func missionDailySummaryDue(runtime missioncontrol.JobRuntimeState, now time.Time) bool {
+	if runtime.State != missioncontrol.JobStateRunning {
+		return false
+	}
+
+	anchor := runtime.StartedAt
+	if anchor.IsZero() {
+		anchor = runtime.CreatedAt
+	}
+	if anchor.IsZero() {
+		return false
+	}
+
+	elapsed := now.Sub(anchor)
+	if elapsed < missionDailySummaryInterval {
+		return false
+	}
+	return countMissionDailySummaries(runtime) < int(elapsed/missionDailySummaryInterval)
+}
+
 func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
@@ -735,23 +775,7 @@ func (a *AgentLoop) maybeEmitMissionCheckIn(now time.Time) {
 	}
 
 	runtime, ok := a.taskState.MissionRuntimeState()
-	if !ok || runtime.State != missioncontrol.JobStateRunning {
-		return
-	}
-
-	anchor := runtime.StartedAt
-	if anchor.IsZero() {
-		anchor = runtime.CreatedAt
-	}
-	if anchor.IsZero() {
-		return
-	}
-
-	elapsed := now.Sub(anchor)
-	if elapsed < missionCheckInInterval {
-		return
-	}
-	if countMissionCheckIns(runtime) >= int(elapsed/missionCheckInInterval) {
+	if !ok || !missionCheckInDue(runtime, now) {
 		return
 	}
 
@@ -797,23 +821,7 @@ func (a *AgentLoop) maybeEmitMissionDailySummary(now time.Time) {
 	}
 
 	runtime, ok := a.taskState.MissionRuntimeState()
-	if !ok || runtime.State != missioncontrol.JobStateRunning {
-		return
-	}
-
-	anchor := runtime.StartedAt
-	if anchor.IsZero() {
-		anchor = runtime.CreatedAt
-	}
-	if anchor.IsZero() {
-		return
-	}
-
-	elapsed := now.Sub(anchor)
-	if elapsed < missionDailySummaryInterval {
-		return
-	}
-	if countMissionDailySummaries(runtime) >= int(elapsed/missionDailySummaryInterval) {
+	if !ok || !missionDailySummaryDue(runtime, now) {
 		return
 	}
 
@@ -851,6 +859,24 @@ func (a *AgentLoop) maybeEmitMissionDailySummary(now time.Time) {
 		return
 	}
 	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
+func (a *AgentLoop) maybeEmitPeriodicMissionNotifications(now time.Time) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	if missionDailySummaryDue(runtime, now) {
+		a.maybeEmitMissionDailySummary(now)
+		return
+	}
+	if missionCheckInDue(runtime, now) {
+		a.maybeEmitMissionCheckIn(now)
+	}
 }
 
 func (a *AgentLoop) completeMissionStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) string {
@@ -1047,8 +1073,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			a.running = false
 			return
 		case now := <-checkInTicker.C:
-			a.maybeEmitMissionCheckIn(now)
-			a.maybeEmitMissionDailySummary(now)
+			a.maybeEmitPeriodicMissionNotifications(now)
 
 		case msg, ok := <-a.hub.In:
 			if !ok {

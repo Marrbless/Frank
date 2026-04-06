@@ -296,6 +296,64 @@ func TestMaybeEmitMissionDailySummaryRestartSafeDuplicateSuppression(t *testing.
 	}
 }
 
+func TestMaybeEmitPeriodicMissionNotificationsPrefersDailySummaryOverCheckInAtTwentyFourHours(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	anchor := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
+	ec.Runtime.CreatedAt = anchor
+	ec.Runtime.UpdatedAt = anchor
+	ec.Runtime.StartedAt = anchor
+	ec.Runtime.ActiveStepAt = anchor
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitPeriodicMissionNotifications(anchor.Add(24 * time.Hour))
+
+	select {
+	case out := <-hub.Out:
+		if !strings.Contains(out.Content, "Daily mission summary:") {
+			t.Fatalf("outbound content = %q, want daily mission summary content", out.Content)
+		}
+		if strings.Contains(out.Content, "Mission check-in:") {
+			t.Fatalf("outbound content = %q, want daily summary without check-in prefix", out.Content)
+		}
+	default:
+		t.Fatal("expected a daily mission summary outbound notification")
+	}
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected extra outbound notification: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if got := countMissionDailySummaries(runtime); got != 1 {
+		t.Fatalf("daily summary audit count = %d, want 1", got)
+	}
+	if got := countMissionCheckIns(runtime); got != 0 {
+		t.Fatalf("check-in audit count = %d, want 0 when daily summary suppresses same-tick check-in", got)
+	}
+	last := runtime.AuditHistory[len(runtime.AuditHistory)-1]
+	if last.ToolName != "daily_summary" {
+		t.Fatalf("last audit tool = %q, want %q", last.ToolName, "daily_summary")
+	}
+}
+
 func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPendingRequest(t *testing.T) {
 	t.Parallel()
 
