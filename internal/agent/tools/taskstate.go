@@ -453,6 +453,33 @@ func (s *TaskState) RecordOwnerFacingCheckIn() (bool, error) {
 	return exhausted, err
 }
 
+func (s *TaskState) RecordOwnerFacingDailySummary() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return false, nil
+	}
+
+	nextRuntime, exhausted, err := missioncontrol.RecordOwnerFacingDailySummary(*ec.Runtime, time.Now())
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return exhausted, err
+}
+
 func (s *TaskState) RecordOwnerFacingApprovalRequest() (bool, error) {
 	if s == nil {
 		return false, nil

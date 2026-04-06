@@ -27,7 +27,10 @@ var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s
 var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
 
-const missionCheckInInterval = 30 * time.Minute
+const (
+	missionCheckInInterval      = 30 * time.Minute
+	missionDailySummaryInterval = 24 * time.Hour
+)
 
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
@@ -309,6 +312,20 @@ func countMissionCheckIns(runtime missioncontrol.JobRuntimeState) int {
 	return count
 }
 
+func countMissionDailySummaries(runtime missioncontrol.JobRuntimeState) int {
+	count := 0
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "daily_summary" || !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
@@ -325,6 +342,24 @@ func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontr
 		return "", err
 	}
 	return "Mission check-in:\n" + summary, nil
+}
+
+func buildMissionDailySummaryContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok := currentExecutionContext(taskState)
+	if ok && ec.Job != nil {
+		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		if err != nil {
+			return "", err
+		}
+		return "Daily mission summary:\n" + summary, nil
+	}
+
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Daily mission summary:\n" + summary, nil
 }
 
 func selectPendingApprovalRequest(runtime missioncontrol.JobRuntimeState) (missioncontrol.ApprovalRequest, bool) {
@@ -756,6 +791,68 @@ func (a *AgentLoop) maybeEmitMissionCheckIn(now time.Time) {
 	sendChannelNotification(a.hub, channel, chatID, content)
 }
 
+func (a *AgentLoop) maybeEmitMissionDailySummary(now time.Time) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStateRunning {
+		return
+	}
+
+	anchor := runtime.StartedAt
+	if anchor.IsZero() {
+		anchor = runtime.CreatedAt
+	}
+	if anchor.IsZero() {
+		return
+	}
+
+	elapsed := now.Sub(anchor)
+	if elapsed < missionDailySummaryInterval {
+		return
+	}
+	if countMissionDailySummaries(runtime) >= int(elapsed/missionDailySummaryInterval) {
+		return
+	}
+
+	if exhausted, err := a.taskState.RecordOwnerFacingDailySummary(); err != nil {
+		log.Printf("mission runtime daily summary accounting failed: %v", err)
+		return
+	} else if exhausted {
+		runtime, ok = a.taskState.MissionRuntimeState()
+		if !ok {
+			return
+		}
+		ec, ok := a.taskState.ExecutionContext()
+		if !ok || ec.Job == nil {
+			return
+		}
+		channel, chatID, ok := a.taskState.OperatorSession()
+		if !ok {
+			return
+		}
+		sendChannelNotification(a.hub, channel, chatID, formatBudgetBlockedResponse(ec, runtime))
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	content, err := buildMissionDailySummaryContent(a.taskState, runtime)
+	if err != nil {
+		log.Printf("mission runtime daily summary formatting failed: %v", err)
+		return
+	}
+	channel, chatID, ok := a.taskState.OperatorSession()
+	if !ok {
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
 func (a *AgentLoop) completeMissionStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) string {
 	if a == nil {
 		return completeMissionStepOutput(nil, finalContent, successfulTools)
@@ -951,6 +1048,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			return
 		case now := <-checkInTicker.C:
 			a.maybeEmitMissionCheckIn(now)
+			a.maybeEmitMissionDailySummary(now)
 
 		case msg, ok := <-a.hub.In:
 			if !ok {

@@ -33,6 +33,7 @@ const (
 	ownerFacingApprovalRequestAction = "approval_request"
 	ownerFacingBudgetPauseAction     = "budget_pause_notification"
 	ownerFacingCompletionAction      = "completion_notification"
+	ownerFacingDailySummaryAction    = "daily_summary"
 	ownerFacingDenyAckAction         = "deny_ack"
 	ownerFacingMessageAction         = "message"
 	ownerFacingCheckInAction         = "check_in"
@@ -639,6 +640,10 @@ func RecordOwnerFacingCheckIn(current JobRuntimeState, now time.Time) (JobRuntim
 	return recordOwnerFacingOutput(current, now, ownerFacingCheckInAction, AuditActionClassRuntime)
 }
 
+func RecordOwnerFacingDailySummary(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	return recordOwnerFacingOutput(current, now, ownerFacingDailySummaryAction, AuditActionClassRuntime)
+}
+
 func RecordOwnerFacingApprovalRequest(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
 	if current.State != JobStateWaitingUser {
 		return JobRuntimeState{}, false, ValidationError{
@@ -1008,6 +1013,7 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingWaitingUserAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingBudgetPauseAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingCompletionAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDailySummaryAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDenyAckAction:
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingCheckInAction:
