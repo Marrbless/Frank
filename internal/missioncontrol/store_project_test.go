@@ -57,13 +57,23 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
 		})
 	}
+	now := time.Now().UTC().Truncate(time.Second)
+	requestBase := now.Add(-8 * time.Hour)
+	auditBase := now.Add(-7 * time.Hour)
+	pausedAt := now.Add(-6 * time.Hour)
+	for i := range requests {
+		requests[i].RequestedAt = requestBase.Add(time.Duration(i) * time.Minute)
+	}
+	for i := range history {
+		history[i].Timestamp = auditBase.Add(time.Duration(i) * time.Minute)
+	}
 	runtime := JobRuntimeState{
 		JobID:            job.ID,
 		State:            JobStatePaused,
 		ActiveStepID:     "final",
 		InspectablePlan:  &plan,
 		PausedReason:     RuntimePauseReasonOperatorCommand,
-		PausedAt:         time.Date(2026, 3, 24, 13, 30, 0, 0, time.UTC),
+		PausedAt:         pausedAt,
 		ApprovalRequests: requests,
 		AuditHistory:     history,
 		CompletedSteps: []RuntimeStepRecord{
@@ -77,7 +87,6 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 5, 20, 0, 0, 0, time.UTC)
 	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
 		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
 	}
@@ -117,8 +126,9 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 	if len(first.RuntimeSummary.RecentAudit) != OperatorStatusRecentAuditLimit {
 		t.Fatalf("RecentAudit len = %d, want %d", len(first.RuntimeSummary.RecentAudit), OperatorStatusRecentAuditLimit)
 	}
-	if first.RuntimeSummary.RecentAudit[0].Timestamp != "2026-03-24T13:05:00Z" {
-		t.Fatalf("RecentAudit[0].Timestamp = %q, want %q", first.RuntimeSummary.RecentAudit[0].Timestamp, "2026-03-24T13:05:00Z")
+	wantRecentAudit0 := auditBase.Add(time.Duration(OperatorStatusRecentAuditLimit) * time.Minute).Format(time.RFC3339)
+	if first.RuntimeSummary.RecentAudit[0].Timestamp != wantRecentAudit0 {
+		t.Fatalf("RecentAudit[0].Timestamp = %q, want %q", first.RuntimeSummary.RecentAudit[0].Timestamp, wantRecentAudit0)
 	}
 	if len(first.RuntimeSummary.Artifacts) != OperatorStatusArtifactLimit {
 		t.Fatalf("Artifacts len = %d, want %d", len(first.RuntimeSummary.Artifacts), OperatorStatusArtifactLimit)
@@ -135,7 +145,7 @@ func TestBuildCommittedMissionStatusSnapshotClearsTerminalControl(t *testing.T) 
 	t.Parallel()
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 5, 20, 15, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	job := testProjectedRuntimeJob()
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {
@@ -151,7 +161,7 @@ func TestBuildCommittedMissionStatusSnapshotClearsTerminalControl(t *testing.T) 
 		StartedAt:    now.Add(-2 * time.Minute),
 		ActiveStepAt: now.Add(-90 * time.Second),
 	}
-	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, running, &control, now.Add(-time.Minute)); err != nil {
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, running, &control, now); err != nil {
 		t.Fatalf("PersistProjectedRuntimeState(running) error = %v", err)
 	}
 
