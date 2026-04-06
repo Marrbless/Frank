@@ -1019,6 +1019,43 @@ func TestRecordOwnerFacingWaitingUserCountsTowardOwnerFacingMessageBudget(t *tes
 	}
 }
 
+func TestRecordOwnerFacingCompletionAppendsAuditEventWithoutChangingTerminalState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 13, 30, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:       "job-1",
+		State:       JobStateCompleted,
+		CompletedAt: now.Add(-time.Minute),
+		CompletedSteps: []RuntimeStepRecord{
+			{StepID: "final", At: now.Add(-time.Minute)},
+		},
+	}
+
+	next, exhausted, err := RecordOwnerFacingCompletion(runtime, now)
+	if err != nil {
+		t.Fatalf("RecordOwnerFacingCompletion() error = %v", err)
+	}
+	if exhausted {
+		t.Fatal("RecordOwnerFacingCompletion() exhausted = true, want false for completed runtime")
+	}
+	if next.State != JobStateCompleted {
+		t.Fatalf("State = %q, want %q", next.State, JobStateCompleted)
+	}
+	if next.BudgetBlocker != nil {
+		t.Fatalf("BudgetBlocker = %#v, want nil for completed runtime", next.BudgetBlocker)
+	}
+	if len(next.AuditHistory) != 1 {
+		t.Fatalf("AuditHistory count = %d, want 1", len(next.AuditHistory))
+	}
+	if next.AuditHistory[0].ToolName != ownerFacingCompletionAction {
+		t.Fatalf("completion audit tool = %q, want %q", next.AuditHistory[0].ToolName, ownerFacingCompletionAction)
+	}
+	if next.AuditHistory[0].ActionClass != AuditActionClassRuntime {
+		t.Fatalf("completion audit class = %q, want %q", next.AuditHistory[0].ActionClass, AuditActionClassRuntime)
+	}
+}
+
 func TestRecordOwnerFacingStepOutputPausesAtCeilingWithPriorMessages(t *testing.T) {
 	t.Parallel()
 

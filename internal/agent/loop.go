@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/local/picobot/internal/agent/memory"
@@ -90,6 +91,13 @@ func completeMissionStepOutput(taskState *tools.TaskState, finalContent string, 
 	}
 
 	return missioncontrol.NormalizeFinalResponse(ec, finalContent)
+}
+
+func latestCompletedStepID(runtime missioncontrol.JobRuntimeState) string {
+	if len(runtime.CompletedSteps) == 0 {
+		return ""
+	}
+	return runtime.CompletedSteps[len(runtime.CompletedSteps)-1].StepID
 }
 
 func formatBudgetBlockedResponse(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState) string {
@@ -440,6 +448,37 @@ func waitingUserNotificationRecorded(runtime missioncontrol.JobRuntimeState) boo
 	return false
 }
 
+func completionNotificationRecorded(runtime missioncontrol.JobRuntimeState) bool {
+	stepID := latestCompletedStepID(runtime)
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "completion_notification" {
+			continue
+		}
+		if !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		if stepID != "" && event.StepID != stepID {
+			continue
+		}
+		if !runtime.CompletedAt.IsZero() && event.Timestamp.Before(runtime.CompletedAt) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func buildMissionCompletionContent(runtime missioncontrol.JobRuntimeState) (string, error) {
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Mission completed:\n" + summary, nil
+}
+
 func buildMissionWaitingUserContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
@@ -562,6 +601,45 @@ func (a *AgentLoop) maybeEmitBudgetPauseNotification() {
 	}
 }
 
+func (a *AgentLoop) maybeEmitCompletionNotification() {
+	if a == nil || a.taskState == nil || a.hub == nil || atomic.LoadInt32(&a.suppressTerminalNotices) > 0 {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStateCompleted || len(runtime.CompletedSteps) == 0 {
+		return
+	}
+	if completionNotificationRecorded(runtime) {
+		return
+	}
+
+	channel, chatID, ok := a.taskState.OperatorSession()
+	if !ok {
+		return
+	}
+
+	exhausted, err := a.taskState.RecordOwnerFacingCompletion()
+	if err != nil {
+		log.Printf("mission runtime completion notification accounting failed: %v", err)
+		return
+	}
+	if exhausted {
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	content, err := buildMissionCompletionContent(runtime)
+	if err != nil {
+		log.Printf("mission runtime completion notification formatting failed: %v", err)
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
 func (a *AgentLoop) maybeEmitWaitingUserNotification() {
 	if a == nil || a.taskState == nil || a.hub == nil {
 		return
@@ -609,6 +687,7 @@ func (a *AgentLoop) composeMissionRuntimeChangeHook(hook func()) func() {
 		if hook != nil {
 			hook()
 		}
+		a.maybeEmitCompletionNotification()
 		a.maybeEmitApprovalRequestNotification()
 		a.maybeEmitWaitingUserNotification()
 		a.maybeEmitBudgetPauseNotification()
@@ -677,19 +756,29 @@ func (a *AgentLoop) maybeEmitMissionCheckIn(now time.Time) {
 	sendChannelNotification(a.hub, channel, chatID, content)
 }
 
+func (a *AgentLoop) completeMissionStepOutput(finalContent string, successfulTools []missioncontrol.RuntimeToolCallEvidence) string {
+	if a == nil {
+		return completeMissionStepOutput(nil, finalContent, successfulTools)
+	}
+	atomic.AddInt32(&a.suppressTerminalNotices, 1)
+	defer atomic.AddInt32(&a.suppressTerminalNotices, -1)
+	return completeMissionStepOutput(a.taskState, finalContent, successfulTools)
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
-	hub                 *chat.Hub
-	provider            providers.LLMProvider
-	tools               *tools.Registry
-	sessions            *session.SessionManager
-	context             *ContextBuilder
-	memory              *memory.MemoryStore
-	model               string
-	maxIterations       int
-	running             bool
-	taskState           *tools.TaskState
-	operatorSetStepHook func(jobID string, stepID string) (string, error)
+	hub                     *chat.Hub
+	provider                providers.LLMProvider
+	tools                   *tools.Registry
+	sessions                *session.SessionManager
+	context                 *ContextBuilder
+	memory                  *memory.MemoryStore
+	model                   string
+	maxIterations           int
+	running                 bool
+	suppressTerminalNotices int32
+	taskState               *tools.TaskState
+	operatorSetStepHook     func(jobID string, stepID string) (string, error)
 }
 
 // NewAgentLoop creates a new AgentLoop with the given provider.
@@ -1064,7 +1153,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			} else if finalContent == "" {
 				finalContent = "I've completed processing but have no response to give."
 			}
-			finalContent = completeMissionStepOutput(a.taskState, finalContent, successfulTools)
+			finalContent = a.completeMissionStepOutput(finalContent, successfulTools)
 
 			if !isSystemChannel(msg.Channel) {
 				sess.AddMessage("user", msg.Content)
@@ -1141,10 +1230,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 		if !resp.HasToolCalls {
 			if resp.Content != "" {
-				return completeMissionStepOutput(a.taskState, resp.Content, successfulTools), nil
+				return a.completeMissionStepOutput(resp.Content, successfulTools), nil
 			}
 			if lastToolResult != "" {
-				return completeMissionStepOutput(a.taskState, lastToolResult, successfulTools), nil
+				return a.completeMissionStepOutput(lastToolResult, successfulTools), nil
 			}
 			return resp.Content, nil
 		}

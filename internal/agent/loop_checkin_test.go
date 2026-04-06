@@ -203,6 +203,101 @@ func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState
 	}
 }
 
+func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	job := testCompletionNotificationMissionJob()
+	ag.taskState.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job: &job,
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:       "job-1",
+			State:       missioncontrol.JobStateCompleted,
+			CompletedAt: time.Date(2026, 4, 6, 13, 30, 0, 0, time.UTC),
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "final", At: time.Date(2026, 4, 6, 13, 30, 0, 0, time.UTC)},
+			},
+		},
+	})
+
+	ag.maybeEmitCompletionNotification()
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "telegram" || out.ChatID != "chat-42" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
+		}
+		if !strings.Contains(out.Content, "Mission completed:") {
+			t.Fatalf("outbound content = %q, want completion notification prefix", out.Content)
+		}
+		if !strings.Contains(out.Content, `"state": "completed"`) {
+			t.Fatalf("outbound content = %q, want completed status summary", out.Content)
+		}
+	default:
+		t.Fatal("expected a completion outbound notification")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	last := runtime.AuditHistory[len(runtime.AuditHistory)-1]
+	if last.ToolName != "completion_notification" {
+		t.Fatalf("last audit tool = %q, want %q", last.ToolName, "completion_notification")
+	}
+
+	ag.maybeEmitCompletionNotification()
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected duplicate completion notification: %#v", out)
+	default:
+	}
+}
+
+func TestMissionRuntimeChangeHookSuppressesCompletionNotificationDuringDirectResponse(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Here is the requested result."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+	if err := ag.ActivateMissionStep(testCompletionNotificationMissionJob(), "final"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("finish", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if !strings.Contains(resp, "Here is the requested result.") {
+		t.Fatalf("ProcessDirect() response = %q, want truthful final response content", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected completion outbound notification during direct response: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateCompleted {
+		t.Fatalf("MissionRuntimeState().State = %q, want %q", runtime.State, missioncontrol.JobStateCompleted)
+	}
+	for _, event := range runtime.AuditHistory {
+		if event.ToolName == "completion_notification" {
+			t.Fatalf("AuditHistory unexpectedly contains completion notification: %#v", runtime.AuditHistory)
+		}
+	}
+}
+
 func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +382,24 @@ func testWaitingUserNotificationMissionJob() missioncontrol.Job {
 					ID:        "final",
 					Type:      missioncontrol.StepTypeFinalResponse,
 					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+}
+
+func testCompletionNotificationMissionJob() missioncontrol.Job {
+	return missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:   "final",
+					Type: missioncontrol.StepTypeFinalResponse,
 				},
 			},
 		},
