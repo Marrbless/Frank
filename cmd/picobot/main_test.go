@@ -350,6 +350,39 @@ func TestMissionPruneStoreCommandReturnsStableSummary(t *testing.T) {
 	}
 }
 
+func TestMissionPruneStoreCommandReturnsStableNoOpSummary(t *testing.T) {
+	root := t.TempDir()
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "prune-store", "--mission-store-root", root})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var summary missionPruneStoreSummary
+	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(stdout) error = %v", err)
+	}
+	if summary.Action != "noop" {
+		t.Fatalf("summary.Action = %q, want %q", summary.Action, "noop")
+	}
+	if summary.StoreRoot != root {
+		t.Fatalf("summary.StoreRoot = %q, want %q", summary.StoreRoot, root)
+	}
+	if summary.PrunedPackageDirs != 0 ||
+		summary.PrunedAuditFiles != 0 ||
+		summary.PrunedApprovalRequestFiles != 0 ||
+		summary.PrunedApprovalGrantFiles != 0 ||
+		summary.PrunedArtifactFiles != 0 ||
+		summary.SkippedNonterminalJobTrees != 0 {
+		t.Fatalf("summary = %#v, want zero-count no-op", summary)
+	}
+}
+
 func TestConfigureGatewayMissionStoreLoggingRoutesStdlibLoggerIntoActiveSegment(t *testing.T) {
 	root := t.TempDir()
 	cmd := &cobra.Command{Use: "gateway"}
