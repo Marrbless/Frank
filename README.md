@@ -110,7 +110,7 @@ The agent can take real actions — not just chat:
 | `web` | Fetch web pages and APIs |
 | `web_search` | Search the web via DuckDuckGo (no API key needed) |
 | `message` | Send messages to channels |
-| `spawn` | Launch background subagents |
+| `spawn` | Return a stub acknowledgement for a background-subagent request; does not launch one |
 | `cron` | Schedule recurring tasks |
 | `write_memory` | Persist information across sessions |
 | `list_memory` | List all memory files |

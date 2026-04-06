@@ -174,7 +174,7 @@ The agent has access to 16 tools:
 | `exec` | Run shell commands |
 | `web` | Fetch web content from URLs |
 | `web_search` | Search the web via DuckDuckGo (no API key needed) |
-| `spawn` | Spawn background subagent |
+| `spawn` | Return a stub acknowledgement for a background-subagent request; does not launch one |
 | `cron` | Schedule cron jobs |
 | `write_memory` | Persist information to memory |
 | `list_memory` | List all memory files |
