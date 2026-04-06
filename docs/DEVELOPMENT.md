@@ -222,13 +222,12 @@ Spin up a container to make sure it works:
 
 ```sh
 docker run --rm -it \
-  -e OPENAI_API_KEY="your-key" \
-  -e OPENAI_API_BASE="https://openrouter.ai/api/v1" \
   -e PICOBOT_MODEL="google/gemini-2.5-flash" \
-  -e TELEGRAM_BOT_TOKEN="your-token" \
   -v ./picobot-data:/home/picobot/.picobot \
   louisho5/picobot:latest
 ```
+
+Put provider credentials and channel tokens in `./picobot-data/config.json`. The runtime loader currently honors only `PICOBOT_MODEL`, `PICOBOT_MAX_TOKENS`, and `PICOBOT_MAX_TOOL_ITERATIONS` as environment overrides.
 
 Check logs:
 
@@ -254,13 +253,11 @@ These environment variables configure the Docker container:
 
 | Variable | Description | Required |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI-compatible API key (OpenRouter, OpenAI, etc.) | Yes |
-| `OPENAI_API_BASE` | OpenAI-compatible API base URL | No |
 | `PICOBOT_MODEL` | LLM model to use (e.g. `google/gemini-2.5-flash`) | No |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | No |
-| `TELEGRAM_ALLOW_FROM` | Comma-separated Telegram user IDs to allow | No |
-| `DISCORD_BOT_TOKEN` | Discord Bot token from Developer Portal | No |
-| `DISCORD_ALLOW_FROM` | Comma-separated Discord user IDs to allow | No |
+| `PICOBOT_MAX_TOKENS` | Maximum tokens for LLM responses | No |
+| `PICOBOT_MAX_TOOL_ITERATIONS` | Maximum tool iterations per request | No |
+
+All provider credentials and channel tokens must come from the mounted Picobot config file.
 
 ## Extending Picobot
 

@@ -165,7 +165,7 @@ This starts the agent loop, heartbeat, and any enabled channels (e.g., Telegram,
 
 ## Available Tools
 
-The agent has access to 16 tools:
+The agent exposes these built-in tools. `cron` is available only when a scheduler is configured:
 
 | Tool | Purpose |
 |------|--------|
@@ -174,7 +174,6 @@ The agent has access to 16 tools:
 | `exec` | Run shell commands |
 | `web` | Fetch web content from URLs |
 | `web_search` | Search the web via DuckDuckGo (no API key needed) |
-| `spawn` | Return a stub acknowledgement for a background-subagent request; does not launch one |
 | `cron` | Schedule cron jobs |
 | `write_memory` | Persist information to memory |
 | `list_memory` | List all memory files |
