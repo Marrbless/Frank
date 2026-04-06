@@ -554,11 +554,72 @@ func NewRootCmd() *cobra.Command {
 	missionSetStepCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file to confirm after writing the mission step control file")
 	missionSetStepCmd.Flags().Duration("wait-timeout", 0, "How long to wait for mission status confirmation after writing the mission step control file")
 
+	missionPackageLogsCmd := &cobra.Command{
+		Use:          "package-logs",
+		Short:        "Package the active mission log segment under the durable store",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storeRoot, _ := cmd.Flags().GetString("mission-store-root")
+			if storeRoot == "" {
+				return fmt.Errorf("--mission-store-root is required")
+			}
+
+			reasonValue, _ := cmd.Flags().GetString("reason")
+			reason := missioncontrol.LogPackageReason(reasonValue)
+			if err := missioncontrol.ValidateLogPackageReason(reason); err != nil {
+				return err
+			}
+
+			hostname, _ := os.Hostname()
+			result, err := missioncontrol.PackageCurrentLogSegment(
+				storeRoot,
+				reason,
+				missioncontrol.WriterLockLease{
+					LeaseHolderID: "picobot-mission-package-logs",
+					PID:           os.Getpid(),
+					Hostname:      hostname,
+				},
+				time.Now().UTC(),
+			)
+			if err != nil {
+				return err
+			}
+
+			summary := missionPackageLogsSummary{
+				Action:             "packaged",
+				Reason:             result.Reason,
+				PackageID:          result.PackageID,
+				LogRelPath:         result.LogRelPath,
+				ByteCount:          result.ByteCount,
+				CurrentLogRelPath:  result.CurrentLogRelPath,
+				CurrentMetaRelPath: result.CurrentMetaRelPath,
+			}
+			if result.NoOp {
+				summary.Action = "noop"
+				summary.NoOpCause = result.NoOpCause
+			}
+
+			data, err := json.MarshalIndent(summary, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to encode log packaging output: %w", err)
+			}
+			data = append(data, '\n')
+			if _, err := cmd.OutOrStdout().Write(data); err != nil {
+				return fmt.Errorf("failed to write log packaging output: %w", err)
+			}
+			return nil
+		},
+	}
+	missionPackageLogsCmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
+	missionPackageLogsCmd.Flags().String("reason", string(missioncontrol.LogPackageReasonManual), "Packaging reason: manual, daily, or reboot")
+
 	missionCmd.AddCommand(missionStatusCmd)
 	missionCmd.AddCommand(missionInspectCmd)
 	missionCmd.AddCommand(missionAssertCmd)
 	missionCmd.AddCommand(missionAssertStepCmd)
 	missionCmd.AddCommand(missionSetStepCmd)
+	missionCmd.AddCommand(missionPackageLogsCmd)
 	rootCmd.AddCommand(missionCmd)
 
 	// memory subcommands: read, append, write, recent
@@ -1168,6 +1229,17 @@ type missionStatusAssertionExpectation struct {
 	HasTools               []string
 	ExactAllowedTools      []string
 	CheckExactAllowedTools bool
+}
+
+type missionPackageLogsSummary struct {
+	Action             string                          `json:"action"`
+	Reason             missioncontrol.LogPackageReason `json:"reason"`
+	NoOpCause          string                          `json:"noop_cause,omitempty"`
+	PackageID          string                          `json:"package_id,omitempty"`
+	LogRelPath         string                          `json:"log_relpath,omitempty"`
+	ByteCount          int64                           `json:"byte_count,omitempty"`
+	CurrentLogRelPath  string                          `json:"current_log_relpath"`
+	CurrentMetaRelPath string                          `json:"current_meta_relpath"`
 }
 
 type missionInspectSummary = missioncontrol.InspectSummary

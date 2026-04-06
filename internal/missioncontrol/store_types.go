@@ -19,6 +19,11 @@ const (
 	storeWriterLockFile   = "writer.lock"
 	storeWriterGuardFile  = "writer.lock.guard"
 	storeActiveJobFile    = "active_job.json"
+	storeLogsDirName      = "logs"
+	storeCurrentLogFile   = "current.log"
+	storeCurrentMetaFile  = "current.meta.json"
+	storeLogPackagesDir   = "log_packages"
+	storeGatewayLogFile   = "gateway.log"
 )
 
 type StoreState string
@@ -82,13 +87,39 @@ type ActiveJobRecord struct {
 	ActivationSeq  uint64    `json:"activation_seq"`
 }
 
+type LogPackageReason string
+
+const (
+	LogPackageReasonManual LogPackageReason = "manual"
+	LogPackageReasonDaily  LogPackageReason = "daily"
+	LogPackageReasonReboot LogPackageReason = "reboot"
+)
+
+type LogSegmentMeta struct {
+	RecordVersion int       `json:"record_version"`
+	OpenedAt      time.Time `json:"opened_at"`
+}
+
+type LogPackageManifest struct {
+	RecordVersion   int              `json:"record_version"`
+	PackageID       string           `json:"package_id"`
+	Reason          LogPackageReason `json:"reason"`
+	CreatedAt       time.Time        `json:"created_at"`
+	SegmentOpenedAt time.Time        `json:"segment_opened_at"`
+	SegmentClosedAt time.Time        `json:"segment_closed_at"`
+	LogRelPath      string           `json:"log_relpath"`
+	ByteCount       int64            `json:"byte_count"`
+}
+
 var (
-	ErrActiveJobRecordNotFound = errors.New("mission store active job record not found")
-	ErrStoreManifestNotFound   = errors.New("mission store manifest not found")
-	ErrWriterEpochIncoherent   = errors.New("mission store writer epoch is incoherent")
-	ErrWriterLockExpired       = errors.New("mission store writer lock lease has expired")
-	ErrWriterLockHeld          = errors.New("mission store writer lock is already held")
-	ErrWriterLockNotFound      = errors.New("mission store writer lock not found")
+	ErrActiveJobRecordNotFound    = errors.New("mission store active job record not found")
+	ErrLogPackageManifestNotFound = errors.New("mission store log package manifest not found")
+	ErrLogSegmentMetaNotFound     = errors.New("mission store log segment meta not found")
+	ErrStoreManifestNotFound      = errors.New("mission store manifest not found")
+	ErrWriterEpochIncoherent      = errors.New("mission store writer epoch is incoherent")
+	ErrWriterLockExpired          = errors.New("mission store writer lock lease has expired")
+	ErrWriterLockHeld             = errors.New("mission store writer lock is already held")
+	ErrWriterLockNotFound         = errors.New("mission store writer lock not found")
 )
 
 func ResolveStoreRoot(explicitRoot string, statusFile string) string {
@@ -115,6 +146,34 @@ func StoreWriterGuardPath(root string) string {
 
 func StoreActiveJobPath(root string) string {
 	return filepath.Join(root, storeActiveJobFile)
+}
+
+func StoreLogsDir(root string) string {
+	return filepath.Join(root, storeLogsDirName)
+}
+
+func StoreCurrentLogPath(root string) string {
+	return filepath.Join(StoreLogsDir(root), storeCurrentLogFile)
+}
+
+func StoreCurrentLogMetaPath(root string) string {
+	return filepath.Join(StoreLogsDir(root), storeCurrentMetaFile)
+}
+
+func StoreLogPackagesDir(root string) string {
+	return filepath.Join(root, storeLogPackagesDir)
+}
+
+func StoreLogPackageDir(root string, packageID string) string {
+	return filepath.Join(StoreLogPackagesDir(root), packageID)
+}
+
+func StoreLogPackageManifestPath(root string, packageID string) string {
+	return filepath.Join(StoreLogPackageDir(root, packageID), storeManifestFilename)
+}
+
+func StoreLogPackageGatewayLogPath(root string, packageID string) string {
+	return filepath.Join(StoreLogPackageDir(root, packageID), storeGatewayLogFile)
 }
 
 func StoreJobsDir(root string) string {

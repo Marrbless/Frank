@@ -252,6 +252,53 @@ func TestMissionStatusCommandUsesSharedObservationReader(t *testing.T) {
 	}
 }
 
+func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
+	root := t.TempDir()
+	openedAt := time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC)
+	if _, err := missioncontrol.EnsureCurrentLogSegment(root, openedAt); err != nil {
+		t.Fatalf("EnsureCurrentLogSegment() error = %v", err)
+	}
+	if err := os.WriteFile(missioncontrol.StoreCurrentLogPath(root), []byte("gateway line\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(current.log) error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "package-logs", "--mission-store-root", root, "--reason", "manual"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var summary missionPackageLogsSummary
+	if err := json.Unmarshal(out.Bytes(), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(stdout) error = %v", err)
+	}
+	if summary.Action != "packaged" {
+		t.Fatalf("summary.Action = %q, want %q", summary.Action, "packaged")
+	}
+	if summary.Reason != missioncontrol.LogPackageReasonManual {
+		t.Fatalf("summary.Reason = %q, want %q", summary.Reason, missioncontrol.LogPackageReasonManual)
+	}
+	if summary.PackageID == "" {
+		t.Fatal("summary.PackageID = empty, want package ID")
+	}
+	if summary.LogRelPath != filepath.ToSlash(filepath.Join("log_packages", summary.PackageID, "gateway.log")) {
+		t.Fatalf("summary.LogRelPath = %q, want gateway log relpath", summary.LogRelPath)
+	}
+	if summary.CurrentLogRelPath != filepath.ToSlash(filepath.Join("logs", "current.log")) {
+		t.Fatalf("summary.CurrentLogRelPath = %q, want %q", summary.CurrentLogRelPath, filepath.ToSlash(filepath.Join("logs", "current.log")))
+	}
+	if summary.CurrentMetaRelPath != filepath.ToSlash(filepath.Join("logs", "current.meta.json")) {
+		t.Fatalf("summary.CurrentMetaRelPath = %q, want %q", summary.CurrentMetaRelPath, filepath.ToSlash(filepath.Join("logs", "current.meta.json")))
+	}
+	if summary.ByteCount == 0 {
+		t.Fatal("summary.ByteCount = 0, want packaged byte count")
+	}
+}
+
 func TestMissionInspectCommandWithValidFilePrintsExpectedSummary(t *testing.T) {
 	job := missioncontrol.Job{
 		ID:           "job-1",
