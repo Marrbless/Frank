@@ -26,6 +26,8 @@ var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s
 var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
 
+const missionCheckInInterval = 30 * time.Minute
+
 // sendChannelNotification delivers a non-blocking status message back to the
 // originating channel so the user can see tool progress in real time.
 // It is a no-op for system channels (heartbeat, cron) that have no user-facing chat.
@@ -285,6 +287,229 @@ func recordOperatorResumeAcknowledgement(taskState *tools.TaskState) (string, bo
 	return formatBudgetBlockedResponse(ec, runtime), true
 }
 
+func countMissionCheckIns(runtime missioncontrol.JobRuntimeState) int {
+	count := 0
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "check_in" || !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok := currentExecutionContext(taskState)
+	if ok && ec.Job != nil {
+		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		if err != nil {
+			return "", err
+		}
+		return "Mission check-in:\n" + summary, nil
+	}
+
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Mission check-in:\n" + summary, nil
+}
+
+func selectPendingApprovalRequest(runtime missioncontrol.JobRuntimeState) (missioncontrol.ApprovalRequest, bool) {
+	var fallback *missioncontrol.ApprovalRequest
+	for i := len(runtime.ApprovalRequests) - 1; i >= 0; i-- {
+		request := runtime.ApprovalRequests[i]
+		if runtime.JobID != "" && request.JobID != runtime.JobID {
+			continue
+		}
+		if request.State != missioncontrol.ApprovalStatePending {
+			continue
+		}
+		if runtime.ActiveStepID != "" && request.StepID == runtime.ActiveStepID {
+			return request, true
+		}
+		if fallback == nil {
+			candidate := request
+			fallback = &candidate
+		}
+	}
+	if fallback == nil {
+		return missioncontrol.ApprovalRequest{}, false
+	}
+	return *fallback, true
+}
+
+func approvalRequestNotificationRecorded(runtime missioncontrol.JobRuntimeState, request missioncontrol.ApprovalRequest) bool {
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "approval_request" {
+			continue
+		}
+		if !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		if event.StepID != request.StepID {
+			continue
+		}
+		if !request.RequestedAt.IsZero() && event.Timestamp.Before(request.RequestedAt) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func approvalRequestNotificationSession(taskState *tools.TaskState, request missioncontrol.ApprovalRequest) (string, string, bool) {
+	if channel := strings.TrimSpace(request.SessionChannel); channel != "" || strings.TrimSpace(request.SessionChatID) != "" {
+		return channel, strings.TrimSpace(request.SessionChatID), true
+	}
+	if taskState == nil {
+		return "", "", false
+	}
+	return taskState.OperatorSession()
+}
+
+func buildMissionApprovalRequestContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok := currentExecutionContext(taskState)
+	if ok && ec.Job != nil {
+		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		if err != nil {
+			return "", err
+		}
+		return "Approval required:\n" + summary, nil
+	}
+
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Approval required:\n" + summary, nil
+}
+
+func (a *AgentLoop) maybeEmitApprovalRequestNotification() {
+	if a == nil || a.taskState == nil || a.hub == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStateWaitingUser {
+		return
+	}
+
+	request, ok := selectPendingApprovalRequest(runtime)
+	if !ok || approvalRequestNotificationRecorded(runtime, request) {
+		return
+	}
+	channel, chatID, ok := approvalRequestNotificationSession(a.taskState, request)
+	if !ok {
+		return
+	}
+
+	exhausted, err := a.taskState.RecordOwnerFacingApprovalRequest()
+	if err != nil {
+		log.Printf("mission runtime approval notification accounting failed: %v", err)
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	if exhausted {
+		ec, ok := a.taskState.ExecutionContext()
+		if !ok || ec.Job == nil {
+			return
+		}
+		sendChannelNotification(a.hub, channel, chatID, formatBudgetBlockedResponse(ec, runtime))
+		return
+	}
+
+	content, err := buildMissionApprovalRequestContent(a.taskState, runtime)
+	if err != nil {
+		log.Printf("mission runtime approval notification formatting failed: %v", err)
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
+func (a *AgentLoop) composeMissionRuntimeChangeHook(hook func()) func() {
+	return func() {
+		if hook != nil {
+			hook()
+		}
+		a.maybeEmitApprovalRequestNotification()
+	}
+}
+
+func (a *AgentLoop) maybeEmitMissionCheckIn(now time.Time) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStateRunning {
+		return
+	}
+
+	anchor := runtime.StartedAt
+	if anchor.IsZero() {
+		anchor = runtime.CreatedAt
+	}
+	if anchor.IsZero() {
+		return
+	}
+
+	elapsed := now.Sub(anchor)
+	if elapsed < missionCheckInInterval {
+		return
+	}
+	if countMissionCheckIns(runtime) >= int(elapsed/missionCheckInInterval) {
+		return
+	}
+
+	if exhausted, err := a.taskState.RecordOwnerFacingCheckIn(); err != nil {
+		log.Printf("mission runtime check-in accounting failed: %v", err)
+		return
+	} else if exhausted {
+		runtime, ok = a.taskState.MissionRuntimeState()
+		if !ok {
+			return
+		}
+		ec, ok := a.taskState.ExecutionContext()
+		if !ok || ec.Job == nil {
+			return
+		}
+		channel, chatID, ok := a.taskState.OperatorSession()
+		if !ok {
+			return
+		}
+		sendChannelNotification(a.hub, channel, chatID, formatBudgetBlockedResponse(ec, runtime))
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	content, err := buildMissionCheckInContent(a.taskState, runtime)
+	if err != nil {
+		log.Printf("mission runtime check-in formatting failed: %v", err)
+		return
+	}
+	channel, chatID, ok := a.taskState.OperatorSession()
+	if !ok {
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+}
+
 // AgentLoop is the core processing loop; it holds an LLM provider, tools, sessions and context builder.
 type AgentLoop struct {
 	hub                 *chat.Hub
@@ -417,7 +642,7 @@ func (a *AgentLoop) SetMissionRuntimeChangeHook(hook func()) {
 	if a == nil || a.taskState == nil {
 		return
 	}
-	a.taskState.SetRuntimeChangeHook(hook)
+	a.taskState.SetRuntimeChangeHook(a.composeMissionRuntimeChangeHook(hook))
 }
 
 func (a *AgentLoop) SetMissionRuntimePersistHook(hook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error) {
@@ -459,6 +684,8 @@ func (a *AgentLoop) MissionRequired() bool {
 func (a *AgentLoop) Run(ctx context.Context) {
 	a.running = true
 	log.Println("Agent loop started")
+	checkInTicker := time.NewTicker(missionCheckInInterval)
+	defer checkInTicker.Stop()
 
 	for a.running {
 		select {
@@ -466,6 +693,8 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			log.Println("Agent loop received shutdown signal")
 			a.running = false
 			return
+		case now := <-checkInTicker.C:
+			a.maybeEmitMissionCheckIn(now)
 
 		case msg, ok := <-a.hub.In:
 			if !ok {

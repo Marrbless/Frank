@@ -130,6 +130,18 @@ func (s *TaskState) MissionRuntimeControl() (missioncontrol.RuntimeControlContex
 	return *missioncontrol.CloneRuntimeControlContext(&s.runtimeControl), true
 }
 
+func (s *TaskState) OperatorSession() (string, string, bool) {
+	if s == nil {
+		return "", "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.operatorChannel == "" && s.operatorChatID == "" {
+		return "", "", false
+	}
+	return s.operatorChannel, s.operatorChatID, true
+}
+
 func (s *TaskState) SetRuntimeChangeHook(hook func()) {
 	if s == nil {
 		return
@@ -401,6 +413,60 @@ func (s *TaskState) RecordOwnerFacingMessage() (bool, error) {
 	}
 
 	nextRuntime, exhausted, err := missioncontrol.RecordOwnerFacingMessage(*ec.Runtime, time.Now())
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return exhausted, err
+}
+
+func (s *TaskState) RecordOwnerFacingCheckIn() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return false, nil
+	}
+
+	nextRuntime, exhausted, err := missioncontrol.RecordOwnerFacingCheckIn(*ec.Runtime, time.Now())
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return exhausted, err
+}
+
+func (s *TaskState) RecordOwnerFacingApprovalRequest() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateWaitingUser {
+		return false, nil
+	}
+
+	nextRuntime, exhausted, err := missioncontrol.RecordOwnerFacingApprovalRequest(*ec.Runtime, time.Now())
 	if err != nil {
 		return false, err
 	}

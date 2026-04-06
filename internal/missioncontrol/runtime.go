@@ -30,13 +30,15 @@ const (
 )
 
 const (
-	ownerFacingDenyAckAction    = "deny_ack"
-	ownerFacingMessageAction    = "message"
-	ownerFacingPauseAckAction   = "pause_ack"
-	ownerFacingRevokeAckAction  = "revoke_approval_ack"
-	ownerFacingStepOutputAction = "step_output"
-	ownerFacingResumeAckAction  = "resume_ack"
-	ownerFacingSetStepAckAction = "set_step_ack"
+	ownerFacingApprovalRequestAction = "approval_request"
+	ownerFacingDenyAckAction         = "deny_ack"
+	ownerFacingMessageAction         = "message"
+	ownerFacingCheckInAction         = "check_in"
+	ownerFacingPauseAckAction        = "pause_ack"
+	ownerFacingRevokeAckAction       = "revoke_approval_ack"
+	ownerFacingStepOutputAction      = "step_output"
+	ownerFacingResumeAckAction       = "resume_ack"
+	ownerFacingSetStepAckAction      = "set_step_ack"
 )
 
 const (
@@ -630,6 +632,56 @@ func RecordOwnerFacingMessage(current JobRuntimeState, now time.Time) (JobRuntim
 	return recordOwnerFacingOutput(current, now, ownerFacingMessageAction, AuditActionClassToolCall)
 }
 
+func RecordOwnerFacingCheckIn(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	return recordOwnerFacingOutput(current, now, ownerFacingCheckInAction, AuditActionClassRuntime)
+}
+
+func RecordOwnerFacingApprovalRequest(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	if current.State != JobStateWaitingUser {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("approval request notification budget requires waiting_user runtime state, got %q", current.State),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "approval request notification budget requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "approval request notification budget requires an active step",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    ownerFacingApprovalRequestAction,
+		ActionClass: AuditActionClassRuntime,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   now,
+	})
+
+	observed := countOwnerFacingMessages(next)
+	if observed < maxOwnerFacingMessagesPerJob {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  ownerMessagesBudgetCeiling,
+		Limit:    maxOwnerFacingMessagesPerJob,
+		Observed: observed,
+		Message:  "owner-facing message budget exhausted",
+	})
+	return paused, true, err
+}
+
 func RecordOwnerFacingDenyAck(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
 	if current.State != JobStateWaitingUser {
 		return JobRuntimeState{}, false, ValidationError{
@@ -808,8 +860,10 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 			continue
 		}
 		switch {
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingApprovalRequestAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDenyAckAction:
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingCheckInAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingPauseAckAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingRevokeAckAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingStepOutputAction:
