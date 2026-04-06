@@ -150,3 +150,69 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 	default:
 	}
 }
+
+func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	ec := missioncontrol.ExecutionContext{
+		Job: &job,
+		Step: &missioncontrol.Step{
+			ID:   "build",
+			Type: missioncontrol.StepTypeDiscussion,
+		},
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        "job-1",
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonBudgetExhausted,
+			BudgetBlocker: &missioncontrol.RuntimeBudgetBlockerRecord{
+				Ceiling:     "owner_messages",
+				Limit:       20,
+				Observed:    20,
+				Message:     "owner-facing message budget exhausted",
+				TriggeredAt: time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitBudgetPauseNotification()
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "telegram" || out.ChatID != "chat-42" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
+		}
+		if !strings.Contains(out.Content, "Mission paused:") {
+			t.Fatalf("outbound content = %q, want mission paused prefix", out.Content)
+		}
+		if !strings.Contains(out.Content, `"budget_blocker": {`) {
+			t.Fatalf("outbound content = %q, want budget blocker summary", out.Content)
+		}
+	default:
+		t.Fatal("expected a budget pause outbound notification")
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	last := runtime.AuditHistory[len(runtime.AuditHistory)-1]
+	if last.ToolName != "budget_pause_notification" {
+		t.Fatalf("last audit tool = %q, want %q", last.ToolName, "budget_pause_notification")
+	}
+
+	ag.maybeEmitBudgetPauseNotification()
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected duplicate budget pause notification: %#v", out)
+	default:
+	}
+}

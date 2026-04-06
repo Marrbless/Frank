@@ -31,6 +31,7 @@ const (
 
 const (
 	ownerFacingApprovalRequestAction = "approval_request"
+	ownerFacingBudgetPauseAction     = "budget_pause_notification"
 	ownerFacingDenyAckAction         = "deny_ack"
 	ownerFacingMessageAction         = "message"
 	ownerFacingCheckInAction         = "check_in"
@@ -682,6 +683,64 @@ func RecordOwnerFacingApprovalRequest(current JobRuntimeState, now time.Time) (J
 	return paused, true, err
 }
 
+func RecordOwnerFacingBudgetPause(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
+	if current.State != JobStatePaused {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("budget pause notification requires paused runtime state, got %q", current.State),
+		}
+	}
+	if current.PausedReason != RuntimePauseReasonBudgetExhausted {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("budget pause notification requires budget-exhausted pause, got %q", current.PausedReason),
+		}
+	}
+	if current.JobID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "budget pause notification requires a runtime job ID",
+		}
+	}
+	if current.ActiveStepID == "" {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "budget pause notification requires an active step",
+		}
+	}
+	if current.BudgetBlocker == nil {
+		return JobRuntimeState{}, false, ValidationError{
+			Code:    RejectionCodeInvalidRuntimeState,
+			Message: "budget pause notification requires a budget blocker",
+		}
+	}
+
+	next := *CloneJobRuntimeState(&current)
+	next.UpdatedAt = now
+	next.AuditHistory = AppendAuditHistory(next.AuditHistory, AuditEvent{
+		JobID:       next.JobID,
+		StepID:      next.ActiveStepID,
+		ToolName:    ownerFacingBudgetPauseAction,
+		ActionClass: AuditActionClassRuntime,
+		Result:      AuditResultApplied,
+		Allowed:     true,
+		Timestamp:   now,
+	})
+
+	observed := countOwnerFacingMessages(next)
+	if observed < maxOwnerFacingMessagesPerJob {
+		return next, false, nil
+	}
+
+	paused, err := PauseJobRuntimeForBudgetExhaustion(next, now, RuntimeBudgetBlockerRecord{
+		Ceiling:  ownerMessagesBudgetCeiling,
+		Limit:    maxOwnerFacingMessagesPerJob,
+		Observed: observed,
+		Message:  "owner-facing message budget exhausted",
+	})
+	return paused, true, err
+}
+
 func RecordOwnerFacingDenyAck(current JobRuntimeState, now time.Time) (JobRuntimeState, bool, error) {
 	if current.State != JobStateWaitingUser {
 		return JobRuntimeState{}, false, ValidationError{
@@ -861,6 +920,7 @@ func countOwnerFacingMessages(runtime JobRuntimeState) int {
 		}
 		switch {
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingApprovalRequestAction:
+		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingBudgetPauseAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingDenyAckAction:
 		case event.ActionClass == AuditActionClassToolCall && event.ToolName == ownerFacingMessageAction:
 		case event.ActionClass == AuditActionClassRuntime && event.ToolName == ownerFacingCheckInAction:

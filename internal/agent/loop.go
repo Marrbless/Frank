@@ -393,6 +393,49 @@ func buildMissionApprovalRequestContent(taskState *tools.TaskState, runtime miss
 	return "Approval required:\n" + summary, nil
 }
 
+func budgetPauseNotificationRecorded(runtime missioncontrol.JobRuntimeState) bool {
+	if runtime.BudgetBlocker == nil {
+		return false
+	}
+	for _, event := range runtime.AuditHistory {
+		if runtime.JobID != "" && event.JobID != runtime.JobID {
+			continue
+		}
+		if event.ActionClass != missioncontrol.AuditActionClassRuntime || event.ToolName != "budget_pause_notification" {
+			continue
+		}
+		if !event.Allowed || event.Result != missioncontrol.AuditResultApplied {
+			continue
+		}
+		if runtime.ActiveStepID != "" && event.StepID != runtime.ActiveStepID {
+			continue
+		}
+		if !runtime.BudgetBlocker.TriggeredAt.IsZero() && event.Timestamp.Before(runtime.BudgetBlocker.TriggeredAt) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func buildMissionBudgetPauseContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok := currentExecutionContext(taskState)
+	if ok && ec.Job != nil {
+		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		if err != nil {
+			return "", err
+		}
+		return "Mission paused:\n" + summary, nil
+	}
+
+	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
+	if err != nil {
+		return "", err
+	}
+	return "Mission paused:\n" + summary, nil
+}
+
 func (a *AgentLoop) maybeEmitApprovalRequestNotification() {
 	if a == nil || a.taskState == nil || a.hub == nil {
 		return
@@ -439,12 +482,53 @@ func (a *AgentLoop) maybeEmitApprovalRequestNotification() {
 	sendChannelNotification(a.hub, channel, chatID, content)
 }
 
+func (a *AgentLoop) maybeEmitBudgetPauseNotification() {
+	if a == nil || a.taskState == nil || a.hub == nil {
+		return
+	}
+
+	runtime, ok := a.taskState.MissionRuntimeState()
+	if !ok || runtime.State != missioncontrol.JobStatePaused || runtime.PausedReason != missioncontrol.RuntimePauseReasonBudgetExhausted || runtime.BudgetBlocker == nil {
+		return
+	}
+	if budgetPauseNotificationRecorded(runtime) {
+		return
+	}
+
+	channel, chatID, ok := a.taskState.OperatorSession()
+	if !ok {
+		return
+	}
+
+	exhausted, err := a.taskState.RecordOwnerFacingBudgetPause()
+	if err != nil {
+		log.Printf("mission runtime budget-pause notification accounting failed: %v", err)
+		return
+	}
+
+	runtime, ok = a.taskState.MissionRuntimeState()
+	if !ok {
+		return
+	}
+	content, err := buildMissionBudgetPauseContent(a.taskState, runtime)
+	if err != nil {
+		log.Printf("mission runtime budget-pause notification formatting failed: %v", err)
+		return
+	}
+	sendChannelNotification(a.hub, channel, chatID, content)
+
+	if exhausted {
+		return
+	}
+}
+
 func (a *AgentLoop) composeMissionRuntimeChangeHook(hook func()) func() {
 	return func() {
 		if hook != nil {
 			hook()
 		}
 		a.maybeEmitApprovalRequestNotification()
+		a.maybeEmitBudgetPauseNotification()
 	}
 }
 

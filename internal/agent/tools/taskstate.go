@@ -480,6 +480,38 @@ func (s *TaskState) RecordOwnerFacingApprovalRequest() (bool, error) {
 	return exhausted, err
 }
 
+func (s *TaskState) RecordOwnerFacingBudgetPause() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	missionJob := missioncontrol.CloneJob(&s.missionJob)
+	hasMissionJob := s.hasMissionJob
+	s.mu.Unlock()
+	if !hasRuntimeState || runtimeState == nil || runtimeState.State != missioncontrol.JobStatePaused {
+		return false, nil
+	}
+	if !hasMissionJob || missionJob == nil {
+		return false, nil
+	}
+
+	nextRuntime, exhausted, err := missioncontrol.RecordOwnerFacingBudgetPause(*runtimeState, time.Now())
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(missionJob, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return exhausted, err
+}
+
 func (s *TaskState) RecordOwnerFacingDenyAck() (bool, error) {
 	if s == nil {
 		return false, nil
