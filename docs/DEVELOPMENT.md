@@ -4,7 +4,7 @@ This document covers how to set up a local development environment, build, test,
 
 ## What You'll Need
 
-- [Go](https://go.dev/dl/) 1.25+ installed
+- [Go](https://go.dev/dl/) 1.26+ installed
 - [Docker](https://www.docker.com/) installed (for container builds)
 - A [Docker Hub](https://hub.docker.com/) account (for publishing)
 
@@ -60,6 +60,8 @@ The binary will be created in the current directory.
 # Start the full gateway (includes channels, heartbeat, etc.)
 ./picobot gateway
 ```
+
+For Frank mission-control development and operator runbooks, the relevant runtime surface is CLI-driven rather than config-driven. See [`docs/HOW_TO_START.md`](./HOW_TO_START.md) for the current `gateway --mission-*` startup flags and `picobot mission ...` operator commands.
 
 ### Run tests
 

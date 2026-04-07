@@ -17,6 +17,7 @@ Picobot is configured via `~/.picobot/config.json`. Run `picobot onboard` to gen
       "requestTimeoutS": 60
     }
   },
+  "mcpServers": {},
   "channels": {
     "telegram": {
       "enabled": false,
@@ -49,6 +50,23 @@ Picobot is configured via `~/.picobot/config.json`. Run `picobot onboard` to gen
   }
 }
 ```
+
+## Frank Mission-Control Runtime
+
+Frank mission-control startup and operator-control settings are currently CLI-only. They are not stored in `~/.picobot/config.json`.
+
+Use the `gateway` and `mission` commands for the mission-control surface that is already implemented on current HEAD:
+
+- `--mission-required` fails closed unless a governed mission step is active
+- `--mission-file` and `--mission-step` bootstrap the active job and step at startup
+- `--mission-status-file` writes the operator status snapshot JSON
+- `--mission-step-control-file` enables file-watched step switching for `picobot mission set-step`
+- `--mission-store-root` points at the durable mission store
+- `--mission-resume-approved` is required before resuming a persisted non-terminal runtime after reboot
+
+If `--mission-store-root` is omitted but `--mission-status-file` is set, Picobot derives the durable store root as `<status-file>.store`.
+
+The durable mission store is the persisted Frank runtime surface. It holds the committed mission runtime, audit history, approval records, artifacts, current gateway log segment, and packaged log bundles used by `picobot mission package-logs` and `picobot mission prune-store`.
 
 ---
 

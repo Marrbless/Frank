@@ -145,6 +145,33 @@ Edit `~/.picobot/workspace/USER.md` to fill in your name, timezone, preferences,
 
 This starts the agent loop, heartbeat, and any enabled channels (e.g., Telegram, Discord, Slack).
 
+### Start the Frank mission-controlled gateway
+
+Frank's mission-control surface is driven by gateway flags, not by `config.json`.
+
+Use these paths as the operator-facing runtime surfaces:
+
+- `--mission-file` and `--mission-step` to bootstrap the active job and step
+- `--mission-required` to fail closed when no governed step is active
+- `--mission-status-file` to write the operator status snapshot
+- `--mission-step-control-file` to enable file-based `mission set-step` switching
+- `--mission-store-root` to persist the durable mission store explicitly
+- `--mission-resume-approved` only when you intentionally want a persisted non-terminal runtime to resume after reboot
+
+If you omit `--mission-store-root` but provide `--mission-status-file`, Picobot derives the durable store path as `<status-file>.store`.
+
+```sh
+./picobot gateway \
+  --mission-required \
+  --mission-file /absolute/path/to/mission.json \
+  --mission-step discussion \
+  --mission-status-file /absolute/path/to/mission-status.json \
+  --mission-step-control-file /absolute/path/to/mission-step-control.json \
+  --mission-store-root /absolute/path/to/mission-store
+```
+
+The durable mission store is where Picobot keeps committed runtime state, audit history, approval records, artifacts, and packaged gateway logs for Frank's long-running operator workflow.
+
 ## CLI Commands
 
 | Command | Description |
@@ -155,6 +182,13 @@ This starts the agent loop, heartbeat, and any enabled channels (e.g., Telegram,
 | `picobot agent -m "..."` | Run a single-shot agent query |
 | `picobot agent -M model -m "..."` | Query with a specific model |
 | `picobot gateway` | Start long-running gateway |
+| `picobot gateway --mission-required --mission-file ... --mission-step ... --mission-status-file ...` | Start the Frank mission-controlled gateway |
+| `picobot mission status --status-file ...` | Read the current mission status snapshot |
+| `picobot mission inspect --mission-file ...` | Inspect a mission or step before switching it live |
+| `picobot mission assert --status-file ...` | Assert mission runtime invariants from the status snapshot |
+| `picobot mission set-step --control-file ... --mission-file ... --status-file ... --step-id ...` | Switch the active mission step through the watched control file |
+| `picobot mission package-logs --mission-store-root ...` | Package the active gateway log segment under the durable mission store |
+| `picobot mission prune-store --mission-store-root ...` | Prune expired retained data from the durable mission store |
 | `picobot memory read today` | Read today's memory notes |
 | `picobot memory read long` | Read long-term memory |
 | `picobot memory append today -c "..."` | Append to today's notes |
