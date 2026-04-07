@@ -68,6 +68,10 @@ type CampaignRef struct {
 	CampaignID string `json:"campaign_id"`
 }
 
+type TreasuryRef struct {
+	TreasuryID string `json:"treasury_id"`
+}
+
 type Job struct {
 	ID           string        `json:"id"`
 	SpecVersion  string        `json:"spec_version,omitempty"`
@@ -101,6 +105,7 @@ type Step struct {
 	GovernedExternalTargets   []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
 	FrankObjectRefs           []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
 	CampaignRef               *CampaignRef                   `json:"campaign_ref,omitempty"`
+	TreasuryRef               *TreasuryRef                   `json:"treasury_ref,omitempty"`
 	SystemAction              *SystemAction                  `json:"system_action,omitempty"`
 }
 
@@ -133,6 +138,11 @@ func NormalizeFrankRegistryObjectRef(ref FrankRegistryObjectRef) FrankRegistryOb
 
 func NormalizeCampaignRef(ref CampaignRef) CampaignRef {
 	ref.CampaignID = strings.TrimSpace(ref.CampaignID)
+	return ref
+}
+
+func NormalizeTreasuryRef(ref TreasuryRef) TreasuryRef {
+	ref.TreasuryID = strings.TrimSpace(ref.TreasuryID)
 	return ref
 }
 

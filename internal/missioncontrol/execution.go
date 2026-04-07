@@ -80,6 +80,7 @@ func copyStep(step Step) Step {
 	stepCopy.GovernedExternalTargets = cloneAutonomyEligibilityTargetRefs(step.GovernedExternalTargets)
 	stepCopy.FrankObjectRefs = cloneFrankRegistryObjectRefs(step.FrankObjectRefs)
 	stepCopy.CampaignRef = cloneCampaignRef(step.CampaignRef)
+	stepCopy.TreasuryRef = cloneTreasuryRef(step.TreasuryRef)
 	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
 	return stepCopy
 }
@@ -89,6 +90,7 @@ func normalizedStep(step Step) Step {
 	stepCopy.IdentityMode = NormalizeIdentityMode(stepCopy.IdentityMode)
 	stepCopy.FrankObjectRefs = normalizeFrankRegistryObjectRefs(stepCopy.FrankObjectRefs)
 	stepCopy.CampaignRef = normalizeCampaignRefPtr(stepCopy.CampaignRef)
+	stepCopy.TreasuryRef = normalizeTreasuryRefPtr(stepCopy.TreasuryRef)
 	return stepCopy
 }
 
@@ -139,5 +141,23 @@ func normalizeCampaignRefPtr(ref *CampaignRef) *CampaignRef {
 	}
 
 	normalized := NormalizeCampaignRef(*ref)
+	return &normalized
+}
+
+func cloneTreasuryRef(ref *TreasuryRef) *TreasuryRef {
+	if ref == nil {
+		return nil
+	}
+
+	cloned := *ref
+	return &cloned
+}
+
+func normalizeTreasuryRefPtr(ref *TreasuryRef) *TreasuryRef {
+	if ref == nil {
+		return nil
+	}
+
+	normalized := NormalizeTreasuryRef(*ref)
 	return &normalized
 }

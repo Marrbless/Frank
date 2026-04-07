@@ -214,6 +214,18 @@ func TestValidatePlanAllowsStepsWithoutCampaignRef(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAllowsStepsWithoutTreasuryRef(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "draft", Type: StepTypeDiscussion, SuccessCriteria: []string{"stay bounded"}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsMalformedIdentityMode(t *testing.T) {
 	t.Parallel()
 
@@ -279,6 +291,58 @@ func TestValidatePlanRejectsMalformedCampaignRefs(t *testing.T) {
 			want := []ValidationError{
 				{
 					Code:    RejectionCodeInvalidCampaignRef,
+					StepID:  "draft",
+					Message: tc.want,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsMalformedTreasuryRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  *TreasuryRef
+		want string
+	}{
+		{
+			name: "empty treasury id",
+			ref: &TreasuryRef{
+				TreasuryID: "   ",
+			},
+			want: "treasury ref is invalid: treasury_id is required",
+		},
+		{
+			name: "malformed treasury id",
+			ref: &TreasuryRef{
+				TreasuryID: "treasury/one",
+			},
+			want: `treasury ref is invalid: treasury_id "treasury/one" is invalid`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testJob([]Step{
+				{
+					ID:          "draft",
+					Type:        StepTypeDiscussion,
+					TreasuryRef: tc.ref,
+				},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+			}))
+
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeInvalidTreasuryRef,
 					StepID:  "draft",
 					Message: tc.want,
 				},

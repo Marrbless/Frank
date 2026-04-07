@@ -58,6 +58,9 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	if control.Step.CampaignRef != nil {
 		t.Fatalf("Step.CampaignRef = %#v, want nil for zero-campaign step", control.Step.CampaignRef)
 	}
+	if control.Step.TreasuryRef != nil {
+		t.Fatalf("Step.TreasuryRef = %#v, want nil for zero-treasury step", control.Step.TreasuryRef)
+	}
 	if control.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
 	}
@@ -104,6 +107,9 @@ func TestTreasuryRegistryScaffoldingDoesNotAlterCurrentV2RuntimePath(t *testing.
 	if control.Step.CampaignRef != nil {
 		t.Fatalf("BuildRuntimeControlContext().Step.CampaignRef = %#v, want nil", control.Step.CampaignRef)
 	}
+	if control.Step.TreasuryRef != nil {
+		t.Fatalf("BuildRuntimeControlContext().Step.TreasuryRef = %#v, want nil", control.Step.TreasuryRef)
+	}
 	if control.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("BuildRuntimeControlContext().Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
 	}
@@ -128,6 +134,9 @@ func TestTreasuryRegistryScaffoldingDoesNotAlterCurrentV2RuntimePath(t *testing.
 	if ec.Step.CampaignRef != nil {
 		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.CampaignRef = %#v, want nil", ec.Step.CampaignRef)
 	}
+	if ec.Step.TreasuryRef != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.TreasuryRef = %#v, want nil", ec.Step.TreasuryRef)
+	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
 	}
@@ -151,6 +160,9 @@ func TestBuildRuntimeControlContextCarriesDeclaredControlPlaneRefsAndNormalizedI
 	}
 	job.Plan.Steps[0].CampaignRef = &CampaignRef{
 		CampaignID: " campaign-1 ",
+	}
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{
+		TreasuryID: " treasury-1 ",
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode(" agent_alias ")
 
@@ -180,6 +192,10 @@ func TestBuildRuntimeControlContextCarriesDeclaredControlPlaneRefsAndNormalizedI
 	wantCampaignRef := &CampaignRef{CampaignID: "campaign-1"}
 	if !reflect.DeepEqual(control.Step.CampaignRef, wantCampaignRef) {
 		t.Fatalf("BuildRuntimeControlContext().Step.CampaignRef = %#v, want %#v", control.Step.CampaignRef, wantCampaignRef)
+	}
+	wantTreasuryRef := &TreasuryRef{TreasuryID: "treasury-1"}
+	if !reflect.DeepEqual(control.Step.TreasuryRef, wantTreasuryRef) {
+		t.Fatalf("BuildRuntimeControlContext().Step.TreasuryRef = %#v, want %#v", control.Step.TreasuryRef, wantTreasuryRef)
 	}
 	if control.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("BuildRuntimeControlContext().Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
@@ -322,6 +338,9 @@ func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t
 	if ec.Step.CampaignRef != nil {
 		t.Fatalf("ExecutionContext.Step.CampaignRef = %#v, want nil for zero-campaign step", ec.Step.CampaignRef)
 	}
+	if ec.Step.TreasuryRef != nil {
+		t.Fatalf("ExecutionContext.Step.TreasuryRef = %#v, want nil for zero-treasury step", ec.Step.TreasuryRef)
+	}
 }
 
 func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
@@ -342,6 +361,9 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredControlPlaneRef
 	}
 	job.Plan.Steps[0].CampaignRef = &CampaignRef{
 		CampaignID: " campaign-1 ",
+	}
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{
+		TreasuryID: " treasury-1 ",
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("  ")
 	control, err := BuildRuntimeControlContext(job, "build")
@@ -380,6 +402,10 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredControlPlaneRef
 	wantCampaignRef := &CampaignRef{CampaignID: "campaign-1"}
 	if !reflect.DeepEqual(ec.Step.CampaignRef, wantCampaignRef) {
 		t.Fatalf("ExecutionContext.Step.CampaignRef = %#v, want %#v", ec.Step.CampaignRef, wantCampaignRef)
+	}
+	wantTreasuryRef := &TreasuryRef{TreasuryID: "treasury-1"}
+	if !reflect.DeepEqual(ec.Step.TreasuryRef, wantTreasuryRef) {
+		t.Fatalf("ExecutionContext.Step.TreasuryRef = %#v, want %#v", ec.Step.TreasuryRef, wantTreasuryRef)
 	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ExecutionContext.Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)

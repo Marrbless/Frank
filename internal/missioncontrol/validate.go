@@ -12,6 +12,7 @@ const (
 	RejectionCodeInvalidGovernedExternalTarget RejectionCode = "invalid_governed_external_target"
 	RejectionCodeInvalidFrankObjectRef         RejectionCode = "invalid_frank_object_ref"
 	RejectionCodeInvalidCampaignRef            RejectionCode = "invalid_campaign_ref"
+	RejectionCodeInvalidTreasuryRef            RejectionCode = "invalid_treasury_ref"
 	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
@@ -139,6 +140,7 @@ func ValidatePlan(job Job) []ValidationError {
 		invalidTypeErrors = append(invalidTypeErrors, validateGovernedExternalTargets(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateFrankObjectRefs(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateCampaignRefDeclaration(step)...)
+		invalidTypeErrors = append(invalidTypeErrors, validateTreasuryRefDeclaration(step)...)
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -324,6 +326,24 @@ func validateCampaignRefDeclaration(step Step) []ValidationError {
 				Code:    RejectionCodeInvalidCampaignRef,
 				StepID:  step.ID,
 				Message: "campaign ref is invalid: " + err.Error(),
+			},
+		}
+	}
+
+	return nil
+}
+
+func validateTreasuryRefDeclaration(step Step) []ValidationError {
+	if step.TreasuryRef == nil {
+		return nil
+	}
+
+	if err := ValidateTreasuryRef(*step.TreasuryRef); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidTreasuryRef,
+				StepID:  step.ID,
+				Message: "treasury ref is invalid: " + err.Error(),
 			},
 		}
 	}

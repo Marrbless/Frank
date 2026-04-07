@@ -263,6 +263,36 @@ func normalizeTreasuryLedgerEntry(entry TreasuryLedgerEntry) TreasuryLedgerEntry
 	return entry
 }
 
+func ValidateTreasuryRef(ref TreasuryRef) error {
+	return validateTreasuryIdentifierValue("treasury_id", NormalizeTreasuryRef(ref).TreasuryID)
+}
+
+func ResolveTreasuryRef(root string, ref TreasuryRef) (TreasuryRecord, error) {
+	normalized := NormalizeTreasuryRef(ref)
+	if err := ValidateTreasuryRef(normalized); err != nil {
+		return TreasuryRecord{}, err
+	}
+	return LoadTreasuryRecord(root, normalized.TreasuryID)
+}
+
+func ResolveExecutionContextTreasuryRef(ec ExecutionContext) (*TreasuryRecord, error) {
+	if ec.Step == nil {
+		return nil, fmt.Errorf("execution context step is required")
+	}
+	if ec.Step.TreasuryRef == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return nil, fmt.Errorf("mission store root is required to resolve treasury refs")
+	}
+
+	record, err := ResolveTreasuryRef(ec.MissionStoreRoot, *ec.Step.TreasuryRef)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func loadTreasuryRecordFile(path string) (TreasuryRecord, error) {
 	var record TreasuryRecord
 	if err := LoadStoreJSON(path, &record); err != nil {

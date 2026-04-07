@@ -136,6 +136,9 @@ func TestJobJSONRoundTrip(t *testing.T) {
 					CampaignRef: &CampaignRef{
 						CampaignID: "campaign-1",
 					},
+					TreasuryRef: &TreasuryRef{
+						TreasuryID: "treasury-1",
+					},
 					StaticArtifactPath:   "dist/report.json",
 					StaticArtifactFormat: "json",
 				},
@@ -195,6 +198,20 @@ func TestNormalizeCampaignRefTrimsFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NormalizeCampaignRef() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeTreasuryRefTrimsFields(t *testing.T) {
+	t.Parallel()
+
+	got := NormalizeTreasuryRef(TreasuryRef{
+		TreasuryID: " treasury-1 ",
+	})
+	want := TreasuryRef{
+		TreasuryID: "treasury-1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NormalizeTreasuryRef() = %#v, want %#v", got, want)
 	}
 }
 

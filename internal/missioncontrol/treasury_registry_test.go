@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -344,6 +345,228 @@ func TestTreasuryZeroSeedPolicyOwnerSeedForbiddenIsStable(t *testing.T) {
 	}
 	if record.ZeroSeedPolicy != TreasuryZeroSeedPolicyOwnerSeedForbidden {
 		t.Fatalf("ZeroSeedPolicy = %q, want %q", record.ZeroSeedPolicy, TreasuryZeroSeedPolicyOwnerSeedForbidden)
+	}
+}
+
+func TestTreasuryRefUsesSingleStepControlPlaneSurface(t *testing.T) {
+	t.Parallel()
+
+	stepType := reflect.TypeOf(Step{})
+	treasuryRefField, ok := stepType.FieldByName("TreasuryRef")
+	if !ok {
+		t.Fatal("Step.TreasuryRef field missing")
+	}
+	if treasuryRefField.Type != reflect.TypeOf((*TreasuryRef)(nil)) {
+		t.Fatalf("Step.TreasuryRef type = %v, want %v", treasuryRefField.Type, reflect.TypeOf((*TreasuryRef)(nil)))
+	}
+
+	executionContextType := reflect.TypeOf(ExecutionContext{})
+	if _, ok := executionContextType.FieldByName("TreasuryRef"); ok {
+		t.Fatal("ExecutionContext.TreasuryRef field present, want no duplicate top-level treasury-ref source")
+	}
+	if _, ok := executionContextType.FieldByName("TreasuryID"); ok {
+		t.Fatal("ExecutionContext.TreasuryID field present, want no duplicate top-level treasury identity source")
+	}
+}
+
+func TestResolveExecutionContextTreasuryRefZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	if ec.Step == nil {
+		t.Fatal("ResolveExecutionContext().Step = nil, want non-nil")
+	}
+	if ec.Step.TreasuryRef != nil {
+		t.Fatalf("ResolveExecutionContext().Step.TreasuryRef = %#v, want nil", ec.Step.TreasuryRef)
+	}
+
+	got, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryRefResolvesActiveTreasuryRef(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 15, 0, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-active"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-active",
+			},
+		}
+	})
+	if err := StoreTreasuryRecord(root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{
+		TreasuryID: " treasury-active ",
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	got, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryRef() = nil, want resolved treasury record")
+	}
+	if !reflect.DeepEqual(*got, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() = %#v, want %#v", *got, record)
+	}
+}
+
+func TestResolveExecutionContextTreasuryRefFailsClosedOnMissingOrMalformedRefs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tests := []struct {
+		name string
+		ref  *TreasuryRef
+		want string
+	}{
+		{
+			name: "missing record",
+			ref: &TreasuryRef{
+				TreasuryID: "treasury-missing",
+			},
+			want: ErrTreasuryRecordNotFound.Error(),
+		},
+		{
+			name: "empty treasury id",
+			ref: &TreasuryRef{
+				TreasuryID: "   ",
+			},
+			want: "treasury_id is required",
+		},
+		{
+			name: "malformed treasury id",
+			ref: &TreasuryRef{
+				TreasuryID: "treasury/malformed",
+			},
+			want: `treasury_id "treasury/malformed" is invalid`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ec := testExecutionContext()
+			ec.Step.TreasuryRef = tc.ref
+			ec.MissionStoreRoot = root
+
+			_, err := ResolveExecutionContextTreasuryRef(ec)
+			if err == nil {
+				t.Fatal("ResolveExecutionContextTreasuryRef() error = nil, want fail-closed rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ResolveExecutionContextTreasuryRef() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveExecutionContextTreasuryRefFailsClosedWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Step.TreasuryRef = &TreasuryRef{
+		TreasuryID: "treasury-1",
+	}
+
+	_, err := ResolveExecutionContextTreasuryRef(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryRef() error = nil, want missing mission store root rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store root is required to resolve treasury refs") {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() error = %q, want missing mission store root rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextTreasuryRefDoesNotIntroduceCampaignIdentityOrObjectSideChannel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 16, 0, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-sidechannel"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-sidechannel",
+			},
+		}
+	})
+	if err := StoreTreasuryRecord(root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].IdentityMode = IdentityModeOwnerOnlyControl
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-mail",
+		},
+	}
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: "campaign-1",
+	}
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{
+		TreasuryID: record.TreasuryID,
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	got, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryRef() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryRef() = nil, want resolved treasury record")
+	}
+	if ec.Step.IdentityMode != IdentityModeOwnerOnlyControl {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeOwnerOnlyControl)
+	}
+	if len(ec.GovernedExternalTargets) != 1 || ec.GovernedExternalTargets[0].RegistryID != "provider-mail" {
+		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want step-owned target only", ec.GovernedExternalTargets)
+	}
+	if len(ec.Step.FrankObjectRefs) != 1 || ec.Step.FrankObjectRefs[0].ObjectID != "identity-mail" {
+		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want step-owned ref only", ec.Step.FrankObjectRefs)
+	}
+	if ec.Step.CampaignRef == nil || ec.Step.CampaignRef.CampaignID != "campaign-1" {
+		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want step-owned campaign only", ec.Step.CampaignRef)
+	}
+	if len(got.ContainerRefs) != 1 || got.ContainerRefs[0].ObjectID != "container-sidechannel" {
+		t.Fatalf("ResolveExecutionContextTreasuryRef().ContainerRefs = %#v, want treasury-owned container only", got.ContainerRefs)
 	}
 }
 
