@@ -63,6 +63,76 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	}
 }
 
+func TestTreasuryRegistryScaffoldingDoesNotAlterCurrentV2RuntimePath(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-v2",
+		SpecVersion:  JobSpecVersionV2,
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: Plan{
+			ID: "plan-v2",
+			Steps: []Step{
+				{
+					ID:                   "artifact",
+					Type:                 StepTypeStaticArtifact,
+					AllowedTools:         []string{"read"},
+					SuccessCriteria:      []string{"write report"},
+					StaticArtifactPath:   "report.json",
+					StaticArtifactFormat: "json",
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"artifact"},
+				},
+			},
+		},
+	}
+
+	control, err := BuildRuntimeControlContext(job, "artifact")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if control.Step.GovernedExternalTargets != nil {
+		t.Fatalf("BuildRuntimeControlContext().Step.GovernedExternalTargets = %#v, want nil", control.Step.GovernedExternalTargets)
+	}
+	if control.Step.FrankObjectRefs != nil {
+		t.Fatalf("BuildRuntimeControlContext().Step.FrankObjectRefs = %#v, want nil", control.Step.FrankObjectRefs)
+	}
+	if control.Step.CampaignRef != nil {
+		t.Fatalf("BuildRuntimeControlContext().Step.CampaignRef = %#v, want nil", control.Step.CampaignRef)
+	}
+	if control.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("BuildRuntimeControlContext().Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
+	}
+
+	ec, err := ResolveExecutionContextWithRuntimeControl(control, JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "artifact",
+	})
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl() error = %v", err)
+	}
+	if ec.GovernedExternalTargets != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl().GovernedExternalTargets = %#v, want nil", ec.GovernedExternalTargets)
+	}
+	if ec.Step == nil {
+		t.Fatal("ResolveExecutionContextWithRuntimeControl().Step = nil, want active step")
+	}
+	if ec.Step.FrankObjectRefs != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.FrankObjectRefs = %#v, want nil", ec.Step.FrankObjectRefs)
+	}
+	if ec.Step.CampaignRef != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.CampaignRef = %#v, want nil", ec.Step.CampaignRef)
+	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
+}
+
 func TestBuildRuntimeControlContextCarriesDeclaredControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
