@@ -557,6 +557,57 @@ func TestDefaultToolGuardMalformedOrConflictingRegistryFailsClosed(t *testing.T)
 	}
 }
 
+func TestDefaultToolGuardDeclaredStepTargetsDelegateThroughAutonomyHelper(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 14, 10, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-human-id",
+	}
+	writeAutonomyEligibilityFixture(t, root, target, PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "human-id.example",
+		TargetClass:      target.Kind,
+		EligibilityLabel: EligibilityLabelIneligible,
+		LastCheckID:      "check-provider-human-id",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, EligibilityCheckRecord{
+		CheckID:                     "check-provider-human-id",
+		TargetKind:                  target.Kind,
+		TargetName:                  "human-id.example",
+		CanCreateWithoutOwner:       false,
+		CanOnboardWithoutOwner:      false,
+		CanControlAsAgent:           false,
+		CanRecoverAsAgent:           false,
+		RequiresHumanOnlyStep:       true,
+		RequiresOwnerOnlySecretOrID: true,
+		RulesAsObservedOK:           false,
+		Label:                       EligibilityLabelIneligible,
+		Reasons:                     []string{string(AutonomyEligibilityReasonOwnerIdentityRequired)},
+		CheckedAt:                   now,
+	})
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	_, wantErr := RequireAutonomyEligibleTarget(root, target)
+	if !errors.Is(wantErr, ErrAutonomyEligibleTargetRequired) {
+		t.Fatalf("RequireAutonomyEligibleTarget() error = %v, want %v", wantErr, ErrAutonomyEligibleTargetRequired)
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, wantErr.Error())
+}
+
 func TestAuditEventJSONUsesRequiredFieldNames(t *testing.T) {
 	t.Parallel()
 

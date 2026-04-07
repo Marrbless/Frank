@@ -178,6 +178,105 @@ func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAllowsStepsWithoutGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "draft", Type: StepTypeDiscussion, SuccessCriteria: []string{"stay bounded"}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsMalformedGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target AutonomyEligibilityTargetRef
+		want   string
+	}{
+		{
+			name: "invalid kind",
+			target: AutonomyEligibilityTargetRef{
+				Kind:       EligibilityTargetKind(""),
+				RegistryID: "provider-mail",
+			},
+			want: `governed external target is invalid: autonomy eligibility target kind "" is invalid`,
+		},
+		{
+			name: "empty registry id",
+			target: AutonomyEligibilityTargetRef{
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "   ",
+			},
+			want: "governed external target is invalid: autonomy eligibility target registry_id is required",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testJob([]Step{
+				{
+					ID:                      "draft",
+					Type:                    StepTypeDiscussion,
+					GovernedExternalTargets: []AutonomyEligibilityTargetRef{tc.target},
+				},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+			}))
+
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeInvalidGovernedExternalTarget,
+					StepID:  "draft",
+					Message: tc.want,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsDuplicateGovernedExternalTargetsAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:   "draft",
+			Type: StepTypeDiscussion,
+			GovernedExternalTargets: []AutonomyEligibilityTargetRef{
+				{
+					Kind:       EligibilityTargetKindProvider,
+					RegistryID: "provider-mail",
+				},
+				{
+					Kind:       EligibilityTargetKindProvider,
+					RegistryID: " provider-mail ",
+				},
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidGovernedExternalTarget,
+			StepID:  "draft",
+			Message: `duplicate governed external target kind "provider" registry_id "provider-mail"`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
 func TestValidatePlanRejectsV2StaticArtifactWithoutExplicitPathMetadata(t *testing.T) {
 	t.Parallel()
 

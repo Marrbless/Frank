@@ -1,18 +1,20 @@
 package missioncontrol
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 )
 
 const (
-	RejectionCodeDuplicateStepID           RejectionCode = "duplicate_step_id"
-	RejectionCodeMissingDependencyTarget   RejectionCode = "missing_dependency_target"
-	RejectionCodeDependencyCycle           RejectionCode = "dependency_cycle"
-	RejectionCodeMissingTerminalFinalStep  RejectionCode = "missing_terminal_final_response"
-	RejectionCodeInvalidStepType           RejectionCode = "invalid_step_type"
-	RejectionCodeLongRunningStartForbidden RejectionCode = "longrun_start_forbidden"
+	RejectionCodeDuplicateStepID               RejectionCode = "duplicate_step_id"
+	RejectionCodeInvalidGovernedExternalTarget RejectionCode = "invalid_governed_external_target"
+	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
+	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
+	RejectionCodeMissingTerminalFinalStep      RejectionCode = "missing_terminal_final_response"
+	RejectionCodeInvalidStepType               RejectionCode = "invalid_step_type"
+	RejectionCodeLongRunningStartForbidden     RejectionCode = "longrun_start_forbidden"
 )
 
 func ValidatePlan(job Job) []ValidationError {
@@ -130,6 +132,7 @@ func ValidatePlan(job Job) []ValidationError {
 		if step.Type == StepTypeSystemAction {
 			invalidTypeErrors = append(invalidTypeErrors, validateSystemActionStep(job, step)...)
 		}
+		invalidTypeErrors = append(invalidTypeErrors, validateGovernedExternalTargets(step)...)
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -195,6 +198,42 @@ func ValidatePlan(job Job) []ValidationError {
 	errors = append(errors, authorityErrors...)
 	errors = append(errors, toolScopeErrors...)
 	return errors
+}
+
+func validateGovernedExternalTargets(step Step) []ValidationError {
+	if len(step.GovernedExternalTargets) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(step.GovernedExternalTargets))
+	errors := make([]ValidationError, 0)
+	for _, target := range step.GovernedExternalTargets {
+		if err := validateAutonomyEligibilityTargetRef(target); err != nil {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeInvalidGovernedExternalTarget,
+				StepID:  step.ID,
+				Message: "governed external target is invalid: " + err.Error(),
+			})
+			continue
+		}
+
+		key := normalizedGovernedExternalTargetKey(target)
+		if _, ok := seen[key]; ok {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeInvalidGovernedExternalTarget,
+				StepID:  step.ID,
+				Message: fmt.Sprintf("duplicate governed external target kind %q registry_id %q", target.Kind, strings.TrimSpace(target.RegistryID)),
+			})
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+
+	return errors
+}
+
+func normalizedGovernedExternalTargetKey(target AutonomyEligibilityTargetRef) string {
+	return string(target.Kind) + "\x1f" + strings.TrimSpace(target.RegistryID)
 }
 
 func isValidStepType(stepType StepType) bool {

@@ -56,21 +56,22 @@ type Plan struct {
 }
 
 type Step struct {
-	ID                        string        `json:"id"`
-	Type                      StepType      `json:"type"`
-	Subtype                   StepSubtype   `json:"subtype,omitempty"`
-	ApprovalScope             string        `json:"approval_scope,omitempty"`
-	DependsOn                 []string      `json:"depends_on"`
-	RequiredAuthority         AuthorityTier `json:"required_authority"`
-	AllowedTools              []string      `json:"allowed_tools"`
-	RequiresApproval          bool          `json:"requires_approval"`
-	SuccessCriteria           []string      `json:"success_criteria"`
-	StaticArtifactPath        string        `json:"static_artifact_path,omitempty"`
-	StaticArtifactFormat      string        `json:"static_artifact_format,omitempty"`
-	OneShotArtifactPath       string        `json:"one_shot_artifact_path,omitempty"`
-	LongRunningStartupCommand []string      `json:"long_running_startup_command,omitempty"`
-	LongRunningArtifactPath   string        `json:"long_running_artifact_path,omitempty"`
-	SystemAction              *SystemAction `json:"system_action,omitempty"`
+	ID                        string                         `json:"id"`
+	Type                      StepType                       `json:"type"`
+	Subtype                   StepSubtype                    `json:"subtype,omitempty"`
+	ApprovalScope             string                         `json:"approval_scope,omitempty"`
+	DependsOn                 []string                       `json:"depends_on"`
+	RequiredAuthority         AuthorityTier                  `json:"required_authority"`
+	AllowedTools              []string                       `json:"allowed_tools"`
+	RequiresApproval          bool                           `json:"requires_approval"`
+	SuccessCriteria           []string                       `json:"success_criteria"`
+	StaticArtifactPath        string                         `json:"static_artifact_path,omitempty"`
+	StaticArtifactFormat      string                         `json:"static_artifact_format,omitempty"`
+	OneShotArtifactPath       string                         `json:"one_shot_artifact_path,omitempty"`
+	LongRunningStartupCommand []string                       `json:"long_running_startup_command,omitempty"`
+	LongRunningArtifactPath   string                         `json:"long_running_artifact_path,omitempty"`
+	GovernedExternalTargets   []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
+	SystemAction              *SystemAction                  `json:"system_action,omitempty"`
 }
 
 type ValidationError struct {

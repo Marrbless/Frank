@@ -317,9 +317,10 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 	}
 	step := copyStep(control.Step)
 	return ExecutionContext{
-		Job:     &job,
-		Step:    &step,
-		Runtime: CloneJobRuntimeState(&runtime),
+		Job:                     &job,
+		Step:                    &step,
+		Runtime:                 CloneJobRuntimeState(&runtime),
+		GovernedExternalTargets: cloneAutonomyEligibilityTargetRefs(step.GovernedExternalTargets),
 	}, nil
 }
 

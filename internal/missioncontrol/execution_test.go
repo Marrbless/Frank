@@ -111,6 +111,39 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 	if ec.Step.ID != "build" {
 		t.Fatalf("ResolveExecutionContext().Step.ID = %q, want %q", ec.Step.ID, "build")
 	}
+	if ec.GovernedExternalTargets != nil {
+		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want nil for zero-target step", ec.GovernedExternalTargets)
+	}
+}
+
+func TestResolveExecutionContextCarriesStepGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	want := []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+	if !reflect.DeepEqual(ec.GovernedExternalTargets, want) {
+		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want %#v", ec.GovernedExternalTargets, want)
+	}
+	if !reflect.DeepEqual(ec.Step.GovernedExternalTargets, want) {
+		t.Fatalf("ResolveExecutionContext().Step.GovernedExternalTargets = %#v, want %#v", ec.Step.GovernedExternalTargets, want)
+	}
 }
 
 func TestResolveExecutionContextInvalidPlanReturnsFirstValidationError(t *testing.T) {

@@ -49,6 +49,36 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	if !reflect.DeepEqual(control.AllowedTools, job.AllowedTools) {
 		t.Fatalf("AllowedTools = %#v, want %#v", control.AllowedTools, job.AllowedTools)
 	}
+	if control.Step.GovernedExternalTargets != nil {
+		t.Fatalf("Step.GovernedExternalTargets = %#v, want nil for zero-target step", control.Step.GovernedExternalTargets)
+	}
+}
+
+func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	want := []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+	if !reflect.DeepEqual(control.Step.GovernedExternalTargets, want) {
+		t.Fatalf("BuildRuntimeControlContext().Step.GovernedExternalTargets = %#v, want %#v", control.Step.GovernedExternalTargets, want)
+	}
 }
 
 func TestBuildInspectablePlanContextCapturesValidatedPlan(t *testing.T) {
@@ -174,6 +204,45 @@ func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t
 	}
 	if ec.Runtime == nil || ec.Runtime.State != JobStateRunning {
 		t.Fatalf("ExecutionContext.Runtime = %#v, want running runtime", ec.Runtime)
+	}
+	if ec.GovernedExternalTargets != nil {
+		t.Fatalf("ExecutionContext.GovernedExternalTargets = %#v, want nil for zero-target step", ec.GovernedExternalTargets)
+	}
+}
+
+func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+	ec, err := ResolveExecutionContextWithRuntimeControl(control, runtime)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextWithRuntimeControl() error = %v", err)
+	}
+
+	want := []AutonomyEligibilityTargetRef{
+		{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-mail",
+		},
+	}
+	if !reflect.DeepEqual(ec.GovernedExternalTargets, want) {
+		t.Fatalf("ExecutionContext.GovernedExternalTargets = %#v, want %#v", ec.GovernedExternalTargets, want)
 	}
 }
 
