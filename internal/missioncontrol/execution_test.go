@@ -36,6 +36,12 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 			AllowedTools:      []string{"read"},
 			RequiresApproval:  true,
 			SuccessCriteria:   []string{"produce code"},
+			FrankObjectRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "identity-1",
+				},
+			},
 		},
 		MissionStoreRoot: "/tmp/mission-store",
 		GovernedExternalTargets: []AutonomyEligibilityTargetRef{
@@ -55,6 +61,7 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	cloned.Job.Plan.Steps[0].DependsOn[0] = "mutated-dependency"
 	cloned.Job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
 	cloned.Step.SuccessCriteria[0] = "mutated-success"
+	cloned.Step.FrankObjectRefs[0].ObjectID = "mutated-object"
 	cloned.GovernedExternalTargets[0].RegistryID = "mutated-target"
 
 	if original.Job.AllowedTools[0] != "read" {
@@ -71,6 +78,9 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 
 	if original.Step.SuccessCriteria[0] != "produce code" {
 		t.Fatalf("original Step.SuccessCriteria[0] = %q, want %q", original.Step.SuccessCriteria[0], "produce code")
+	}
+	if original.Step.FrankObjectRefs[0].ObjectID != "identity-1" {
+		t.Fatalf("original Step.FrankObjectRefs[0].ObjectID = %q, want %q", original.Step.FrankObjectRefs[0].ObjectID, "identity-1")
 	}
 
 	if original.GovernedExternalTargets[0].RegistryID != "provider-mail" {
@@ -117,9 +127,12 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 	if ec.GovernedExternalTargets != nil {
 		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want nil for zero-target step", ec.GovernedExternalTargets)
 	}
+	if ec.Step.FrankObjectRefs != nil {
+		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want nil for zero-ref step", ec.Step.FrankObjectRefs)
+	}
 }
 
-func TestResolveExecutionContextCarriesStepGovernedExternalTargetsAndNormalizedIdentityMode(t *testing.T) {
+func TestResolveExecutionContextCarriesStepGovernedExternalTargetsFrankObjectRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -127,6 +140,12 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargetsAndNormalizedI
 		{
 			Kind:       EligibilityTargetKindProvider,
 			RegistryID: "provider-mail",
+		},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKind(" identity "),
+			ObjectID: " identity-1 ",
 		},
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("   ")
@@ -147,6 +166,15 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargetsAndNormalizedI
 	}
 	if !reflect.DeepEqual(ec.Step.GovernedExternalTargets, want) {
 		t.Fatalf("ResolveExecutionContext().Step.GovernedExternalTargets = %#v, want %#v", ec.Step.GovernedExternalTargets, want)
+	}
+	wantRefs := []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-1",
+		},
+	}
+	if !reflect.DeepEqual(ec.Step.FrankObjectRefs, wantRefs) {
+		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want %#v", ec.Step.FrankObjectRefs, wantRefs)
 	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)

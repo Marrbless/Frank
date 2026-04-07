@@ -51,6 +51,19 @@ const (
 	IdentityModeAgentAlias       IdentityMode = "agent_alias"
 )
 
+type FrankRegistryObjectKind string
+
+const (
+	FrankRegistryObjectKindIdentity  FrankRegistryObjectKind = "identity"
+	FrankRegistryObjectKindAccount   FrankRegistryObjectKind = "account"
+	FrankRegistryObjectKindContainer FrankRegistryObjectKind = "container"
+)
+
+type FrankRegistryObjectRef struct {
+	Kind     FrankRegistryObjectKind `json:"kind"`
+	ObjectID string                  `json:"object_id"`
+}
+
 type Job struct {
 	ID           string        `json:"id"`
 	SpecVersion  string        `json:"spec_version,omitempty"`
@@ -82,6 +95,7 @@ type Step struct {
 	LongRunningArtifactPath   string                         `json:"long_running_artifact_path,omitempty"`
 	IdentityMode              IdentityMode                   `json:"identity_mode,omitempty"`
 	GovernedExternalTargets   []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
+	FrankObjectRefs           []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
 	SystemAction              *SystemAction                  `json:"system_action,omitempty"`
 }
 
@@ -100,6 +114,16 @@ func validateIdentityMode(mode IdentityMode) error {
 	default:
 		return fmt.Errorf("identity_mode %q is invalid", strings.TrimSpace(string(mode)))
 	}
+}
+
+func NormalizeFrankRegistryObjectKind(kind FrankRegistryObjectKind) FrankRegistryObjectKind {
+	return FrankRegistryObjectKind(strings.TrimSpace(string(kind)))
+}
+
+func NormalizeFrankRegistryObjectRef(ref FrankRegistryObjectRef) FrankRegistryObjectRef {
+	ref.Kind = NormalizeFrankRegistryObjectKind(ref.Kind)
+	ref.ObjectID = strings.TrimSpace(ref.ObjectID)
+	return ref
 }
 
 type ValidationError struct {

@@ -93,6 +93,15 @@ func TestEnumValues(t *testing.T) {
 	if ApprovalStateRevoked != "revoked" {
 		t.Fatalf("ApprovalStateRevoked = %q, want %q", ApprovalStateRevoked, "revoked")
 	}
+	if FrankRegistryObjectKindIdentity != "identity" {
+		t.Fatalf("FrankRegistryObjectKindIdentity = %q, want %q", FrankRegistryObjectKindIdentity, "identity")
+	}
+	if FrankRegistryObjectKindAccount != "account" {
+		t.Fatalf("FrankRegistryObjectKindAccount = %q, want %q", FrankRegistryObjectKindAccount, "account")
+	}
+	if FrankRegistryObjectKindContainer != "container" {
+		t.Fatalf("FrankRegistryObjectKindContainer = %q, want %q", FrankRegistryObjectKindContainer, "container")
+	}
 }
 
 func TestJobJSONRoundTrip(t *testing.T) {
@@ -107,13 +116,23 @@ func TestJobJSONRoundTrip(t *testing.T) {
 			ID: "plan-1",
 			Steps: []Step{
 				{
-					ID:                   "step-1",
-					Type:                 StepTypeStaticArtifact,
-					DependsOn:            []string{},
-					RequiredAuthority:    AuthorityTierLow,
-					AllowedTools:         []string{"shell"},
-					RequiresApproval:     false,
-					SuccessCriteria:      []string{"write the report and verify the artifact"},
+					ID:                "step-1",
+					Type:              StepTypeStaticArtifact,
+					DependsOn:         []string{},
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"shell"},
+					RequiresApproval:  false,
+					SuccessCriteria:   []string{"write the report and verify the artifact"},
+					FrankObjectRefs: []FrankRegistryObjectRef{
+						{
+							Kind:     FrankRegistryObjectKindIdentity,
+							ObjectID: "identity-1",
+						},
+						{
+							Kind:     FrankRegistryObjectKindAccount,
+							ObjectID: "account-1",
+						},
+					},
 					StaticArtifactPath:   "dist/report.json",
 					StaticArtifactFormat: "json",
 				},
@@ -143,6 +162,22 @@ func TestJobJSONRoundTrip(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round-trip mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestNormalizeFrankRegistryObjectRefTrimsFields(t *testing.T) {
+	t.Parallel()
+
+	got := NormalizeFrankRegistryObjectRef(FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKind(" account "),
+		ObjectID: " account-1 ",
+	})
+	want := FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindAccount,
+		ObjectID: "account-1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NormalizeFrankRegistryObjectRef() = %#v, want %#v", got, want)
 	}
 }
 

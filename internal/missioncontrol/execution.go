@@ -78,6 +78,7 @@ func copyStep(step Step) Step {
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	stepCopy.GovernedExternalTargets = cloneAutonomyEligibilityTargetRefs(step.GovernedExternalTargets)
+	stepCopy.FrankObjectRefs = cloneFrankRegistryObjectRefs(step.FrankObjectRefs)
 	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
 	return stepCopy
 }
@@ -85,6 +86,7 @@ func copyStep(step Step) Step {
 func normalizedStep(step Step) Step {
 	stepCopy := copyStep(step)
 	stepCopy.IdentityMode = NormalizeIdentityMode(stepCopy.IdentityMode)
+	stepCopy.FrankObjectRefs = normalizeFrankRegistryObjectRefs(stepCopy.FrankObjectRefs)
 	return stepCopy
 }
 
@@ -96,4 +98,26 @@ func cloneAutonomyEligibilityTargetRefs(targets []AutonomyEligibilityTargetRef) 
 	cloned := make([]AutonomyEligibilityTargetRef, len(targets))
 	copy(cloned, targets)
 	return cloned
+}
+
+func cloneFrankRegistryObjectRefs(refs []FrankRegistryObjectRef) []FrankRegistryObjectRef {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	cloned := make([]FrankRegistryObjectRef, len(refs))
+	copy(cloned, refs)
+	return cloned
+}
+
+func normalizeFrankRegistryObjectRefs(refs []FrankRegistryObjectRef) []FrankRegistryObjectRef {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	normalized := make([]FrankRegistryObjectRef, len(refs))
+	for i, ref := range refs {
+		normalized[i] = NormalizeFrankRegistryObjectRef(ref)
+	}
+	return normalized
 }

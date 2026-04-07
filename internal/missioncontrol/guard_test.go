@@ -105,6 +105,34 @@ func TestDefaultToolGuardNoExternalTargetsPreservesBehaviorWhenIdentityModeOmitt
 	}
 }
 
+func TestDefaultToolGuardFrankObjectRefsDoNotCreateEligibilityOrIdentityModeSideChannel(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].FrankObjectRefs = []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-1",
+		},
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
 func TestDefaultToolGuardApprovalRequired(t *testing.T) {
 	t.Parallel()
 

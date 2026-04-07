@@ -10,6 +10,7 @@ import (
 const (
 	RejectionCodeDuplicateStepID               RejectionCode = "duplicate_step_id"
 	RejectionCodeInvalidGovernedExternalTarget RejectionCode = "invalid_governed_external_target"
+	RejectionCodeInvalidFrankObjectRef         RejectionCode = "invalid_frank_object_ref"
 	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
@@ -135,6 +136,7 @@ func ValidatePlan(job Job) []ValidationError {
 		}
 		invalidTypeErrors = append(invalidTypeErrors, validateIdentityModeDeclaration(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateGovernedExternalTargets(step)...)
+		invalidTypeErrors = append(invalidTypeErrors, validateFrankObjectRefs(step)...)
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -249,6 +251,64 @@ func validateGovernedExternalTargets(step Step) []ValidationError {
 
 func normalizedGovernedExternalTargetKey(target AutonomyEligibilityTargetRef) string {
 	return string(target.Kind) + "\x1f" + strings.TrimSpace(target.RegistryID)
+}
+
+func validateFrankRegistryObjectKind(kind FrankRegistryObjectKind) error {
+	switch NormalizeFrankRegistryObjectKind(kind) {
+	case FrankRegistryObjectKindIdentity, FrankRegistryObjectKindAccount, FrankRegistryObjectKindContainer:
+		return nil
+	default:
+		return fmt.Errorf("Frank object ref kind %q is invalid", strings.TrimSpace(string(kind)))
+	}
+}
+
+func validateFrankRegistryObjectRef(ref FrankRegistryObjectRef) error {
+	ref = NormalizeFrankRegistryObjectRef(ref)
+	if err := validateFrankRegistryObjectKind(ref.Kind); err != nil {
+		return err
+	}
+	if ref.ObjectID == "" {
+		return fmt.Errorf("Frank object ref object_id is required")
+	}
+	return nil
+}
+
+func validateFrankObjectRefs(step Step) []ValidationError {
+	if len(step.FrankObjectRefs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(step.FrankObjectRefs))
+	errors := make([]ValidationError, 0)
+	for _, ref := range step.FrankObjectRefs {
+		normalized := NormalizeFrankRegistryObjectRef(ref)
+		if err := validateFrankRegistryObjectRef(normalized); err != nil {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeInvalidFrankObjectRef,
+				StepID:  step.ID,
+				Message: "Frank object ref is invalid: " + err.Error(),
+			})
+			continue
+		}
+
+		key := normalizedFrankRegistryObjectRefKey(normalized)
+		if _, ok := seen[key]; ok {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeInvalidFrankObjectRef,
+				StepID:  step.ID,
+				Message: fmt.Sprintf("duplicate Frank object ref kind %q object_id %q", normalized.Kind, normalized.ObjectID),
+			})
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+
+	return errors
+}
+
+func normalizedFrankRegistryObjectRefKey(ref FrankRegistryObjectRef) string {
+	normalized := NormalizeFrankRegistryObjectRef(ref)
+	return string(normalized.Kind) + "\x1f" + normalized.ObjectID
 }
 
 func isValidStepType(stepType StepType) bool {

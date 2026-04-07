@@ -190,6 +190,18 @@ func TestValidatePlanAllowsStepsWithoutGovernedExternalTargets(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAllowsStepsWithoutFrankObjectRefs(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "draft", Type: StepTypeDiscussion, SuccessCriteria: []string{"stay bounded"}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsMalformedIdentityMode(t *testing.T) {
 	t.Parallel()
 
@@ -265,6 +277,93 @@ func TestValidatePlanRejectsMalformedGovernedExternalTargets(t *testing.T) {
 				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
 			}
 		})
+	}
+}
+
+func TestValidatePlanRejectsMalformedFrankObjectRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  FrankRegistryObjectRef
+		want string
+	}{
+		{
+			name: "invalid kind",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(""),
+				ObjectID: "identity-1",
+			},
+			want: `Frank object ref is invalid: Frank object ref kind "" is invalid`,
+		},
+		{
+			name: "empty object id",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "   ",
+			},
+			want: "Frank object ref is invalid: Frank object ref object_id is required",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testJob([]Step{
+				{
+					ID:              "draft",
+					Type:            StepTypeDiscussion,
+					FrankObjectRefs: []FrankRegistryObjectRef{tc.ref},
+				},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+			}))
+
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeInvalidFrankObjectRef,
+					StepID:  "draft",
+					Message: tc.want,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsDuplicateFrankObjectRefsAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:   "draft",
+			Type: StepTypeDiscussion,
+			FrankObjectRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindAccount,
+					ObjectID: "account-mail",
+				},
+				{
+					Kind:     FrankRegistryObjectKind(" account "),
+					ObjectID: " account-mail ",
+				},
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidFrankObjectRef,
+			StepID:  "draft",
+			Message: `duplicate Frank object ref kind "account" object_id "account-mail"`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
 	}
 }
 

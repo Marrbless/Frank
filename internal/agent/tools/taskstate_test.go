@@ -72,7 +72,7 @@ func TestTaskStateActivateStepCarriesMissionStoreRoot(t *testing.T) {
 	}
 }
 
-func TestTaskStateActivateStepCarriesMissionStoreRootNormalizedIdentityModeAndDeclaredTargets(t *testing.T) {
+func TestTaskStateActivateStepCarriesMissionStoreRootNormalizedIdentityModeDeclaredTargetsAndFrankObjectRefs(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -85,6 +85,12 @@ func TestTaskStateActivateStepCarriesMissionStoreRootNormalizedIdentityModeAndDe
 		RegistryID: "provider-mail",
 	}
 	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{target}
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{
+			Kind:     missioncontrol.FrankRegistryObjectKind(" identity "),
+			ObjectID: " identity-1 ",
+		},
+	}
 
 	if err := state.ActivateStep(job, "build"); err != nil {
 		t.Fatalf("ActivateStep() error = %v", err)
@@ -106,6 +112,15 @@ func TestTaskStateActivateStepCarriesMissionStoreRootNormalizedIdentityModeAndDe
 	wantTargets := []missioncontrol.AutonomyEligibilityTargetRef{target}
 	if !reflect.DeepEqual(ec.GovernedExternalTargets, wantTargets) {
 		t.Fatalf("ExecutionContext().GovernedExternalTargets = %#v, want %#v", ec.GovernedExternalTargets, wantTargets)
+	}
+	wantRefs := []missioncontrol.FrankRegistryObjectRef{
+		{
+			Kind:     missioncontrol.FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-1",
+		},
+	}
+	if !reflect.DeepEqual(ec.Step.FrankObjectRefs, wantRefs) {
+		t.Fatalf("ExecutionContext().Step.FrankObjectRefs = %#v, want %#v", ec.Step.FrankObjectRefs, wantRefs)
 	}
 }
 
@@ -320,6 +335,9 @@ func TestTaskStateZeroTargetExecutionWithoutMissionStoreRootPreservesV2Behavior(
 	}
 	if ec.GovernedExternalTargets != nil {
 		t.Fatalf("ExecutionContext().GovernedExternalTargets = %#v, want nil", ec.GovernedExternalTargets)
+	}
+	if ec.Step.FrankObjectRefs != nil {
+		t.Fatalf("ExecutionContext().Step.FrankObjectRefs = %#v, want nil", ec.Step.FrankObjectRefs)
 	}
 
 	decision := missioncontrol.NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
