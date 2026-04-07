@@ -14,6 +14,8 @@ func CloneExecutionContext(ec ExecutionContext) ExecutionContext {
 		cloned.Step = &stepCopy
 	}
 	cloned.Runtime = CloneJobRuntimeState(ec.Runtime)
+	cloned.MissionStoreRoot = ec.MissionStoreRoot
+	cloned.GovernedExternalTargets = cloneAutonomyEligibilityTargetRefs(ec.GovernedExternalTargets)
 	return cloned
 }
 
@@ -75,4 +77,14 @@ func copyStep(step Step) Step {
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
 	return stepCopy
+}
+
+func cloneAutonomyEligibilityTargetRefs(targets []AutonomyEligibilityTargetRef) []AutonomyEligibilityTargetRef {
+	if len(targets) == 0 {
+		return nil
+	}
+
+	cloned := make([]AutonomyEligibilityTargetRef, len(targets))
+	copy(cloned, targets)
+	return cloned
 }

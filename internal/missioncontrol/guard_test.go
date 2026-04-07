@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,26 @@ func TestDefaultToolGuardAllow(t *testing.T) {
 		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
 	}
 
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
+func TestDefaultToolGuardNoExternalTargetsPreservesBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = ""
+	ec.GovernedExternalTargets = nil
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
 	if decision.Reason != "" {
 		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
 	}
@@ -255,6 +276,284 @@ func TestDefaultToolGuardSystemActionApprovalRejectionAuditsCanonicalVerificatio
 	assertDenied(t, decision, RejectionCodeApprovalRequired, "step requires approval")
 	if decision.Event.ToolName != "system_action:verify_post_state:start:service:demo-service" {
 		t.Fatalf("Event.ToolName = %q, want canonical system_action verification audit string", decision.Event.ToolName)
+	}
+}
+
+func TestDefaultToolGuardEligibleExternalTargetPasses(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	writeAutonomyEligibilityFixture(t, root, target, PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "mail.example",
+		TargetClass:      target.Kind,
+		EligibilityLabel: EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, EligibilityCheckRecord{
+		CheckID:                     "check-provider-mail",
+		TargetKind:                  target.Kind,
+		TargetName:                  "mail.example",
+		CanCreateWithoutOwner:       true,
+		CanOnboardWithoutOwner:      true,
+		CanControlAsAgent:           true,
+		CanRecoverAsAgent:           true,
+		RequiresHumanOnlyStep:       false,
+		RequiresOwnerOnlySecretOrID: false,
+		RulesAsObservedOK:           true,
+		Label:                       EligibilityLabelAutonomyCompatible,
+		Reasons:                     []string{"operator-reviewed"},
+		CheckedAt:                   now,
+	})
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = root
+	ec.GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
+func TestDefaultToolGuardUnknownExternalTargetFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "missing-provider",
+	}
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = root
+	ec.GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, `autonomy eligibility target "missing-provider" has no autonomy-compatible registry record`)
+}
+
+func TestDefaultToolGuardIneligibleExternalTargetFailsClosedWithCanonicalReason(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 30, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-human-id",
+	}
+	writeAutonomyEligibilityFixture(t, root, target, PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "human-id.example",
+		TargetClass:      target.Kind,
+		EligibilityLabel: EligibilityLabelIneligible,
+		LastCheckID:      "check-provider-human-id",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, EligibilityCheckRecord{
+		CheckID:                     "check-provider-human-id",
+		TargetKind:                  target.Kind,
+		TargetName:                  "human-id.example",
+		CanCreateWithoutOwner:       false,
+		CanOnboardWithoutOwner:      false,
+		CanControlAsAgent:           false,
+		CanRecoverAsAgent:           false,
+		RequiresHumanOnlyStep:       true,
+		RequiresOwnerOnlySecretOrID: true,
+		RulesAsObservedOK:           false,
+		Label:                       EligibilityLabelIneligible,
+		Reasons:                     []string{string(AutonomyEligibilityReasonOwnerIdentityRequired)},
+		CheckedAt:                   now,
+	})
+
+	wantResult, wantErr := RequireAutonomyEligibleTarget(root, target)
+	if !errors.Is(wantErr, ErrAutonomyEligibleTargetRequired) {
+		t.Fatalf("RequireAutonomyEligibleTarget() error = %v, want %v", wantErr, ErrAutonomyEligibleTargetRequired)
+	}
+	if wantResult.Decision != AutonomyEligibilityDecisionIneligible {
+		t.Fatalf("RequireAutonomyEligibleTarget().Decision = %q, want %q", wantResult.Decision, AutonomyEligibilityDecisionIneligible)
+	}
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = root
+	ec.GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, wantErr.Error())
+}
+
+func TestDefaultToolGuardMultipleExternalTargetsRequireAllEligible(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 13, 0, 0, 0, time.UTC)
+	eligible := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	writeAutonomyEligibilityFixture(t, root, eligible, PlatformRecord{
+		PlatformID:       eligible.RegistryID,
+		PlatformName:     "mail.example",
+		TargetClass:      eligible.Kind,
+		EligibilityLabel: EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, EligibilityCheckRecord{
+		CheckID:                     "check-provider-mail",
+		TargetKind:                  eligible.Kind,
+		TargetName:                  "mail.example",
+		CanCreateWithoutOwner:       true,
+		CanOnboardWithoutOwner:      true,
+		CanControlAsAgent:           true,
+		CanRecoverAsAgent:           true,
+		RequiresHumanOnlyStep:       false,
+		RequiresOwnerOnlySecretOrID: false,
+		RulesAsObservedOK:           true,
+		Label:                       EligibilityLabelAutonomyCompatible,
+		Reasons:                     []string{"operator-reviewed"},
+		CheckedAt:                   now,
+	})
+
+	unknown := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-unknown",
+	}
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = root
+	ec.GovernedExternalTargets = []AutonomyEligibilityTargetRef{eligible, unknown}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, `autonomy eligibility target "provider-unknown" has no autonomy-compatible registry record`)
+}
+
+func TestDefaultToolGuardMalformedOrConflictingRegistryFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string) AutonomyEligibilityTargetRef
+	}{
+		{
+			name: "conflicting labels",
+			setup: func(t *testing.T, root string) AutonomyEligibilityTargetRef {
+				t.Helper()
+
+				now := time.Date(2026, 4, 7, 14, 0, 0, 0, time.UTC)
+				target := AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindProvider,
+					RegistryID: "provider-conflict",
+				}
+				if err := StorePlatformRecord(root, PlatformRecord{
+					PlatformID:       target.RegistryID,
+					PlatformName:     "conflict.example",
+					TargetClass:      target.Kind,
+					EligibilityLabel: EligibilityLabelAutonomyCompatible,
+					LastCheckID:      "check-conflict",
+					Notes:            []string{"registry note"},
+					UpdatedAt:        now,
+				}); err != nil {
+					t.Fatalf("StorePlatformRecord() error = %v", err)
+				}
+				if err := StoreEligibilityCheckRecord(root, EligibilityCheckRecord{
+					CheckID:                     "check-conflict",
+					TargetKind:                  target.Kind,
+					TargetName:                  "conflict.example",
+					CanCreateWithoutOwner:       false,
+					CanOnboardWithoutOwner:      false,
+					CanControlAsAgent:           false,
+					CanRecoverAsAgent:           false,
+					RequiresHumanOnlyStep:       true,
+					RequiresOwnerOnlySecretOrID: false,
+					RulesAsObservedOK:           false,
+					Label:                       EligibilityLabelIneligible,
+					Reasons:                     []string{string(AutonomyEligibilityReasonManualHumanCompletionRequired)},
+					CheckedAt:                   now,
+				}); err != nil {
+					t.Fatalf("StoreEligibilityCheckRecord() error = %v", err)
+				}
+				return target
+			},
+		},
+		{
+			name: "malformed reason code",
+			setup: func(t *testing.T, root string) AutonomyEligibilityTargetRef {
+				t.Helper()
+
+				now := time.Date(2026, 4, 7, 14, 5, 0, 0, time.UTC)
+				target := AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindPlatform,
+					RegistryID: "platform-bad-reason",
+				}
+				if err := StorePlatformRecord(root, PlatformRecord{
+					PlatformID:       target.RegistryID,
+					PlatformName:     "bad-reason.example",
+					TargetClass:      target.Kind,
+					EligibilityLabel: EligibilityLabelIneligible,
+					LastCheckID:      "check-bad-reason",
+					Notes:            []string{"registry note"},
+					UpdatedAt:        now,
+				}); err != nil {
+					t.Fatalf("StorePlatformRecord() error = %v", err)
+				}
+				if err := StoreEligibilityCheckRecord(root, EligibilityCheckRecord{
+					CheckID:                     "check-bad-reason",
+					TargetKind:                  target.Kind,
+					TargetName:                  "bad-reason.example",
+					CanCreateWithoutOwner:       false,
+					CanOnboardWithoutOwner:      false,
+					CanControlAsAgent:           false,
+					CanRecoverAsAgent:           false,
+					RequiresHumanOnlyStep:       true,
+					RequiresOwnerOnlySecretOrID: false,
+					RulesAsObservedOK:           false,
+					Label:                       EligibilityLabelIneligible,
+					Reasons:                     []string{"unsupported_reason_code"},
+					CheckedAt:                   now,
+				}); err != nil {
+					t.Fatalf("StoreEligibilityCheckRecord() error = %v", err)
+				}
+				return target
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			target := tc.setup(t, root)
+			_, wantErr := RequireAutonomyEligibleTarget(root, target)
+			if wantErr == nil {
+				t.Fatal("RequireAutonomyEligibleTarget() error = nil, want fail-closed registry error")
+			}
+
+			ec := testExecutionContext()
+			ec.MissionStoreRoot = root
+			ec.GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+
+			decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+			assertDenied(t, decision, RejectionCodeInvalidRuntimeState, wantErr.Error())
+		})
 	}
 }
 

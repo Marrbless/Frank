@@ -6,9 +6,11 @@ import (
 )
 
 type ExecutionContext struct {
-	Job     *Job
-	Step    *Step
-	Runtime *JobRuntimeState
+	Job                     *Job
+	Step                    *Step
+	Runtime                 *JobRuntimeState
+	MissionStoreRoot        string
+	GovernedExternalTargets []AutonomyEligibilityTargetRef
 }
 
 type executionContextKey struct{}
@@ -76,7 +78,25 @@ func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, t
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
 	}
 
+	if err := requireAutonomyEligibleTargets(ec); err != nil {
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
+	}
+
 	return newGuardDecision(ec, toolName, args, true, "", "")
+}
+
+func requireAutonomyEligibleTargets(ec ExecutionContext) error {
+	if len(ec.GovernedExternalTargets) == 0 {
+		return nil
+	}
+
+	for _, target := range ec.GovernedExternalTargets {
+		if _, err := RequireAutonomyEligibleTarget(ec.MissionStoreRoot, target); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func newGuardDecision(ec ExecutionContext, toolName string, args map[string]interface{}, allowed bool, code RejectionCode, reason string) GuardDecision {

@@ -37,6 +37,13 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 			RequiresApproval:  true,
 			SuccessCriteria:   []string{"produce code"},
 		},
+		MissionStoreRoot: "/tmp/mission-store",
+		GovernedExternalTargets: []AutonomyEligibilityTargetRef{
+			{
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-mail",
+			},
+		},
 	}
 
 	cloned := CloneExecutionContext(original)
@@ -48,6 +55,7 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	cloned.Job.Plan.Steps[0].DependsOn[0] = "mutated-dependency"
 	cloned.Job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
 	cloned.Step.SuccessCriteria[0] = "mutated-success"
+	cloned.GovernedExternalTargets[0].RegistryID = "mutated-target"
 
 	if original.Job.AllowedTools[0] != "read" {
 		t.Fatalf("original Job.AllowedTools[0] = %q, want %q", original.Job.AllowedTools[0], "read")
@@ -63,6 +71,10 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 
 	if original.Step.SuccessCriteria[0] != "produce code" {
 		t.Fatalf("original Step.SuccessCriteria[0] = %q, want %q", original.Step.SuccessCriteria[0], "produce code")
+	}
+
+	if original.GovernedExternalTargets[0].RegistryID != "provider-mail" {
+		t.Fatalf("original GovernedExternalTargets[0].RegistryID = %q, want %q", original.GovernedExternalTargets[0].RegistryID, "provider-mail")
 	}
 }
 
