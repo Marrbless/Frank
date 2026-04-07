@@ -62,6 +62,13 @@ type ResolvedFrankRegistryObjectRef struct {
 	Container *FrankContainerRecord  `json:"container,omitempty"`
 }
 
+type ResolvedExecutionContextFrankRegistryObjects struct {
+	ResolvedRefs []ResolvedFrankRegistryObjectRef `json:"resolved_refs,omitempty"`
+	Identities   []FrankIdentityRecord            `json:"identities,omitempty"`
+	Accounts     []FrankAccountRecord             `json:"accounts,omitempty"`
+	Containers   []FrankContainerRecord           `json:"containers,omitempty"`
+}
+
 func StoreFrankRegistryDir(root string) string {
 	return filepath.Join(root, "frank_registry")
 }
@@ -278,17 +285,37 @@ func ResolveFrankRegistryObjectRefs(root string, refs []FrankRegistryObjectRef) 
 	return resolved, nil
 }
 
-func ResolveExecutionContextFrankRegistryObjectRefs(ec ExecutionContext) ([]ResolvedFrankRegistryObjectRef, error) {
+func ResolveExecutionContextFrankRegistryObjectRefs(ec ExecutionContext) (ResolvedExecutionContextFrankRegistryObjects, error) {
 	if ec.Step == nil {
-		return nil, fmt.Errorf("execution context step is required")
+		return ResolvedExecutionContextFrankRegistryObjects{}, fmt.Errorf("execution context step is required")
 	}
 	if len(ec.Step.FrankObjectRefs) == 0 {
-		return nil, nil
+		return ResolvedExecutionContextFrankRegistryObjects{}, nil
 	}
 	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
-		return nil, fmt.Errorf("mission store root is required to resolve Frank object refs")
+		return ResolvedExecutionContextFrankRegistryObjects{}, fmt.Errorf("mission store root is required to resolve Frank object refs")
 	}
-	return ResolveFrankRegistryObjectRefs(ec.MissionStoreRoot, ec.Step.FrankObjectRefs)
+
+	resolvedRefs, err := ResolveFrankRegistryObjectRefs(ec.MissionStoreRoot, ec.Step.FrankObjectRefs)
+	if err != nil {
+		return ResolvedExecutionContextFrankRegistryObjects{}, err
+	}
+
+	resolved := ResolvedExecutionContextFrankRegistryObjects{
+		ResolvedRefs: resolvedRefs,
+	}
+	for _, record := range resolvedRefs {
+		switch {
+		case record.Identity != nil:
+			resolved.Identities = append(resolved.Identities, *record.Identity)
+		case record.Account != nil:
+			resolved.Accounts = append(resolved.Accounts, *record.Account)
+		case record.Container != nil:
+			resolved.Containers = append(resolved.Containers, *record.Container)
+		}
+	}
+
+	return resolved, nil
 }
 
 func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {

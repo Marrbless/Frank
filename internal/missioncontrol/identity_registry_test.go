@@ -832,9 +832,407 @@ func TestResolveExecutionContextFrankRegistryObjectRefsZeroRefPathPreservesPrior
 	if err != nil {
 		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
 	}
-	if got != nil {
-		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want nil for zero-ref step", got)
+	if !reflect.DeepEqual(got, ResolvedExecutionContextFrankRegistryObjects{}) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want zero value for zero-ref step", got)
 	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsResolvesActiveIdentityRef(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKind(" identity "),
+			ObjectID: " identity-mail ",
+		},
+	})
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
+	}
+	if len(got.ResolvedRefs) != 1 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs len = %d, want 1", len(got.ResolvedRefs))
+	}
+	wantRef := FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindIdentity,
+		ObjectID: "identity-mail",
+	}
+	if !reflect.DeepEqual(got.ResolvedRefs[0].Ref, wantRef) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Ref = %#v, want %#v", got.ResolvedRefs[0].Ref, wantRef)
+	}
+	if got.ResolvedRefs[0].Identity == nil || !reflect.DeepEqual(*got.ResolvedRefs[0].Identity, fixtures.identity) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Identity = %#v, want %#v", got.ResolvedRefs[0].Identity, fixtures.identity)
+	}
+	if len(got.Identities) != 1 || !reflect.DeepEqual(got.Identities[0], fixtures.identity) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Identities = %#v, want [%#v]", got.Identities, fixtures.identity)
+	}
+	if len(got.Accounts) != 0 || len(got.Containers) != 0 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want only identity resolution", got)
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsResolvesActiveAccountRef(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKind(" account "),
+			ObjectID: " account-mail ",
+		},
+	})
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
+	}
+	if len(got.ResolvedRefs) != 1 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs len = %d, want 1", len(got.ResolvedRefs))
+	}
+	wantRef := FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindAccount,
+		ObjectID: "account-mail",
+	}
+	if !reflect.DeepEqual(got.ResolvedRefs[0].Ref, wantRef) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Ref = %#v, want %#v", got.ResolvedRefs[0].Ref, wantRef)
+	}
+	if got.ResolvedRefs[0].Account == nil || !reflect.DeepEqual(*got.ResolvedRefs[0].Account, fixtures.account) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Account = %#v, want %#v", got.ResolvedRefs[0].Account, fixtures.account)
+	}
+	if len(got.Accounts) != 1 || !reflect.DeepEqual(got.Accounts[0], fixtures.account) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Accounts = %#v, want [%#v]", got.Accounts, fixtures.account)
+	}
+	if len(got.Identities) != 0 || len(got.Containers) != 0 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want only account resolution", got)
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsResolvesActiveContainerRef(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKind(" container "),
+			ObjectID: " container-wallet ",
+		},
+	})
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
+	}
+	if len(got.ResolvedRefs) != 1 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs len = %d, want 1", len(got.ResolvedRefs))
+	}
+	wantRef := FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindContainer,
+		ObjectID: "container-wallet",
+	}
+	if !reflect.DeepEqual(got.ResolvedRefs[0].Ref, wantRef) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Ref = %#v, want %#v", got.ResolvedRefs[0].Ref, wantRef)
+	}
+	if got.ResolvedRefs[0].Container == nil || !reflect.DeepEqual(*got.ResolvedRefs[0].Container, fixtures.container) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().ResolvedRefs[0].Container = %#v, want %#v", got.ResolvedRefs[0].Container, fixtures.container)
+	}
+	if len(got.Containers) != 1 || !reflect.DeepEqual(got.Containers[0], fixtures.container) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Containers = %#v, want [%#v]", got.Containers, fixtures.container)
+	}
+	if len(got.Identities) != 0 || len(got.Accounts) != 0 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want only container resolution", got)
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsFailsClosedWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-mail",
+		},
+	})
+
+	_, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextFrankRegistryObjectRefs() error = nil, want missing mission store root rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store root is required to resolve Frank object refs") {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %q, want missing mission store root rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsFailsClosedOnMissingOrMalformedRefs(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	if err := WriteStoreJSONAtomic(StoreFrankIdentityPath(fixtures.root, "identity-bad"), map[string]interface{}{
+		"record_version":          StoreRecordVersion,
+		"identity_id":             "identity-bad",
+		"identity_kind":           "email",
+		"display_name":            "",
+		"provider_or_platform_id": "provider-mail",
+		"identity_mode":           string(IdentityModeAgentAlias),
+		"state":                   "active",
+		"eligibility_target_ref": map[string]interface{}{
+			"kind":        string(EligibilityTargetKindProvider),
+			"registry_id": "provider-mail",
+		},
+		"created_at": fixtures.identity.CreatedAt,
+		"updated_at": fixtures.identity.UpdatedAt,
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		refs []FrankRegistryObjectRef
+		want string
+	}{
+		{
+			name: "missing record",
+			refs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "missing-identity",
+				},
+			},
+			want: ErrFrankIdentityRecordNotFound.Error(),
+		},
+		{
+			name: "empty object id",
+			refs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "   ",
+				},
+			},
+			want: "Frank object ref object_id is required",
+		},
+		{
+			name: "unknown kind",
+			refs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKind("mystery"),
+					ObjectID: "identity-mail",
+				},
+			},
+			want: `Frank object ref kind "mystery" is invalid`,
+		},
+		{
+			name: "malformed stored record",
+			refs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "identity-bad",
+				},
+			},
+			want: "display_name is required",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ec := testExecutionContext()
+			ec.Step.FrankObjectRefs = tc.refs
+			ec.MissionStoreRoot = fixtures.root
+
+			_, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+			if err == nil {
+				t.Fatal("ResolveExecutionContextFrankRegistryObjectRefs() error = nil, want fail-closed rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsRejectsDuplicatesAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	ec := testExecutionContext()
+	ec.Step.FrankObjectRefs = []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-mail",
+		},
+		{
+			Kind:     FrankRegistryObjectKind(" identity "),
+			ObjectID: " identity-mail ",
+		},
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextFrankRegistryObjectRefs() error = nil, want duplicate rejection")
+	}
+	if !strings.Contains(err.Error(), `duplicate Frank object ref kind "identity" object_id "identity-mail"`) {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %q, want duplicate rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsDoesNotIntroduceEligibilityOrIdentityModeSideChannel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 4, 0, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-human-id",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelIneligible, "provider-human-id.example", "check-provider-human-id", now)
+
+	record := FrankIdentityRecord{
+		RecordVersion:        StoreRecordVersion,
+		IdentityID:           "identity-human-id",
+		IdentityKind:         "email",
+		DisplayName:          "Human-ID Candidate",
+		ProviderOrPlatformID: target.RegistryID,
+		IdentityMode:         IdentityModeOwnerOnlyControl,
+		State:                "candidate",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankIdentityRecord(root, record); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	if _, err := RequireAutonomyEligibleTarget(root, target); !errors.Is(err, ErrAutonomyEligibleTargetRequired) {
+		t.Fatalf("RequireAutonomyEligibleTarget() error = %v, want %v", err, ErrAutonomyEligibleTargetRequired)
+	}
+
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: record.IdentityID,
+		},
+	})
+	ec.MissionStoreRoot = root
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
+
+	got, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
+	}
+	if len(got.Identities) != 1 {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Identities len = %d, want 1", len(got.Identities))
+	}
+	if got.Identities[0].IdentityMode != IdentityModeOwnerOnlyControl {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Identities[0].IdentityMode = %q, want %q", got.Identities[0].IdentityMode, IdentityModeOwnerOnlyControl)
+	}
+	if got.Identities[0].EligibilityTargetRef != target {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs().Identities[0].EligibilityTargetRef = %#v, want %#v", got.Identities[0].EligibilityTargetRef, target)
+	}
+}
+
+type executionContextFrankRegistryFixtures struct {
+	root      string
+	identity  FrankIdentityRecord
+	account   FrankAccountRecord
+	container FrankContainerRecord
+}
+
+func writeExecutionContextFrankRegistryFixtures(t *testing.T) executionContextFrankRegistryFixtures {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}, EligibilityLabelAutonomyCompatible, "provider-mail.example", "check-provider-mail", now)
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}, EligibilityLabelAutonomyCompatible, "account-class-mailbox", "check-account-class-mailbox", now.Add(time.Minute))
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}, EligibilityLabelAutonomyCompatible, "container-class-wallet", "check-container-class-wallet", now.Add(2*time.Minute))
+
+	identity := FrankIdentityRecord{
+		RecordVersion:        StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := FrankAccountRecord{
+		RecordVersion:        StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	container := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindTreasuryContainerClass, RegistryID: "container-class-wallet"},
+		CreatedAt:            now.Add(4 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(5 * time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	return executionContextFrankRegistryFixtures{
+		root:      root,
+		identity:  identity,
+		account:   account,
+		container: container,
+	}
+}
+
+func testExecutionContextWithFrankObjectRefs(t *testing.T, refs []FrankRegistryObjectRef) ExecutionContext {
+	t.Helper()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].FrankObjectRefs = refs
+
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	return ec
 }
 
 func writeFrankRegistryEligibilityFixture(t *testing.T, root string, target AutonomyEligibilityTargetRef, label EligibilityLabel, targetName string, checkID string, checkedAt time.Time) {
