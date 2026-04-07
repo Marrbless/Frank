@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -49,6 +50,56 @@ func TestTaskStateActivateStepStoresValidExecutionContext(t *testing.T) {
 	}
 	if ec.Runtime.ActiveStepID != "build" {
 		t.Fatalf("ExecutionContext().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
+	}
+}
+
+func TestTaskStateActivateStepCarriesMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot("/tmp/mission-store")
+
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.MissionStoreRoot != "/tmp/mission-store" {
+		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want %q", ec.MissionStoreRoot, "/tmp/mission-store")
+	}
+}
+
+func TestTaskStateActivateStepCarriesMissionStoreRootAndDeclaredTargets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	job := testTaskStateJob()
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{target}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.MissionStoreRoot != root {
+		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want %q", ec.MissionStoreRoot, root)
+	}
+	wantTargets := []missioncontrol.AutonomyEligibilityTargetRef{target}
+	if !reflect.DeepEqual(ec.GovernedExternalTargets, wantTargets) {
+		t.Fatalf("ExecutionContext().GovernedExternalTargets = %#v, want %#v", ec.GovernedExternalTargets, wantTargets)
 	}
 }
 
@@ -212,6 +263,125 @@ func TestTaskStateResumeRuntimeStoresExecutionContext(t *testing.T) {
 	}
 	if ec.Runtime.ActiveStepID != "build" {
 		t.Fatalf("ExecutionContext().Runtime.ActiveStepID = %q, want %q", ec.Runtime.ActiveStepID, "build")
+	}
+}
+
+func TestTaskStateResumeRuntimeCarriesMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot("/tmp/mission-store")
+	job := testTaskStateJob()
+	runtimeState := missioncontrol.JobRuntimeState{
+		JobID:        job.ID,
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+	}
+
+	if err := state.ResumeRuntime(job, runtimeState, nil, true); err != nil {
+		t.Fatalf("ResumeRuntime() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.MissionStoreRoot != "/tmp/mission-store" {
+		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want %q", ec.MissionStoreRoot, "/tmp/mission-store")
+	}
+}
+
+func TestTaskStateZeroTargetExecutionWithoutMissionStoreRootPreservesV2Behavior(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.MissionStoreRoot != "" {
+		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want empty", ec.MissionStoreRoot)
+	}
+	if ec.GovernedExternalTargets != nil {
+		t.Fatalf("ExecutionContext().GovernedExternalTargets = %#v, want nil", ec.GovernedExternalTargets)
+	}
+
+	decision := missioncontrol.NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
+func TestTaskStateOrdinaryRuntimePathProvidesStoreRootToAutonomyGuard(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 15, 0, 0, 0, time.UTC)
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-human-id",
+	}
+	writeTaskStateAutonomyEligibilityFixture(t, root, target, missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "human-id.example",
+		TargetClass:      target.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelIneligible,
+		LastCheckID:      "check-provider-human-id",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                     "check-provider-human-id",
+		TargetKind:                  target.Kind,
+		TargetName:                  "human-id.example",
+		CanCreateWithoutOwner:       false,
+		CanOnboardWithoutOwner:      false,
+		CanControlAsAgent:           false,
+		CanRecoverAsAgent:           false,
+		RequiresHumanOnlyStep:       true,
+		RequiresOwnerOnlySecretOrID: true,
+		RulesAsObservedOK:           false,
+		Label:                       missioncontrol.EligibilityLabelIneligible,
+		Reasons:                     []string{string(missioncontrol.AutonomyEligibilityReasonOwnerIdentityRequired)},
+		CheckedAt:                   now,
+	})
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{target}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	_, wantErr := missioncontrol.RequireAutonomyEligibleTarget(root, target)
+	if wantErr == nil {
+		t.Fatal("RequireAutonomyEligibleTarget() error = nil, want fail-closed error")
+	}
+
+	decision := missioncontrol.NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+	if decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = true, want false: %#v", decision)
+	}
+	if decision.Code != missioncontrol.RejectionCodeInvalidRuntimeState {
+		t.Fatalf("EvaluateTool().Code = %q, want %q", decision.Code, missioncontrol.RejectionCodeInvalidRuntimeState)
+	}
+	if decision.Reason != wantErr.Error() {
+		t.Fatalf("EvaluateTool().Reason = %q, want %q", decision.Reason, wantErr.Error())
 	}
 }
 
@@ -3316,5 +3486,16 @@ func testReusableApprovalJob(scope string) missioncontrol.Job {
 				},
 			},
 		},
+	}
+}
+
+func writeTaskStateAutonomyEligibilityFixture(t *testing.T, root string, target missioncontrol.AutonomyEligibilityTargetRef, record missioncontrol.PlatformRecord, check missioncontrol.EligibilityCheckRecord) {
+	t.Helper()
+
+	if err := missioncontrol.StorePlatformRecord(root, record); err != nil {
+		t.Fatalf("StorePlatformRecord(%s) error = %v", target.RegistryID, err)
+	}
+	if err := missioncontrol.StoreEligibilityCheckRecord(root, check); err != nil {
+		t.Fatalf("StoreEligibilityCheckRecord(%s) error = %v", check.CheckID, err)
 	}
 }

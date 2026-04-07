@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ type TaskState struct {
 	mu                    sync.Mutex
 	currentTaskID         string
 	projectInitialized    bool
+	missionStoreRoot      string
 	executionContext      missioncontrol.ExecutionContext
 	hasExecutionContext   bool
 	missionJob            missioncontrol.Job
@@ -66,13 +68,25 @@ func (s *TaskState) ProjectInitialized() bool {
 	return s.projectInitialized
 }
 
+func (s *TaskState) SetMissionStoreRoot(root string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.missionStoreRoot = strings.TrimSpace(root)
+	if s.hasExecutionContext {
+		s.executionContext.MissionStoreRoot = s.missionStoreRoot
+	}
+}
+
 func (s *TaskState) SetExecutionContext(ec missioncontrol.ExecutionContext) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cloned := missioncontrol.CloneExecutionContext(ec)
+	cloned := s.withMissionStoreRootLocked(missioncontrol.CloneExecutionContext(ec))
 	s.executionContext = cloned
 	s.hasExecutionContext = true
 	s.storeMissionJobLocked(cloned.Job)
@@ -1454,7 +1468,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 			if err != nil {
 				return err
 			}
-			storedExecutionContext = resolved
+			storedExecutionContext = s.withMissionStoreRootLocked(resolved)
 		} else {
 			if persistControl == nil {
 				return missioncontrol.ValidationError{
@@ -1466,7 +1480,7 @@ func (s *TaskState) storeRuntimeStateLocked(job *missioncontrol.Job, runtimeStat
 			if err != nil {
 				return err
 			}
-			storedExecutionContext = resolved
+			storedExecutionContext = s.withMissionStoreRootLocked(resolved)
 			storedControl = missioncontrol.CloneRuntimeControlContext(persistControl)
 		}
 		hasExecutionContext = true
@@ -1736,15 +1750,15 @@ func (s *TaskState) runtimeAuditContext(control *missioncontrol.RuntimeControlCo
 		return missioncontrol.ExecutionContext{}
 	}
 
-	ec := missioncontrol.ExecutionContext{
+	ec := s.withMissionStoreRootLocked(missioncontrol.ExecutionContext{
 		Runtime: missioncontrol.CloneJobRuntimeState(runtime),
-	}
+	})
 	if control == nil {
 		return ec
 	}
 	if runtime.ActiveStepID != "" {
 		if resolved, err := missioncontrol.ResolveExecutionContextWithRuntimeControl(*control, *runtime); err == nil {
-			return resolved
+			return s.withMissionStoreRootLocked(resolved)
 		}
 	}
 	job := missioncontrol.Job{
@@ -1757,6 +1771,14 @@ func (s *TaskState) runtimeAuditContext(control *missioncontrol.RuntimeControlCo
 		step := control.Step
 		ec.Step = &step
 	}
+	return s.withMissionStoreRootLocked(ec)
+}
+
+func (s *TaskState) withMissionStoreRootLocked(ec missioncontrol.ExecutionContext) missioncontrol.ExecutionContext {
+	if strings.TrimSpace(s.missionStoreRoot) == "" {
+		return ec
+	}
+	ec.MissionStoreRoot = s.missionStoreRoot
 	return ec
 }
 

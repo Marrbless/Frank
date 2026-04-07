@@ -1020,6 +1020,7 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 
 	statusFile, _ := cmd.Flags().GetString("mission-status-file")
 	storeRoot := resolveMissionStoreRoot(cmd)
+	ag.SetMissionStoreRoot(storeRoot)
 
 	if storeRoot != "" {
 		lease := ensureMissionStoreWriterLease(cmd)

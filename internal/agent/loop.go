@@ -1038,6 +1038,13 @@ func (a *AgentLoop) SetMissionRuntimeProjectionHook(hook func(*missioncontrol.Jo
 	a.taskState.SetRuntimeProjectionHook(hook)
 }
 
+func (a *AgentLoop) SetMissionStoreRoot(root string) {
+	if a == nil || a.taskState == nil {
+		return
+	}
+	a.taskState.SetMissionStoreRoot(root)
+}
+
 func (a *AgentLoop) SetMissionRequired(required bool) {
 	if a == nil || a.tools == nil {
 		return
