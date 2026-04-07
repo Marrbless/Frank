@@ -24,6 +24,9 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 						AllowedTools:      []string{"read"},
 						RequiresApproval:  true,
 						SuccessCriteria:   []string{"produce code"},
+						CampaignRef: &CampaignRef{
+							CampaignID: "campaign-1",
+						},
 					},
 				},
 			},
@@ -41,6 +44,9 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 					Kind:     FrankRegistryObjectKindIdentity,
 					ObjectID: "identity-1",
 				},
+			},
+			CampaignRef: &CampaignRef{
+				CampaignID: "campaign-1",
 			},
 		},
 		MissionStoreRoot: "/tmp/mission-store",
@@ -60,8 +66,10 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	cloned.Job.AllowedTools[0] = "mutated-job-tool"
 	cloned.Job.Plan.Steps[0].DependsOn[0] = "mutated-dependency"
 	cloned.Job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
+	cloned.Job.Plan.Steps[0].CampaignRef.CampaignID = "mutated-plan-campaign"
 	cloned.Step.SuccessCriteria[0] = "mutated-success"
 	cloned.Step.FrankObjectRefs[0].ObjectID = "mutated-object"
+	cloned.Step.CampaignRef.CampaignID = "mutated-step-campaign"
 	cloned.GovernedExternalTargets[0].RegistryID = "mutated-target"
 
 	if original.Job.AllowedTools[0] != "read" {
@@ -81,6 +89,12 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	}
 	if original.Step.FrankObjectRefs[0].ObjectID != "identity-1" {
 		t.Fatalf("original Step.FrankObjectRefs[0].ObjectID = %q, want %q", original.Step.FrankObjectRefs[0].ObjectID, "identity-1")
+	}
+	if original.Job.Plan.Steps[0].CampaignRef == nil || original.Job.Plan.Steps[0].CampaignRef.CampaignID != "campaign-1" {
+		t.Fatalf("original Job.Plan.Steps[0].CampaignRef = %#v, want campaign-1", original.Job.Plan.Steps[0].CampaignRef)
+	}
+	if original.Step.CampaignRef == nil || original.Step.CampaignRef.CampaignID != "campaign-1" {
+		t.Fatalf("original Step.CampaignRef = %#v, want campaign-1", original.Step.CampaignRef)
 	}
 
 	if original.GovernedExternalTargets[0].RegistryID != "provider-mail" {
@@ -130,9 +144,12 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 	if ec.Step.FrankObjectRefs != nil {
 		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want nil for zero-ref step", ec.Step.FrankObjectRefs)
 	}
+	if ec.Step.CampaignRef != nil {
+		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want nil for zero-campaign step", ec.Step.CampaignRef)
+	}
 }
 
-func TestResolveExecutionContextCarriesStepGovernedExternalTargetsFrankObjectRefsAndNormalizedIdentityMode(t *testing.T) {
+func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -147,6 +164,9 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargetsFrankObjectRef
 			Kind:     FrankRegistryObjectKind(" identity "),
 			ObjectID: " identity-1 ",
 		},
+	}
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: " campaign-1 ",
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("   ")
 
@@ -175,6 +195,10 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargetsFrankObjectRef
 	}
 	if !reflect.DeepEqual(ec.Step.FrankObjectRefs, wantRefs) {
 		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want %#v", ec.Step.FrankObjectRefs, wantRefs)
+	}
+	wantCampaignRef := &CampaignRef{CampaignID: "campaign-1"}
+	if !reflect.DeepEqual(ec.Step.CampaignRef, wantCampaignRef) {
+		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want %#v", ec.Step.CampaignRef, wantCampaignRef)
 	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)

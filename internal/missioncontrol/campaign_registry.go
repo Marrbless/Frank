@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type CampaignKind string
@@ -69,8 +70,8 @@ func ValidateCampaignRecord(record CampaignRecord) error {
 	if record.RecordVersion <= 0 {
 		return fmt.Errorf("mission store campaign record_version must be positive")
 	}
-	if strings.TrimSpace(record.CampaignID) == "" {
-		return fmt.Errorf("mission store campaign campaign_id is required")
+	if err := validateCampaignID(record.CampaignID, "mission store campaign"); err != nil {
+		return err
 	}
 	if !isValidCampaignKind(record.CampaignKind) {
 		return fmt.Errorf("mission store campaign campaign_kind %q is invalid", strings.TrimSpace(string(record.CampaignKind)))
@@ -140,10 +141,11 @@ func LoadCampaignRecord(root, campaignID string) (CampaignRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return CampaignRecord{}, err
 	}
-	if strings.TrimSpace(campaignID) == "" {
-		return CampaignRecord{}, fmt.Errorf("mission store campaign campaign_id is required")
+	if err := validateCampaignID(campaignID, "mission store campaign"); err != nil {
+		return CampaignRecord{}, err
 	}
-	record, err := loadCampaignRecordFile(StoreCampaignPath(root, campaignID))
+	normalizedCampaignID := strings.TrimSpace(campaignID)
+	record, err := loadCampaignRecordFile(StoreCampaignPath(root, normalizedCampaignID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return CampaignRecord{}, ErrCampaignRecordNotFound
@@ -187,6 +189,36 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	return record
+}
+
+func ValidateCampaignRef(ref CampaignRef) error {
+	return validateCampaignIDValue(NormalizeCampaignRef(ref).CampaignID)
+}
+
+func ResolveCampaignRef(root string, ref CampaignRef) (CampaignRecord, error) {
+	normalized := NormalizeCampaignRef(ref)
+	if err := ValidateCampaignRef(normalized); err != nil {
+		return CampaignRecord{}, err
+	}
+	return LoadCampaignRecord(root, normalized.CampaignID)
+}
+
+func ResolveExecutionContextCampaignRef(ec ExecutionContext) (*CampaignRecord, error) {
+	if ec.Step == nil {
+		return nil, fmt.Errorf("execution context step is required")
+	}
+	if ec.Step.CampaignRef == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return nil, fmt.Errorf("mission store root is required to resolve campaign refs")
+	}
+
+	record, err := ResolveCampaignRef(ec.MissionStoreRoot, *ec.Step.CampaignRef)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func normalizeCampaignGovernedExternalTargets(targets []AutonomyEligibilityTargetRef) []AutonomyEligibilityTargetRef {
@@ -293,4 +325,30 @@ func isValidCampaignState(state CampaignState) bool {
 	default:
 		return false
 	}
+}
+
+func validateCampaignID(campaignID string, surface string) error {
+	if err := validateCampaignIDValue(campaignID); err != nil {
+		return fmt.Errorf("%s %w", surface, err)
+	}
+	return nil
+}
+
+func validateCampaignIDValue(campaignID string) error {
+	normalized := strings.TrimSpace(campaignID)
+	if normalized == "" {
+		return fmt.Errorf("campaign_id is required")
+	}
+	if normalized == "." || normalized == ".." {
+		return fmt.Errorf("campaign_id %q is invalid", normalized)
+	}
+	if strings.ContainsAny(normalized, `/\`) {
+		return fmt.Errorf("campaign_id %q is invalid", normalized)
+	}
+	for _, r := range normalized {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("campaign_id %q is invalid", normalized)
+		}
+	}
+	return nil
 }

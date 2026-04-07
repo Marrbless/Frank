@@ -202,6 +202,18 @@ func TestValidatePlanAllowsStepsWithoutFrankObjectRefs(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAllowsStepsWithoutCampaignRef(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "draft", Type: StepTypeDiscussion, SuccessCriteria: []string{"stay bounded"}},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsMalformedIdentityMode(t *testing.T) {
 	t.Parallel()
 
@@ -223,6 +235,58 @@ func TestValidatePlanRejectsMalformedIdentityMode(t *testing.T) {
 	}
 	if !reflect.DeepEqual(errors, want) {
 		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsMalformedCampaignRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  *CampaignRef
+		want string
+	}{
+		{
+			name: "empty campaign id",
+			ref: &CampaignRef{
+				CampaignID: "   ",
+			},
+			want: "campaign ref is invalid: campaign_id is required",
+		},
+		{
+			name: "malformed campaign id",
+			ref: &CampaignRef{
+				CampaignID: "campaign/one",
+			},
+			want: `campaign ref is invalid: campaign_id "campaign/one" is invalid`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testJob([]Step{
+				{
+					ID:          "draft",
+					Type:        StepTypeDiscussion,
+					CampaignRef: tc.ref,
+				},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+			}))
+
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeInvalidCampaignRef,
+					StepID:  "draft",
+					Message: tc.want,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
 	}
 }
 

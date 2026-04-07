@@ -135,6 +135,15 @@ func TestCampaignRecordValidationFailsClosed(t *testing.T) {
 			want: "mission store campaign campaign_id is required",
 		},
 		{
+			name: "malformed campaign id",
+			run: func() error {
+				return StoreCampaignRecord(root, validCampaignRecord(now, func(record *CampaignRecord) {
+					record.CampaignID = "campaign/one"
+				}))
+			},
+			want: `mission store campaign campaign_id "campaign/one" is invalid`,
+		},
+		{
 			name: "malformed campaign kind",
 			run: func() error {
 				return StoreCampaignRecord(root, validCampaignRecord(now, func(record *CampaignRecord) {
@@ -350,6 +359,27 @@ func TestCampaignRecordReusesExistingTargetObjectAndIdentityTypes(t *testing.T) 
 	}
 }
 
+func TestCampaignRefUsesSingleStepControlPlaneSurface(t *testing.T) {
+	t.Parallel()
+
+	stepType := reflect.TypeOf(Step{})
+	campaignRefField, ok := stepType.FieldByName("CampaignRef")
+	if !ok {
+		t.Fatal("Step.CampaignRef field missing")
+	}
+	if campaignRefField.Type != reflect.TypeOf((*CampaignRef)(nil)) {
+		t.Fatalf("Step.CampaignRef type = %v, want %v", campaignRefField.Type, reflect.TypeOf((*CampaignRef)(nil)))
+	}
+
+	executionContextType := reflect.TypeOf(ExecutionContext{})
+	if _, ok := executionContextType.FieldByName("CampaignRef"); ok {
+		t.Fatal("ExecutionContext.CampaignRef field present, want no duplicate top-level campaign-ref source")
+	}
+	if _, ok := executionContextType.FieldByName("CampaignID"); ok {
+		t.Fatal("ExecutionContext.CampaignID field present, want no duplicate top-level campaign identity source")
+	}
+}
+
 func TestCampaignRegistryScaffoldingDoesNotChangeCurrentV2RuntimePath(t *testing.T) {
 	t.Parallel()
 
@@ -368,6 +398,211 @@ func TestCampaignRegistryScaffoldingDoesNotChangeCurrentV2RuntimePath(t *testing
 	}
 	if ec.Step.FrankObjectRefs != nil {
 		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want nil", ec.Step.FrankObjectRefs)
+	}
+	if ec.Step.CampaignRef != nil {
+		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want nil", ec.Step.CampaignRef)
+	}
+}
+
+func TestResolveExecutionContextCampaignRefZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	if ec.Step == nil {
+		t.Fatal("ResolveExecutionContext().Step = nil, want non-nil")
+	}
+	if ec.Step.CampaignRef != nil {
+		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want nil", ec.Step.CampaignRef)
+	}
+
+	got, err := ResolveExecutionContextCampaignRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextCampaignRef() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextCampaignRef() = %#v, want nil for zero-campaign step", got)
+	}
+}
+
+func TestResolveExecutionContextCampaignRefResolvesActiveCampaignRef(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 6, 0, 0, 0, time.UTC)
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-active"
+		record.IdentityMode = IdentityModeOwnerOnlyControl
+		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+			{
+				Kind:       EligibilityTargetKindPlatform,
+				RegistryID: "community-platform",
+			},
+		}
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "identity-community",
+			},
+		}
+	})
+	if err := StoreCampaignRecord(root, record); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: " campaign-active ",
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	got, err := ResolveExecutionContextCampaignRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextCampaignRef() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextCampaignRef() = nil, want resolved campaign record")
+	}
+	if !reflect.DeepEqual(*got, record) {
+		t.Fatalf("ResolveExecutionContextCampaignRef() = %#v, want %#v", *got, record)
+	}
+}
+
+func TestResolveExecutionContextCampaignRefFailsClosedOnMissingOrMalformedRefs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tests := []struct {
+		name string
+		ref  *CampaignRef
+		want string
+	}{
+		{
+			name: "missing record",
+			ref: &CampaignRef{
+				CampaignID: "campaign-missing",
+			},
+			want: ErrCampaignRecordNotFound.Error(),
+		},
+		{
+			name: "empty campaign id",
+			ref: &CampaignRef{
+				CampaignID: "   ",
+			},
+			want: "campaign_id is required",
+		},
+		{
+			name: "malformed campaign id",
+			ref: &CampaignRef{
+				CampaignID: "campaign/malformed",
+			},
+			want: `campaign_id "campaign/malformed" is invalid`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ec := testExecutionContext()
+			ec.Step.CampaignRef = tc.ref
+			ec.MissionStoreRoot = root
+
+			_, err := ResolveExecutionContextCampaignRef(ec)
+			if err == nil {
+				t.Fatal("ResolveExecutionContextCampaignRef() error = nil, want fail-closed rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ResolveExecutionContextCampaignRef() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveExecutionContextCampaignRefFailsClosedWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Step.CampaignRef = &CampaignRef{
+		CampaignID: "campaign-1",
+	}
+
+	_, err := ResolveExecutionContextCampaignRef(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextCampaignRef() error = nil, want missing mission store root rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store root is required to resolve campaign refs") {
+		t.Fatalf("ResolveExecutionContextCampaignRef() error = %q, want missing mission store root rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextCampaignRefDoesNotIntroduceIdentityEligibilityOrObjectSideChannel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 7, 0, 0, 0, time.UTC)
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-sidechannel"
+		record.IdentityMode = IdentityModeOwnerOnlyControl
+		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+			{
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-human-id",
+			},
+		}
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "identity-human-id",
+			},
+		}
+	})
+	if err := StoreCampaignRecord(root, record); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: record.CampaignID,
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
+	if ec.GovernedExternalTargets != nil {
+		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want nil", ec.GovernedExternalTargets)
+	}
+	if ec.Step.FrankObjectRefs != nil {
+		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want nil", ec.Step.FrankObjectRefs)
+	}
+
+	got, err := ResolveExecutionContextCampaignRef(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextCampaignRef() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextCampaignRef() = nil, want resolved campaign record")
+	}
+	if got.IdentityMode != IdentityModeOwnerOnlyControl {
+		t.Fatalf("ResolveExecutionContextCampaignRef().IdentityMode = %q, want %q", got.IdentityMode, IdentityModeOwnerOnlyControl)
+	}
+	if len(got.GovernedExternalTargets) != 1 || got.GovernedExternalTargets[0].RegistryID != "provider-human-id" {
+		t.Fatalf("ResolveExecutionContextCampaignRef().GovernedExternalTargets = %#v, want campaign-owned target only", got.GovernedExternalTargets)
+	}
+	if len(got.FrankObjectRefs) != 1 || got.FrankObjectRefs[0].ObjectID != "identity-human-id" {
+		t.Fatalf("ResolveExecutionContextCampaignRef().FrankObjectRefs = %#v, want campaign-owned ref only", got.FrankObjectRefs)
 	}
 }
 

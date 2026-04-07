@@ -133,6 +133,9 @@ func TestJobJSONRoundTrip(t *testing.T) {
 							ObjectID: "account-1",
 						},
 					},
+					CampaignRef: &CampaignRef{
+						CampaignID: "campaign-1",
+					},
 					StaticArtifactPath:   "dist/report.json",
 					StaticArtifactFormat: "json",
 				},
@@ -178,6 +181,20 @@ func TestNormalizeFrankRegistryObjectRefTrimsFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NormalizeFrankRegistryObjectRef() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeCampaignRefTrimsFields(t *testing.T) {
+	t.Parallel()
+
+	got := NormalizeCampaignRef(CampaignRef{
+		CampaignID: " campaign-1 ",
+	})
+	want := CampaignRef{
+		CampaignID: "campaign-1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NormalizeCampaignRef() = %#v, want %#v", got, want)
 	}
 }
 

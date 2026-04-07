@@ -11,6 +11,7 @@ const (
 	RejectionCodeDuplicateStepID               RejectionCode = "duplicate_step_id"
 	RejectionCodeInvalidGovernedExternalTarget RejectionCode = "invalid_governed_external_target"
 	RejectionCodeInvalidFrankObjectRef         RejectionCode = "invalid_frank_object_ref"
+	RejectionCodeInvalidCampaignRef            RejectionCode = "invalid_campaign_ref"
 	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
@@ -137,6 +138,7 @@ func ValidatePlan(job Job) []ValidationError {
 		invalidTypeErrors = append(invalidTypeErrors, validateIdentityModeDeclaration(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateGovernedExternalTargets(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateFrankObjectRefs(step)...)
+		invalidTypeErrors = append(invalidTypeErrors, validateCampaignRefDeclaration(step)...)
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -309,6 +311,24 @@ func validateFrankObjectRefs(step Step) []ValidationError {
 func normalizedFrankRegistryObjectRefKey(ref FrankRegistryObjectRef) string {
 	normalized := NormalizeFrankRegistryObjectRef(ref)
 	return string(normalized.Kind) + "\x1f" + normalized.ObjectID
+}
+
+func validateCampaignRefDeclaration(step Step) []ValidationError {
+	if step.CampaignRef == nil {
+		return nil
+	}
+
+	if err := ValidateCampaignRef(*step.CampaignRef); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidCampaignRef,
+				StepID:  step.ID,
+				Message: "campaign ref is invalid: " + err.Error(),
+			},
+		}
+	}
+
+	return nil
 }
 
 func isValidStepType(stepType StepType) bool {

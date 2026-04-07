@@ -55,12 +55,15 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	if control.Step.FrankObjectRefs != nil {
 		t.Fatalf("Step.FrankObjectRefs = %#v, want nil for zero-ref step", control.Step.FrankObjectRefs)
 	}
+	if control.Step.CampaignRef != nil {
+		t.Fatalf("Step.CampaignRef = %#v, want nil for zero-campaign step", control.Step.CampaignRef)
+	}
 	if control.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
 	}
 }
 
-func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargetsFrankObjectRefsAndNormalizedIdentityMode(t *testing.T) {
+func TestBuildRuntimeControlContextCarriesDeclaredControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -75,6 +78,9 @@ func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargetsFrankOb
 			Kind:     FrankRegistryObjectKind(" account "),
 			ObjectID: " account-1 ",
 		},
+	}
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: " campaign-1 ",
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode(" agent_alias ")
 
@@ -100,6 +106,10 @@ func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargetsFrankOb
 	}
 	if !reflect.DeepEqual(control.Step.FrankObjectRefs, wantRefs) {
 		t.Fatalf("BuildRuntimeControlContext().Step.FrankObjectRefs = %#v, want %#v", control.Step.FrankObjectRefs, wantRefs)
+	}
+	wantCampaignRef := &CampaignRef{CampaignID: "campaign-1"}
+	if !reflect.DeepEqual(control.Step.CampaignRef, wantCampaignRef) {
+		t.Fatalf("BuildRuntimeControlContext().Step.CampaignRef = %#v, want %#v", control.Step.CampaignRef, wantCampaignRef)
 	}
 	if control.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("BuildRuntimeControlContext().Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
@@ -239,9 +249,12 @@ func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t
 	if ec.Step.FrankObjectRefs != nil {
 		t.Fatalf("ExecutionContext.Step.FrankObjectRefs = %#v, want nil for zero-ref step", ec.Step.FrankObjectRefs)
 	}
+	if ec.Step.CampaignRef != nil {
+		t.Fatalf("ExecutionContext.Step.CampaignRef = %#v, want nil for zero-campaign step", ec.Step.CampaignRef)
+	}
 }
 
-func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExternalTargetsFrankObjectRefsAndNormalizedIdentityMode(t *testing.T) {
+func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -256,6 +269,9 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExterna
 			Kind:     FrankRegistryObjectKind(" container "),
 			ObjectID: " container-1 ",
 		},
+	}
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{
+		CampaignID: " campaign-1 ",
 	}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("  ")
 	control, err := BuildRuntimeControlContext(job, "build")
@@ -290,6 +306,10 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExterna
 	}
 	if !reflect.DeepEqual(ec.Step.FrankObjectRefs, wantRefs) {
 		t.Fatalf("ExecutionContext.Step.FrankObjectRefs = %#v, want %#v", ec.Step.FrankObjectRefs, wantRefs)
+	}
+	wantCampaignRef := &CampaignRef{CampaignID: "campaign-1"}
+	if !reflect.DeepEqual(ec.Step.CampaignRef, wantCampaignRef) {
+		t.Fatalf("ExecutionContext.Step.CampaignRef = %#v, want %#v", ec.Step.CampaignRef, wantCampaignRef)
 	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ExecutionContext.Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
