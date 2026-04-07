@@ -1,6 +1,9 @@
 package missioncontrol
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type JobState string
 
@@ -41,6 +44,13 @@ const (
 	AuthorityTierHigh   AuthorityTier = "high"
 )
 
+type IdentityMode string
+
+const (
+	IdentityModeOwnerOnlyControl IdentityMode = "owner_only_control"
+	IdentityModeAgentAlias       IdentityMode = "agent_alias"
+)
+
 type Job struct {
 	ID           string        `json:"id"`
 	SpecVersion  string        `json:"spec_version,omitempty"`
@@ -70,8 +80,26 @@ type Step struct {
 	OneShotArtifactPath       string                         `json:"one_shot_artifact_path,omitempty"`
 	LongRunningStartupCommand []string                       `json:"long_running_startup_command,omitempty"`
 	LongRunningArtifactPath   string                         `json:"long_running_artifact_path,omitempty"`
+	IdentityMode              IdentityMode                   `json:"identity_mode,omitempty"`
 	GovernedExternalTargets   []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
 	SystemAction              *SystemAction                  `json:"system_action,omitempty"`
+}
+
+func NormalizeIdentityMode(mode IdentityMode) IdentityMode {
+	normalized := IdentityMode(strings.TrimSpace(string(mode)))
+	if normalized == "" {
+		return IdentityModeAgentAlias
+	}
+	return normalized
+}
+
+func validateIdentityMode(mode IdentityMode) error {
+	switch normalized := NormalizeIdentityMode(mode); normalized {
+	case IdentityModeOwnerOnlyControl, IdentityModeAgentAlias:
+		return nil
+	default:
+		return fmt.Errorf("identity_mode %q is invalid", strings.TrimSpace(string(mode)))
+	}
 }
 
 type ValidationError struct {

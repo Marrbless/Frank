@@ -111,12 +111,15 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 	if ec.Step.ID != "build" {
 		t.Fatalf("ResolveExecutionContext().Step.ID = %q, want %q", ec.Step.ID, "build")
 	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
 	if ec.GovernedExternalTargets != nil {
 		t.Fatalf("ResolveExecutionContext().GovernedExternalTargets = %#v, want nil for zero-target step", ec.GovernedExternalTargets)
 	}
 }
 
-func TestResolveExecutionContextCarriesStepGovernedExternalTargets(t *testing.T) {
+func TestResolveExecutionContextCarriesStepGovernedExternalTargetsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -126,6 +129,7 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargets(t *testing.T)
 			RegistryID: "provider-mail",
 		},
 	}
+	job.Plan.Steps[0].IdentityMode = IdentityMode("   ")
 
 	ec, err := ResolveExecutionContext(job, "build")
 	if err != nil {
@@ -143,6 +147,9 @@ func TestResolveExecutionContextCarriesStepGovernedExternalTargets(t *testing.T)
 	}
 	if !reflect.DeepEqual(ec.Step.GovernedExternalTargets, want) {
 		t.Fatalf("ResolveExecutionContext().Step.GovernedExternalTargets = %#v, want %#v", ec.Step.GovernedExternalTargets, want)
+	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
 	}
 }
 

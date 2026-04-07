@@ -1769,6 +1769,7 @@ func (s *TaskState) runtimeAuditContext(control *missioncontrol.RuntimeControlCo
 	ec.Job = &job
 	if control.Step.ID != "" {
 		step := control.Step
+		step.IdentityMode = missioncontrol.NormalizeIdentityMode(step.IdentityMode)
 		ec.Step = &step
 	}
 	return s.withMissionStoreRootLocked(ec)

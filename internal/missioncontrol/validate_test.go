@@ -190,6 +190,30 @@ func TestValidatePlanAllowsStepsWithoutGovernedExternalTargets(t *testing.T) {
 	}
 }
 
+func TestValidatePlanRejectsMalformedIdentityMode(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:           "draft",
+			Type:         StepTypeDiscussion,
+			IdentityMode: IdentityMode("owner-ish"),
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidIdentityMode,
+			StepID:  "draft",
+			Message: `identity_mode "owner-ish" is invalid`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
 func TestValidatePlanRejectsMalformedGovernedExternalTargets(t *testing.T) {
 	t.Parallel()
 

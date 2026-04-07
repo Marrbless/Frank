@@ -52,9 +52,12 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	if control.Step.GovernedExternalTargets != nil {
 		t.Fatalf("Step.GovernedExternalTargets = %#v, want nil for zero-target step", control.Step.GovernedExternalTargets)
 	}
+	if control.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
+	}
 }
 
-func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargets(t *testing.T) {
+func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargetsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -64,6 +67,7 @@ func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargets(t *tes
 			RegistryID: "provider-mail",
 		},
 	}
+	job.Plan.Steps[0].IdentityMode = IdentityMode(" agent_alias ")
 
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {
@@ -78,6 +82,9 @@ func TestBuildRuntimeControlContextCarriesDeclaredGovernedExternalTargets(t *tes
 	}
 	if !reflect.DeepEqual(control.Step.GovernedExternalTargets, want) {
 		t.Fatalf("BuildRuntimeControlContext().Step.GovernedExternalTargets = %#v, want %#v", control.Step.GovernedExternalTargets, want)
+	}
+	if control.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("BuildRuntimeControlContext().Step.IdentityMode = %q, want %q", control.Step.IdentityMode, IdentityModeAgentAlias)
 	}
 }
 
@@ -205,12 +212,15 @@ func TestResolveExecutionContextWithRuntimeControlReconstructsExecutionContext(t
 	if ec.Runtime == nil || ec.Runtime.State != JobStateRunning {
 		t.Fatalf("ExecutionContext.Runtime = %#v, want running runtime", ec.Runtime)
 	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ExecutionContext.Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
 	if ec.GovernedExternalTargets != nil {
 		t.Fatalf("ExecutionContext.GovernedExternalTargets = %#v, want nil for zero-target step", ec.GovernedExternalTargets)
 	}
 }
 
-func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExternalTargets(t *testing.T) {
+func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExternalTargetsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
@@ -220,6 +230,7 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExterna
 			RegistryID: "provider-mail",
 		},
 	}
+	job.Plan.Steps[0].IdentityMode = IdentityMode("  ")
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {
 		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
@@ -243,6 +254,9 @@ func TestResolveExecutionContextWithRuntimeControlCarriesDeclaredGovernedExterna
 	}
 	if !reflect.DeepEqual(ec.GovernedExternalTargets, want) {
 		t.Fatalf("ExecutionContext.GovernedExternalTargets = %#v, want %#v", ec.GovernedExternalTargets, want)
+	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ExecutionContext.Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
 	}
 }
 

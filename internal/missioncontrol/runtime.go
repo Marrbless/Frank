@@ -231,7 +231,7 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 		JobID:        ec.Job.ID,
 		MaxAuthority: ec.Job.MaxAuthority,
 		AllowedTools: append([]string(nil), ec.Job.AllowedTools...),
-		Step:         copyStep(*ec.Step),
+		Step:         normalizedStep(*ec.Step),
 	}, nil
 }
 
@@ -312,10 +312,10 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 		MaxAuthority: control.MaxAuthority,
 		AllowedTools: append([]string(nil), control.AllowedTools...),
 		Plan: Plan{
-			Steps: []Step{copyStep(control.Step)},
+			Steps: []Step{normalizedStep(control.Step)},
 		},
 	}
-	step := copyStep(control.Step)
+	step := normalizedStep(control.Step)
 	return ExecutionContext{
 		Job:                     &job,
 		Step:                    &step,

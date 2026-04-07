@@ -80,6 +80,31 @@ func TestDefaultToolGuardNoExternalTargetsPreservesBehavior(t *testing.T) {
 	}
 }
 
+func TestDefaultToolGuardNoExternalTargetsPreservesBehaviorWhenIdentityModeOmitted(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	if ec.Step.IdentityMode != IdentityModeAgentAlias {
+		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
 func TestDefaultToolGuardApprovalRequired(t *testing.T) {
 	t.Parallel()
 
@@ -591,6 +616,7 @@ func TestDefaultToolGuardDeclaredStepTargetsDelegateThroughAutonomyHelper(t *tes
 	})
 
 	job := testExecutionJob()
+	job.Plan.Steps[0].IdentityMode = IdentityModeAgentAlias
 	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
 	ec, err := ResolveExecutionContext(job, "build")
 	if err != nil {
@@ -606,6 +632,51 @@ func TestDefaultToolGuardDeclaredStepTargetsDelegateThroughAutonomyHelper(t *tes
 	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
 
 	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, wantErr.Error())
+}
+
+func TestDefaultToolGuardRejectsOwnerOnlyControlForGovernedExternalTargets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 14, 15, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	writeAutonomyEligibilityFixture(t, root, target, PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "mail.example",
+		TargetClass:      target.Kind,
+		EligibilityLabel: EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"eligible fixture"},
+		UpdatedAt:        now,
+	}, EligibilityCheckRecord{
+		CheckID:                "check-provider-mail",
+		TargetKind:             target.Kind,
+		TargetName:             "mail.example",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now,
+	})
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].IdentityMode = IdentityModeOwnerOnlyControl
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, `governed external target execution requires identity_mode "agent_alias"; got "owner_only_control"`)
 }
 
 func TestAuditEventJSONUsesRequiredFieldNames(t *testing.T) {

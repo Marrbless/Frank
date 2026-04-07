@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -78,11 +79,39 @@ func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, t
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
 	}
 
+	if err := requireGovernedExternalIdentityMode(ec); err != nil {
+		validationErr, ok := err.(ValidationError)
+		if !ok {
+			return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
+		}
+		return newGuardDecision(ec, toolName, args, false, validationErr.Code, validationErr.Message)
+	}
+
 	if err := requireAutonomyEligibleTargets(ec); err != nil {
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
 	}
 
 	return newGuardDecision(ec, toolName, args, true, "", "")
+}
+
+func requireGovernedExternalIdentityMode(ec ExecutionContext) error {
+	if len(ec.GovernedExternalTargets) == 0 {
+		return nil
+	}
+
+	mode := NormalizeIdentityMode("")
+	if ec.Step != nil {
+		mode = NormalizeIdentityMode(ec.Step.IdentityMode)
+	}
+	if mode == IdentityModeAgentAlias {
+		return nil
+	}
+
+	return ValidationError{
+		Code:    RejectionCodeInvalidRuntimeState,
+		StepID:  ec.Step.ID,
+		Message: fmt.Sprintf("governed external target execution requires identity_mode %q; got %q", IdentityModeAgentAlias, mode),
+	}
 }
 
 func requireAutonomyEligibleTargets(ec ExecutionContext) error {

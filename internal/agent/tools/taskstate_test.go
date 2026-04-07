@@ -72,7 +72,7 @@ func TestTaskStateActivateStepCarriesMissionStoreRoot(t *testing.T) {
 	}
 }
 
-func TestTaskStateActivateStepCarriesMissionStoreRootAndDeclaredTargets(t *testing.T) {
+func TestTaskStateActivateStepCarriesMissionStoreRootNormalizedIdentityModeAndDeclaredTargets(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -96,6 +96,12 @@ func TestTaskStateActivateStepCarriesMissionStoreRootAndDeclaredTargets(t *testi
 	}
 	if ec.MissionStoreRoot != root {
 		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want %q", ec.MissionStoreRoot, root)
+	}
+	if ec.Step == nil {
+		t.Fatal("ExecutionContext().Step = nil, want non-nil")
+	}
+	if ec.Step.IdentityMode != missioncontrol.IdentityModeAgentAlias {
+		t.Fatalf("ExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, missioncontrol.IdentityModeAgentAlias)
 	}
 	wantTargets := []missioncontrol.AutonomyEligibilityTargetRef{target}
 	if !reflect.DeepEqual(ec.GovernedExternalTargets, wantTargets) {
@@ -305,6 +311,12 @@ func TestTaskStateZeroTargetExecutionWithoutMissionStoreRootPreservesV2Behavior(
 	}
 	if ec.MissionStoreRoot != "" {
 		t.Fatalf("ExecutionContext().MissionStoreRoot = %q, want empty", ec.MissionStoreRoot)
+	}
+	if ec.Step == nil {
+		t.Fatal("ExecutionContext().Step = nil, want non-nil")
+	}
+	if ec.Step.IdentityMode != missioncontrol.IdentityModeAgentAlias {
+		t.Fatalf("ExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, missioncontrol.IdentityModeAgentAlias)
 	}
 	if ec.GovernedExternalTargets != nil {
 		t.Fatalf("ExecutionContext().GovernedExternalTargets = %#v, want nil", ec.GovernedExternalTargets)

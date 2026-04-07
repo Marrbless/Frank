@@ -49,7 +49,8 @@ func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
 	}
 
 	jobCopy := copyJob(job)
-	stepCopy := copyStep(jobCopy.Plan.Steps[stepIndex])
+	stepCopy := normalizedStep(jobCopy.Plan.Steps[stepIndex])
+	jobCopy.Plan.Steps[stepIndex] = copyStep(stepCopy)
 	return ExecutionContext{
 		Job:                     &jobCopy,
 		Step:                    &stepCopy,
@@ -78,6 +79,12 @@ func copyStep(step Step) Step {
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	stepCopy.GovernedExternalTargets = cloneAutonomyEligibilityTargetRefs(step.GovernedExternalTargets)
 	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
+	return stepCopy
+}
+
+func normalizedStep(step Step) Step {
+	stepCopy := copyStep(step)
+	stepCopy.IdentityMode = NormalizeIdentityMode(stepCopy.IdentityMode)
 	return stepCopy
 }
 

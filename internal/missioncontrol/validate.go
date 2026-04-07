@@ -10,6 +10,7 @@ import (
 const (
 	RejectionCodeDuplicateStepID               RejectionCode = "duplicate_step_id"
 	RejectionCodeInvalidGovernedExternalTarget RejectionCode = "invalid_governed_external_target"
+	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
 	RejectionCodeMissingTerminalFinalStep      RejectionCode = "missing_terminal_final_response"
@@ -132,6 +133,7 @@ func ValidatePlan(job Job) []ValidationError {
 		if step.Type == StepTypeSystemAction {
 			invalidTypeErrors = append(invalidTypeErrors, validateSystemActionStep(job, step)...)
 		}
+		invalidTypeErrors = append(invalidTypeErrors, validateIdentityModeDeclaration(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateGovernedExternalTargets(step)...)
 
 		if step.RequiredAuthority != "" {
@@ -198,6 +200,19 @@ func ValidatePlan(job Job) []ValidationError {
 	errors = append(errors, authorityErrors...)
 	errors = append(errors, toolScopeErrors...)
 	return errors
+}
+
+func validateIdentityModeDeclaration(step Step) []ValidationError {
+	if err := validateIdentityMode(step.IdentityMode); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidIdentityMode,
+				StepID:  step.ID,
+				Message: err.Error(),
+			},
+		}
+	}
+	return nil
 }
 
 func validateGovernedExternalTargets(step Step) []ValidationError {
