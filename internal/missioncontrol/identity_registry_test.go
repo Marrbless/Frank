@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -498,6 +499,341 @@ func TestFrankRegistryScaffoldingPreservesZeroTargetExecutionBehavior(t *testing
 	}
 	if decision.Code != "" || decision.Reason != "" {
 		t.Fatalf("EvaluateTool() = %#v, want allowed zero-target behavior", decision)
+	}
+}
+
+func TestResolveFrankRegistryObjectRefSucceedsForEachSupportedKind(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC)
+
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}, EligibilityLabelAutonomyCompatible, "provider-mail.example", "check-provider-mail", now)
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}, EligibilityLabelAutonomyCompatible, "account-class-mailbox", "check-account-class-mailbox", now.Add(time.Minute))
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}, EligibilityLabelAutonomyCompatible, "container-class-wallet", "check-container-class-wallet", now.Add(2*time.Minute))
+
+	if err := StoreFrankIdentityRecord(root, FrankIdentityRecord{
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+	if err := StoreFrankAccountRecord(root, FrankAccountRecord{
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityID:           "identity-mail",
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+		CreatedAt:            now.Add(2 * time.Minute),
+		UpdatedAt:            now.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+	if err := StoreFrankContainerRecord(root, FrankContainerRecord{
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindTreasuryContainerClass, RegistryID: "container-class-wallet"},
+		CreatedAt:            now.Add(4 * time.Minute),
+		UpdatedAt:            now.Add(5 * time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		ref     FrankRegistryObjectRef
+		wantRef FrankRegistryObjectRef
+		check   func(t *testing.T, got ResolvedFrankRegistryObjectRef)
+	}{
+		{
+			name: "identity",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" identity "),
+				ObjectID: " identity-mail ",
+			},
+			wantRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "identity-mail",
+			},
+			check: func(t *testing.T, got ResolvedFrankRegistryObjectRef) {
+				t.Helper()
+				if got.Identity == nil || got.Identity.IdentityID != "identity-mail" {
+					t.Fatalf("resolved identity = %#v, want identity-mail", got.Identity)
+				}
+				if got.Account != nil || got.Container != nil {
+					t.Fatalf("resolved identity payload = %#v, want only identity set", got)
+				}
+			},
+		},
+		{
+			name: "account",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" account "),
+				ObjectID: " account-mail ",
+			},
+			wantRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindAccount,
+				ObjectID: "account-mail",
+			},
+			check: func(t *testing.T, got ResolvedFrankRegistryObjectRef) {
+				t.Helper()
+				if got.Account == nil || got.Account.AccountID != "account-mail" {
+					t.Fatalf("resolved account = %#v, want account-mail", got.Account)
+				}
+				if got.Identity != nil || got.Container != nil {
+					t.Fatalf("resolved account payload = %#v, want only account set", got)
+				}
+			},
+		},
+		{
+			name: "container",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " container-wallet ",
+			},
+			wantRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+			check: func(t *testing.T, got ResolvedFrankRegistryObjectRef) {
+				t.Helper()
+				if got.Container == nil || got.Container.ContainerID != "container-wallet" {
+					t.Fatalf("resolved container = %#v, want container-wallet", got.Container)
+				}
+				if got.Identity != nil || got.Account != nil {
+					t.Fatalf("resolved container payload = %#v, want only container set", got)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := ResolveFrankRegistryObjectRef(root, tc.ref)
+			if err != nil {
+				t.Fatalf("ResolveFrankRegistryObjectRef() error = %v", err)
+			}
+			if !reflect.DeepEqual(got.Ref, tc.wantRef) {
+				t.Fatalf("ResolveFrankRegistryObjectRef().Ref = %#v, want %#v", got.Ref, tc.wantRef)
+			}
+			tc.check(t, got)
+		})
+	}
+}
+
+func TestResolveFrankRegistryObjectRefFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 1, 0, 0, 0, time.UTC)
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}, EligibilityLabelAutonomyCompatible, "provider-mail.example", "check-provider-mail", now)
+
+	tests := []struct {
+		name string
+		ref  FrankRegistryObjectRef
+		want string
+	}{
+		{
+			name: "invalid kind",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(""),
+				ObjectID: "identity-mail",
+			},
+			want: `Frank object ref kind "" is invalid`,
+		},
+		{
+			name: "empty object id",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "   ",
+			},
+			want: "Frank object ref object_id is required",
+		},
+		{
+			name: "missing record",
+			ref: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: "missing-identity",
+			},
+			want: ErrFrankIdentityRecordNotFound.Error(),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := ResolveFrankRegistryObjectRef(root, tc.ref)
+			if err == nil {
+				t.Fatal("ResolveFrankRegistryObjectRef() error = nil, want fail-closed error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ResolveFrankRegistryObjectRef() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveFrankRegistryObjectRefFailsClosedOnMalformedRecord(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 2, 0, 0, 0, time.UTC)
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}, EligibilityLabelAutonomyCompatible, "provider-mail.example", "check-provider-mail", now)
+
+	if err := WriteStoreJSONAtomic(StoreFrankIdentityPath(root, "identity-bad"), map[string]interface{}{
+		"record_version":          StoreRecordVersion,
+		"identity_id":             "identity-bad",
+		"identity_kind":           "email",
+		"display_name":            "",
+		"provider_or_platform_id": "provider-mail",
+		"identity_mode":           string(IdentityModeAgentAlias),
+		"state":                   "active",
+		"eligibility_target_ref": map[string]interface{}{
+			"kind":        string(EligibilityTargetKindProvider),
+			"registry_id": "provider-mail",
+		},
+		"created_at": now,
+		"updated_at": now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+
+	_, err := ResolveFrankRegistryObjectRef(root, FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindIdentity,
+		ObjectID: "identity-bad",
+	})
+	if err == nil {
+		t.Fatal("ResolveFrankRegistryObjectRef() error = nil, want malformed-record rejection")
+	}
+	if !strings.Contains(err.Error(), "display_name is required") {
+		t.Fatalf("ResolveFrankRegistryObjectRef() error = %q, want malformed record validation failure", err.Error())
+	}
+}
+
+func TestResolveFrankRegistryObjectRefsRejectsDuplicatesAfterNormalization(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	_, err := ResolveFrankRegistryObjectRefs(root, []FrankRegistryObjectRef{
+		{
+			Kind:     FrankRegistryObjectKindIdentity,
+			ObjectID: "identity-mail",
+		},
+		{
+			Kind:     FrankRegistryObjectKind(" identity "),
+			ObjectID: " identity-mail ",
+		},
+	})
+	if err == nil {
+		t.Fatal("ResolveFrankRegistryObjectRefs() error = nil, want duplicate rejection")
+	}
+	if !strings.Contains(err.Error(), `duplicate Frank object ref kind "identity" object_id "identity-mail"`) {
+		t.Fatalf("ResolveFrankRegistryObjectRefs() error = %q, want duplicate rejection", err.Error())
+	}
+}
+
+func TestResolveFrankRegistryObjectRefDoesNotIntroduceEligibilityOrIdentityModeSideChannel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 3, 0, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-human-id",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelIneligible, "provider-human-id.example", "check-provider-human-id", now)
+
+	if err := StoreFrankIdentityRecord(root, FrankIdentityRecord{
+		IdentityID:           "identity-human-id",
+		IdentityKind:         "email",
+		DisplayName:          "Human-ID Candidate",
+		ProviderOrPlatformID: target.RegistryID,
+		IdentityMode:         IdentityModeOwnerOnlyControl,
+		State:                "candidate",
+		EligibilityTargetRef: target,
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	if _, err := RequireAutonomyEligibleTarget(root, target); !errors.Is(err, ErrAutonomyEligibleTargetRequired) {
+		t.Fatalf("RequireAutonomyEligibleTarget() error = %v, want %v", err, ErrAutonomyEligibleTargetRequired)
+	}
+
+	got, err := ResolveFrankRegistryObjectRef(root, FrankRegistryObjectRef{
+		Kind:     FrankRegistryObjectKindIdentity,
+		ObjectID: "identity-human-id",
+	})
+	if err != nil {
+		t.Fatalf("ResolveFrankRegistryObjectRef() error = %v", err)
+	}
+	if got.Identity == nil {
+		t.Fatal("ResolveFrankRegistryObjectRef().Identity = nil, want resolved identity record")
+	}
+	if got.Identity.IdentityMode != IdentityModeOwnerOnlyControl {
+		t.Fatalf("ResolveFrankRegistryObjectRef().Identity.IdentityMode = %q, want %q", got.Identity.IdentityMode, IdentityModeOwnerOnlyControl)
+	}
+	if got.Identity.EligibilityTargetRef != target {
+		t.Fatalf("ResolveFrankRegistryObjectRef().Identity.EligibilityTargetRef = %#v, want %#v", got.Identity.EligibilityTargetRef, target)
+	}
+}
+
+func TestResolveExecutionContextFrankRegistryObjectRefsZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	if ec.Step == nil {
+		t.Fatal("ResolveExecutionContext().Step = nil, want non-nil")
+	}
+	if ec.Step.FrankObjectRefs != nil {
+		t.Fatalf("ResolveExecutionContext().Step.FrankObjectRefs = %#v, want nil", ec.Step.FrankObjectRefs)
+	}
+
+	got, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextFrankRegistryObjectRefs() = %#v, want nil for zero-ref step", got)
 	}
 }
 

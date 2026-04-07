@@ -55,6 +55,13 @@ var (
 	ErrFrankContainerRecordNotFound = errors.New("mission store Frank container record not found")
 )
 
+type ResolvedFrankRegistryObjectRef struct {
+	Ref       FrankRegistryObjectRef `json:"ref"`
+	Identity  *FrankIdentityRecord   `json:"identity,omitempty"`
+	Account   *FrankAccountRecord    `json:"account,omitempty"`
+	Container *FrankContainerRecord  `json:"container,omitempty"`
+}
+
 func StoreFrankRegistryDir(root string) string {
 	return filepath.Join(root, "frank_registry")
 }
@@ -197,6 +204,91 @@ func ValidateFrankContainerRecord(record FrankContainerRecord) error {
 		return fmt.Errorf("mission store Frank container updated_at must be on or after created_at")
 	}
 	return nil
+}
+
+func ResolveFrankRegistryObjectRef(root string, ref FrankRegistryObjectRef) (ResolvedFrankRegistryObjectRef, error) {
+	normalized := NormalizeFrankRegistryObjectRef(ref)
+	if err := validateFrankRegistryObjectRef(normalized); err != nil {
+		return ResolvedFrankRegistryObjectRef{}, err
+	}
+
+	switch normalized.Kind {
+	case FrankRegistryObjectKindIdentity:
+		record, err := LoadFrankIdentityRecord(root, normalized.ObjectID)
+		if err != nil {
+			return ResolvedFrankRegistryObjectRef{}, fmt.Errorf("resolve Frank object ref kind %q object_id %q: %w", normalized.Kind, normalized.ObjectID, err)
+		}
+		return ResolvedFrankRegistryObjectRef{
+			Ref:      normalized,
+			Identity: &record,
+		}, nil
+	case FrankRegistryObjectKindAccount:
+		record, err := LoadFrankAccountRecord(root, normalized.ObjectID)
+		if err != nil {
+			return ResolvedFrankRegistryObjectRef{}, fmt.Errorf("resolve Frank object ref kind %q object_id %q: %w", normalized.Kind, normalized.ObjectID, err)
+		}
+		return ResolvedFrankRegistryObjectRef{
+			Ref:     normalized,
+			Account: &record,
+		}, nil
+	case FrankRegistryObjectKindContainer:
+		record, err := LoadFrankContainerRecord(root, normalized.ObjectID)
+		if err != nil {
+			return ResolvedFrankRegistryObjectRef{}, fmt.Errorf("resolve Frank object ref kind %q object_id %q: %w", normalized.Kind, normalized.ObjectID, err)
+		}
+		return ResolvedFrankRegistryObjectRef{
+			Ref:       normalized,
+			Container: &record,
+		}, nil
+	default:
+		return ResolvedFrankRegistryObjectRef{}, fmt.Errorf("Frank object ref kind %q is invalid", strings.TrimSpace(string(normalized.Kind)))
+	}
+}
+
+func ResolveFrankRegistryObjectRefs(root string, refs []FrankRegistryObjectRef) ([]ResolvedFrankRegistryObjectRef, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(refs))
+	normalizedRefs := make([]FrankRegistryObjectRef, len(refs))
+	for i, ref := range refs {
+		normalized := NormalizeFrankRegistryObjectRef(ref)
+		if err := validateFrankRegistryObjectRef(normalized); err != nil {
+			return nil, err
+		}
+
+		key := normalizedFrankRegistryObjectRefKey(normalized)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("duplicate Frank object ref kind %q object_id %q", normalized.Kind, normalized.ObjectID)
+		}
+		seen[key] = struct{}{}
+		normalizedRefs[i] = normalized
+	}
+
+	resolved := make([]ResolvedFrankRegistryObjectRef, 0, len(normalizedRefs))
+	for _, normalized := range normalizedRefs {
+		record, err := ResolveFrankRegistryObjectRef(root, normalized)
+		if err != nil {
+			return nil, err
+		}
+		resolved = append(resolved, record)
+	}
+
+	return resolved, nil
+}
+
+func ResolveExecutionContextFrankRegistryObjectRefs(ec ExecutionContext) ([]ResolvedFrankRegistryObjectRef, error) {
+	if ec.Step == nil {
+		return nil, fmt.Errorf("execution context step is required")
+	}
+	if len(ec.Step.FrankObjectRefs) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return nil, fmt.Errorf("mission store root is required to resolve Frank object refs")
+	}
+	return ResolveFrankRegistryObjectRefs(ec.MissionStoreRoot, ec.Step.FrankObjectRefs)
 }
 
 func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
