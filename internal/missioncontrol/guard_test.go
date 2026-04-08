@@ -105,6 +105,25 @@ func TestDefaultToolGuardNoExternalTargetsPreservesBehaviorWhenIdentityModeOmitt
 	}
 }
 
+func TestDefaultToolGuardTreasuryPreflightZeroRefPathPreservesBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.MissionStoreRoot = ""
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
 func TestDefaultToolGuardFrankObjectRefsDoNotCreateEligibilityOrIdentityModeSideChannel(t *testing.T) {
 	t.Parallel()
 
@@ -379,6 +398,102 @@ func TestDefaultToolGuardEligibleExternalTargetPasses(t *testing.T) {
 	if decision.Reason != "" {
 		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
 	}
+}
+
+func TestDefaultToolGuardEligibleTreasuryContainerPasses(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-guard-eligible"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].IdentityMode = IdentityModeOwnerOnlyControl
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
+func TestDefaultToolGuardIneligibleTreasuryContainerFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-human-wallet",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelIneligible, "container-class-human-wallet", "check-container-class-human-wallet", now)
+
+	container := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-human-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Human Wallet",
+		ContainerClassID:     "container-class-human-wallet",
+		State:                "candidate",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now.Add(2*time.Minute), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-guard-ineligible"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: container.ContainerID,
+			},
+		}
+	})
+	if err := StoreTreasuryRecord(root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	_, wantErr := RequireAutonomyEligibleTarget(root, target)
+	if !errors.Is(wantErr, ErrAutonomyEligibleTargetRequired) {
+		t.Fatalf("RequireAutonomyEligibleTarget() error = %v, want %v", wantErr, ErrAutonomyEligibleTargetRequired)
+	}
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+	assertDenied(t, decision, RejectionCodeInvalidRuntimeState, wantErr.Error())
 }
 
 func TestDefaultToolGuardUnknownExternalTargetFailsClosed(t *testing.T) {

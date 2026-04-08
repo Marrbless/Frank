@@ -90,6 +90,9 @@ func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, t
 	if err := requireAutonomyEligibleTargets(ec); err != nil {
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
 	}
+	if err := requireAutonomyEligibleTreasuryContainers(ec); err != nil {
+		return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
+	}
 
 	return newGuardDecision(ec, toolName, args, true, "", "")
 }
@@ -121,6 +124,24 @@ func requireAutonomyEligibleTargets(ec ExecutionContext) error {
 
 	for _, target := range ec.GovernedExternalTargets {
 		if _, err := RequireAutonomyEligibleTarget(ec.MissionStoreRoot, target); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func requireAutonomyEligibleTreasuryContainers(ec ExecutionContext) error {
+	preflight, err := ResolveExecutionContextTreasuryPreflight(ec)
+	if err != nil {
+		return err
+	}
+	if preflight.Treasury == nil {
+		return nil
+	}
+
+	for _, container := range preflight.Containers {
+		if _, err := RequireAutonomyEligibleTarget(ec.MissionStoreRoot, container.EligibilityTargetRef); err != nil {
 			return err
 		}
 	}
