@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -208,6 +209,118 @@ func TestBuildCommittedMissionStatusSnapshotClearsTerminalControl(t *testing.T) 
 	}
 	if snapshot.Runtime == nil || snapshot.Runtime.State != JobStateCompleted {
 		t.Fatalf("Runtime = %#v, want completed runtime", snapshot.Runtime)
+	}
+}
+
+func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 30, 0, 0, time.UTC)
+	job := testProjectedRuntimeJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: "treasury-wallet"}
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}
+	if err := StorePlatformRecord(root, PlatformRecord{
+		RecordVersion:    StoreRecordVersion,
+		PlatformID:       target.RegistryID,
+		PlatformName:     "container-class-wallet",
+		TargetClass:      target.Kind,
+		EligibilityLabel: EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-container-class-wallet",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.Add(-3 * time.Minute).UTC(),
+	}); err != nil {
+		t.Fatalf("StorePlatformRecord() error = %v", err)
+	}
+	if err := StoreEligibilityCheckRecord(root, EligibilityCheckRecord{
+		RecordVersion:          StoreRecordVersion,
+		CheckID:                "check-container-class-wallet",
+		TargetKind:             target.Kind,
+		TargetName:             "container-class-wallet",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.Add(-3 * time.Minute).UTC(),
+	}); err != nil {
+		t.Fatalf("StoreEligibilityCheckRecord() error = %v", err)
+	}
+
+	container := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(-2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(-time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+	if err := StoreTreasuryRecord(root, TreasuryRecord{
+		RecordVersion:  StoreRecordVersion,
+		TreasuryID:     "treasury-wallet",
+		DisplayName:    "Frank Treasury",
+		State:          TreasuryStateBootstrap,
+		ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: container.ContainerID,
+			},
+		},
+		CreatedAt: now.Add(-3 * time.Minute).UTC(),
+		UpdatedAt: now.UTC(),
+	}); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    now.Add(-2 * time.Minute),
+		UpdatedAt:    now.Add(-time.Minute),
+		StartedAt:    now.Add(-2 * time.Minute),
+		ActiveStepAt: now.Add(-90 * time.Second),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal(snapshot) error = %v", err)
+	}
+	if strings.Contains(string(data), "\"treasury_preflight\"") {
+		t.Fatalf("snapshot JSON unexpectedly contains treasury preflight: %s", string(data))
+	}
+	if strings.Contains(string(data), "\"container_id\":\"container-wallet\"") {
+		t.Fatalf("snapshot JSON unexpectedly contains resolved treasury container data: %s", string(data))
+	}
+	if strings.Contains(string(data), "\"display_name\":\"Frank Treasury\"") {
+		t.Fatalf("snapshot JSON unexpectedly contains resolved treasury record data: %s", string(data))
 	}
 }
 

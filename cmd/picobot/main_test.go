@@ -747,6 +747,117 @@ func TestMissionInspectCommandWithStepIDIncludesResolvedEffectiveAllowedTools(t 
 	}
 }
 
+func TestMissionInspectCommandTreasuryPreflightZeroRefPathUnchanged(t *testing.T) {
+	job := testMissionBootstrapJob()
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", got.Steps[0].TreasuryPreflight)
+	}
+	if !reflect.DeepEqual(got.Steps[0].EffectiveAllowedTools, []string{"read"}) {
+		t.Fatalf("EffectiveAllowedTools = %v, want [read]", got.Steps[0].EffectiveAllowedTools)
+	}
+}
+
+func TestMissionInspectCommandTreasuryStepSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	root, treasury, container := writeMissionInspectTreasuryFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].TreasuryPreflight == nil {
+		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+	}
+	if got.Steps[0].TreasuryPreflight.Treasury == nil {
+		t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+	}
+	if !reflect.DeepEqual(*got.Steps[0].TreasuryPreflight.Treasury, treasury) {
+		t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *got.Steps[0].TreasuryPreflight.Treasury, treasury)
+	}
+	if !reflect.DeepEqual(got.Steps[0].TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.Steps[0].TreasuryPreflight.Containers, container)
+	}
+}
+
+func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now.Add(time.Minute),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want fail-closed inspection failure")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve mission inspection summary") {
+		t.Fatalf("Execute() error = %q, want inspection summary failure", err)
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("Execute() error = %q, want missing container rejection", err)
+	}
+}
+
 func TestMissionInspectCommandWithUnknownStepReturnsClearError(t *testing.T) {
 	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
 
@@ -8372,6 +8483,110 @@ func writeMissionStatusSnapshotFile(t *testing.T, path string, snapshot missionS
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+}
+
+func writeMissionInspectTreasuryFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC)
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}
+	writeMissionInspectEligibilityFixture(t, root, target, missioncontrol.EligibilityLabelAutonomyCompatible, "container-class-wallet", "check-container-class-wallet", now)
+
+	container := missioncontrol.FrankContainerRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(time.Minute).UTC(),
+		UpdatedAt:            now.Add(2 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-wallet",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: container.ContainerID,
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	return root, treasury, container
+}
+
+func writeMissionInspectEligibilityFixture(t *testing.T, root string, target missioncontrol.AutonomyEligibilityTargetRef, label missioncontrol.EligibilityLabel, targetName string, checkID string, checkedAt time.Time) {
+	t.Helper()
+
+	check := missioncontrol.EligibilityCheckRecord{
+		CheckID:    checkID,
+		TargetKind: target.Kind,
+		TargetName: targetName,
+		Label:      label,
+		CheckedAt:  checkedAt,
+	}
+	platform := missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     targetName,
+		TargetClass:      target.Kind,
+		EligibilityLabel: label,
+		LastCheckID:      checkID,
+		Notes:            []string{"registry note"},
+		UpdatedAt:        checkedAt.UTC(),
+	}
+
+	switch label {
+	case missioncontrol.EligibilityLabelAutonomyCompatible:
+		check.CanCreateWithoutOwner = true
+		check.CanOnboardWithoutOwner = true
+		check.CanControlAsAgent = true
+		check.CanRecoverAsAgent = true
+		check.RulesAsObservedOK = true
+		check.Reasons = []string{"autonomy_compatible"}
+	case missioncontrol.EligibilityLabelHumanGated:
+		check.CanCreateWithoutOwner = false
+		check.CanOnboardWithoutOwner = false
+		check.CanControlAsAgent = false
+		check.CanRecoverAsAgent = false
+		check.RequiresHumanOnlyStep = true
+		check.RulesAsObservedOK = false
+		check.Reasons = []string{string(missioncontrol.AutonomyEligibilityReasonHumanGatedKYCOrCustodialOnboarding)}
+	case missioncontrol.EligibilityLabelIneligible:
+		check.CanCreateWithoutOwner = false
+		check.CanOnboardWithoutOwner = false
+		check.CanControlAsAgent = false
+		check.CanRecoverAsAgent = false
+		check.RequiresOwnerOnlySecretOrID = true
+		check.RulesAsObservedOK = false
+		check.Reasons = []string{string(missioncontrol.AutonomyEligibilityReasonOwnerIdentityRequired)}
+	default:
+		t.Fatalf("unsupported eligibility label %q", label)
+	}
+
+	if err := missioncontrol.StorePlatformRecord(root, platform); err != nil {
+		t.Fatalf("StorePlatformRecord(%s) error = %v", target.RegistryID, err)
+	}
+	if err := missioncontrol.StoreEligibilityCheckRecord(root, check); err != nil {
+		t.Fatalf("StoreEligibilityCheckRecord(%s) error = %v", checkID, err)
 	}
 }
 

@@ -10,17 +10,39 @@ type InspectSummary struct {
 }
 
 type InspectStep struct {
-	StepID                string        `json:"step_id"`
-	StepType              StepType      `json:"step_type"`
-	DependsOn             []string      `json:"depends_on"`
-	RequiredAuthority     AuthorityTier `json:"required_authority"`
-	AllowedTools          []string      `json:"allowed_tools"`
-	SuccessCriteria       []string      `json:"success_criteria"`
-	EffectiveAllowedTools []string      `json:"effective_allowed_tools"`
-	RequiresApproval      bool          `json:"requires_approval"`
+	StepID                string                                     `json:"step_id"`
+	StepType              StepType                                   `json:"step_type"`
+	DependsOn             []string                                   `json:"depends_on"`
+	RequiredAuthority     AuthorityTier                              `json:"required_authority"`
+	AllowedTools          []string                                   `json:"allowed_tools"`
+	SuccessCriteria       []string                                   `json:"success_criteria"`
+	EffectiveAllowedTools []string                                   `json:"effective_allowed_tools"`
+	RequiresApproval      bool                                       `json:"requires_approval"`
+	TreasuryPreflight     *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
 }
 
 func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
+	return newInspectSummary(job, stepID, func(step Step, ec ExecutionContext) (InspectStep, error) {
+		return newInspectStepSummary(step, ec), nil
+	})
+}
+
+func NewInspectSummaryWithTreasuryPreflight(job Job, stepID string, storeRoot string) (InspectSummary, error) {
+	return newInspectSummary(job, stepID, func(step Step, ec ExecutionContext) (InspectStep, error) {
+		ec.MissionStoreRoot = storeRoot
+		summary := newInspectStepSummary(step, ec)
+		preflight, err := ResolveExecutionContextTreasuryPreflight(ec)
+		if err != nil {
+			return InspectStep{}, err
+		}
+		if preflight.Treasury != nil {
+			summary.TreasuryPreflight = &preflight
+		}
+		return summary, nil
+	})
+}
+
+func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionContext) (InspectStep, error)) (InspectSummary, error) {
 	summary := InspectSummary{
 		JobID:        job.ID,
 		MaxAuthority: job.MaxAuthority,
@@ -33,7 +55,11 @@ func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
 			return InspectSummary{}, err
 		}
 
-		summary.Steps = append(summary.Steps, newInspectStepSummary(*ec.Step, ec))
+		stepSummary, err := buildStep(*ec.Step, ec)
+		if err != nil {
+			return InspectSummary{}, err
+		}
+		summary.Steps = append(summary.Steps, stepSummary)
 		return summary, nil
 	}
 
@@ -44,7 +70,11 @@ func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
 			return InspectSummary{}, err
 		}
 
-		summary.Steps = append(summary.Steps, newInspectStepSummary(step, ec))
+		stepSummary, err := buildStep(step, ec)
+		if err != nil {
+			return InspectSummary{}, err
+		}
+		summary.Steps = append(summary.Steps, stepSummary)
 	}
 
 	return summary, nil

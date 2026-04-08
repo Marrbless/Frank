@@ -372,8 +372,9 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			stepID, _ := cmd.Flags().GetString("step-id")
+			storeRoot := resolveMissionStoreRoot(cmd)
 
-			summary, err := newMissionInspectSummary(job, stepID)
+			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
 				return fmt.Errorf("failed to resolve mission inspection summary for %q: %w", missionFile, err)
 			}
@@ -392,6 +393,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 	missionInspectCmd.Flags().String("mission-file", "", "Path to a mission job JSON file")
+	missionInspectCmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
 	missionInspectCmd.Flags().String("step-id", "", "Optional mission step ID to filter the inspection summary to one step")
 
 	missionAssertCmd := &cobra.Command{
@@ -1493,8 +1495,8 @@ func loadPersistedMissionRuntimeSnapshot(path string, job missioncontrol.Job) (m
 	return *missioncontrol.CloneJobRuntimeState(snapshot.Runtime), runtimeControl, true, nil
 }
 
-func newMissionInspectSummary(job missioncontrol.Job, stepID string) (missionInspectSummary, error) {
-	return missioncontrol.NewInspectSummary(job, stepID)
+func newMissionInspectSummary(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectSummary, error) {
+	return missioncontrol.NewInspectSummaryWithTreasuryPreflight(job, stepID, storeRoot)
 }
 
 func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.Job, path string, data []byte) (string, bool, error) {
