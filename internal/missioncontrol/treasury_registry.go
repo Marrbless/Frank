@@ -57,6 +57,11 @@ type TreasuryLedgerEntry struct {
 	SourceRef     string                  `json:"source_ref,omitempty"`
 }
 
+type ResolvedExecutionContextTreasuryPreflight struct {
+	Treasury   *TreasuryRecord        `json:"treasury,omitempty"`
+	Containers []FrankContainerRecord `json:"containers,omitempty"`
+}
+
 var (
 	ErrTreasuryLedgerEntryNotFound = errors.New("mission store treasury ledger entry not found")
 	ErrTreasuryRecordNotFound      = errors.New("mission store treasury record not found")
@@ -291,6 +296,38 @@ func ResolveExecutionContextTreasuryRef(ec ExecutionContext) (*TreasuryRecord, e
 		return nil, err
 	}
 	return &record, nil
+}
+
+func ResolveExecutionContextTreasuryPreflight(ec ExecutionContext) (ResolvedExecutionContextTreasuryPreflight, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return ResolvedExecutionContextTreasuryPreflight{}, err
+	}
+	if treasury == nil {
+		return ResolvedExecutionContextTreasuryPreflight{}, nil
+	}
+
+	resolvedRefs, err := ResolveFrankRegistryObjectRefs(ec.MissionStoreRoot, treasury.ContainerRefs)
+	if err != nil {
+		return ResolvedExecutionContextTreasuryPreflight{}, err
+	}
+
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: treasury,
+	}
+	if len(resolvedRefs) == 0 {
+		return preflight, nil
+	}
+
+	preflight.Containers = make([]FrankContainerRecord, 0, len(resolvedRefs))
+	for _, resolved := range resolvedRefs {
+		if resolved.Container == nil {
+			return ResolvedExecutionContextTreasuryPreflight{}, fmt.Errorf("resolve treasury container ref kind %q object_id %q: expected Frank container record", resolved.Ref.Kind, resolved.Ref.ObjectID)
+		}
+		preflight.Containers = append(preflight.Containers, *resolved.Container)
+	}
+
+	return preflight, nil
 }
 
 func loadTreasuryRecordFile(path string) (TreasuryRecord, error) {
