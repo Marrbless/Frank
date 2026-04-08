@@ -1252,7 +1252,7 @@ func (s *TaskState) OperatorInspect(jobID string, stepID string) (string, error)
 			}
 		}
 
-		summary, err := missioncontrol.NewInspectSummary(*ec.Job, stepID)
+		summary, err := missioncontrol.NewInspectSummaryWithTreasuryPreflight(*ec.Job, stepID, ec.MissionStoreRoot)
 		if err != nil {
 			return "", err
 		}

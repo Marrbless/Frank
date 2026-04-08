@@ -3307,7 +3307,7 @@ func TestTaskStateOperatorInspectWithoutValidatedPlanReturnsDeterministicError(t
 	}
 }
 
-func TestTaskStateOperatorInspectActiveExecutionContextPreservesValidatedPlanBehavior(t *testing.T) {
+func TestTaskStateOperatorInspectActiveExecutionContextZeroTreasuryRefPathUnchanged(t *testing.T) {
 	t.Parallel()
 
 	state := NewTaskState()
@@ -3326,6 +3326,90 @@ func TestTaskStateOperatorInspectActiveExecutionContextPreservesValidatedPlanBeh
 	}
 	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
 		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
+	}
+	if summary.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", summary.Steps[0].TreasuryPreflight)
+	}
+}
+
+func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	got, err := state.OperatorInspect("job-1", "build")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+	}
+	if summary.Steps[0].TreasuryPreflight == nil {
+		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+	}
+	if summary.Steps[0].TreasuryPreflight.Treasury == nil {
+		t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+	}
+	if !reflect.DeepEqual(*summary.Steps[0].TreasuryPreflight.Treasury, treasury) {
+		t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.Steps[0].TreasuryPreflight.Treasury, treasury)
+	}
+	if !reflect.DeepEqual(summary.Steps[0].TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.Steps[0].TreasuryPreflight.Containers, container)
+	}
+}
+
+func TestTaskStateOperatorInspectActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, err := state.OperatorInspect("job-1", "build")
+	if err == nil {
+		t.Fatal("OperatorInspect() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("OperatorInspect() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -3371,6 +3455,49 @@ func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t
 	}
 	if !reflect.DeepEqual(summary.Steps[0].EffectiveAllowedTools, []string{"read"}) {
 		t.Fatalf("EffectiveAllowedTools = %#v, want %#v", summary.Steps[0].EffectiveAllowedTools, []string{"read"})
+	}
+}
+
+func TestTaskStateOperatorInspectPersistedInspectablePlanPathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: "treasury-wallet"}
+	inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	state.runtimeState = missioncontrol.JobRuntimeState{
+		JobID:           "job-1",
+		State:           missioncontrol.JobStatePaused,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	state.hasRuntimeState = true
+	state.runtimeControl = control
+	state.hasRuntimeControl = true
+
+	got, err := state.OperatorInspect("job-1", "build")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+	}
+	if summary.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil for persisted inspectable-plan path", summary.Steps[0].TreasuryPreflight)
 	}
 }
 
@@ -3528,4 +3655,72 @@ func writeTaskStateAutonomyEligibilityFixture(t *testing.T, root string, target 
 	if err := missioncontrol.StoreEligibilityCheckRecord(root, check); err != nil {
 		t.Fatalf("StoreEligibilityCheckRecord(%s) error = %v", check.CheckID, err)
 	}
+}
+
+func writeTaskStateTreasuryFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC)
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}
+	writeTaskStateAutonomyEligibilityFixture(t, root, target, missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "container-class-wallet",
+		TargetClass:      target.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-container-class-wallet",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-container-class-wallet",
+		TargetKind:             target.Kind,
+		TargetName:             "container-class-wallet",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now,
+	})
+
+	container := missioncontrol.FrankContainerRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(time.Minute).UTC(),
+		UpdatedAt:            now.Add(2 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-wallet",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: container.ContainerID,
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	return root, treasury, container
 }
