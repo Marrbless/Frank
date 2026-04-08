@@ -216,7 +216,7 @@ func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *t
 	t.Parallel()
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 8, 21, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	job := testProjectedRuntimeJob()
 	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: "treasury-wallet"}
 	target := AutonomyEligibilityTargetRef{
