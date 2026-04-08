@@ -1190,7 +1190,15 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 				Message: "operator command does not match the active job",
 			}
 		}
-		return missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*ec.Runtime, missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step))
+		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
+		if ec.Step != nil && ec.Step.TreasuryRef != nil {
+			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+			if err != nil {
+				return "", err
+			}
+			preflight = &resolved
+		}
+		return missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(*ec.Runtime, missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step), preflight)
 	}
 
 	if !hasRuntimeState || runtimeState == nil {

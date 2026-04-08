@@ -11,24 +11,25 @@ const OperatorStatusApprovalHistoryLimit = 5
 const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
-	JobID           string                         `json:"job_id"`
-	State           JobState                       `json:"state"`
-	ActiveStepID    string                         `json:"active_step_id,omitempty"`
-	AllowedTools    []string                       `json:"allowed_tools,omitempty"`
-	BudgetBlocker   *OperatorBudgetBlockerStatus   `json:"budget_blocker,omitempty"`
-	WaitingReason   string                         `json:"waiting_reason,omitempty"`
-	WaitingAt       *string                        `json:"waiting_at,omitempty"`
-	PausedReason    string                         `json:"paused_reason,omitempty"`
-	PausedAt        *string                        `json:"paused_at,omitempty"`
-	AbortedReason   string                         `json:"aborted_reason,omitempty"`
-	FailedStepID    string                         `json:"failed_step_id,omitempty"`
-	FailureReason   string                         `json:"failure_reason,omitempty"`
-	FailedAt        *string                        `json:"failed_at,omitempty"`
-	ApprovalRequest *OperatorApprovalRequestStatus `json:"approval_request,omitempty"`
-	ApprovalHistory []OperatorApprovalHistoryEntry `json:"approval_history,omitempty"`
-	RecentAudit     []OperatorRecentAuditStatus    `json:"recent_audit,omitempty"`
-	Artifacts       []OperatorArtifactStatus       `json:"artifacts,omitempty"`
-	Truncation      *OperatorStatusTruncation      `json:"truncation,omitempty"`
+	JobID             string                                     `json:"job_id"`
+	State             JobState                                   `json:"state"`
+	ActiveStepID      string                                     `json:"active_step_id,omitempty"`
+	AllowedTools      []string                                   `json:"allowed_tools,omitempty"`
+	TreasuryPreflight *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
+	BudgetBlocker     *OperatorBudgetBlockerStatus               `json:"budget_blocker,omitempty"`
+	WaitingReason     string                                     `json:"waiting_reason,omitempty"`
+	WaitingAt         *string                                    `json:"waiting_at,omitempty"`
+	PausedReason      string                                     `json:"paused_reason,omitempty"`
+	PausedAt          *string                                    `json:"paused_at,omitempty"`
+	AbortedReason     string                                     `json:"aborted_reason,omitempty"`
+	FailedStepID      string                                     `json:"failed_step_id,omitempty"`
+	FailureReason     string                                     `json:"failure_reason,omitempty"`
+	FailedAt          *string                                    `json:"failed_at,omitempty"`
+	ApprovalRequest   *OperatorApprovalRequestStatus             `json:"approval_request,omitempty"`
+	ApprovalHistory   []OperatorApprovalHistoryEntry             `json:"approval_history,omitempty"`
+	RecentAudit       []OperatorRecentAuditStatus                `json:"recent_audit,omitempty"`
+	Artifacts         []OperatorArtifactStatus                   `json:"artifacts,omitempty"`
+	Truncation        *OperatorStatusTruncation                  `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
@@ -110,6 +111,14 @@ func FormatOperatorStatusSummary(runtime JobRuntimeState) (string, error) {
 
 func FormatOperatorStatusSummaryWithAllowedTools(runtime JobRuntimeState, allowedTools []string) (string, error) {
 	return formatOperatorStatusSummary(buildOperatorStatusSummary(runtime, allowedTools))
+}
+
+func FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime JobRuntimeState, allowedTools []string, preflight *ResolvedExecutionContextTreasuryPreflight) (string, error) {
+	summary := buildOperatorStatusSummary(runtime, allowedTools)
+	if preflight != nil && preflight.Treasury != nil {
+		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(preflight)
+	}
+	return formatOperatorStatusSummary(summary)
 }
 
 func EffectiveAllowedTools(job *Job, step *Step) []string {
@@ -222,6 +231,21 @@ func selectOperatorStatusFailedAt(runtime JobRuntimeState) *string {
 		return formatOperatorStatusTime(record.At)
 	}
 	return nil
+}
+
+func cloneResolvedExecutionContextTreasuryPreflight(preflight *ResolvedExecutionContextTreasuryPreflight) *ResolvedExecutionContextTreasuryPreflight {
+	if preflight == nil {
+		return nil
+	}
+
+	cloned := ResolvedExecutionContextTreasuryPreflight{
+		Containers: append([]FrankContainerRecord(nil), preflight.Containers...),
+	}
+	if preflight.Treasury != nil {
+		treasury := *preflight.Treasury
+		cloned.Treasury = &treasury
+	}
+	return &cloned
 }
 
 func formatOperatorStatusSummary(summary OperatorStatusSummary) (string, error) {

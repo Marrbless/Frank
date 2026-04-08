@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
-func TestTaskStateOperatorStatusReturnsDeterministicSummaryForActiveRuntime(t *testing.T) {
+func TestTaskStateOperatorStatusActiveExecutionContextZeroTreasuryRefPathUnchanged(t *testing.T) {
 	t.Parallel()
 
 	state := NewTaskState()
@@ -22,22 +23,24 @@ func TestTaskStateOperatorStatusReturnsDeterministicSummaryForActiveRuntime(t *t
 		t.Fatalf("OperatorStatus() error = %v", err)
 	}
 
-	var got map[string]any
+	var got missioncontrol.OperatorStatusSummary
 	if err := json.Unmarshal([]byte(summary), &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	if got["job_id"] != "job-1" {
-		t.Fatalf("job_id = %#v, want %q", got["job_id"], "job-1")
+	if got.JobID != "job-1" {
+		t.Fatalf("JobID = %#v, want %q", got.JobID, "job-1")
 	}
-	if got["state"] != string(missioncontrol.JobStateRunning) {
-		t.Fatalf("state = %#v, want %q", got["state"], missioncontrol.JobStateRunning)
+	if got.State != missioncontrol.JobStateRunning {
+		t.Fatalf("State = %#v, want %q", got.State, missioncontrol.JobStateRunning)
 	}
-	if got["active_step_id"] != "build" {
-		t.Fatalf("active_step_id = %#v, want %q", got["active_step_id"], "build")
+	if got.ActiveStepID != "build" {
+		t.Fatalf("ActiveStepID = %#v, want %q", got.ActiveStepID, "build")
 	}
-	allowedTools, ok := got["allowed_tools"].([]any)
-	if !ok || len(allowedTools) != 1 || allowedTools[0] != "read" {
-		t.Fatalf("allowed_tools = %#v, want [%q]", got["allowed_tools"], "read")
+	if !reflect.DeepEqual(got.AllowedTools, []string{"read"}) {
+		t.Fatalf("AllowedTools = %#v, want [%q]", got.AllowedTools, "read")
+	}
+	if got.TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", got.TreasuryPreflight)
 	}
 
 	runtime, ok := state.MissionRuntimeState()
@@ -46,6 +49,84 @@ func TestTaskStateOperatorStatusReturnsDeterministicSummaryForActiveRuntime(t *t
 	}
 	if runtime.State != missioncontrol.JobStateRunning {
 		t.Fatalf("MissionRuntimeState().State = %q, want unchanged %q", runtime.State, missioncontrol.JobStateRunning)
+	}
+}
+
+func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	var got missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(summary), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.TreasuryPreflight == nil {
+		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+	}
+	if got.TreasuryPreflight.Treasury == nil {
+		t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+	}
+	if !reflect.DeepEqual(*got.TreasuryPreflight.Treasury, treasury) {
+		t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *got.TreasuryPreflight.Treasury, treasury)
+	}
+	if !reflect.DeepEqual(got.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.TreasuryPreflight.Containers, container)
+	}
+}
+
+func TestTaskStateOperatorStatusActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, err := state.OperatorStatus("job-1")
+	if err == nil {
+		t.Fatal("OperatorStatus() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("OperatorStatus() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -201,6 +282,41 @@ func TestTaskStateOperatorStatusReturnsApprovalSummaryForPersistedWaitingRuntime
 		if !strings.Contains(summary, want) {
 			t.Fatalf("OperatorStatus() = %q, want substring %q", summary, want)
 		}
+	}
+}
+
+func TestTaskStateOperatorStatusPersistedRuntimePathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: "treasury-wallet"}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if err := state.HydrateRuntimeControl(job, runtime, &control); err != nil {
+		t.Fatalf("HydrateRuntimeControl() error = %v", err)
+	}
+	state.ClearExecutionContext()
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	var got missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(summary), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil for persisted runtime path", got.TreasuryPreflight)
 	}
 }
 
