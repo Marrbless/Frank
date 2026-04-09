@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -384,6 +386,9 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 		if !strings.Contains(out.Content, `"step_id": "build"`) {
 			t.Fatalf("outbound content = %q, want active approval step", out.Content)
 		}
+		if strings.Contains(out.Content, `"treasury_preflight"`) {
+			t.Fatalf("outbound content = %q, want zero-ref approval notification path unchanged", out.Content)
+		}
 	default:
 		t.Fatal("expected an approval-required outbound notification")
 	}
@@ -402,6 +407,152 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 	case out := <-hub.Out:
 		t.Fatalf("unexpected duplicate approval notification: %#v", out)
 	default:
+	}
+}
+
+func TestMissionRuntimeChangeHookApprovalNotificationSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeApprovalNotificationTreasuryFixtures(t)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+
+	job := testDiscussionMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Need approval before continuing." {
+		t.Fatalf("ProcessDirect() response = %q, want discussion response", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "cli" || out.ChatID != "direct" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
+		}
+		summary := decodeApprovalNotificationSummary(t, out.Content)
+		if summary.TreasuryPreflight == nil {
+			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+		}
+		if summary.TreasuryPreflight.Treasury == nil {
+			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+		}
+		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected an approval-required outbound notification")
+	}
+}
+
+func TestMissionRuntimeChangeHookApprovalNotificationInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Need approval before continuing."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+
+	job := testDiscussionMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Need approval before continuing." {
+		t.Fatalf("ProcessDirect() response = %q, want discussion response", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	_, err = buildMissionApprovalRequestContent(ag.taskState, runtime)
+	if err == nil {
+		t.Fatal("buildMissionApprovalRequestContent() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("buildMissionApprovalRequestContent() error = %q, want missing container rejection", err)
+	}
+}
+
+func TestBuildMissionApprovalRequestContentPersistedRuntimePathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	summary, err := buildMissionApprovalRequestContent(ag.taskState, missioncontrol.JobRuntimeState{
+		JobID:         "job-1",
+		State:         missioncontrol.JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "discussion_authorization",
+		WaitingAt:     time.Date(2026, 4, 8, 21, 30, 0, 0, time.UTC),
+		ApprovalRequests: []missioncontrol.ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "build",
+				RequestedAction: missioncontrol.ApprovalRequestedActionStepComplete,
+				Scope:           missioncontrol.ApprovalScopeMissionStep,
+				RequestedVia:    missioncontrol.ApprovalRequestedViaRuntime,
+				State:           missioncontrol.ApprovalStatePending,
+				RequestedAt:     time.Date(2026, 4, 8, 21, 29, 0, 0, time.UTC),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildMissionApprovalRequestContent() error = %v", err)
+	}
+	if !strings.HasPrefix(summary, "Approval required:\n") {
+		t.Fatalf("summary = %q, want approval notification prefix", summary)
+	}
+	if strings.Contains(summary, `"treasury_preflight"`) {
+		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
 }
 
@@ -639,6 +790,100 @@ func testWaitingUserNotificationMissionJob() missioncontrol.Job {
 				},
 			},
 		},
+	}
+}
+
+func decodeApprovalNotificationSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	const prefix = "Approval required:\n"
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func writeApprovalNotificationTreasuryFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC)
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet",
+	}
+	writeApprovalNotificationEligibilityFixture(t, root, missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "container-class-wallet",
+		TargetClass:      target.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-container-class-wallet",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.UTC(),
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-container-class-wallet",
+		TargetKind:             target.Kind,
+		TargetName:             "container-class-wallet",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.UTC(),
+	})
+
+	container := missioncontrol.FrankContainerRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(time.Minute).UTC(),
+		UpdatedAt:            now.Add(2 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-wallet",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: container.ContainerID,
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	return root, treasury, container
+}
+
+func writeApprovalNotificationEligibilityFixture(t *testing.T, root string, platform missioncontrol.PlatformRecord, check missioncontrol.EligibilityCheckRecord) {
+	t.Helper()
+
+	if err := missioncontrol.StorePlatformRecord(root, platform); err != nil {
+		t.Fatalf("StorePlatformRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreEligibilityCheckRecord(root, check); err != nil {
+		t.Fatalf("StoreEligibilityCheckRecord() error = %v", err)
 	}
 }
 
