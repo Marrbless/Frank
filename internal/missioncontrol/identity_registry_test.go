@@ -85,6 +85,14 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.FixedZone("offset", 2*60*60))
 
 	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-b",
+	}, EligibilityLabelAutonomyCompatible, "provider-b.example", "check-provider-b", now.Add(-time.Minute))
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindProvider,
+		RegistryID: "provider-a",
+	}, EligibilityLabelAutonomyCompatible, "provider-a.example", "check-provider-a", now)
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
 		Kind:       EligibilityTargetKindAccountClass,
 		RegistryID: "account-class-b",
 	}, EligibilityLabelAutonomyCompatible, "account-class-b", "check-account-class-b", now)
@@ -92,6 +100,33 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		Kind:       EligibilityTargetKindAccountClass,
 		RegistryID: "account-class-a",
 	}, EligibilityLabelAutonomyCompatible, "account-class-a", "check-account-class-a", now.Add(time.Minute))
+
+	if err := StoreFrankIdentityRecord(root, FrankIdentityRecord{
+		IdentityID:           "identity-b",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail B",
+		ProviderOrPlatformID: "provider-b",
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "candidate",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-b"},
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord(identity-b) error = %v", err)
+	}
+	if err := StoreFrankIdentityRecord(root, FrankIdentityRecord{
+		IdentityID:           "identity-a",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail A",
+		ProviderOrPlatformID: "provider-a",
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-a"},
+		CreatedAt:            now.Add(2 * time.Minute),
+		UpdatedAt:            now.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord(identity-a) error = %v", err)
+	}
 
 	if err := StoreFrankAccountRecord(root, FrankAccountRecord{
 		AccountID:            "account-b",
@@ -282,6 +317,22 @@ func TestFrankRegistryMalformedValidationFailsClosed(t *testing.T) {
 			},
 			want: `mission store frank registry eligibility_target_ref "missing-container-class" has no linked eligibility registry record`,
 		},
+		{
+			name: "container wrong eligibility kind",
+			run: func() error {
+				return StoreFrankContainerRecord(root, FrankContainerRecord{
+					ContainerID:          "container-1",
+					ContainerKind:        "wallet",
+					Label:                "Wallet",
+					ContainerClassID:     "provider-mail",
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: `mission store Frank container eligibility_target_ref.kind "provider" must be "treasury_container_class"`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -293,6 +344,142 @@ func TestFrankRegistryMalformedValidationFailsClosed(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestFrankAccountRecordRequiresExistingIdentityLink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 6, 0, 0, 0, time.UTC)
+
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}, EligibilityLabelAutonomyCompatible, "account-class-mailbox", "check-account-class-mailbox", now)
+
+	err := StoreFrankAccountRecord(root, FrankAccountRecord{
+		AccountID:            "account-missing-identity",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityID:           "missing-identity",
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	})
+	if err == nil {
+		t.Fatal("StoreFrankAccountRecord() error = nil, want missing identity rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store Frank account identity_id "missing-identity": mission store Frank identity record not found`) {
+		t.Fatalf("StoreFrankAccountRecord() error = %q, want missing identity rejection", err.Error())
+	}
+}
+
+func TestLoadFrankAccountRecordFailsClosedWhenLinkedIdentityIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 8, 6, 30, 0, 0, time.UTC)
+
+	writeFrankRegistryEligibilityFixture(t, root, AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}, EligibilityLabelAutonomyCompatible, "account-class-mailbox", "check-account-class-mailbox", now)
+
+	if err := WriteStoreJSONAtomic(StoreFrankAccountPath(root, "account-missing-identity"), map[string]interface{}{
+		"record_version":          StoreRecordVersion,
+		"account_id":              "account-missing-identity",
+		"account_kind":            "mailbox",
+		"label":                   "Inbox",
+		"provider_or_platform_id": "provider-mail",
+		"identity_id":             "missing-identity",
+		"control_model":           "agent_managed",
+		"recovery_model":          "agent_recoverable",
+		"state":                   "active",
+		"eligibility_target_ref": map[string]interface{}{
+			"kind":        string(EligibilityTargetKindAccountClass),
+			"registry_id": "account-class-mailbox",
+		},
+		"created_at": now,
+		"updated_at": now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+
+	_, err := LoadFrankAccountRecord(root, "account-missing-identity")
+	if err == nil {
+		t.Fatal("LoadFrankAccountRecord() error = nil, want missing linked identity rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store Frank account identity_id "missing-identity": mission store Frank identity record not found`) {
+		t.Fatalf("LoadFrankAccountRecord() error = %q, want missing linked identity rejection", err.Error())
+	}
+}
+
+func TestFrankObjectViewsAdaptStorageFieldNamesWithoutDuplicatingEligibilityTruth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 7, 0, 0, 0, time.UTC)
+	identityTarget := AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"}
+	accountTarget := AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"}
+	containerTarget := AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindTreasuryContainerClass, RegistryID: "container-class-wallet"}
+
+	identityView := (FrankIdentityRecord{
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: identityTarget,
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}).AsObjectView()
+	if identityView.ProviderOrPlatform != "provider-mail" || identityView.Status != "active" {
+		t.Fatalf("FrankIdentityRecord.AsObjectView() = %#v, want provider_or_platform/status adapter", identityView)
+	}
+	if identityView.EligibilityTargetRef != identityTarget {
+		t.Fatalf("FrankIdentityRecord.AsObjectView().EligibilityTargetRef = %#v, want %#v", identityView.EligibilityTargetRef, identityTarget)
+	}
+
+	accountView := (FrankAccountRecord{
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityID:           "identity-mail",
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}).AsObjectView()
+	if accountView.ProviderOrPlatform != "provider-mail" || accountView.Status != "active" {
+		t.Fatalf("FrankAccountRecord.AsObjectView() = %#v, want provider_or_platform/status adapter", accountView)
+	}
+	if accountView.EligibilityTargetRef != accountTarget {
+		t.Fatalf("FrankAccountRecord.AsObjectView().EligibilityTargetRef = %#v, want %#v", accountView.EligibilityTargetRef, accountTarget)
+	}
+
+	containerView := (FrankContainerRecord{
+		ContainerID:          "container-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Primary Wallet",
+		ContainerClassID:     "container-class-wallet",
+		State:                "active",
+		EligibilityTargetRef: containerTarget,
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}).AsObjectView()
+	if containerView.Status != "active" || containerView.ContainerClassID != "container-class-wallet" {
+		t.Fatalf("FrankContainerRecord.AsObjectView() = %#v, want status/container_class_id adapter", containerView)
+	}
+	if containerView.EligibilityTargetRef != containerTarget {
+		t.Fatalf("FrankContainerRecord.AsObjectView().EligibilityTargetRef = %#v, want %#v", containerView.EligibilityTargetRef, containerTarget)
 	}
 }
 

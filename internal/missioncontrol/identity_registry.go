@@ -22,6 +22,20 @@ type FrankIdentityRecord struct {
 	UpdatedAt            time.Time                    `json:"updated_at"`
 }
 
+// FrankIdentityObjectView is a read-model adapter that exposes canonical
+// object names without forcing a durable storage migration.
+type FrankIdentityObjectView struct {
+	IdentityID           string                       `json:"identity_id"`
+	IdentityKind         string                       `json:"identity_kind"`
+	DisplayName          string                       `json:"display_name"`
+	ProviderOrPlatform   string                       `json:"provider_or_platform"`
+	IdentityMode         IdentityMode                 `json:"identity_mode"`
+	Status               string                       `json:"status"`
+	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
+	CreatedAt            time.Time                    `json:"created_at"`
+	UpdatedAt            time.Time                    `json:"updated_at"`
+}
+
 type FrankAccountRecord struct {
 	RecordVersion        int                          `json:"record_version"`
 	AccountID            string                       `json:"account_id"`
@@ -37,6 +51,22 @@ type FrankAccountRecord struct {
 	UpdatedAt            time.Time                    `json:"updated_at"`
 }
 
+// FrankAccountObjectView is a read-model adapter that exposes canonical
+// object names without forcing a durable storage migration.
+type FrankAccountObjectView struct {
+	AccountID            string                       `json:"account_id"`
+	AccountKind          string                       `json:"account_kind"`
+	Label                string                       `json:"label"`
+	ProviderOrPlatform   string                       `json:"provider_or_platform"`
+	IdentityID           string                       `json:"identity_id"`
+	ControlModel         string                       `json:"control_model"`
+	RecoveryModel        string                       `json:"recovery_model"`
+	Status               string                       `json:"status"`
+	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
+	CreatedAt            time.Time                    `json:"created_at"`
+	UpdatedAt            time.Time                    `json:"updated_at"`
+}
+
 type FrankContainerRecord struct {
 	RecordVersion        int                          `json:"record_version"`
 	ContainerID          string                       `json:"container_id"`
@@ -44,6 +74,19 @@ type FrankContainerRecord struct {
 	Label                string                       `json:"label"`
 	ContainerClassID     string                       `json:"container_class_id"`
 	State                string                       `json:"state"`
+	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
+	CreatedAt            time.Time                    `json:"created_at"`
+	UpdatedAt            time.Time                    `json:"updated_at"`
+}
+
+// FrankContainerObjectView is a read-model adapter that exposes canonical
+// object names without forcing a durable storage migration.
+type FrankContainerObjectView struct {
+	ContainerID          string                       `json:"container_id"`
+	ContainerKind        string                       `json:"container_kind"`
+	Label                string                       `json:"label"`
+	ContainerClassID     string                       `json:"container_class_id"`
+	Status               string                       `json:"status"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
 	CreatedAt            time.Time                    `json:"created_at"`
 	UpdatedAt            time.Time                    `json:"updated_at"`
@@ -106,6 +149,16 @@ func ValidateFrankRegistryEligibilityLink(root string, target AutonomyEligibilit
 		return result, fmt.Errorf("mission store frank registry eligibility_target_ref %q has no linked eligibility registry record", target.RegistryID)
 	}
 	return result, nil
+}
+
+func ValidateFrankIdentityLink(root, identityID string) error {
+	if strings.TrimSpace(identityID) == "" {
+		return fmt.Errorf("mission store Frank account identity_id is required")
+	}
+	if _, err := LoadFrankIdentityRecord(root, identityID); err != nil {
+		return fmt.Errorf("mission store Frank account identity_id %q: %w", strings.TrimSpace(identityID), err)
+	}
+	return nil
 }
 
 func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
@@ -201,6 +254,13 @@ func ValidateFrankContainerRecord(record FrankContainerRecord) error {
 	if strings.TrimSpace(record.State) == "" {
 		return fmt.Errorf("mission store Frank container state is required")
 	}
+	if record.EligibilityTargetRef.Kind != EligibilityTargetKindTreasuryContainerClass {
+		return fmt.Errorf(
+			"mission store Frank container eligibility_target_ref.kind %q must be %q",
+			strings.TrimSpace(string(record.EligibilityTargetRef.Kind)),
+			EligibilityTargetKindTreasuryContainerClass,
+		)
+	}
 	if record.CreatedAt.IsZero() {
 		return fmt.Errorf("mission store Frank container created_at is required")
 	}
@@ -211,6 +271,49 @@ func ValidateFrankContainerRecord(record FrankContainerRecord) error {
 		return fmt.Errorf("mission store Frank container updated_at must be on or after created_at")
 	}
 	return nil
+}
+
+func (record FrankIdentityRecord) AsObjectView() FrankIdentityObjectView {
+	return FrankIdentityObjectView{
+		IdentityID:           record.IdentityID,
+		IdentityKind:         record.IdentityKind,
+		DisplayName:          record.DisplayName,
+		ProviderOrPlatform:   record.ProviderOrPlatformID,
+		IdentityMode:         record.IdentityMode,
+		Status:               record.State,
+		EligibilityTargetRef: record.EligibilityTargetRef,
+		CreatedAt:            record.CreatedAt,
+		UpdatedAt:            record.UpdatedAt,
+	}
+}
+
+func (record FrankAccountRecord) AsObjectView() FrankAccountObjectView {
+	return FrankAccountObjectView{
+		AccountID:            record.AccountID,
+		AccountKind:          record.AccountKind,
+		Label:                record.Label,
+		ProviderOrPlatform:   record.ProviderOrPlatformID,
+		IdentityID:           record.IdentityID,
+		ControlModel:         record.ControlModel,
+		RecoveryModel:        record.RecoveryModel,
+		Status:               record.State,
+		EligibilityTargetRef: record.EligibilityTargetRef,
+		CreatedAt:            record.CreatedAt,
+		UpdatedAt:            record.UpdatedAt,
+	}
+}
+
+func (record FrankContainerRecord) AsObjectView() FrankContainerObjectView {
+	return FrankContainerObjectView{
+		ContainerID:          record.ContainerID,
+		ContainerKind:        record.ContainerKind,
+		Label:                record.Label,
+		ContainerClassID:     record.ContainerClassID,
+		Status:               record.State,
+		EligibilityTargetRef: record.EligibilityTargetRef,
+		CreatedAt:            record.CreatedAt,
+		UpdatedAt:            record.UpdatedAt,
+	}
 }
 
 func ResolveFrankRegistryObjectRef(root string, ref FrankRegistryObjectRef) (ResolvedFrankRegistryObjectRef, error) {
@@ -371,6 +474,9 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	if err := ValidateFrankAccountRecord(record); err != nil {
 		return err
 	}
+	if err := ValidateFrankIdentityLink(root, record.IdentityID); err != nil {
+		return err
+	}
 	if _, err := ValidateFrankRegistryEligibilityLink(root, record.EligibilityTargetRef); err != nil {
 		return err
 	}
@@ -470,6 +576,9 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
+		return FrankAccountRecord{}, err
+	}
+	if err := ValidateFrankIdentityLink(root, record.IdentityID); err != nil {
 		return FrankAccountRecord{}, err
 	}
 	if _, err := ValidateFrankRegistryEligibilityLink(root, record.EligibilityTargetRef); err != nil {
