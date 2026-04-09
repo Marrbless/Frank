@@ -529,6 +529,37 @@ func TestCampaignObjectViewPreservesCanonicalCampaignContractSurface(t *testing.
 	}
 }
 
+func TestCampaignObjectViewKeepsUnresolvedEnvelopeFieldsNonDurableAfterLoad(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 8, 2, 35, 0, 0, time.UTC)
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-object-view-load"
+	})
+
+	if err := StoreCampaignRecord(root, record); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	loaded, err := LoadCampaignRecord(root, record.CampaignID)
+	if err != nil {
+		t.Fatalf("LoadCampaignRecord() error = %v", err)
+	}
+
+	view := loaded.AsObjectView()
+	if view.PlatformOrChannel != "provider-mail" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().PlatformOrChannel = %q, want %q", view.PlatformOrChannel, "provider-mail")
+	}
+	if view.AudienceClassOrTarget != "" || view.MessageFamilyOrParticipationStyle != "" || view.Cadence != "" || view.Budget != "" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView() unresolved non-durable fields = %#v, want zero values until a justified durable source exists", view)
+	}
+	if view.EscalationRules != nil {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().EscalationRules = %#v, want nil until a justified durable source exists", view.EscalationRules)
+	}
+}
+
 func TestResolveCampaignPlatformOrChannelRequiresSingleProviderOrPlatformTarget(t *testing.T) {
 	t.Parallel()
 

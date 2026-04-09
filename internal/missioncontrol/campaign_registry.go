@@ -50,24 +50,46 @@ type CampaignRecord struct {
 
 // CampaignObjectView exposes the currently-grounded subset of the frozen V3
 // campaign contract without forcing a durable storage migration.
+//
+// platform_or_channel may be derived when current governed targets honestly
+// support that projection. The remaining spec-facing campaign envelope fields
+// below are intentionally non-durable for now:
+// audience_class_or_target
+// message_family_or_participation_style
+// cadence
+// escalation_rules
+// budget
+//
+// Those fields must remain zero-valued until storage has a justified durable
+// source owned by a real control-plane producer/consumer.
 type CampaignObjectView struct {
-	CampaignID                        string                         `json:"campaign_id"`
-	CampaignKind                      CampaignKind                   `json:"campaign_kind"`
-	Objective                         string                         `json:"objective"`
-	PlatformOrChannel                 string                         `json:"platform_or_channel,omitempty"`
-	AudienceClassOrTarget             string                         `json:"audience_class_or_target,omitempty"`
-	IdentityMode                      IdentityMode                   `json:"identity_mode"`
-	MessageFamilyOrParticipationStyle string                         `json:"message_family_or_participation_style,omitempty"`
-	Cadence                           string                         `json:"cadence,omitempty"`
-	EscalationRules                   []string                       `json:"escalation_rules,omitempty"`
-	GovernedExternalTargets           []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
-	FrankObjectRefs                   []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
-	StopConditions                    []string                       `json:"stop_conditions"`
-	FailureThreshold                  CampaignFailureThreshold       `json:"failure_threshold"`
-	ComplianceChecks                  []string                       `json:"compliance_checks"`
-	Budget                            string                         `json:"budget,omitempty"`
-	CreatedAt                         time.Time                      `json:"created_at"`
-	UpdatedAt                         time.Time                      `json:"updated_at"`
+	CampaignID        string       `json:"campaign_id"`
+	CampaignKind      CampaignKind `json:"campaign_kind"`
+	Objective         string       `json:"objective"`
+	PlatformOrChannel string       `json:"platform_or_channel,omitempty"`
+	// AudienceClassOrTarget is intentionally non-durable and must remain a
+	// zero value until campaign storage grows a justified durable source.
+	AudienceClassOrTarget string       `json:"audience_class_or_target,omitempty"`
+	IdentityMode          IdentityMode `json:"identity_mode"`
+	// MessageFamilyOrParticipationStyle is intentionally non-durable and must
+	// remain a zero value until campaign storage grows a justified durable source.
+	MessageFamilyOrParticipationStyle string `json:"message_family_or_participation_style,omitempty"`
+	// Cadence is intentionally non-durable and must remain a zero value until
+	// campaign storage grows a justified durable source.
+	Cadence string `json:"cadence,omitempty"`
+	// EscalationRules is intentionally non-durable and must remain a zero value
+	// until campaign storage grows a justified durable source.
+	EscalationRules         []string                       `json:"escalation_rules,omitempty"`
+	GovernedExternalTargets []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
+	FrankObjectRefs         []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
+	StopConditions          []string                       `json:"stop_conditions"`
+	FailureThreshold        CampaignFailureThreshold       `json:"failure_threshold"`
+	ComplianceChecks        []string                       `json:"compliance_checks"`
+	// Budget is intentionally non-durable and must remain a zero value until
+	// campaign storage grows a justified durable source.
+	Budget    string    `json:"budget,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 var ErrCampaignRecordNotFound = errors.New("mission store campaign record not found")
@@ -227,6 +249,11 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 	return record
 }
 
+// AsObjectView adapts durable campaign storage to the current frozen-spec view
+// without inventing new persisted truth. Only platform_or_channel may be
+// derived today, and only when governed targets support that projection
+// honestly. The remaining unresolved campaign envelope fields are kept as zero
+// values until a future storage migration is justified.
 func (record CampaignRecord) AsObjectView() CampaignObjectView {
 	platformOrChannel, _ := ResolveCampaignPlatformOrChannel(record)
 	return CampaignObjectView{
@@ -245,6 +272,10 @@ func (record CampaignRecord) AsObjectView() CampaignObjectView {
 	}
 }
 
+// ResolveCampaignPlatformOrChannel derives the spec-facing platform_or_channel
+// only when current governed targets provide one honest, unambiguous provider
+// or platform source. It does not infer any of the other unresolved envelope
+// fields, which must remain non-durable zero values for now.
 func ResolveCampaignPlatformOrChannel(record CampaignRecord) (string, bool) {
 	if len(record.GovernedExternalTargets) != 1 {
 		return "", false
