@@ -608,7 +608,15 @@ func buildMissionBudgetPauseContent(taskState *tools.TaskState, runtime missionc
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(runtime, allowedTools)
+		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
+		if ec.Step != nil && ec.Step.TreasuryRef != nil {
+			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+			if err != nil {
+				return "", err
+			}
+			preflight = &resolved
+		}
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
 		if err != nil {
 			return "", err
 		}

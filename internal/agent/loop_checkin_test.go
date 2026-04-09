@@ -1185,6 +1185,9 @@ func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T)
 		if !strings.Contains(out.Content, `"budget_blocker": {`) {
 			t.Fatalf("outbound content = %q, want budget blocker summary", out.Content)
 		}
+		if strings.Contains(out.Content, `"treasury_preflight"`) {
+			t.Fatalf("outbound content = %q, want zero-ref budget-pause path unchanged", out.Content)
+		}
 	default:
 		t.Fatal("expected a budget pause outbound notification")
 	}
@@ -1204,6 +1207,165 @@ func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T)
 	case out := <-hub.Out:
 		t.Fatalf("unexpected duplicate budget pause notification: %#v", out)
 	default:
+	}
+}
+
+func TestMaybeEmitBudgetPauseNotificationSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeApprovalNotificationTreasuryFixtures(t)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+	ag.taskState.SetMissionStoreRoot(root)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	ec.Runtime.State = missioncontrol.JobStatePaused
+	ec.Runtime.PausedReason = missioncontrol.RuntimePauseReasonBudgetExhausted
+	ec.Runtime.BudgetBlocker = &missioncontrol.RuntimeBudgetBlockerRecord{
+		Ceiling:     "owner_messages",
+		Limit:       20,
+		Observed:    20,
+		Message:     "owner-facing message budget exhausted",
+		TriggeredAt: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC),
+	}
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitBudgetPauseNotification()
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "telegram" || out.ChatID != "chat-42" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
+		}
+		summary := decodeMissionPausedSummary(t, out.Content)
+		if summary.TreasuryPreflight == nil {
+			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+		}
+		if summary.TreasuryPreflight.Treasury == nil {
+			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+		}
+		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected a budget pause outbound notification")
+	}
+}
+
+func TestMaybeEmitBudgetPauseNotificationInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 9, 11, 30, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+	ag.taskState.SetMissionStoreRoot(root)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	ec.Runtime.State = missioncontrol.JobStatePaused
+	ec.Runtime.PausedReason = missioncontrol.RuntimePauseReasonBudgetExhausted
+	ec.Runtime.BudgetBlocker = &missioncontrol.RuntimeBudgetBlockerRecord{
+		Ceiling:     "owner_messages",
+		Limit:       20,
+		Observed:    20,
+		Message:     "owner-facing message budget exhausted",
+		TriggeredAt: now,
+	}
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitBudgetPauseNotification()
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	_, err := buildMissionBudgetPauseContent(ag.taskState, runtime)
+	if err == nil {
+		t.Fatal("buildMissionBudgetPauseContent() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("buildMissionBudgetPauseContent() error = %q, want missing container rejection", err)
+	}
+}
+
+func TestBuildMissionBudgetPauseContentPersistedRuntimePathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	summary, err := buildMissionBudgetPauseContent(ag.taskState, missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStatePaused,
+		ActiveStepID: "build",
+		PausedReason: missioncontrol.RuntimePauseReasonBudgetExhausted,
+		BudgetBlocker: &missioncontrol.RuntimeBudgetBlockerRecord{
+			Ceiling:     "owner_messages",
+			Limit:       20,
+			Observed:    20,
+			Message:     "owner-facing message budget exhausted",
+			TriggeredAt: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC),
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildMissionBudgetPauseContent() error = %v", err)
+	}
+	if !strings.HasPrefix(summary, "Mission paused:\n") {
+		t.Fatalf("summary = %q, want mission paused prefix", summary)
+	}
+	if strings.Contains(summary, `"treasury_preflight"`) {
+		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
 }
 
@@ -1280,6 +1442,21 @@ func decodeWaitingUserSummary(t *testing.T, content string) missioncontrol.Opera
 	t.Helper()
 
 	const prefix = "Waiting for user:\n"
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func decodeMissionPausedSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	const prefix = "Mission paused:\n"
 	if !strings.HasPrefix(content, prefix) {
 		t.Fatalf("content = %q, want prefix %q", content, prefix)
 	}
