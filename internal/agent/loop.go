@@ -570,7 +570,54 @@ func completionNotificationRecorded(runtime missioncontrol.JobRuntimeState) bool
 	return false
 }
 
-func buildMissionCompletionContent(runtime missioncontrol.JobRuntimeState) (string, error) {
+func completedStepExecutionContext(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (missioncontrol.ExecutionContext, bool, error) {
+	if taskState == nil {
+		return missioncontrol.ExecutionContext{}, false, nil
+	}
+
+	stepID := latestCompletedStepID(runtime)
+	if strings.TrimSpace(stepID) == "" {
+		return missioncontrol.ExecutionContext{}, false, nil
+	}
+
+	job, storeRoot, ok := taskState.MissionJobWithStoreRoot()
+	if !ok {
+		return missioncontrol.ExecutionContext{}, false, nil
+	}
+	if job.ID != "" && runtime.JobID != "" && job.ID != runtime.JobID {
+		return missioncontrol.ExecutionContext{}, false, nil
+	}
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return missioncontrol.ExecutionContext{}, false, err
+	}
+	ec.Runtime = missioncontrol.CloneJobRuntimeState(&runtime)
+	ec.MissionStoreRoot = storeRoot
+	return ec, true, nil
+}
+
+func buildMissionCompletionContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
+	ec, ok, err := completedStepExecutionContext(taskState, runtime)
+	if err != nil {
+		return "", err
+	}
+	if ok && ec.Step != nil && ec.Step.TreasuryRef != nil {
+		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
+		}
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(
+			runtime,
+			missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step),
+			&resolved,
+		)
+		if err != nil {
+			return "", err
+		}
+		return "Mission completed:\n" + summary, nil
+	}
+
 	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
 	if err != nil {
 		return "", err
@@ -747,7 +794,7 @@ func (a *AgentLoop) maybeEmitCompletionNotification() {
 	if !ok {
 		return
 	}
-	content, err := buildMissionCompletionContent(runtime)
+	content, err := buildMissionCompletionContent(a.taskState, runtime)
 	if err != nil {
 		log.Printf("mission runtime completion notification formatting failed: %v", err)
 		return

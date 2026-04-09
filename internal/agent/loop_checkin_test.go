@@ -1080,6 +1080,9 @@ func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.
 		if !strings.Contains(out.Content, `"state": "completed"`) {
 			t.Fatalf("outbound content = %q, want completed status summary", out.Content)
 		}
+		if strings.Contains(out.Content, `"treasury_preflight"`) {
+			t.Fatalf("outbound content = %q, want zero-ref completion path unchanged", out.Content)
+		}
 	default:
 		t.Fatal("expected a completion outbound notification")
 	}
@@ -1099,6 +1102,117 @@ func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.
 	case out := <-hub.Out:
 		t.Fatalf("unexpected duplicate completion notification: %#v", out)
 	default:
+	}
+}
+
+func TestMaybeEmitCompletionNotificationSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeApprovalNotificationTreasuryFixtures(t)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+	ag.taskState.SetMissionStoreRoot(root)
+
+	job := testCompletionNotificationMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job: &job,
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:       "job-1",
+			State:       missioncontrol.JobStateCompleted,
+			CompletedAt: time.Date(2026, 4, 9, 13, 30, 0, 0, time.UTC),
+			CompletedSteps: []missioncontrol.RuntimeStepRecord{
+				{StepID: "final", At: time.Date(2026, 4, 9, 13, 30, 0, 0, time.UTC)},
+			},
+		},
+	})
+
+	ag.maybeEmitCompletionNotification()
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "telegram" || out.ChatID != "chat-42" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
+		}
+		summary := decodeMissionCompletedSummary(t, out.Content)
+		if summary.TreasuryPreflight == nil {
+			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+		}
+		if summary.TreasuryPreflight.Treasury == nil {
+			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+		}
+		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected a completion outbound notification")
+	}
+}
+
+func TestMaybeEmitCompletionNotificationInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 9, 13, 0, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+	ag.taskState.SetMissionStoreRoot(root)
+
+	job := testCompletionNotificationMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:       "job-1",
+		State:       missioncontrol.JobStateCompleted,
+		CompletedAt: now.Add(30 * time.Minute),
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "final", At: now.Add(30 * time.Minute)},
+		},
+	}
+	ag.taskState.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job:     &job,
+		Runtime: &runtime,
+	})
+
+	ag.maybeEmitCompletionNotification()
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
+	default:
+	}
+
+	summary, err := buildMissionCompletionContent(ag.taskState, runtime)
+	if err == nil {
+		t.Fatalf("buildMissionCompletionContent() error = nil, want fail-closed treasury preflight rejection with summary %q", summary)
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("buildMissionCompletionContent() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -1442,6 +1556,21 @@ func decodeWaitingUserSummary(t *testing.T, content string) missioncontrol.Opera
 	t.Helper()
 
 	const prefix = "Waiting for user:\n"
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func decodeMissionCompletedSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	const prefix = "Mission completed:\n"
 	if !strings.HasPrefix(content, prefix) {
 		t.Fatalf("content = %q, want prefix %q", content, prefix)
 	}

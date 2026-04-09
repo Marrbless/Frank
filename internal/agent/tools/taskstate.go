@@ -144,6 +144,18 @@ func (s *TaskState) MissionRuntimeControl() (missioncontrol.RuntimeControlContex
 	return *missioncontrol.CloneRuntimeControlContext(&s.runtimeControl), true
 }
 
+func (s *TaskState) MissionJobWithStoreRoot() (missioncontrol.Job, string, bool) {
+	if s == nil {
+		return missioncontrol.Job{}, "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasMissionJob {
+		return missioncontrol.Job{}, strings.TrimSpace(s.missionStoreRoot), false
+	}
+	return *missioncontrol.CloneJob(&s.missionJob), strings.TrimSpace(s.missionStoreRoot), true
+}
+
 func (s *TaskState) OperatorSession() (string, string, bool) {
 	if s == nil {
 		return "", "", false
