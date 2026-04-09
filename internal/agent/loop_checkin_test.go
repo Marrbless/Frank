@@ -886,6 +886,9 @@ func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState
 		if !strings.Contains(out.Content, `"waiting_reason": "discussion_blocker"`) {
 			t.Fatalf("outbound content = %q, want waiting reason", out.Content)
 		}
+		if strings.Contains(out.Content, `"treasury_preflight"`) {
+			t.Fatalf("outbound content = %q, want zero-ref waiting-user path unchanged", out.Content)
+		}
 	default:
 		t.Fatal("expected a waiting-user outbound notification")
 	}
@@ -905,6 +908,141 @@ func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState
 	last := runtime.AuditHistory[len(runtime.AuditHistory)-1]
 	if last.ToolName != "waiting_user_notification" {
 		t.Fatalf("last audit tool = %q, want %q", last.ToolName, "waiting_user_notification")
+	}
+}
+
+func TestMissionRuntimeChangeHookWaitingUserNotificationSurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeApprovalNotificationTreasuryFixtures(t)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Waiting for your answer."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+
+	job := testWaitingUserNotificationMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Waiting for your answer." {
+		t.Fatalf("ProcessDirect() response = %q, want waiting-user response", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "cli" || out.ChatID != "direct" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
+		}
+		summary := decodeWaitingUserSummary(t, out.Content)
+		if summary.TreasuryPreflight == nil {
+			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+		}
+		if summary.TreasuryPreflight.Treasury == nil {
+			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+		}
+		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected a waiting-user outbound notification")
+	}
+}
+
+func TestMissionRuntimeChangeHookWaitingUserNotificationInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 9, 11, 30, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "Waiting for your answer."}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionRuntimeChangeHook(nil)
+
+	job := testWaitingUserNotificationMissionJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("continue", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if resp != "Waiting for your answer." {
+		t.Fatalf("ProcessDirect() response = %q, want waiting-user response", resp)
+	}
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	_, err = buildMissionWaitingUserContent(ag.taskState, runtime)
+	if err == nil {
+		t.Fatal("buildMissionWaitingUserContent() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("buildMissionWaitingUserContent() error = %q, want missing container rejection", err)
+	}
+}
+
+func TestBuildMissionWaitingUserContentPersistedRuntimePathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	summary, err := buildMissionWaitingUserContent(ag.taskState, missioncontrol.JobRuntimeState{
+		JobID:         "job-1",
+		State:         missioncontrol.JobStateWaitingUser,
+		ActiveStepID:  "build",
+		WaitingReason: "discussion_blocker",
+		WaitingAt:     time.Date(2026, 4, 9, 11, 31, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("buildMissionWaitingUserContent() error = %v", err)
+	}
+	if !strings.HasPrefix(summary, "Waiting for user:\n") {
+		t.Fatalf("summary = %q, want waiting-user prefix", summary)
+	}
+	if strings.Contains(summary, `"treasury_preflight"`) {
+		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
 }
 
@@ -1127,6 +1265,21 @@ func decodeMissionDailySummary(t *testing.T, content string) missioncontrol.Oper
 	t.Helper()
 
 	const prefix = "Daily mission summary:\n"
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func decodeWaitingUserSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	const prefix = "Waiting for user:\n"
 	if !strings.HasPrefix(content, prefix) {
 		t.Fatalf("content = %q, want prefix %q", content, prefix)
 	}
