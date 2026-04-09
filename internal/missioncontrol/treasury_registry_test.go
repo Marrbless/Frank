@@ -190,6 +190,25 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	root := fixtures.root
 	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
+	secondTarget := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet-2",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, secondTarget, EligibilityLabelAutonomyCompatible, "container-class-wallet-2", "check-container-class-wallet-2", now)
+	secondContainer := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-wallet-2",
+		ContainerKind:        "wallet",
+		Label:                "Secondary Wallet",
+		ContainerClassID:     "container-class-wallet-2",
+		State:                "active",
+		EligibilityTargetRef: secondTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, secondContainer); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
 
 	tests := []struct {
 		name string
@@ -250,6 +269,35 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury container_refs require kind "container", got "identity"`,
+		},
+		{
+			name: "funded treasury without derivable active container id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateFunded
+					record.ContainerRefs = nil
+				}))
+			},
+			want: `mission store treasury state "funded" requires exactly one active_container_id derivable from container_refs`,
+		},
+		{
+			name: "active treasury with ambiguous active container id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.ContainerRefs = []FrankRegistryObjectRef{
+						{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: fixtures.container.ContainerID,
+						},
+						{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: secondContainer.ContainerID,
+						},
+					}
+				}))
+			},
+			want: `mission store treasury state "active" requires exactly one active_container_id derivable from container_refs`,
 		},
 	}
 
@@ -402,6 +450,32 @@ func TestLoadTreasuryRecordFailsClosedWhenLinkedContainerIsMissing(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), `mission store treasury container_refs ref kind "container" object_id "container-missing": resolve Frank object ref kind "container" object_id "container-missing": mission store Frank container record not found`) {
 		t.Fatalf("LoadTreasuryRecord() error = %q, want missing container-link rejection", err.Error())
+	}
+}
+
+func TestLoadTreasuryRecordFailsClosedWhenFundedStateCannotDeriveActiveContainerID(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 13, 50, 0, 0, time.UTC)
+	if err := WriteStoreJSONAtomic(StoreTreasuryPath(fixtures.root, "treasury-funded-missing-active-container"), map[string]interface{}{
+		"record_version":   StoreRecordVersion,
+		"treasury_id":      "treasury-funded-missing-active-container",
+		"display_name":     "Frank Treasury Funded Missing Container",
+		"state":            string(TreasuryStateFunded),
+		"zero_seed_policy": string(TreasuryZeroSeedPolicyOwnerSeedForbidden),
+		"created_at":       now,
+		"updated_at":       now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+
+	_, err := LoadTreasuryRecord(fixtures.root, "treasury-funded-missing-active-container")
+	if err == nil {
+		t.Fatal("LoadTreasuryRecord() error = nil, want active-container derivation rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury state "funded" requires exactly one active_container_id derivable from container_refs`) {
+		t.Fatalf("LoadTreasuryRecord() error = %q, want active-container derivation rejection", err.Error())
 	}
 }
 
@@ -1147,6 +1221,20 @@ func TestTreasuryObjectViewsAdaptStorageFieldsWithoutMigration(t *testing.T) {
 	if view.ActiveContainerID != "container-wallet" || view.LedgerRef != "treasury-view" || view.State != record.State {
 		t.Fatalf("TreasuryRecord.AsObjectView() = %#v, want active_container_id/ledger_ref adapter", view)
 	}
+	if view.CustodyModel != TreasuryCustodyModelFrankContainerRegistry {
+		t.Fatalf("TreasuryRecord.AsObjectView().CustodyModel = %q, want %q", view.CustodyModel, TreasuryCustodyModelFrankContainerRegistry)
+	}
+	if !reflect.DeepEqual(view.ForbiddenTransactionClasses, []TreasuryTransactionClass{
+		TreasuryTransactionClassAllocate,
+		TreasuryTransactionClassSave,
+		TreasuryTransactionClassSpend,
+		TreasuryTransactionClassReinvest,
+	}) {
+		t.Fatalf("TreasuryRecord.AsObjectView().ForbiddenTransactionClasses = %#v, want default non-active policy envelope", view.ForbiddenTransactionClasses)
+	}
+	if view.PermittedTransactionClasses != nil {
+		t.Fatalf("TreasuryRecord.AsObjectView().PermittedTransactionClasses = %#v, want nil for non-active treasury", view.PermittedTransactionClasses)
+	}
 
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now.Add(time.Minute), func(record *TreasuryRecord) {
@@ -1174,6 +1262,65 @@ func TestTreasuryObjectViewsAdaptStorageFieldsWithoutMigration(t *testing.T) {
 	}
 	if entryView.ContainerID != fixtures.container.ContainerID || entryView.EntryClass != TreasuryLedgerEntryKindMovement || entryView.Asset != "USDC" || entryView.Source != "campaign:community-a" {
 		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() = %#v, want canonical ledger contract fields", entryView)
+	}
+	if entryView.Direction != TreasuryLedgerDirectionInternal || entryView.Status != TreasuryLedgerStatusRecorded {
+		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() direction/status = (%q, %q), want (%q, %q)", entryView.Direction, entryView.Status, TreasuryLedgerDirectionInternal, TreasuryLedgerStatusRecorded)
+	}
+}
+
+func TestActiveTreasuryObjectViewUsesDefaultActiveTransactionPolicyEnvelope(t *testing.T) {
+	t.Parallel()
+
+	record := TreasuryRecord{
+		RecordVersion:  StoreRecordVersion,
+		TreasuryID:     "treasury-active-view",
+		DisplayName:    "Frank Treasury Active",
+		State:          TreasuryStateActive,
+		ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+		},
+		CreatedAt: time.Date(2026, 4, 8, 20, 30, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 4, 8, 20, 31, 0, 0, time.UTC),
+	}
+
+	view := record.AsObjectView()
+	if !reflect.DeepEqual(view.PermittedTransactionClasses, []TreasuryTransactionClass{
+		TreasuryTransactionClassAllocate,
+		TreasuryTransactionClassSave,
+		TreasuryTransactionClassSpend,
+		TreasuryTransactionClassReinvest,
+	}) {
+		t.Fatalf("TreasuryRecord.AsObjectView().PermittedTransactionClasses = %#v, want default active policy envelope", view.PermittedTransactionClasses)
+	}
+	if view.ForbiddenTransactionClasses != nil {
+		t.Fatalf("TreasuryRecord.AsObjectView().ForbiddenTransactionClasses = %#v, want nil for active treasury", view.ForbiddenTransactionClasses)
+	}
+}
+
+func TestResolveTreasuryLedgerEntryDirectionMapsEntryKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind TreasuryLedgerEntryKind
+		want TreasuryLedgerDirection
+	}{
+		{kind: TreasuryLedgerEntryKindAcquisition, want: TreasuryLedgerDirectionInflow},
+		{kind: TreasuryLedgerEntryKindMovement, want: TreasuryLedgerDirectionInternal},
+		{kind: TreasuryLedgerEntryKindDisposition, want: TreasuryLedgerDirectionOutflow},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(string(tc.kind), func(t *testing.T) {
+			t.Parallel()
+			got := ResolveTreasuryLedgerEntryDirection(TreasuryLedgerEntry{EntryKind: tc.kind})
+			if got != tc.want {
+				t.Fatalf("ResolveTreasuryLedgerEntryDirection(%q) = %q, want %q", tc.kind, got, tc.want)
+			}
+		})
 	}
 }
 

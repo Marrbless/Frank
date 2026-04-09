@@ -27,6 +27,21 @@ const (
 	TreasuryZeroSeedPolicyOwnerSeedForbidden TreasuryZeroSeedPolicy = "owner_seed_forbidden"
 )
 
+type TreasuryCustodyModel string
+
+const (
+	TreasuryCustodyModelFrankContainerRegistry TreasuryCustodyModel = "frank_container_registry"
+)
+
+type TreasuryTransactionClass string
+
+const (
+	TreasuryTransactionClassAllocate TreasuryTransactionClass = "allocate"
+	TreasuryTransactionClassSave     TreasuryTransactionClass = "save"
+	TreasuryTransactionClassSpend    TreasuryTransactionClass = "spend"
+	TreasuryTransactionClassReinvest TreasuryTransactionClass = "reinvest"
+)
+
 type TreasuryLedgerEntryKind string
 
 const (
@@ -49,13 +64,30 @@ type TreasuryRecord struct {
 // TreasuryObjectView exposes the currently-grounded subset of the frozen V3
 // treasury contract without forcing a durable storage migration.
 type TreasuryObjectView struct {
-	TreasuryID        string                 `json:"treasury_id"`
-	State             TreasuryState          `json:"state"`
-	ZeroSeedPolicy    TreasuryZeroSeedPolicy `json:"zero_seed_policy"`
-	ActiveContainerID string                 `json:"active_container_id,omitempty"`
-	LedgerRef         string                 `json:"ledger_ref"`
-	UpdatedAt         time.Time              `json:"updated_at"`
+	TreasuryID                  string                     `json:"treasury_id"`
+	State                       TreasuryState              `json:"state"`
+	ZeroSeedPolicy              TreasuryZeroSeedPolicy     `json:"zero_seed_policy"`
+	ActiveContainerID           string                     `json:"active_container_id,omitempty"`
+	CustodyModel                TreasuryCustodyModel       `json:"custody_model,omitempty"`
+	PermittedTransactionClasses []TreasuryTransactionClass `json:"permitted_transaction_classes,omitempty"`
+	ForbiddenTransactionClasses []TreasuryTransactionClass `json:"forbidden_transaction_classes,omitempty"`
+	LedgerRef                   string                     `json:"ledger_ref"`
+	UpdatedAt                   time.Time                  `json:"updated_at"`
 }
+
+type TreasuryLedgerDirection string
+
+const (
+	TreasuryLedgerDirectionInflow   TreasuryLedgerDirection = "inflow"
+	TreasuryLedgerDirectionInternal TreasuryLedgerDirection = "internal"
+	TreasuryLedgerDirectionOutflow  TreasuryLedgerDirection = "outflow"
+)
+
+type TreasuryLedgerStatus string
+
+const (
+	TreasuryLedgerStatusRecorded TreasuryLedgerStatus = "recorded"
+)
 
 type TreasuryLedgerEntry struct {
 	RecordVersion int                     `json:"record_version"`
@@ -77,8 +109,10 @@ type TreasuryLedgerEntryObjectView struct {
 	EntryClass  TreasuryLedgerEntryKind `json:"entry_class"`
 	Asset       string                  `json:"asset"`
 	Amount      string                  `json:"amount"`
+	Direction   TreasuryLedgerDirection `json:"direction"`
 	Source      string                  `json:"source,omitempty"`
 	RecordedAt  time.Time               `json:"recorded_at"`
+	Status      TreasuryLedgerStatus    `json:"status"`
 }
 
 type ResolvedExecutionContextTreasuryPreflight struct {
@@ -142,6 +176,9 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		return fmt.Errorf("mission store treasury zero_seed_policy %q is invalid", strings.TrimSpace(string(record.ZeroSeedPolicy)))
 	}
 	if err := validateTreasuryContainerRefs(record.ContainerRefs); err != nil {
+		return err
+	}
+	if err := validateTreasuryActiveContainerContract(record); err != nil {
 		return err
 	}
 	if record.CreatedAt.IsZero() {
@@ -302,13 +339,17 @@ func normalizeTreasuryLedgerEntry(entry TreasuryLedgerEntry) TreasuryLedgerEntry
 
 func (record TreasuryRecord) AsObjectView() TreasuryObjectView {
 	activeContainerID, _ := TreasuryActiveContainerID(record)
+	permitted, forbidden := DefaultTreasuryTransactionPolicy(record.State)
 	return TreasuryObjectView{
-		TreasuryID:        record.TreasuryID,
-		State:             record.State,
-		ZeroSeedPolicy:    record.ZeroSeedPolicy,
-		ActiveContainerID: activeContainerID,
-		LedgerRef:         record.TreasuryID,
-		UpdatedAt:         record.UpdatedAt,
+		TreasuryID:                  record.TreasuryID,
+		State:                       record.State,
+		ZeroSeedPolicy:              record.ZeroSeedPolicy,
+		ActiveContainerID:           activeContainerID,
+		CustodyModel:                ResolveTreasuryCustodyModel(record),
+		PermittedTransactionClasses: permitted,
+		ForbiddenTransactionClasses: forbidden,
+		LedgerRef:                   record.TreasuryID,
+		UpdatedAt:                   record.UpdatedAt,
 	}
 }
 
@@ -324,8 +365,10 @@ func ResolveTreasuryLedgerEntryObjectView(root string, entry TreasuryLedgerEntry
 		EntryClass:  entry.EntryKind,
 		Asset:       entry.AssetCode,
 		Amount:      entry.Amount,
+		Direction:   ResolveTreasuryLedgerEntryDirection(entry),
 		Source:      entry.SourceRef,
 		RecordedAt:  entry.CreatedAt,
+		Status:      ResolveTreasuryLedgerEntryStatus(entry),
 	}, nil
 }
 
@@ -503,6 +546,26 @@ func TreasuryActiveContainerID(record TreasuryRecord) (string, bool) {
 	return ref.ObjectID, true
 }
 
+func ResolveTreasuryCustodyModel(record TreasuryRecord) TreasuryCustodyModel {
+	if len(record.ContainerRefs) == 0 {
+		return ""
+	}
+	return TreasuryCustodyModelFrankContainerRegistry
+}
+
+func DefaultTreasuryTransactionPolicy(state TreasuryState) ([]TreasuryTransactionClass, []TreasuryTransactionClass) {
+	all := []TreasuryTransactionClass{
+		TreasuryTransactionClassAllocate,
+		TreasuryTransactionClassSave,
+		TreasuryTransactionClassSpend,
+		TreasuryTransactionClassReinvest,
+	}
+	if NormalizeTreasuryState(state) == TreasuryStateActive {
+		return append([]TreasuryTransactionClass(nil), all...), nil
+	}
+	return nil, append([]TreasuryTransactionClass(nil), all...)
+}
+
 func ResolveTreasuryLedgerEntryContainerID(root string, entry TreasuryLedgerEntry) (string, error) {
 	treasury, err := LoadTreasuryRecord(root, entry.TreasuryID)
 	if err != nil {
@@ -527,6 +590,39 @@ func ResolveTreasuryLedgerEntryContainerID(root string, entry TreasuryLedgerEntr
 func ValidateTreasuryLedgerEntryLink(root string, entry TreasuryLedgerEntry) error {
 	if _, err := ResolveTreasuryLedgerEntryContainerID(root, entry); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ResolveTreasuryLedgerEntryDirection(entry TreasuryLedgerEntry) TreasuryLedgerDirection {
+	switch NormalizeTreasuryLedgerEntryKind(entry.EntryKind) {
+	case TreasuryLedgerEntryKindAcquisition:
+		return TreasuryLedgerDirectionInflow
+	case TreasuryLedgerEntryKindMovement:
+		return TreasuryLedgerDirectionInternal
+	case TreasuryLedgerEntryKindDisposition:
+		return TreasuryLedgerDirectionOutflow
+	default:
+		return ""
+	}
+}
+
+func ResolveTreasuryLedgerEntryStatus(entry TreasuryLedgerEntry) TreasuryLedgerStatus {
+	if NormalizeTreasuryLedgerEntryKind(entry.EntryKind) == "" {
+		return ""
+	}
+	return TreasuryLedgerStatusRecorded
+}
+
+func validateTreasuryActiveContainerContract(record TreasuryRecord) error {
+	switch NormalizeTreasuryState(record.State) {
+	case TreasuryStateFunded, TreasuryStateActive:
+		if _, ok := TreasuryActiveContainerID(record); !ok {
+			return fmt.Errorf(
+				"mission store treasury state %q requires exactly one active_container_id derivable from container_refs",
+				record.State,
+			)
+		}
 	}
 	return nil
 }

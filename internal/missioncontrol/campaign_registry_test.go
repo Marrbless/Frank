@@ -512,11 +512,48 @@ func TestCampaignObjectViewPreservesCanonicalCampaignContractSurface(t *testing.
 	if view.CampaignID != record.CampaignID || view.Objective != record.Objective || view.IdentityMode != record.IdentityMode {
 		t.Fatalf("CampaignRecord.AsObjectView() = %#v, want canonical campaign contract fields", view)
 	}
+	if view.PlatformOrChannel != "provider-mail" {
+		t.Fatalf("CampaignRecord.AsObjectView().PlatformOrChannel = %q, want %q", view.PlatformOrChannel, "provider-mail")
+	}
+	if view.AudienceClassOrTarget != "" || view.MessageFamilyOrParticipationStyle != "" || view.Cadence != "" || view.Budget != "" {
+		t.Fatalf("CampaignRecord.AsObjectView() unresolved optional fields = %#v, want zero values until storage adds durable sources", view)
+	}
+	if view.EscalationRules != nil {
+		t.Fatalf("CampaignRecord.AsObjectView().EscalationRules = %#v, want nil until storage adds durable sources", view.EscalationRules)
+	}
 	if !reflect.DeepEqual(view.GovernedExternalTargets, record.GovernedExternalTargets) {
 		t.Fatalf("CampaignRecord.AsObjectView().GovernedExternalTargets = %#v, want %#v", view.GovernedExternalTargets, record.GovernedExternalTargets)
 	}
 	if !reflect.DeepEqual(view.FrankObjectRefs, record.FrankObjectRefs) {
 		t.Fatalf("CampaignRecord.AsObjectView().FrankObjectRefs = %#v, want %#v", view.FrankObjectRefs, record.FrankObjectRefs)
+	}
+}
+
+func TestResolveCampaignPlatformOrChannelRequiresSingleProviderOrPlatformTarget(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 2, 45, 0, 0, time.UTC)
+
+	platform, ok := ResolveCampaignPlatformOrChannel(validCampaignRecord(now, nil))
+	if !ok || platform != "provider-mail" {
+		t.Fatalf("ResolveCampaignPlatformOrChannel(validCampaignRecord) = (%q, %t), want (%q, true)", platform, ok, "provider-mail")
+	}
+
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+			{
+				Kind:       EligibilityTargetKindPlatform,
+				RegistryID: "community-platform",
+			},
+			{
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-mail",
+			},
+		}
+	})
+	platform, ok = ResolveCampaignPlatformOrChannel(record)
+	if ok || platform != "" {
+		t.Fatalf("ResolveCampaignPlatformOrChannel(multi-target) = (%q, %t), want (\"\", false)", platform, ok)
 	}
 }
 

@@ -51,17 +51,23 @@ type CampaignRecord struct {
 // CampaignObjectView exposes the currently-grounded subset of the frozen V3
 // campaign contract without forcing a durable storage migration.
 type CampaignObjectView struct {
-	CampaignID              string                         `json:"campaign_id"`
-	CampaignKind            CampaignKind                   `json:"campaign_kind"`
-	Objective               string                         `json:"objective"`
-	IdentityMode            IdentityMode                   `json:"identity_mode"`
-	GovernedExternalTargets []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
-	FrankObjectRefs         []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
-	StopConditions          []string                       `json:"stop_conditions"`
-	FailureThreshold        CampaignFailureThreshold       `json:"failure_threshold"`
-	ComplianceChecks        []string                       `json:"compliance_checks"`
-	CreatedAt               time.Time                      `json:"created_at"`
-	UpdatedAt               time.Time                      `json:"updated_at"`
+	CampaignID                        string                         `json:"campaign_id"`
+	CampaignKind                      CampaignKind                   `json:"campaign_kind"`
+	Objective                         string                         `json:"objective"`
+	PlatformOrChannel                 string                         `json:"platform_or_channel,omitempty"`
+	AudienceClassOrTarget             string                         `json:"audience_class_or_target,omitempty"`
+	IdentityMode                      IdentityMode                   `json:"identity_mode"`
+	MessageFamilyOrParticipationStyle string                         `json:"message_family_or_participation_style,omitempty"`
+	Cadence                           string                         `json:"cadence,omitempty"`
+	EscalationRules                   []string                       `json:"escalation_rules,omitempty"`
+	GovernedExternalTargets           []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
+	FrankObjectRefs                   []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
+	StopConditions                    []string                       `json:"stop_conditions"`
+	FailureThreshold                  CampaignFailureThreshold       `json:"failure_threshold"`
+	ComplianceChecks                  []string                       `json:"compliance_checks"`
+	Budget                            string                         `json:"budget,omitempty"`
+	CreatedAt                         time.Time                      `json:"created_at"`
+	UpdatedAt                         time.Time                      `json:"updated_at"`
 }
 
 var ErrCampaignRecordNotFound = errors.New("mission store campaign record not found")
@@ -222,10 +228,12 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 }
 
 func (record CampaignRecord) AsObjectView() CampaignObjectView {
+	platformOrChannel, _ := ResolveCampaignPlatformOrChannel(record)
 	return CampaignObjectView{
 		CampaignID:              record.CampaignID,
 		CampaignKind:            record.CampaignKind,
 		Objective:               record.Objective,
+		PlatformOrChannel:       platformOrChannel,
 		IdentityMode:            record.IdentityMode,
 		GovernedExternalTargets: record.GovernedExternalTargets,
 		FrankObjectRefs:         record.FrankObjectRefs,
@@ -234,6 +242,22 @@ func (record CampaignRecord) AsObjectView() CampaignObjectView {
 		ComplianceChecks:        record.ComplianceChecks,
 		CreatedAt:               record.CreatedAt,
 		UpdatedAt:               record.UpdatedAt,
+	}
+}
+
+func ResolveCampaignPlatformOrChannel(record CampaignRecord) (string, bool) {
+	if len(record.GovernedExternalTargets) != 1 {
+		return "", false
+	}
+	target := record.GovernedExternalTargets[0]
+	switch target.Kind {
+	case EligibilityTargetKindPlatform, EligibilityTargetKindProvider:
+		if strings.TrimSpace(target.RegistryID) == "" {
+			return "", false
+		}
+		return strings.TrimSpace(target.RegistryID), true
+	default:
+		return "", false
 	}
 }
 
