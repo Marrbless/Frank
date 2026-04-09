@@ -287,6 +287,9 @@ func TestMaybeEmitMissionDailySummaryEmitsOncePerTwentyFourHourBucket(t *testing
 		if !strings.Contains(out.Content, `"job_id": "job-1"`) {
 			t.Fatalf("outbound content = %q, want mission status summary", out.Content)
 		}
+		if strings.Contains(out.Content, `"treasury_preflight"`) {
+			t.Fatalf("outbound content = %q, want zero-ref daily summary path unchanged", out.Content)
+		}
 	default:
 		t.Fatal("expected a daily mission summary outbound notification")
 	}
@@ -303,6 +306,153 @@ func TestMaybeEmitMissionDailySummaryEmitsOncePerTwentyFourHourBucket(t *testing
 	}
 	if got := runtime.AuditHistory[len(runtime.AuditHistory)-1].ToolName; got != "daily_summary" {
 		t.Fatalf("last audit tool = %q, want %q", got, "daily_summary")
+	}
+}
+
+func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeApprovalNotificationTreasuryFixtures(t)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	ag.taskState.SetMissionStoreRoot(root)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	now := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	ec.Runtime.CreatedAt = now.Add(-24 * time.Hour)
+	ec.Runtime.UpdatedAt = now.Add(-24 * time.Hour)
+	ec.Runtime.StartedAt = now.Add(-24 * time.Hour)
+	ec.Runtime.ActiveStepAt = now.Add(-24 * time.Hour)
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitMissionDailySummary(now)
+
+	select {
+	case out := <-hub.Out:
+		if out.Channel != "telegram" || out.ChatID != "chat-42" {
+			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
+		}
+		summary := decodeMissionDailySummary(t, out.Content)
+		if summary.TreasuryPreflight == nil {
+			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
+		}
+		if summary.TreasuryPreflight.Treasury == nil {
+			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
+		}
+		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected a daily mission summary outbound notification")
+	}
+}
+
+func TestMaybeEmitMissionDailySummaryInvalidTreasuryStateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 9, 11, 30, 0, 0, time.UTC)
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-missing-container",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateBootstrap,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
+			{
+				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+				ObjectID: "missing-container",
+			},
+		},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	ag.taskState.SetMissionStoreRoot(root)
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	summaryAt := now.Add(30 * time.Minute)
+	ec.Runtime.CreatedAt = summaryAt.Add(-24 * time.Hour)
+	ec.Runtime.UpdatedAt = summaryAt.Add(-24 * time.Hour)
+	ec.Runtime.StartedAt = summaryAt.Add(-24 * time.Hour)
+	ec.Runtime.ActiveStepAt = summaryAt.Add(-24 * time.Hour)
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitMissionDailySummary(summaryAt)
+
+	select {
+	case out := <-hub.Out:
+		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
+	default:
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	_, err := buildMissionDailySummaryContent(ag.taskState, runtime)
+	if err == nil {
+		t.Fatal("buildMissionDailySummaryContent() error = nil, want fail-closed treasury preflight rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
+		t.Fatalf("buildMissionDailySummaryContent() error = %q, want missing container rejection", err)
+	}
+}
+
+func TestBuildMissionDailySummaryContentPersistedRuntimePathUnchangedForTreasurySteps(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	summary, err := buildMissionDailySummaryContent(ag.taskState, missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC),
+		StartedAt:    time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC),
+		ActiveStepAt: time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("buildMissionDailySummaryContent() error = %v", err)
+	}
+	if !strings.HasPrefix(summary, "Daily mission summary:\n") {
+		t.Fatalf("summary = %q, want daily mission summary prefix", summary)
+	}
+	if strings.Contains(summary, `"treasury_preflight"`) {
+		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
 }
 
@@ -962,6 +1112,21 @@ func decodeMissionCheckInSummary(t *testing.T, content string) missioncontrol.Op
 	t.Helper()
 
 	const prefix = "Mission check-in:\n"
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func decodeMissionDailySummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	const prefix = "Daily mission summary:\n"
 	if !strings.HasPrefix(content, prefix) {
 		t.Fatalf("content = %q, want prefix %q", content, prefix)
 	}
