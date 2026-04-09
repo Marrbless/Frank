@@ -10,7 +10,8 @@ import (
 func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.FixedZone("offset", -4*60*60))
 
 	if err := StoreTreasuryRecord(root, TreasuryRecord{
@@ -32,7 +33,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		ContainerRefs: []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKind(" container "),
-				ObjectID: " container-a ",
+				ObjectID: " " + fixtures.container.ContainerID + " ",
 			},
 		},
 		CreatedAt: now.Add(2 * time.Minute),
@@ -55,7 +56,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 	want.ContainerRefs = []FrankRegistryObjectRef{
 		{
 			Kind:     FrankRegistryObjectKindContainer,
-			ObjectID: "container-a",
+			ObjectID: fixtures.container.ContainerID,
 		},
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
@@ -79,8 +80,21 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 func TestTreasuryLedgerEntryRoundTripAndList(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 10, 0, 0, 0, time.FixedZone("offset", 2*60*60))
+
+	if err := StoreTreasuryRecord(root, validTreasuryRecord(now.Add(-time.Minute), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-a"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+		}
+	})); err != nil {
+		t.Fatalf("StoreTreasuryRecord(treasury-a) error = %v", err)
+	}
 
 	if err := StoreTreasuryLedgerEntry(root, TreasuryLedgerEntry{
 		EntryID:    "entry-b",
@@ -139,14 +153,27 @@ func TestTreasuryLedgerEntryRoundTripAndList(t *testing.T) {
 func TestTreasuryLedgerEntriesAreAppendOnly(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
+	if err := StoreTreasuryRecord(root, validTreasuryRecord(now.Add(-time.Minute), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-a"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+		}
+	})); err != nil {
+		t.Fatalf("StoreTreasuryRecord(treasury-a) error = %v", err)
+	}
 	entry := TreasuryLedgerEntry{
 		EntryID:    "entry-1",
 		TreasuryID: "treasury-a",
 		EntryKind:  TreasuryLedgerEntryKindAcquisition,
 		AssetCode:  "USD",
 		Amount:     "1.00",
-		CreatedAt:  time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC),
+		CreatedAt:  now,
 	}
 
 	if err := StoreTreasuryLedgerEntry(root, entry); err != nil {
@@ -160,7 +187,8 @@ func TestTreasuryLedgerEntriesAreAppendOnly(t *testing.T) {
 func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -322,6 +350,61 @@ func TestTreasuryRecordUsesFrankRegistryContainerRefs(t *testing.T) {
 	}
 }
 
+func TestTreasuryRecordRequiresExistingContainerLinks(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 13, 30, 0, 0, time.UTC)
+
+	err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-missing-container"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-missing",
+			},
+		}
+	}))
+	if err == nil {
+		t.Fatal("StoreTreasuryRecord() error = nil, want missing container-link rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury container_refs ref kind "container" object_id "container-missing": resolve Frank object ref kind "container" object_id "container-missing": mission store Frank container record not found`) {
+		t.Fatalf("StoreTreasuryRecord() error = %q, want missing container-link rejection", err.Error())
+	}
+}
+
+func TestLoadTreasuryRecordFailsClosedWhenLinkedContainerIsMissing(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 13, 45, 0, 0, time.UTC)
+	if err := WriteStoreJSONAtomic(StoreTreasuryPath(fixtures.root, "treasury-missing-container"), map[string]interface{}{
+		"record_version":   StoreRecordVersion,
+		"treasury_id":      "treasury-missing-container",
+		"display_name":     "Frank Treasury Missing Container",
+		"state":            string(TreasuryStateBootstrap),
+		"zero_seed_policy": string(TreasuryZeroSeedPolicyOwnerSeedForbidden),
+		"container_refs": []map[string]interface{}{
+			{
+				"kind":      string(FrankRegistryObjectKindContainer),
+				"object_id": "container-missing",
+			},
+		},
+		"created_at": now,
+		"updated_at": now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+
+	_, err := LoadTreasuryRecord(fixtures.root, "treasury-missing-container")
+	if err == nil {
+		t.Fatal("LoadTreasuryRecord() error = nil, want missing container-link rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury container_refs ref kind "container" object_id "container-missing": resolve Frank object ref kind "container" object_id "container-missing": mission store Frank container record not found`) {
+		t.Fatalf("LoadTreasuryRecord() error = %q, want missing container-link rejection", err.Error())
+	}
+}
+
 func TestTreasuryZeroSeedPolicyOwnerSeedForbiddenIsStable(t *testing.T) {
 	t.Parallel()
 
@@ -395,14 +478,15 @@ func TestResolveExecutionContextTreasuryRefZeroRefPathPreservesPriorBehavior(t *
 func TestResolveExecutionContextTreasuryRefResolvesActiveTreasuryRef(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 15, 0, 0, 0, time.UTC)
 	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-active"
 		record.ContainerRefs = []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindContainer,
-				ObjectID: "container-active",
+				ObjectID: fixtures.container.ContainerID,
 			},
 		}
 	})
@@ -505,14 +589,15 @@ func TestResolveExecutionContextTreasuryRefFailsClosedWithoutMissionStoreRoot(t 
 func TestResolveExecutionContextTreasuryRefDoesNotIntroduceCampaignIdentityOrObjectSideChannel(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 16, 0, 0, 0, time.UTC)
 	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-sidechannel"
 		record.ContainerRefs = []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindContainer,
-				ObjectID: "container-sidechannel",
+				ObjectID: fixtures.container.ContainerID,
 			},
 		}
 	})
@@ -565,7 +650,7 @@ func TestResolveExecutionContextTreasuryRefDoesNotIntroduceCampaignIdentityOrObj
 	if ec.Step.CampaignRef == nil || ec.Step.CampaignRef.CampaignID != "campaign-1" {
 		t.Fatalf("ResolveExecutionContext().Step.CampaignRef = %#v, want step-owned campaign only", ec.Step.CampaignRef)
 	}
-	if len(got.ContainerRefs) != 1 || got.ContainerRefs[0].ObjectID != "container-sidechannel" {
+	if len(got.ContainerRefs) != 1 || got.ContainerRefs[0].ObjectID != fixtures.container.ContainerID {
 		t.Fatalf("ResolveExecutionContextTreasuryRef().ContainerRefs = %#v, want treasury-owned container only", got.ContainerRefs)
 	}
 }
@@ -745,7 +830,8 @@ func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMissingOrMalformed
 func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMalformedTreasuryRecord(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 18, 0, 0, 0, time.UTC)
 	if err := WriteStoreJSONAtomic(StoreTreasuryPath(root, "treasury-bad"), map[string]interface{}{
 		"record_version":   StoreRecordVersion,
@@ -756,7 +842,7 @@ func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMalformedTreasuryR
 		"container_refs": []map[string]interface{}{
 			{
 				"kind":      string(FrankRegistryObjectKindContainer),
-				"object_id": "container-a",
+				"object_id": fixtures.container.ContainerID,
 			},
 		},
 		"created_at": now,
@@ -826,8 +912,22 @@ func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMissingOrMalformed
 				},
 			}
 		})
-		if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
-			t.Fatalf("StoreTreasuryRecord() error = %v", err)
+		if err := WriteStoreJSONAtomic(StoreTreasuryPath(fixtures.root, record.TreasuryID), map[string]interface{}{
+			"record_version":   StoreRecordVersion,
+			"treasury_id":      record.TreasuryID,
+			"display_name":     record.DisplayName,
+			"state":            string(record.State),
+			"zero_seed_policy": string(record.ZeroSeedPolicy),
+			"container_refs": []map[string]interface{}{
+				{
+					"kind":      string(record.ContainerRefs[0].Kind),
+					"object_id": record.ContainerRefs[0].ObjectID,
+				},
+			},
+			"created_at": record.CreatedAt,
+			"updated_at": record.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
 		}
 
 		assertPreflightError(t, record.TreasuryID, ErrFrankContainerRecordNotFound.Error())
@@ -845,8 +945,22 @@ func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMissingOrMalformed
 				},
 			}
 		})
-		if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
-			t.Fatalf("StoreTreasuryRecord() error = %v", err)
+		if err := WriteStoreJSONAtomic(StoreTreasuryPath(fixtures.root, record.TreasuryID), map[string]interface{}{
+			"record_version":   StoreRecordVersion,
+			"treasury_id":      record.TreasuryID,
+			"display_name":     record.DisplayName,
+			"state":            string(record.State),
+			"zero_seed_policy": string(record.ZeroSeedPolicy),
+			"container_refs": []map[string]interface{}{
+				{
+					"kind":      string(record.ContainerRefs[0].Kind),
+					"object_id": record.ContainerRefs[0].ObjectID,
+				},
+			},
+			"created_at": record.CreatedAt,
+			"updated_at": record.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
 		}
 
 		assertPreflightError(t, record.TreasuryID, "label is required")
@@ -917,6 +1031,150 @@ func TestResolveExecutionContextTreasuryPreflightFailsClosedOnMissingOrMalformed
 
 		assertPreflightError(t, record.TreasuryID, `mission store treasury container_refs require kind "container", got "identity"`)
 	})
+}
+
+func TestTreasuryLedgerEntryRequiresExistingTreasuryWithSingleLinkedContainer(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 19, 30, 0, 0, time.UTC)
+
+	t.Run("missing treasury record", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		err := StoreTreasuryLedgerEntry(fixtures.root, validTreasuryLedgerEntry(now, func(entry *TreasuryLedgerEntry) {
+			entry.EntryID = "entry-missing-treasury"
+			entry.TreasuryID = "treasury-missing"
+		}))
+		if err == nil {
+			t.Fatal("StoreTreasuryLedgerEntry() error = nil, want missing treasury rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store treasury ledger entry treasury_id "treasury-missing": mission store treasury record not found`) {
+			t.Fatalf("StoreTreasuryLedgerEntry() error = %q, want missing treasury rejection", err.Error())
+		}
+	})
+
+	t.Run("treasury without active container", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+			record.TreasuryID = "treasury-no-container"
+			record.ContainerRefs = nil
+		})); err != nil {
+			t.Fatalf("StoreTreasuryRecord() error = %v", err)
+		}
+
+		err := StoreTreasuryLedgerEntry(fixtures.root, validTreasuryLedgerEntry(now.Add(time.Minute), func(entry *TreasuryLedgerEntry) {
+			entry.EntryID = "entry-no-container"
+			entry.TreasuryID = "treasury-no-container"
+		}))
+		if err == nil {
+			t.Fatal("StoreTreasuryLedgerEntry() error = nil, want missing active-container rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store treasury ledger entry treasury_id "treasury-no-container" has no active treasury container`) {
+			t.Fatalf("StoreTreasuryLedgerEntry() error = %q, want missing active-container rejection", err.Error())
+		}
+	})
+
+	t.Run("treasury with ambiguous active container", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		target := AutonomyEligibilityTargetRef{
+			Kind:       EligibilityTargetKindTreasuryContainerClass,
+			RegistryID: "container-class-wallet-2",
+		}
+		writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-wallet-2", "check-container-class-wallet-2", now)
+		container2 := FrankContainerRecord{
+			RecordVersion:        StoreRecordVersion,
+			ContainerID:          "container-wallet-2",
+			ContainerKind:        "wallet",
+			Label:                "Secondary Wallet",
+			ContainerClassID:     "container-class-wallet-2",
+			State:                "active",
+			EligibilityTargetRef: target,
+			CreatedAt:            now.UTC(),
+			UpdatedAt:            now.Add(time.Minute).UTC(),
+		}
+		if err := StoreFrankContainerRecord(fixtures.root, container2); err != nil {
+			t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+		}
+		if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now.Add(2*time.Minute), func(record *TreasuryRecord) {
+			record.TreasuryID = "treasury-ambiguous-container"
+			record.ContainerRefs = []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: fixtures.container.ContainerID,
+				},
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: container2.ContainerID,
+				},
+			}
+		})); err != nil {
+			t.Fatalf("StoreTreasuryRecord() error = %v", err)
+		}
+
+		err := StoreTreasuryLedgerEntry(fixtures.root, validTreasuryLedgerEntry(now.Add(3*time.Minute), func(entry *TreasuryLedgerEntry) {
+			entry.EntryID = "entry-ambiguous-container"
+			entry.TreasuryID = "treasury-ambiguous-container"
+		}))
+		if err == nil {
+			t.Fatal("StoreTreasuryLedgerEntry() error = nil, want ambiguous active-container rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store treasury ledger entry treasury_id "treasury-ambiguous-container" has ambiguous active treasury container across 2 container_refs`) {
+			t.Fatalf("StoreTreasuryLedgerEntry() error = %q, want ambiguous active-container rejection", err.Error())
+		}
+	})
+}
+
+func TestTreasuryObjectViewsAdaptStorageFieldsWithoutMigration(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 19, 45, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-view"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+		}
+	})
+
+	view := record.AsObjectView()
+	if view.ActiveContainerID != "container-wallet" || view.LedgerRef != "treasury-view" || view.State != record.State {
+		t.Fatalf("TreasuryRecord.AsObjectView() = %#v, want active_container_id/ledger_ref adapter", view)
+	}
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now.Add(time.Minute), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-view"
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+		}
+	})); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	entryView, err := ResolveTreasuryLedgerEntryObjectView(fixtures.root, validTreasuryLedgerEntry(now.Add(2*time.Minute), func(entry *TreasuryLedgerEntry) {
+		entry.EntryID = "entry-view"
+		entry.TreasuryID = "treasury-view"
+		entry.EntryKind = TreasuryLedgerEntryKindMovement
+		entry.AssetCode = "USDC"
+		entry.Amount = "42.00"
+		entry.SourceRef = "campaign:community-a"
+	}))
+	if err != nil {
+		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() error = %v", err)
+	}
+	if entryView.ContainerID != fixtures.container.ContainerID || entryView.EntryClass != TreasuryLedgerEntryKindMovement || entryView.Asset != "USDC" || entryView.Source != "campaign:community-a" {
+		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() = %#v, want canonical ledger contract fields", entryView)
+	}
 }
 
 func TestResolveExecutionContextTreasuryPreflightDoesNotIntroduceEligibilityIdentityModeCampaignOrObjectSideChannel(t *testing.T) {
@@ -1024,7 +1282,7 @@ func validTreasuryRecord(now time.Time, mutate func(*TreasuryRecord)) TreasuryRe
 		ContainerRefs: []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindContainer,
-				ObjectID: "container-a",
+				ObjectID: "container-wallet",
 			},
 		},
 		CreatedAt: now,

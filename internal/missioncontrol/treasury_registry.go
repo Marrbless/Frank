@@ -46,6 +46,17 @@ type TreasuryRecord struct {
 	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
+// TreasuryObjectView exposes the currently-grounded subset of the frozen V3
+// treasury contract without forcing a durable storage migration.
+type TreasuryObjectView struct {
+	TreasuryID        string                 `json:"treasury_id"`
+	State             TreasuryState          `json:"state"`
+	ZeroSeedPolicy    TreasuryZeroSeedPolicy `json:"zero_seed_policy"`
+	ActiveContainerID string                 `json:"active_container_id,omitempty"`
+	LedgerRef         string                 `json:"ledger_ref"`
+	UpdatedAt         time.Time              `json:"updated_at"`
+}
+
 type TreasuryLedgerEntry struct {
 	RecordVersion int                     `json:"record_version"`
 	EntryID       string                  `json:"entry_id"`
@@ -55,6 +66,19 @@ type TreasuryLedgerEntry struct {
 	Amount        string                  `json:"amount"`
 	CreatedAt     time.Time               `json:"created_at"`
 	SourceRef     string                  `json:"source_ref,omitempty"`
+}
+
+// TreasuryLedgerEntryObjectView exposes the currently-grounded subset of the
+// frozen V3 ledger contract without forcing a durable storage migration.
+type TreasuryLedgerEntryObjectView struct {
+	EntryID     string                  `json:"entry_id"`
+	TreasuryID  string                  `json:"treasury_id"`
+	ContainerID string                  `json:"container_id,omitempty"`
+	EntryClass  TreasuryLedgerEntryKind `json:"entry_class"`
+	Asset       string                  `json:"asset"`
+	Amount      string                  `json:"amount"`
+	Source      string                  `json:"source,omitempty"`
+	RecordedAt  time.Time               `json:"recorded_at"`
 }
 
 type ResolvedExecutionContextTreasuryPreflight struct {
@@ -166,6 +190,9 @@ func StoreTreasuryRecord(root string, record TreasuryRecord) error {
 	if err := ValidateTreasuryRecord(record); err != nil {
 		return err
 	}
+	if err := ValidateTreasuryContainerLinks(root, record.ContainerRefs); err != nil {
+		return err
+	}
 	return WriteStoreJSONAtomic(StoreTreasuryPath(root, record.TreasuryID), record)
 }
 
@@ -176,7 +203,7 @@ func LoadTreasuryRecord(root, treasuryID string) (TreasuryRecord, error) {
 	if err := validateTreasuryID(treasuryID, "mission store treasury"); err != nil {
 		return TreasuryRecord{}, err
 	}
-	record, err := loadTreasuryRecordFile(StoreTreasuryPath(root, strings.TrimSpace(treasuryID)))
+	record, err := loadTreasuryRecordFile(root, StoreTreasuryPath(root, strings.TrimSpace(treasuryID)))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return TreasuryRecord{}, ErrTreasuryRecordNotFound
@@ -190,7 +217,9 @@ func ListTreasuryRecords(root string) ([]TreasuryRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, err
 	}
-	return listStoreJSONRecords(StoreTreasuriesDir(root), loadTreasuryRecordFile)
+	return listStoreJSONRecords(StoreTreasuriesDir(root), func(path string) (TreasuryRecord, error) {
+		return loadTreasuryRecordFile(root, path)
+	})
 }
 
 func StoreTreasuryLedgerEntry(root string, entry TreasuryLedgerEntry) error {
@@ -200,6 +229,9 @@ func StoreTreasuryLedgerEntry(root string, entry TreasuryLedgerEntry) error {
 	entry = normalizeTreasuryLedgerEntry(entry)
 	entry.RecordVersion = normalizeRecordVersion(entry.RecordVersion)
 	if err := ValidateTreasuryLedgerEntry(entry); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryLedgerEntryLink(root, entry); err != nil {
 		return err
 	}
 
@@ -223,7 +255,7 @@ func LoadTreasuryLedgerEntry(root, treasuryID, entryID string) (TreasuryLedgerEn
 		return TreasuryLedgerEntry{}, err
 	}
 	normalizedTreasuryID := strings.TrimSpace(treasuryID)
-	record, err := loadTreasuryLedgerEntryFile(StoreTreasuryLedgerEntryPath(root, normalizedTreasuryID, strings.TrimSpace(entryID)), normalizedTreasuryID)
+	record, err := loadTreasuryLedgerEntryFile(root, StoreTreasuryLedgerEntryPath(root, normalizedTreasuryID, strings.TrimSpace(entryID)), normalizedTreasuryID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return TreasuryLedgerEntry{}, ErrTreasuryLedgerEntryNotFound
@@ -242,7 +274,7 @@ func ListTreasuryLedgerEntries(root, treasuryID string) ([]TreasuryLedgerEntry, 
 	}
 	normalizedTreasuryID := strings.TrimSpace(treasuryID)
 	return listStoreJSONRecords(StoreTreasuryLedgerDir(root, normalizedTreasuryID), func(path string) (TreasuryLedgerEntry, error) {
-		return loadTreasuryLedgerEntryFile(path, normalizedTreasuryID)
+		return loadTreasuryLedgerEntryFile(root, path, normalizedTreasuryID)
 	})
 }
 
@@ -266,6 +298,35 @@ func normalizeTreasuryLedgerEntry(entry TreasuryLedgerEntry) TreasuryLedgerEntry
 	entry.SourceRef = strings.TrimSpace(entry.SourceRef)
 	entry.CreatedAt = entry.CreatedAt.UTC()
 	return entry
+}
+
+func (record TreasuryRecord) AsObjectView() TreasuryObjectView {
+	activeContainerID, _ := TreasuryActiveContainerID(record)
+	return TreasuryObjectView{
+		TreasuryID:        record.TreasuryID,
+		State:             record.State,
+		ZeroSeedPolicy:    record.ZeroSeedPolicy,
+		ActiveContainerID: activeContainerID,
+		LedgerRef:         record.TreasuryID,
+		UpdatedAt:         record.UpdatedAt,
+	}
+}
+
+func ResolveTreasuryLedgerEntryObjectView(root string, entry TreasuryLedgerEntry) (TreasuryLedgerEntryObjectView, error) {
+	containerID, err := ResolveTreasuryLedgerEntryContainerID(root, entry)
+	if err != nil {
+		return TreasuryLedgerEntryObjectView{}, err
+	}
+	return TreasuryLedgerEntryObjectView{
+		EntryID:     entry.EntryID,
+		TreasuryID:  entry.TreasuryID,
+		ContainerID: containerID,
+		EntryClass:  entry.EntryKind,
+		Asset:       entry.AssetCode,
+		Amount:      entry.Amount,
+		Source:      entry.SourceRef,
+		RecordedAt:  entry.CreatedAt,
+	}, nil
 }
 
 func ValidateTreasuryRef(ref TreasuryRef) error {
@@ -330,7 +391,7 @@ func ResolveExecutionContextTreasuryPreflight(ec ExecutionContext) (ResolvedExec
 	return preflight, nil
 }
 
-func loadTreasuryRecordFile(path string) (TreasuryRecord, error) {
+func loadTreasuryRecordFile(root, path string) (TreasuryRecord, error) {
 	var record TreasuryRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
 		return TreasuryRecord{}, err
@@ -339,10 +400,13 @@ func loadTreasuryRecordFile(path string) (TreasuryRecord, error) {
 	if err := ValidateTreasuryRecord(record); err != nil {
 		return TreasuryRecord{}, err
 	}
+	if err := ValidateTreasuryContainerLinks(root, record.ContainerRefs); err != nil {
+		return TreasuryRecord{}, err
+	}
 	return record, nil
 }
 
-func loadTreasuryLedgerEntryFile(path string, expectedTreasuryID string) (TreasuryLedgerEntry, error) {
+func loadTreasuryLedgerEntryFile(root, path string, expectedTreasuryID string) (TreasuryLedgerEntry, error) {
 	var entry TreasuryLedgerEntry
 	if err := LoadStoreJSON(path, &entry); err != nil {
 		return TreasuryLedgerEntry{}, err
@@ -353,6 +417,9 @@ func loadTreasuryLedgerEntryFile(path string, expectedTreasuryID string) (Treasu
 	}
 	if entry.TreasuryID != strings.TrimSpace(expectedTreasuryID) {
 		return TreasuryLedgerEntry{}, fmt.Errorf("mission store treasury ledger entry treasury_id %q does not match ledger %q", entry.TreasuryID, strings.TrimSpace(expectedTreasuryID))
+	}
+	if err := ValidateTreasuryLedgerEntryLink(root, entry); err != nil {
+		return TreasuryLedgerEntry{}, err
 	}
 	return entry, nil
 }
@@ -399,6 +466,67 @@ func validateTreasuryContainerRefs(refs []FrankRegistryObjectRef) error {
 			return fmt.Errorf("mission store treasury container_refs contain duplicate ref kind %q object_id %q", normalized.Kind, normalized.ObjectID)
 		}
 		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func ValidateTreasuryContainerLinks(root string, refs []FrankRegistryObjectRef) error {
+	for _, ref := range refs {
+		resolved, err := ResolveFrankRegistryObjectRef(root, ref)
+		if err != nil {
+			return fmt.Errorf(
+				"mission store treasury container_refs ref kind %q object_id %q: %w",
+				strings.TrimSpace(string(ref.Kind)),
+				strings.TrimSpace(ref.ObjectID),
+				err,
+			)
+		}
+		if resolved.Container == nil {
+			return fmt.Errorf(
+				"mission store treasury container_refs ref kind %q object_id %q: expected Frank container record",
+				strings.TrimSpace(string(ref.Kind)),
+				strings.TrimSpace(ref.ObjectID),
+			)
+		}
+	}
+	return nil
+}
+
+func TreasuryActiveContainerID(record TreasuryRecord) (string, bool) {
+	if len(record.ContainerRefs) != 1 {
+		return "", false
+	}
+	ref := NormalizeFrankRegistryObjectRef(record.ContainerRefs[0])
+	if ref.Kind != FrankRegistryObjectKindContainer || strings.TrimSpace(ref.ObjectID) == "" {
+		return "", false
+	}
+	return ref.ObjectID, true
+}
+
+func ResolveTreasuryLedgerEntryContainerID(root string, entry TreasuryLedgerEntry) (string, error) {
+	treasury, err := LoadTreasuryRecord(root, entry.TreasuryID)
+	if err != nil {
+		return "", fmt.Errorf("mission store treasury ledger entry treasury_id %q: %w", strings.TrimSpace(entry.TreasuryID), err)
+	}
+	containerID, ok := TreasuryActiveContainerID(treasury)
+	if !ok {
+		switch len(treasury.ContainerRefs) {
+		case 0:
+			return "", fmt.Errorf("mission store treasury ledger entry treasury_id %q has no active treasury container", treasury.TreasuryID)
+		default:
+			return "", fmt.Errorf(
+				"mission store treasury ledger entry treasury_id %q has ambiguous active treasury container across %d container_refs",
+				treasury.TreasuryID,
+				len(treasury.ContainerRefs),
+			)
+		}
+	}
+	return containerID, nil
+}
+
+func ValidateTreasuryLedgerEntryLink(root string, entry TreasuryLedgerEntry) error {
+	if _, err := ResolveTreasuryLedgerEntryContainerID(root, entry); err != nil {
+		return err
 	}
 	return nil
 }

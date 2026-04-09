@@ -10,7 +10,8 @@ import (
 func TestCampaignRecordRoundTripAndList(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 7, 21, 0, 0, 0, time.FixedZone("offset", -4*60*60))
 
 	if err := StoreCampaignRecord(root, CampaignRecord{
@@ -21,14 +22,14 @@ func TestCampaignRecordRoundTripAndList(t *testing.T) {
 		Objective:    "Join communities without posting yet",
 		GovernedExternalTargets: []AutonomyEligibilityTargetRef{
 			{
-				Kind:       EligibilityTargetKindPlatform,
-				RegistryID: "community-platform-b",
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-mail",
 			},
 		},
 		FrankObjectRefs: []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindIdentity,
-				ObjectID: "identity-community-b",
+				ObjectID: fixtures.identity.IdentityID,
 			},
 		},
 		IdentityMode:     IdentityModeAgentAlias,
@@ -117,7 +118,8 @@ func TestCampaignRecordRoundTripAndList(t *testing.T) {
 func TestCampaignRecordValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 7, 22, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -234,7 +236,8 @@ func TestCampaignRecordValidationFailsClosed(t *testing.T) {
 func TestCampaignRecordRejectsDuplicateGovernedExternalTargetsAfterNormalization(t *testing.T) {
 	t.Parallel()
 
-	err := StoreCampaignRecord(t.TempDir(), validCampaignRecord(time.Date(2026, 4, 7, 23, 0, 0, 0, time.UTC), func(record *CampaignRecord) {
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	err := StoreCampaignRecord(fixtures.root, validCampaignRecord(time.Date(2026, 4, 7, 23, 0, 0, 0, time.UTC), func(record *CampaignRecord) {
 		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
 			{
 				Kind:       EligibilityTargetKindProvider,
@@ -257,7 +260,8 @@ func TestCampaignRecordRejectsDuplicateGovernedExternalTargetsAfterNormalization
 func TestCampaignRecordRejectsDuplicateFrankObjectRefsAfterNormalization(t *testing.T) {
 	t.Parallel()
 
-	err := StoreCampaignRecord(t.TempDir(), validCampaignRecord(time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC), func(record *CampaignRecord) {
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	err := StoreCampaignRecord(fixtures.root, validCampaignRecord(time.Date(2026, 4, 8, 0, 0, 0, 0, time.UTC), func(record *CampaignRecord) {
 		record.FrankObjectRefs = []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindAccount,
@@ -280,7 +284,8 @@ func TestCampaignRecordRejectsDuplicateFrankObjectRefsAfterNormalization(t *test
 func TestCampaignRecordLoadFailsClosedOnMalformedStoredRecord(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 1, 0, 0, 0, time.UTC)
 	record := validCampaignRecord(now, nil)
 
@@ -326,6 +331,192 @@ func TestCampaignRecordLoadFailsClosedOnMalformedStoredRecord(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mission store campaign stop_conditions must not contain blanks") {
 		t.Fatalf("LoadCampaignRecord() error = %q, want malformed-record rejection", err.Error())
+	}
+}
+
+func TestCampaignRecordRequiresExistingGovernedTargetAndFrankObjectLinks(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 1, 30, 0, 0, time.UTC)
+
+	t.Run("missing governed target", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		err := StoreCampaignRecord(fixtures.root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+				{
+					Kind:       EligibilityTargetKindPlatform,
+					RegistryID: "platform-missing",
+				},
+			}
+		}))
+		if err == nil {
+			t.Fatal("StoreCampaignRecord() error = nil, want missing governed-target rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store campaign governed_external_targets target kind "platform" registry_id "platform-missing": mission store frank registry eligibility_target_ref "platform-missing" has no linked eligibility registry record`) {
+			t.Fatalf("StoreCampaignRecord() error = %q, want missing governed-target rejection", err.Error())
+		}
+	})
+
+	t.Run("missing Frank object ref", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		err := StoreCampaignRecord(fixtures.root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.FrankObjectRefs = []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "identity-missing",
+				},
+			}
+		}))
+		if err == nil {
+			t.Fatal("StoreCampaignRecord() error = nil, want missing Frank-object rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store campaign frank_object_refs ref kind "identity" object_id "identity-missing": resolve Frank object ref kind "identity" object_id "identity-missing": mission store Frank identity record not found`) {
+			t.Fatalf("StoreCampaignRecord() error = %q, want missing Frank-object rejection", err.Error())
+		}
+	})
+}
+
+func TestLoadCampaignRecordFailsClosedWhenLinkedTargetOrFrankObjectIsMissing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 2, 0, 0, 0, time.UTC)
+
+	t.Run("missing governed target", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		record := validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-missing-governed-target"
+			record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+				{
+					Kind:       EligibilityTargetKindPlatform,
+					RegistryID: "platform-missing",
+				},
+			}
+		})
+		if err := WriteStoreJSONAtomic(StoreCampaignPath(fixtures.root, record.CampaignID), map[string]interface{}{
+			"record_version": StoreRecordVersion,
+			"campaign_id":    record.CampaignID,
+			"campaign_kind":  string(record.CampaignKind),
+			"display_name":   record.DisplayName,
+			"state":          string(record.State),
+			"objective":      record.Objective,
+			"governed_external_targets": []map[string]interface{}{
+				{
+					"kind":        string(record.GovernedExternalTargets[0].Kind),
+					"registry_id": record.GovernedExternalTargets[0].RegistryID,
+				},
+			},
+			"frank_object_refs": []map[string]interface{}{
+				{
+					"kind":      string(record.FrankObjectRefs[0].Kind),
+					"object_id": record.FrankObjectRefs[0].ObjectID,
+				},
+			},
+			"identity_mode": string(record.IdentityMode),
+			"stop_conditions": []string{
+				record.StopConditions[0],
+			},
+			"failure_threshold": map[string]interface{}{
+				"metric": record.FailureThreshold.Metric,
+				"limit":  record.FailureThreshold.Limit,
+			},
+			"compliance_checks": []string{
+				record.ComplianceChecks[0],
+			},
+			"created_at": record.CreatedAt,
+			"updated_at": record.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+		}
+
+		_, err := LoadCampaignRecord(fixtures.root, record.CampaignID)
+		if err == nil {
+			t.Fatal("LoadCampaignRecord() error = nil, want missing governed-target rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store campaign governed_external_targets target kind "platform" registry_id "platform-missing": mission store frank registry eligibility_target_ref "platform-missing" has no linked eligibility registry record`) {
+			t.Fatalf("LoadCampaignRecord() error = %q, want missing governed-target rejection", err.Error())
+		}
+	})
+
+	t.Run("missing Frank object ref", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		record := validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-missing-frank-object"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindIdentity,
+					ObjectID: "identity-missing",
+				},
+			}
+		})
+		if err := WriteStoreJSONAtomic(StoreCampaignPath(fixtures.root, record.CampaignID), map[string]interface{}{
+			"record_version": StoreRecordVersion,
+			"campaign_id":    record.CampaignID,
+			"campaign_kind":  string(record.CampaignKind),
+			"display_name":   record.DisplayName,
+			"state":          string(record.State),
+			"objective":      record.Objective,
+			"governed_external_targets": []map[string]interface{}{
+				{
+					"kind":        string(record.GovernedExternalTargets[0].Kind),
+					"registry_id": record.GovernedExternalTargets[0].RegistryID,
+				},
+			},
+			"frank_object_refs": []map[string]interface{}{
+				{
+					"kind":      string(record.FrankObjectRefs[0].Kind),
+					"object_id": record.FrankObjectRefs[0].ObjectID,
+				},
+			},
+			"identity_mode": string(record.IdentityMode),
+			"stop_conditions": []string{
+				record.StopConditions[0],
+			},
+			"failure_threshold": map[string]interface{}{
+				"metric": record.FailureThreshold.Metric,
+				"limit":  record.FailureThreshold.Limit,
+			},
+			"compliance_checks": []string{
+				record.ComplianceChecks[0],
+			},
+			"created_at": record.CreatedAt,
+			"updated_at": record.UpdatedAt,
+		}); err != nil {
+			t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+		}
+
+		_, err := LoadCampaignRecord(fixtures.root, record.CampaignID)
+		if err == nil {
+			t.Fatal("LoadCampaignRecord() error = nil, want missing Frank-object rejection")
+		}
+		if !strings.Contains(err.Error(), `mission store campaign frank_object_refs ref kind "identity" object_id "identity-missing": resolve Frank object ref kind "identity" object_id "identity-missing": mission store Frank identity record not found`) {
+			t.Fatalf("LoadCampaignRecord() error = %q, want missing Frank-object rejection", err.Error())
+		}
+	})
+}
+
+func TestCampaignObjectViewPreservesCanonicalCampaignContractSurface(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 2, 30, 0, 0, time.UTC)
+	record := validCampaignRecord(now, nil)
+
+	view := record.AsObjectView()
+	if view.CampaignID != record.CampaignID || view.Objective != record.Objective || view.IdentityMode != record.IdentityMode {
+		t.Fatalf("CampaignRecord.AsObjectView() = %#v, want canonical campaign contract fields", view)
+	}
+	if !reflect.DeepEqual(view.GovernedExternalTargets, record.GovernedExternalTargets) {
+		t.Fatalf("CampaignRecord.AsObjectView().GovernedExternalTargets = %#v, want %#v", view.GovernedExternalTargets, record.GovernedExternalTargets)
+	}
+	if !reflect.DeepEqual(view.FrankObjectRefs, record.FrankObjectRefs) {
+		t.Fatalf("CampaignRecord.AsObjectView().FrankObjectRefs = %#v, want %#v", view.FrankObjectRefs, record.FrankObjectRefs)
 	}
 }
 
@@ -430,21 +621,22 @@ func TestResolveExecutionContextCampaignRefZeroRefPathPreservesPriorBehavior(t *
 func TestResolveExecutionContextCampaignRefResolvesActiveCampaignRef(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 6, 0, 0, 0, time.UTC)
 	record := validCampaignRecord(now, func(record *CampaignRecord) {
 		record.CampaignID = "campaign-active"
 		record.IdentityMode = IdentityModeOwnerOnlyControl
 		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
 			{
-				Kind:       EligibilityTargetKindPlatform,
-				RegistryID: "community-platform",
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-mail",
 			},
 		}
 		record.FrankObjectRefs = []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindIdentity,
-				ObjectID: "identity-community",
+				ObjectID: fixtures.identity.IdentityID,
 			},
 		}
 	})
@@ -547,7 +739,8 @@ func TestResolveExecutionContextCampaignRefFailsClosedWithoutMissionStoreRoot(t 
 func TestResolveExecutionContextCampaignRefDoesNotIntroduceIdentityEligibilityOrObjectSideChannel(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Date(2026, 4, 8, 7, 0, 0, 0, time.UTC)
 	record := validCampaignRecord(now, func(record *CampaignRecord) {
 		record.CampaignID = "campaign-sidechannel"
@@ -555,13 +748,13 @@ func TestResolveExecutionContextCampaignRefDoesNotIntroduceIdentityEligibilityOr
 		record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{
 			{
 				Kind:       EligibilityTargetKindProvider,
-				RegistryID: "provider-human-id",
+				RegistryID: "provider-mail",
 			},
 		}
 		record.FrankObjectRefs = []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindIdentity,
-				ObjectID: "identity-human-id",
+				ObjectID: fixtures.identity.IdentityID,
 			},
 		}
 	})
@@ -598,10 +791,10 @@ func TestResolveExecutionContextCampaignRefDoesNotIntroduceIdentityEligibilityOr
 	if got.IdentityMode != IdentityModeOwnerOnlyControl {
 		t.Fatalf("ResolveExecutionContextCampaignRef().IdentityMode = %q, want %q", got.IdentityMode, IdentityModeOwnerOnlyControl)
 	}
-	if len(got.GovernedExternalTargets) != 1 || got.GovernedExternalTargets[0].RegistryID != "provider-human-id" {
+	if len(got.GovernedExternalTargets) != 1 || got.GovernedExternalTargets[0].RegistryID != "provider-mail" {
 		t.Fatalf("ResolveExecutionContextCampaignRef().GovernedExternalTargets = %#v, want campaign-owned target only", got.GovernedExternalTargets)
 	}
-	if len(got.FrankObjectRefs) != 1 || got.FrankObjectRefs[0].ObjectID != "identity-human-id" {
+	if len(got.FrankObjectRefs) != 1 || got.FrankObjectRefs[0].ObjectID != fixtures.identity.IdentityID {
 		t.Fatalf("ResolveExecutionContextCampaignRef().FrankObjectRefs = %#v, want campaign-owned ref only", got.FrankObjectRefs)
 	}
 }

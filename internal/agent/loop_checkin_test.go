@@ -11,6 +11,33 @@ import (
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
+func writeMalformedTreasuryRecord(t *testing.T, root string, treasury missioncontrol.TreasuryRecord) {
+	t.Helper()
+
+	payload := map[string]interface{}{
+		"record_version":   treasury.RecordVersion,
+		"treasury_id":      treasury.TreasuryID,
+		"display_name":     treasury.DisplayName,
+		"state":            string(treasury.State),
+		"zero_seed_policy": string(treasury.ZeroSeedPolicy),
+		"created_at":       treasury.CreatedAt,
+		"updated_at":       treasury.UpdatedAt,
+	}
+	if len(treasury.ContainerRefs) > 0 {
+		refs := make([]map[string]interface{}, 0, len(treasury.ContainerRefs))
+		for _, ref := range treasury.ContainerRefs {
+			refs = append(refs, map[string]interface{}{
+				"kind":      string(ref.Kind),
+				"object_id": ref.ObjectID,
+			})
+		}
+		payload["container_refs"] = refs
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreTreasuryPath(root, treasury.TreasuryID), payload); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+}
+
 func TestMaybeEmitMissionCheckInEmitsOncePerThirtyMinuteBucket(t *testing.T) {
 	t.Parallel()
 
@@ -146,9 +173,7 @@ func TestMaybeEmitMissionCheckInInvalidTreasuryStateFailsClosed(t *testing.T) {
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}
@@ -381,9 +406,7 @@ func TestMaybeEmitMissionDailySummaryInvalidTreasuryStateFailsClosed(t *testing.
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}
@@ -777,9 +800,7 @@ func TestMissionRuntimeChangeHookApprovalNotificationInvalidTreasuryStateFailsCl
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "Need approval before continuing."}
@@ -978,9 +999,7 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationInvalidTreasuryStateFail
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "Waiting for your answer."}
@@ -1174,9 +1193,7 @@ func TestMaybeEmitCompletionNotificationInvalidTreasuryStateFailsClosed(t *testi
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}
@@ -1400,9 +1417,7 @@ func TestMaybeEmitBudgetPauseNotificationInvalidTreasuryStateFailsClosed(t *test
 		CreatedAt: now.UTC(),
 		UpdatedAt: now.Add(time.Minute).UTC(),
 	}
-	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
-		t.Fatalf("StoreTreasuryRecord() error = %v", err)
-	}
+	writeMalformedTreasuryRecord(t, root, treasury)
 
 	hub := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}

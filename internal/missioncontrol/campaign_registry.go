@@ -48,6 +48,22 @@ type CampaignRecord struct {
 	UpdatedAt               time.Time                      `json:"updated_at"`
 }
 
+// CampaignObjectView exposes the currently-grounded subset of the frozen V3
+// campaign contract without forcing a durable storage migration.
+type CampaignObjectView struct {
+	CampaignID              string                         `json:"campaign_id"`
+	CampaignKind            CampaignKind                   `json:"campaign_kind"`
+	Objective               string                         `json:"objective"`
+	IdentityMode            IdentityMode                   `json:"identity_mode"`
+	GovernedExternalTargets []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
+	FrankObjectRefs         []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
+	StopConditions          []string                       `json:"stop_conditions"`
+	FailureThreshold        CampaignFailureThreshold       `json:"failure_threshold"`
+	ComplianceChecks        []string                       `json:"compliance_checks"`
+	CreatedAt               time.Time                      `json:"created_at"`
+	UpdatedAt               time.Time                      `json:"updated_at"`
+}
+
 var ErrCampaignRecordNotFound = errors.New("mission store campaign record not found")
 
 func StoreCampaignsDir(root string) string {
@@ -134,6 +150,12 @@ func StoreCampaignRecord(root string, record CampaignRecord) error {
 	if err := ValidateCampaignRecord(record); err != nil {
 		return err
 	}
+	if err := ValidateCampaignGovernedTargetLinks(root, record.GovernedExternalTargets); err != nil {
+		return err
+	}
+	if err := ValidateCampaignFrankObjectRefLinks(root, record.FrankObjectRefs); err != nil {
+		return err
+	}
 	return WriteStoreJSONAtomic(StoreCampaignPath(root, record.CampaignID), record)
 }
 
@@ -145,7 +167,7 @@ func LoadCampaignRecord(root, campaignID string) (CampaignRecord, error) {
 		return CampaignRecord{}, err
 	}
 	normalizedCampaignID := strings.TrimSpace(campaignID)
-	record, err := loadCampaignRecordFile(StoreCampaignPath(root, normalizedCampaignID))
+	record, err := loadCampaignRecordFile(root, StoreCampaignPath(root, normalizedCampaignID))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return CampaignRecord{}, ErrCampaignRecordNotFound
@@ -159,16 +181,24 @@ func ListCampaignRecords(root string) ([]CampaignRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, err
 	}
-	return listStoreJSONRecords(StoreCampaignsDir(root), loadCampaignRecordFile)
+	return listStoreJSONRecords(StoreCampaignsDir(root), func(path string) (CampaignRecord, error) {
+		return loadCampaignRecordFile(root, path)
+	})
 }
 
-func loadCampaignRecordFile(path string) (CampaignRecord, error) {
+func loadCampaignRecordFile(root, path string) (CampaignRecord, error) {
 	var record CampaignRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
 		return CampaignRecord{}, err
 	}
 	record = normalizeCampaignRecord(record)
 	if err := ValidateCampaignRecord(record); err != nil {
+		return CampaignRecord{}, err
+	}
+	if err := ValidateCampaignGovernedTargetLinks(root, record.GovernedExternalTargets); err != nil {
+		return CampaignRecord{}, err
+	}
+	if err := ValidateCampaignFrankObjectRefLinks(root, record.FrankObjectRefs); err != nil {
 		return CampaignRecord{}, err
 	}
 	return record, nil
@@ -189,6 +219,22 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	return record
+}
+
+func (record CampaignRecord) AsObjectView() CampaignObjectView {
+	return CampaignObjectView{
+		CampaignID:              record.CampaignID,
+		CampaignKind:            record.CampaignKind,
+		Objective:               record.Objective,
+		IdentityMode:            record.IdentityMode,
+		GovernedExternalTargets: record.GovernedExternalTargets,
+		FrankObjectRefs:         record.FrankObjectRefs,
+		StopConditions:          record.StopConditions,
+		FailureThreshold:        record.FailureThreshold,
+		ComplianceChecks:        record.ComplianceChecks,
+		CreatedAt:               record.CreatedAt,
+		UpdatedAt:               record.UpdatedAt,
+	}
 }
 
 func ValidateCampaignRef(ref CampaignRef) error {
@@ -261,6 +307,34 @@ func validateCampaignGovernedExternalTargets(targets []AutonomyEligibilityTarget
 			return fmt.Errorf("mission store campaign governed_external_targets contain duplicate target kind %q registry_id %q", target.Kind, strings.TrimSpace(target.RegistryID))
 		}
 		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func ValidateCampaignGovernedTargetLinks(root string, targets []AutonomyEligibilityTargetRef) error {
+	for _, target := range targets {
+		if _, err := ValidateFrankRegistryEligibilityLink(root, target); err != nil {
+			return fmt.Errorf(
+				"mission store campaign governed_external_targets target kind %q registry_id %q: %w",
+				strings.TrimSpace(string(target.Kind)),
+				strings.TrimSpace(target.RegistryID),
+				err,
+			)
+		}
+	}
+	return nil
+}
+
+func ValidateCampaignFrankObjectRefLinks(root string, refs []FrankRegistryObjectRef) error {
+	for _, ref := range refs {
+		if _, err := ResolveFrankRegistryObjectRef(root, ref); err != nil {
+			return fmt.Errorf(
+				"mission store campaign frank_object_refs ref kind %q object_id %q: %w",
+				strings.TrimSpace(string(ref.Kind)),
+				strings.TrimSpace(ref.ObjectID),
+				err,
+			)
+		}
 	}
 	return nil
 }
