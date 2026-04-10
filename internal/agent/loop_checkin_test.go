@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,146 @@ func writeMalformedTreasuryRecord(t *testing.T, root string, treasury missioncon
 	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreTreasuryPath(root, treasury.TreasuryID), payload); err != nil {
 		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
 	}
+}
+
+func assertLoopCheckInJSONObjectKeys(t *testing.T, value any, want ...string) {
+	t.Helper()
+
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("JSON value = %#v, want object", value)
+	}
+
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+
+	wantKeys := append([]string(nil), want...)
+	sort.Strings(wantKeys)
+
+	if len(got) != len(wantKeys) {
+		t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+	}
+	for i := range got {
+		if got[i] != wantKeys[i] {
+			t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+		}
+	}
+}
+
+func mustLoopCheckInJSONArray(t *testing.T, value any, label string) []any {
+	t.Helper()
+
+	array, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want array", label, value)
+	}
+	return array
+}
+
+func assertLoopCheckInResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight = %#v, want object", value)
+	}
+	assertLoopCheckInJSONObjectKeys(t, preflight, "containers", "treasury")
+
+	treasury, ok := preflight["treasury"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.treasury = %#v, want object", preflight["treasury"])
+	}
+	assertLoopCheckInJSONObjectKeys(t, treasury, "container_refs", "created_at", "display_name", "record_version", "state", "treasury_id", "updated_at", "zero_seed_policy")
+
+	containerRefs := mustLoopCheckInJSONArray(t, treasury["container_refs"], "treasury_preflight.treasury.container_refs")
+	if len(containerRefs) != 1 {
+		t.Fatalf("treasury_preflight.treasury.container_refs len = %d, want 1", len(containerRefs))
+	}
+	assertLoopCheckInJSONObjectKeys(t, containerRefs[0], "kind", "object_id")
+
+	containers := mustLoopCheckInJSONArray(t, preflight["containers"], "treasury_preflight.containers")
+	if len(containers) != 1 {
+		t.Fatalf("treasury_preflight.containers len = %d, want 1", len(containers))
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0] = %#v, want object", containers[0])
+	}
+	assertLoopCheckInJSONObjectKeys(t, container, "container_class_id", "container_id", "container_kind", "created_at", "eligibility_target_ref", "label", "record_version", "state", "updated_at")
+
+	eligibility, ok := container["eligibility_target_ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0].eligibility_target_ref = %#v, want object", container["eligibility_target_ref"])
+	}
+	assertLoopCheckInJSONObjectKeys(t, eligibility, "kind", "registry_id")
+}
+
+func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix string, allowTreasuryPreflight bool, wantKeys ...string) map[string]any {
+	t.Helper()
+
+	if !strings.HasPrefix(content, prefix) {
+		t.Fatalf("content = %q, want prefix %q", content, prefix)
+	}
+
+	payload := strings.TrimPrefix(content, prefix)
+	var decoded any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	forbiddenKeys := map[string]struct{}{
+		"audience_class_or_target":              {},
+		"message_family_or_participation_style": {},
+		"cadence":                               {},
+		"escalation_rules":                      {},
+		"budget":                                {},
+		"active_container_id":                   {},
+		"custody_model":                         {},
+		"permitted_transaction_classes":         {},
+		"forbidden_transaction_classes":         {},
+		"ledger_ref":                            {},
+		"direction":                             {},
+	}
+	if !allowTreasuryPreflight {
+		forbiddenKeys["treasury_preflight"] = struct{}{}
+	}
+
+	var walk func(any)
+	walk = func(node any) {
+		switch typed := node.(type) {
+		case map[string]any:
+			for key, value := range typed {
+				if _, ok := forbiddenKeys[key]; ok {
+					t.Fatalf("notification summary unexpectedly contains adapter-only field %q: %s", key, payload)
+				}
+				walk(value)
+			}
+		case []any:
+			for _, value := range typed {
+				walk(value)
+			}
+		}
+	}
+	walk(decoded)
+
+	if strings.Contains(payload, `"status": "recorded"`) {
+		t.Fatalf("notification summary unexpectedly contains derived-only ledger status: %s", payload)
+	}
+
+	object, ok := decoded.(map[string]any)
+	if !ok {
+		t.Fatalf("summary payload = %#v, want object", decoded)
+	}
+	assertLoopCheckInJSONObjectKeys(t, object, wantKeys...)
+
+	if allowTreasuryPreflight {
+		assertLoopCheckInResolvedTreasuryPreflightJSONEnvelope(t, object["treasury_preflight"])
+	}
+
+	return object
 }
 
 func TestMaybeEmitMissionCheckInEmitsOncePerThirtyMinuteBucket(t *testing.T) {
@@ -76,6 +217,7 @@ func TestMaybeEmitMissionCheckInEmitsOncePerThirtyMinuteBucket(t *testing.T) {
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref check-in path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a mission check-in outbound notification")
 	}
@@ -136,6 +278,7 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeMissionCheckInSummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -244,6 +387,7 @@ func TestBuildMissionCheckInContentPersistedRuntimePathUnchangedForTreasurySteps
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission check-in:\n", false, "active_step_id", "job_id", "state")
 }
 
 func TestMaybeEmitMissionCheckInSkipsBeforeThirtyMinutes(t *testing.T) {
@@ -315,6 +459,7 @@ func TestMaybeEmitMissionDailySummaryEmitsOncePerTwentyFourHourBucket(t *testing
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref daily summary path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a daily mission summary outbound notification")
 	}
@@ -369,6 +514,7 @@ func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testin
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeMissionDailySummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -477,6 +623,7 @@ func TestBuildMissionDailySummaryContentPersistedRuntimePathUnchangedForTreasury
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Daily mission summary:\n", false, "active_step_id", "job_id", "state")
 }
 
 func TestMaybeEmitMissionDailySummarySkipsBeforeTwentyFourHours(t *testing.T) {
@@ -712,6 +859,7 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref approval notification path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", false, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
 	default:
 		t.Fatal("expected an approval-required outbound notification")
 	}
@@ -763,6 +911,7 @@ func TestMissionRuntimeChangeHookApprovalNotificationSurfacesResolvedTreasuryPre
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
 		summary := decodeApprovalNotificationSummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", true, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -875,6 +1024,7 @@ func TestBuildMissionApprovalRequestContentPersistedRuntimePathUnchangedForTreas
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Approval required:\n", false, "active_step_id", "approval_history", "approval_request", "job_id", "state", "waiting_at", "waiting_reason")
 }
 
 func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState(t *testing.T) {
@@ -910,6 +1060,7 @@ func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref waiting-user path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
 	default:
 		t.Fatal("expected a waiting-user outbound notification")
 	}
@@ -962,6 +1113,7 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationSurfacesResolvedTreasury
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
 		summary := decodeWaitingUserSummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -1063,6 +1215,7 @@ func TestBuildMissionWaitingUserContentPersistedRuntimePathUnchangedForTreasuryS
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Waiting for user:\n", false, "active_step_id", "job_id", "state", "waiting_at", "waiting_reason")
 }
 
 func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.T) {
@@ -1102,6 +1255,7 @@ func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref completion path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", false, "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a completion outbound notification")
 	}
@@ -1156,6 +1310,7 @@ func TestMaybeEmitCompletionNotificationSurfacesResolvedTreasuryPreflight(t *tes
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeMissionCompletedSummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", true, "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -1319,6 +1474,7 @@ func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T)
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref budget-pause path unchanged", out.Content)
 		}
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", false, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state")
 	default:
 		t.Fatal("expected a budget pause outbound notification")
 	}
@@ -1380,6 +1536,7 @@ func TestMaybeEmitBudgetPauseNotificationSurfacesResolvedTreasuryPreflight(t *te
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeMissionPausedSummary(t, out.Content)
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", true, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -1496,6 +1653,7 @@ func TestBuildMissionBudgetPauseContentPersistedRuntimePathUnchangedForTreasuryS
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission paused:\n", false, "active_step_id", "budget_blocker", "job_id", "paused_reason", "state")
 }
 
 func testWaitingUserNotificationMissionJob() missioncontrol.Job {
