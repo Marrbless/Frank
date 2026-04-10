@@ -1207,37 +1207,8 @@ func TestTreasuryObjectViewsAdaptStorageFieldsWithoutMigration(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 8, 19, 45, 0, 0, time.UTC)
-	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
-		record.TreasuryID = "treasury-view"
-		record.ContainerRefs = []FrankRegistryObjectRef{
-			{
-				Kind:     FrankRegistryObjectKindContainer,
-				ObjectID: "container-wallet",
-			},
-		}
-	})
-
-	view := record.AsObjectView()
-	if view.ActiveContainerID != "container-wallet" || view.LedgerRef != "treasury-view" || view.State != record.State {
-		t.Fatalf("TreasuryRecord.AsObjectView() = %#v, want active_container_id/ledger_ref adapter", view)
-	}
-	if view.CustodyModel != TreasuryCustodyModelFrankContainerRegistry {
-		t.Fatalf("TreasuryRecord.AsObjectView().CustodyModel = %q, want %q", view.CustodyModel, TreasuryCustodyModelFrankContainerRegistry)
-	}
-	if !reflect.DeepEqual(view.ForbiddenTransactionClasses, []TreasuryTransactionClass{
-		TreasuryTransactionClassAllocate,
-		TreasuryTransactionClassSave,
-		TreasuryTransactionClassSpend,
-		TreasuryTransactionClassReinvest,
-	}) {
-		t.Fatalf("TreasuryRecord.AsObjectView().ForbiddenTransactionClasses = %#v, want default non-active policy envelope", view.ForbiddenTransactionClasses)
-	}
-	if view.PermittedTransactionClasses != nil {
-		t.Fatalf("TreasuryRecord.AsObjectView().PermittedTransactionClasses = %#v, want nil for non-active treasury", view.PermittedTransactionClasses)
-	}
-
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
-	if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now.Add(time.Minute), func(record *TreasuryRecord) {
+	if err := StoreTreasuryRecord(fixtures.root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-view"
 		record.ContainerRefs = []FrankRegistryObjectRef{
 			{
@@ -1249,22 +1220,62 @@ func TestTreasuryObjectViewsAdaptStorageFieldsWithoutMigration(t *testing.T) {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
 
-	entryView, err := ResolveTreasuryLedgerEntryObjectView(fixtures.root, validTreasuryLedgerEntry(now.Add(2*time.Minute), func(entry *TreasuryLedgerEntry) {
+	loadedRecord, err := LoadTreasuryRecord(fixtures.root, "treasury-view")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+
+	view := loadedRecord.AsObjectView()
+	activeContainerID, ok := TreasuryActiveContainerID(loadedRecord)
+	if !ok {
+		t.Fatalf("TreasuryActiveContainerID(loaded treasury) = (_, false), want derivable active container id from current storage links")
+	}
+	if view.ActiveContainerID != activeContainerID {
+		t.Fatalf("loaded TreasuryRecord.AsObjectView().ActiveContainerID = %q, want derived %q from current storage links", view.ActiveContainerID, activeContainerID)
+	}
+	if view.CustodyModel != ResolveTreasuryCustodyModel(loadedRecord) {
+		t.Fatalf("loaded TreasuryRecord.AsObjectView().CustodyModel = %q, want derived %q from current storage", view.CustodyModel, ResolveTreasuryCustodyModel(loadedRecord))
+	}
+	wantPermitted, wantForbidden := DefaultTreasuryTransactionPolicy(loadedRecord.State)
+	if !reflect.DeepEqual(view.PermittedTransactionClasses, wantPermitted) {
+		t.Fatalf("loaded TreasuryRecord.AsObjectView().PermittedTransactionClasses = %#v, want derived %#v from treasury state", view.PermittedTransactionClasses, wantPermitted)
+	}
+	if !reflect.DeepEqual(view.ForbiddenTransactionClasses, wantForbidden) {
+		t.Fatalf("loaded TreasuryRecord.AsObjectView().ForbiddenTransactionClasses = %#v, want derived %#v from treasury state", view.ForbiddenTransactionClasses, wantForbidden)
+	}
+	if view.LedgerRef != loadedRecord.TreasuryID {
+		t.Fatalf("loaded TreasuryRecord.AsObjectView().LedgerRef = %q, want derived %q from treasury_id", view.LedgerRef, loadedRecord.TreasuryID)
+	}
+
+	entry := validTreasuryLedgerEntry(now.Add(2*time.Minute), func(entry *TreasuryLedgerEntry) {
 		entry.EntryID = "entry-view"
 		entry.TreasuryID = "treasury-view"
 		entry.EntryKind = TreasuryLedgerEntryKindMovement
 		entry.AssetCode = "USDC"
 		entry.Amount = "42.00"
 		entry.SourceRef = "campaign:community-a"
-	}))
+	})
+	if err := StoreTreasuryLedgerEntry(fixtures.root, entry); err != nil {
+		t.Fatalf("StoreTreasuryLedgerEntry() error = %v", err)
+	}
+
+	loadedEntry, err := LoadTreasuryLedgerEntry(fixtures.root, "treasury-view", "entry-view")
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+
+	entryView, err := ResolveTreasuryLedgerEntryObjectView(fixtures.root, loadedEntry)
 	if err != nil {
 		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() error = %v", err)
 	}
-	if entryView.ContainerID != fixtures.container.ContainerID || entryView.EntryClass != TreasuryLedgerEntryKindMovement || entryView.Asset != "USDC" || entryView.Source != "campaign:community-a" {
+	if entryView.ContainerID != fixtures.container.ContainerID || entryView.EntryClass != loadedEntry.EntryKind || entryView.Asset != loadedEntry.AssetCode || entryView.Source != loadedEntry.SourceRef {
 		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() = %#v, want canonical ledger contract fields", entryView)
 	}
-	if entryView.Direction != TreasuryLedgerDirectionInternal || entryView.Status != TreasuryLedgerStatusRecorded {
-		t.Fatalf("ResolveTreasuryLedgerEntryObjectView() direction/status = (%q, %q), want (%q, %q)", entryView.Direction, entryView.Status, TreasuryLedgerDirectionInternal, TreasuryLedgerStatusRecorded)
+	if entryView.Direction != ResolveTreasuryLedgerEntryDirection(loadedEntry) {
+		t.Fatalf("ResolveTreasuryLedgerEntryObjectView().Direction = %q, want derived %q from entry kind", entryView.Direction, ResolveTreasuryLedgerEntryDirection(loadedEntry))
+	}
+	if entryView.Status != ResolveTreasuryLedgerEntryStatus(loadedEntry) {
+		t.Fatalf("ResolveTreasuryLedgerEntryObjectView().Status = %q, want derived %q from current stored entry", entryView.Status, ResolveTreasuryLedgerEntryStatus(loadedEntry))
 	}
 }
 

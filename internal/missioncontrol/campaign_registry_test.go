@@ -552,11 +552,20 @@ func TestCampaignObjectViewKeepsUnresolvedEnvelopeFieldsNonDurableAfterLoad(t *t
 	if view.PlatformOrChannel != "provider-mail" {
 		t.Fatalf("loaded CampaignRecord.AsObjectView().PlatformOrChannel = %q, want %q", view.PlatformOrChannel, "provider-mail")
 	}
-	if view.AudienceClassOrTarget != "" || view.MessageFamilyOrParticipationStyle != "" || view.Cadence != "" || view.Budget != "" {
-		t.Fatalf("loaded CampaignRecord.AsObjectView() unresolved non-durable fields = %#v, want zero values until a justified durable source exists", view)
+	if view.AudienceClassOrTarget != "" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().AudienceClassOrTarget = %q, want empty string until a justified durable source exists", view.AudienceClassOrTarget)
+	}
+	if view.MessageFamilyOrParticipationStyle != "" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().MessageFamilyOrParticipationStyle = %q, want empty string until a justified durable source exists", view.MessageFamilyOrParticipationStyle)
+	}
+	if view.Cadence != "" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().Cadence = %q, want empty string until a justified durable source exists", view.Cadence)
 	}
 	if view.EscalationRules != nil {
 		t.Fatalf("loaded CampaignRecord.AsObjectView().EscalationRules = %#v, want nil until a justified durable source exists", view.EscalationRules)
+	}
+	if view.Budget != "" {
+		t.Fatalf("loaded CampaignRecord.AsObjectView().Budget = %q, want empty string until a justified durable source exists", view.Budget)
 	}
 }
 
