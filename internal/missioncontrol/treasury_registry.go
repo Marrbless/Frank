@@ -591,20 +591,28 @@ func ResolveTreasuryLedgerEntryContainerID(root string, entry TreasuryLedgerEntr
 	if err != nil {
 		return "", fmt.Errorf("mission store treasury ledger entry treasury_id %q: %w", strings.TrimSpace(entry.TreasuryID), err)
 	}
-	containerID, ok := TreasuryActiveContainerID(treasury)
-	if !ok {
-		switch len(treasury.ContainerRefs) {
-		case 0:
-			return "", fmt.Errorf("mission store treasury ledger entry treasury_id %q has no active treasury container", treasury.TreasuryID)
-		default:
-			return "", fmt.Errorf(
-				"mission store treasury ledger entry treasury_id %q has ambiguous active treasury container across %d container_refs",
-				treasury.TreasuryID,
-				len(treasury.ContainerRefs),
-			)
-		}
+	containerID, err := resolveTreasuryActiveContainerID(treasury)
+	if err != nil {
+		return "", err
 	}
 	return containerID, nil
+}
+
+func resolveTreasuryActiveContainerID(treasury TreasuryRecord) (string, error) {
+	containerID, ok := TreasuryActiveContainerID(treasury)
+	if ok {
+		return containerID, nil
+	}
+	switch len(treasury.ContainerRefs) {
+	case 0:
+		return "", fmt.Errorf("mission store treasury ledger entry treasury_id %q has no active treasury container", treasury.TreasuryID)
+	default:
+		return "", fmt.Errorf(
+			"mission store treasury ledger entry treasury_id %q has ambiguous active treasury container across %d container_refs",
+			treasury.TreasuryID,
+			len(treasury.ContainerRefs),
+		)
+	}
 }
 
 func ValidateTreasuryLedgerEntryLink(root string, entry TreasuryLedgerEntry) error {
