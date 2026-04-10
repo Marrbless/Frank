@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -351,6 +352,44 @@ func TestBuildOperatorStatusSummaryFallsBackToGrantRevokedAtForOlderSnapshots(t 
 	}
 	if summary.ApprovalHistory[0].RevokedAt == nil || *summary.ApprovalHistory[0].RevokedAt != "2026-03-24T12:09:00Z" {
 		t.Fatalf("ApprovalHistory[0].RevokedAt = %#v, want fallback RFC3339 time", summary.ApprovalHistory[0].RevokedAt)
+	}
+}
+
+func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFields(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummaryWithAllowedTools(JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}, []string{"read"})
+
+	data, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("json.Marshal(summary) error = %v", err)
+	}
+
+	forbidden := []string{
+		"\"treasury_preflight\"",
+		"\"audience_class_or_target\"",
+		"\"message_family_or_participation_style\"",
+		"\"cadence\"",
+		"\"escalation_rules\"",
+		"\"budget\":",
+		"\"active_container_id\"",
+		"\"custody_model\"",
+		"\"permitted_transaction_classes\"",
+		"\"forbidden_transaction_classes\"",
+		"\"ledger_ref\"",
+		"\"direction\":\"internal\"",
+		"\"status\":\"recorded\"",
+	}
+	for _, key := range forbidden {
+		if strings.Contains(string(data), key) {
+			t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, string(data))
+		}
 	}
 }
 

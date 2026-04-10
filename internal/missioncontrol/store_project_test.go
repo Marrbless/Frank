@@ -215,56 +215,42 @@ func TestBuildCommittedMissionStatusSnapshotClearsTerminalControl(t *testing.T) 
 func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
 	now := time.Now().UTC().Truncate(time.Second)
 	job := testProjectedRuntimeJob()
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-mail"}
 	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: "treasury-wallet"}
-	target := AutonomyEligibilityTargetRef{
-		Kind:       EligibilityTargetKindTreasuryContainerClass,
-		RegistryID: "container-class-wallet",
-	}
-	if err := StorePlatformRecord(root, PlatformRecord{
-		RecordVersion:    StoreRecordVersion,
-		PlatformID:       target.RegistryID,
-		PlatformName:     "container-class-wallet",
-		TargetClass:      target.Kind,
-		EligibilityLabel: EligibilityLabelAutonomyCompatible,
-		LastCheckID:      "check-container-class-wallet",
-		Notes:            []string{"registry note"},
-		UpdatedAt:        now.Add(-3 * time.Minute).UTC(),
+	if err := StoreCampaignRecord(root, CampaignRecord{
+		RecordVersion:  StoreRecordVersion,
+		CampaignID:     "campaign-mail",
+		CampaignKind:   CampaignKindOutreach,
+		DisplayName:    "Mail Outreach",
+		State:          CampaignStateActive,
+		Objective:      "Reach aligned operators",
+		IdentityMode:   IdentityModeAgentAlias,
+		CreatedAt:      now.Add(-4 * time.Minute).UTC(),
+		UpdatedAt:      now.Add(-3 * time.Minute).UTC(),
+		StopConditions: []string{"stop after 3 replies"},
+		FailureThreshold: CampaignFailureThreshold{
+			Metric: "bounced_messages",
+			Limit:  3,
+		},
+		ComplianceChecks: []string{"can-spam-reviewed"},
+		GovernedExternalTargets: []AutonomyEligibilityTargetRef{
+			{
+				Kind:       EligibilityTargetKindProvider,
+				RegistryID: "provider-mail",
+			},
+		},
+		FrankObjectRefs: []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindIdentity,
+				ObjectID: fixtures.identity.IdentityID,
+			},
+		},
 	}); err != nil {
-		t.Fatalf("StorePlatformRecord() error = %v", err)
-	}
-	if err := StoreEligibilityCheckRecord(root, EligibilityCheckRecord{
-		RecordVersion:          StoreRecordVersion,
-		CheckID:                "check-container-class-wallet",
-		TargetKind:             target.Kind,
-		TargetName:             "container-class-wallet",
-		CanCreateWithoutOwner:  true,
-		CanOnboardWithoutOwner: true,
-		CanControlAsAgent:      true,
-		CanRecoverAsAgent:      true,
-		RulesAsObservedOK:      true,
-		Label:                  EligibilityLabelAutonomyCompatible,
-		Reasons:                []string{"autonomy_compatible"},
-		CheckedAt:              now.Add(-3 * time.Minute).UTC(),
-	}); err != nil {
-		t.Fatalf("StoreEligibilityCheckRecord() error = %v", err)
-	}
-
-	container := FrankContainerRecord{
-		RecordVersion:        StoreRecordVersion,
-		ContainerID:          "container-wallet",
-		ContainerKind:        "wallet",
-		Label:                "Primary Wallet",
-		ContainerClassID:     "container-class-wallet",
-		State:                "active",
-		EligibilityTargetRef: target,
-		CreatedAt:            now.Add(-2 * time.Minute).UTC(),
-		UpdatedAt:            now.Add(-time.Minute).UTC(),
-	}
-	if err := StoreFrankContainerRecord(root, container); err != nil {
-		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
 	}
 	if err := StoreTreasuryRecord(root, TreasuryRecord{
 		RecordVersion:  StoreRecordVersion,
@@ -275,13 +261,25 @@ func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *t
 		ContainerRefs: []FrankRegistryObjectRef{
 			{
 				Kind:     FrankRegistryObjectKindContainer,
-				ObjectID: container.ContainerID,
+				ObjectID: fixtures.container.ContainerID,
 			},
 		},
 		CreatedAt: now.Add(-3 * time.Minute).UTC(),
 		UpdatedAt: now.UTC(),
 	}); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	if err := StoreTreasuryLedgerEntry(root, TreasuryLedgerEntry{
+		RecordVersion: StoreRecordVersion,
+		EntryID:       "entry-wallet",
+		TreasuryID:    "treasury-wallet",
+		EntryKind:     TreasuryLedgerEntryKindMovement,
+		AssetCode:     "USDC",
+		Amount:        "42.00",
+		CreatedAt:     now.Add(-2 * time.Minute).UTC(),
+		SourceRef:     "campaign:community-a",
+	}); err != nil {
+		t.Fatalf("StoreTreasuryLedgerEntry() error = %v", err)
 	}
 
 	control, err := BuildRuntimeControlContext(job, "build")
@@ -313,14 +311,28 @@ func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *t
 	if err != nil {
 		t.Fatalf("json.Marshal(snapshot) error = %v", err)
 	}
-	if strings.Contains(string(data), "\"treasury_preflight\"") {
-		t.Fatalf("snapshot JSON unexpectedly contains treasury preflight: %s", string(data))
+
+	forbidden := []string{
+		"\"treasury_preflight\"",
+		"\"audience_class_or_target\"",
+		"\"message_family_or_participation_style\"",
+		"\"cadence\"",
+		"\"escalation_rules\"",
+		"\"budget\":",
+		"\"active_container_id\"",
+		"\"custody_model\"",
+		"\"permitted_transaction_classes\"",
+		"\"forbidden_transaction_classes\"",
+		"\"ledger_ref\"",
+		"\"direction\":\"internal\"",
+		"\"status\":\"recorded\"",
+		"\"container_id\":\"container-wallet\"",
+		"\"display_name\":\"Frank Treasury\"",
 	}
-	if strings.Contains(string(data), "\"container_id\":\"container-wallet\"") {
-		t.Fatalf("snapshot JSON unexpectedly contains resolved treasury container data: %s", string(data))
-	}
-	if strings.Contains(string(data), "\"display_name\":\"Frank Treasury\"") {
-		t.Fatalf("snapshot JSON unexpectedly contains resolved treasury record data: %s", string(data))
+	for _, key := range forbidden {
+		if strings.Contains(string(data), key) {
+			t.Fatalf("snapshot JSON unexpectedly contains %s: %s", key, string(data))
+		}
 	}
 }
 
