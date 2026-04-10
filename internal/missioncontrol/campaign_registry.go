@@ -48,8 +48,9 @@ type CampaignRecord struct {
 	UpdatedAt               time.Time                      `json:"updated_at"`
 }
 
-// CampaignObjectView exposes the currently-grounded subset of the frozen V3
-// campaign contract without forcing a durable storage migration.
+// CampaignObjectView is an adapter-only surface that exposes the
+// currently-grounded subset of the frozen V3 campaign contract without
+// forcing a durable storage migration or creating a second source of truth.
 //
 // platform_or_channel may be derived when current governed targets honestly
 // support that projection. The remaining spec-facing campaign envelope fields
@@ -249,11 +250,14 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 	return record
 }
 
-// AsObjectView adapts durable campaign storage to the current frozen-spec view
-// without inventing new persisted truth. Only platform_or_channel may be
-// derived today, and only when governed targets support that projection
-// honestly. The remaining unresolved campaign envelope fields are kept as zero
-// values until a future storage migration is justified.
+// AsObjectView adapts durable campaign storage to the current frozen-spec
+// campaign view without inventing new persisted truth. Only
+// platform_or_channel may be derived today, and only when governed targets
+// support that projection honestly. The remaining unresolved campaign envelope
+// fields, audience_class_or_target, message_family_or_participation_style,
+// cadence, escalation_rules, and budget, are adapter-only, intentionally
+// non-durable, and must remain zero-valued until a future justified storage
+// migration exists.
 func (record CampaignRecord) AsObjectView() CampaignObjectView {
 	platformOrChannel, _ := ResolveCampaignPlatformOrChannel(record)
 	return CampaignObjectView{

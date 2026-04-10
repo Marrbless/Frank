@@ -61,8 +61,15 @@ type TreasuryRecord struct {
 	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
-// TreasuryObjectView exposes the currently-grounded subset of the frozen V3
-// treasury contract without forcing a durable storage migration.
+// TreasuryObjectView is an adapter-only surface that exposes the
+// currently-grounded subset of the frozen V3 treasury contract without
+// forcing a durable storage migration or creating a second source of truth.
+//
+// The following fields are derived-only over current treasury storage:
+// active_container_id from container_refs when one honest active container can
+// be projected, custody_model from the presence of current container_refs,
+// permitted_transaction_classes and forbidden_transaction_classes from the
+// current treasury state, and ledger_ref from treasury_id.
 type TreasuryObjectView struct {
 	TreasuryID                  string                     `json:"treasury_id"`
 	State                       TreasuryState              `json:"state"`
@@ -100,8 +107,13 @@ type TreasuryLedgerEntry struct {
 	SourceRef     string                  `json:"source_ref,omitempty"`
 }
 
-// TreasuryLedgerEntryObjectView exposes the currently-grounded subset of the
-// frozen V3 ledger contract without forcing a durable storage migration.
+// TreasuryLedgerEntryObjectView is an adapter-only surface that exposes the
+// currently-grounded subset of the frozen V3 ledger contract without forcing a
+// durable storage migration or creating a second source of truth.
+//
+// The following fields are derived-only over current ledger storage:
+// container_id from treasury/container link resolution, direction from
+// entry_class, and status from the presence of a valid stored ledger entry.
 type TreasuryLedgerEntryObjectView struct {
 	EntryID     string                  `json:"entry_id"`
 	TreasuryID  string                  `json:"treasury_id"`
@@ -337,6 +349,10 @@ func normalizeTreasuryLedgerEntry(entry TreasuryLedgerEntry) TreasuryLedgerEntry
 	return entry
 }
 
+// AsObjectView adapts durable treasury storage to the current frozen-spec
+// treasury view without inventing new persisted truth. active_container_id,
+// custody_model, permitted_transaction_classes, forbidden_transaction_classes,
+// and ledger_ref are adapter-only derived fields over current storage.
 func (record TreasuryRecord) AsObjectView() TreasuryObjectView {
 	activeContainerID, _ := TreasuryActiveContainerID(record)
 	permitted, forbidden := DefaultTreasuryTransactionPolicy(record.State)
@@ -353,6 +369,10 @@ func (record TreasuryRecord) AsObjectView() TreasuryObjectView {
 	}
 }
 
+// ResolveTreasuryLedgerEntryObjectView adapts a durable treasury ledger entry
+// to the frozen-spec ledger view without inventing new persisted truth.
+// container_id is resolved from current treasury/container links, while
+// direction and status are derived-only adapter fields over current storage.
 func ResolveTreasuryLedgerEntryObjectView(root string, entry TreasuryLedgerEntry) (TreasuryLedgerEntryObjectView, error) {
 	containerID, err := ResolveTreasuryLedgerEntryContainerID(root, entry)
 	if err != nil {
