@@ -3420,6 +3420,21 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if err := json.Unmarshal([]byte(got), &summary); err != nil {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(got), &envelope); err != nil {
+			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
+		}
+		assertTaskStateJSONObjectKeys(t, envelope, "allowed_tools", "job_id", "max_authority", "steps")
+		steps := mustTaskStateJSONArray(t, envelope["steps"], "inspect.steps")
+		if len(steps) != 1 {
+			t.Fatalf("steps len = %d, want 1", len(steps))
+		}
+		step, ok := steps[0].(map[string]any)
+		if !ok {
+			t.Fatalf("steps[0] = %#v, want object", steps[0])
+		}
+		assertTaskStateJSONObjectKeys(t, step, "allowed_tools", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria", "treasury_preflight")
+		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
 		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
 			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
 		}
@@ -3468,6 +3483,20 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if err := json.Unmarshal([]byte(got), &summary); err != nil {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(got), &envelope); err != nil {
+			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
+		}
+		assertTaskStateJSONObjectKeys(t, envelope, "allowed_tools", "job_id", "max_authority", "steps")
+		steps := mustTaskStateJSONArray(t, envelope["steps"], "inspect.steps")
+		if len(steps) != 1 {
+			t.Fatalf("steps len = %d, want 1", len(steps))
+		}
+		step, ok := steps[0].(map[string]any)
+		if !ok {
+			t.Fatalf("steps[0] = %#v, want object", steps[0])
+		}
+		assertTaskStateJSONObjectKeys(t, step, "allowed_tools", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria")
 		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
 			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
 		}

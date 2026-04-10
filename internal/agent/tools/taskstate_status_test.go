@@ -3,12 +3,88 @@ package tools
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/local/picobot/internal/missioncontrol"
 )
+
+func assertTaskStateJSONObjectKeys(t *testing.T, value any, want ...string) {
+	t.Helper()
+
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("JSON value = %#v, want object", value)
+	}
+
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+
+	wantKeys := append([]string(nil), want...)
+	sort.Strings(wantKeys)
+
+	if len(got) != len(wantKeys) {
+		t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+	}
+	for i := range got {
+		if got[i] != wantKeys[i] {
+			t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+		}
+	}
+}
+
+func mustTaskStateJSONArray(t *testing.T, value any, label string) []any {
+	t.Helper()
+
+	array, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want array", label, value)
+	}
+	return array
+}
+
+func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight = %#v, want object", value)
+	}
+	assertTaskStateJSONObjectKeys(t, preflight, "containers", "treasury")
+
+	treasury, ok := preflight["treasury"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.treasury = %#v, want object", preflight["treasury"])
+	}
+	assertTaskStateJSONObjectKeys(t, treasury, "container_refs", "created_at", "display_name", "record_version", "state", "treasury_id", "updated_at", "zero_seed_policy")
+
+	containerRefs := mustTaskStateJSONArray(t, treasury["container_refs"], "treasury_preflight.treasury.container_refs")
+	if len(containerRefs) != 1 {
+		t.Fatalf("treasury_preflight.treasury.container_refs len = %d, want 1", len(containerRefs))
+	}
+	assertTaskStateJSONObjectKeys(t, containerRefs[0], "kind", "object_id")
+
+	containers := mustTaskStateJSONArray(t, preflight["containers"], "treasury_preflight.containers")
+	if len(containers) != 1 {
+		t.Fatalf("treasury_preflight.containers len = %d, want 1", len(containers))
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0] = %#v, want object", containers[0])
+	}
+	assertTaskStateJSONObjectKeys(t, container, "container_class_id", "container_id", "container_kind", "created_at", "eligibility_target_ref", "label", "record_version", "state", "updated_at")
+
+	eligibility, ok := container["eligibility_target_ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0].eligibility_target_ref = %#v, want object", container["eligibility_target_ref"])
+	}
+	assertTaskStateJSONObjectKeys(t, eligibility, "kind", "registry_id")
+}
 
 func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowTreasuryPreflight bool) {
 	t.Helper()
@@ -185,6 +261,12 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		if err := json.Unmarshal([]byte(summary), &got); err != nil {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(summary), &envelope); err != nil {
+			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
+		}
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
+		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, envelope["treasury_preflight"])
 		if got.TreasuryPreflight == nil || got.TreasuryPreflight.Treasury == nil {
 			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", got.TreasuryPreflight)
 		}
@@ -225,6 +307,11 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		if err := json.Unmarshal([]byte(summary), &got); err != nil {
 			t.Fatalf("json.Unmarshal() error = %v", err)
 		}
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(summary), &envelope); err != nil {
+			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
+		}
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "paused_reason", "state")
 		if got.TreasuryPreflight != nil {
 			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted runtime path", got.TreasuryPreflight)
 		}

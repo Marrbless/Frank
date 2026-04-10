@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewInspectSummaryReturnsFilteredResolvedStep(t *testing.T) {
@@ -157,27 +158,55 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 	if err != nil {
 		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
 	}
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-wallet"
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
 
 	tests := []struct {
 		name string
-		run  func() (InspectSummary, error)
+		run  func() (string, error)
+		keys []string
 	}{
 		{
 			name: "job",
-			run: func() (InspectSummary, error) {
-				return NewInspectSummary(job, "build")
+			run: func() (string, error) {
+				summary, err := NewInspectSummary(job, "build")
+				if err != nil {
+					return "", err
+				}
+				return FormatInspectSummary(summary)
 			},
+			keys: []string{"allowed_tools", "job_id", "max_authority", "steps"},
 		},
 		{
 			name: "inspectable_plan",
-			run: func() (InspectSummary, error) {
-				return NewInspectSummaryFromInspectablePlan(job.ID, &plan, "build")
+			run: func() (string, error) {
+				summary, err := NewInspectSummaryFromInspectablePlan(job.ID, &plan, "build")
+				if err != nil {
+					return "", err
+				}
+				return FormatInspectSummary(summary)
 			},
+			keys: []string{"allowed_tools", "job_id", "max_authority", "steps"},
+		},
+		{
+			name: "resolved_treasury_preflight",
+			run: func() (string, error) {
+				summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+				if err != nil {
+					return "", err
+				}
+				return FormatInspectSummary(summary)
+			},
+			keys: []string{"allowed_tools", "job_id", "max_authority", "steps"},
 		},
 	}
 
 	forbidden := []string{
-		"\"treasury_preflight\"",
 		"\"audience_class_or_target\"",
 		"\"message_family_or_participation_style\"",
 		"\"cadence\"",
@@ -197,24 +226,37 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			summary, err := tc.run()
+			formatted, err := tc.run()
 			if err != nil {
 				t.Fatalf("inspect summary error = %v", err)
 			}
-			if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
-				t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+
+			var got map[string]any
+			if err := json.Unmarshal([]byte(formatted), &got); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
 			}
-			if summary.Steps[0].TreasuryPreflight != nil {
-				t.Fatalf("TreasuryPreflight = %#v, want nil for implicit inspect surfaces", summary.Steps[0].TreasuryPreflight)
+			assertJSONObjectKeys(t, got, tc.keys...)
+			steps := mustJSONArray(t, got["steps"], "inspect.steps")
+			if len(steps) != 1 {
+				t.Fatalf("steps len = %d, want 1", len(steps))
+			}
+			step, ok := steps[0].(map[string]any)
+			if !ok {
+				t.Fatalf("steps[0] = %#v, want object", steps[0])
 			}
 
-			data, err := json.Marshal(summary)
-			if err != nil {
-				t.Fatalf("json.Marshal(summary) error = %v", err)
+			wantStepKeys := []string{"allowed_tools", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria"}
+			if tc.name == "resolved_treasury_preflight" {
+				wantStepKeys = append(wantStepKeys, "treasury_preflight")
+				assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+			} else if _, ok := step["treasury_preflight"]; ok {
+				t.Fatalf("treasury_preflight = %#v, want omitted on %s path", step["treasury_preflight"], tc.name)
 			}
+			assertJSONObjectKeys(t, step, wantStepKeys...)
+
 			for _, key := range forbidden {
-				if strings.Contains(string(data), key) {
-					t.Fatalf("inspect JSON unexpectedly contains %s: %s", key, string(data))
+				if strings.Contains(formatted, key) {
+					t.Fatalf("inspect JSON unexpectedly contains %s: %s", key, formatted)
 				}
 			}
 		})

@@ -2,10 +2,86 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
+
+func assertJSONObjectKeys(t *testing.T, value any, want ...string) {
+	t.Helper()
+
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("JSON value = %#v, want object", value)
+	}
+
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+
+	wantKeys := append([]string(nil), want...)
+	sort.Strings(wantKeys)
+
+	if len(got) != len(wantKeys) {
+		t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+	}
+	for i := range got {
+		if got[i] != wantKeys[i] {
+			t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+		}
+	}
+}
+
+func mustJSONArray(t *testing.T, value any, label string) []any {
+	t.Helper()
+
+	array, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want array", label, value)
+	}
+	return array
+}
+
+func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight = %#v, want object", value)
+	}
+	assertJSONObjectKeys(t, preflight, "containers", "treasury")
+
+	treasury, ok := preflight["treasury"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.treasury = %#v, want object", preflight["treasury"])
+	}
+	assertJSONObjectKeys(t, treasury, "container_refs", "created_at", "display_name", "record_version", "state", "treasury_id", "updated_at", "zero_seed_policy")
+
+	containerRefs := mustJSONArray(t, treasury["container_refs"], "treasury_preflight.treasury.container_refs")
+	if len(containerRefs) != 1 {
+		t.Fatalf("treasury_preflight.treasury.container_refs len = %d, want 1", len(containerRefs))
+	}
+	assertJSONObjectKeys(t, containerRefs[0], "kind", "object_id")
+
+	containers := mustJSONArray(t, preflight["containers"], "treasury_preflight.containers")
+	if len(containers) != 1 {
+		t.Fatalf("treasury_preflight.containers len = %d, want 1", len(containers))
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0] = %#v, want object", containers[0])
+	}
+	assertJSONObjectKeys(t, container, "container_class_id", "container_id", "container_kind", "created_at", "eligibility_target_ref", "label", "record_version", "state", "updated_at")
+
+	eligibility, ok := container["eligibility_target_ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("treasury_preflight.containers[0].eligibility_target_ref = %#v, want object", container["eligibility_target_ref"])
+	}
+	assertJSONObjectKeys(t, eligibility, "kind", "registry_id")
+}
 
 func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testing.T) {
 	t.Parallel()
@@ -358,39 +434,117 @@ func TestBuildOperatorStatusSummaryFallsBackToGrantRevokedAtForOlderSnapshots(t 
 func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFields(t *testing.T) {
 	t.Parallel()
 
-	summary := BuildOperatorStatusSummaryWithAllowedTools(JobRuntimeState{
+	runtime := JobRuntimeState{
 		JobID:        "job-1",
 		State:        JobStateRunning,
 		ActiveStepID: "build",
 		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
 		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
-	}, []string{"read"})
-
-	data, err := json.Marshal(summary)
-	if err != nil {
-		t.Fatalf("json.Marshal(summary) error = %v", err)
 	}
 
-	forbidden := []string{
-		"\"treasury_preflight\"",
-		"\"audience_class_or_target\"",
-		"\"message_family_or_participation_style\"",
-		"\"cadence\"",
-		"\"escalation_rules\"",
-		"\"budget\":",
-		"\"active_container_id\"",
-		"\"custody_model\"",
-		"\"permitted_transaction_classes\"",
-		"\"forbidden_transaction_classes\"",
-		"\"ledger_ref\"",
-		"\"direction\":\"internal\"",
-		"\"status\":\"recorded\"",
-	}
-	for _, key := range forbidden {
-		if strings.Contains(string(data), key) {
-			t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, string(data))
+	t.Run("without_treasury_preflight", func(t *testing.T) {
+		t.Parallel()
+
+		formatted, err := FormatOperatorStatusSummaryWithAllowedTools(runtime, []string{"read"})
+		if err != nil {
+			t.Fatalf("FormatOperatorStatusSummaryWithAllowedTools() error = %v", err)
 		}
-	}
+
+		var got map[string]any
+		if err := json.Unmarshal([]byte(formatted), &got); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state")
+
+		for _, key := range []string{
+			"\"treasury_preflight\"",
+			"\"audience_class_or_target\"",
+			"\"message_family_or_participation_style\"",
+			"\"cadence\"",
+			"\"escalation_rules\"",
+			"\"budget\":",
+			"\"active_container_id\"",
+			"\"custody_model\"",
+			"\"permitted_transaction_classes\"",
+			"\"forbidden_transaction_classes\"",
+			"\"ledger_ref\"",
+			"\"direction\":\"internal\"",
+			"\"status\":\"recorded\"",
+		} {
+			if strings.Contains(formatted, key) {
+				t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, formatted)
+			}
+		}
+	})
+
+	t.Run("with_resolved_treasury_preflight", func(t *testing.T) {
+		t.Parallel()
+
+		preflight := ResolvedExecutionContextTreasuryPreflight{
+			Treasury: &TreasuryRecord{
+				RecordVersion:  StoreRecordVersion,
+				TreasuryID:     "treasury-wallet",
+				DisplayName:    "Frank Treasury",
+				State:          TreasuryStateBootstrap,
+				ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+				ContainerRefs: []FrankRegistryObjectRef{
+					{
+						Kind:     FrankRegistryObjectKindContainer,
+						ObjectID: "container-wallet",
+					},
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 3, 0, 0, time.UTC),
+			},
+			Containers: []FrankContainerRecord{
+				{
+					RecordVersion:    StoreRecordVersion,
+					ContainerID:      "container-wallet",
+					ContainerKind:    "wallet",
+					Label:            "Primary Wallet",
+					ContainerClassID: "container-class-wallet",
+					State:            "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{
+						Kind:       EligibilityTargetKindTreasuryContainerClass,
+						RegistryID: "container-class-wallet",
+					},
+					CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+					UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+				},
+			},
+		}
+
+		formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+		if err != nil {
+			t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+		}
+
+		var got map[string]any
+		if err := json.Unmarshal([]byte(formatted), &got); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
+		assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+
+		for _, key := range []string{
+			"\"audience_class_or_target\"",
+			"\"message_family_or_participation_style\"",
+			"\"cadence\"",
+			"\"escalation_rules\"",
+			"\"budget\":",
+			"\"active_container_id\"",
+			"\"custody_model\"",
+			"\"permitted_transaction_classes\"",
+			"\"forbidden_transaction_classes\"",
+			"\"ledger_ref\"",
+			"\"direction\":\"internal\"",
+			"\"status\":\"recorded\"",
+		} {
+			if strings.Contains(formatted, key) {
+				t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, formatted)
+			}
+		}
+	})
 }
 
 func TestBuildOperatorStatusSummaryIncludesBoundedDeterministicApprovalHistory(t *testing.T) {
