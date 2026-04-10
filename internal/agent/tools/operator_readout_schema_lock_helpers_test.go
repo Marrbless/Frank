@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func mustTaskStateReadoutJSON[T any](t *testing.T, readout string) T {
+	t.Helper()
+
+	var decoded T
+	if err := json.Unmarshal([]byte(readout), &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return decoded
+}
+
 func assertTaskStateJSONObjectKeys(t *testing.T, value any, want ...string) {
 	t.Helper()
 
@@ -42,6 +52,12 @@ func mustTaskStateJSONArray(t *testing.T, value any, label string) []any {
 		t.Fatalf("%s = %#v, want array", label, value)
 	}
 	return array
+}
+
+func mustTaskStateJSONObject(t *testing.T, readout string) map[string]any {
+	t.Helper()
+
+	return mustTaskStateReadoutJSON[map[string]any](t, readout)
 }
 
 func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {

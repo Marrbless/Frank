@@ -2,7 +2,6 @@ package missioncontrol
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 )
@@ -374,31 +373,9 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 			t.Fatalf("FormatOperatorStatusSummaryWithAllowedTools() error = %v", err)
 		}
 
-		var got map[string]any
-		if err := json.Unmarshal([]byte(formatted), &got); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
+		got := mustOperatorReadoutJSONObject(t, formatted)
 		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state")
-
-		for _, key := range []string{
-			"\"treasury_preflight\"",
-			"\"audience_class_or_target\"",
-			"\"message_family_or_participation_style\"",
-			"\"cadence\"",
-			"\"escalation_rules\"",
-			"\"budget\":",
-			"\"active_container_id\"",
-			"\"custody_model\"",
-			"\"permitted_transaction_classes\"",
-			"\"forbidden_transaction_classes\"",
-			"\"ledger_ref\"",
-			"\"direction\":\"internal\"",
-			"\"status\":\"recorded\"",
-		} {
-			if strings.Contains(formatted, key) {
-				t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, formatted)
-			}
-		}
+		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false)
 	})
 
 	t.Run("with_resolved_treasury_preflight", func(t *testing.T) {
@@ -443,31 +420,10 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 			t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
 		}
 
-		var got map[string]any
-		if err := json.Unmarshal([]byte(formatted), &got); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
+		got := mustOperatorReadoutJSONObject(t, formatted)
 		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
 		assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
-
-		for _, key := range []string{
-			"\"audience_class_or_target\"",
-			"\"message_family_or_participation_style\"",
-			"\"cadence\"",
-			"\"escalation_rules\"",
-			"\"budget\":",
-			"\"active_container_id\"",
-			"\"custody_model\"",
-			"\"permitted_transaction_classes\"",
-			"\"forbidden_transaction_classes\"",
-			"\"ledger_ref\"",
-			"\"direction\":\"internal\"",
-			"\"status\":\"recorded\"",
-		} {
-			if strings.Contains(formatted, key) {
-				t.Fatalf("operator status JSON unexpectedly contains %s: %s", key, formatted)
-			}
-		}
+		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", true)
 	})
 }
 

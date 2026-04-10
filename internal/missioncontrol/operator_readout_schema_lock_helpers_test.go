@@ -1,9 +1,26 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"sort"
+	"strings"
 	"testing"
 )
+
+var operatorReadoutAdapterOnlyFields = []string{
+	"\"audience_class_or_target\"",
+	"\"message_family_or_participation_style\"",
+	"\"cadence\"",
+	"\"escalation_rules\"",
+	"\"budget\":",
+	"\"active_container_id\"",
+	"\"custody_model\"",
+	"\"permitted_transaction_classes\"",
+	"\"forbidden_transaction_classes\"",
+	"\"ledger_ref\"",
+	"\"direction\":\"internal\"",
+	"\"status\":\"recorded\"",
+}
 
 func assertJSONObjectKeys(t *testing.T, value any, want ...string) {
 	t.Helper()
@@ -40,6 +57,30 @@ func mustJSONArray(t *testing.T, value any, label string) []any {
 		t.Fatalf("%s = %#v, want array", label, value)
 	}
 	return array
+}
+
+func mustOperatorReadoutJSONObject(t *testing.T, readout string) map[string]any {
+	t.Helper()
+
+	var object map[string]any
+	if err := json.Unmarshal([]byte(readout), &object); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return object
+}
+
+func assertOperatorReadoutAdapterBoundary(t *testing.T, readout, label string, allowTreasuryPreflight bool) {
+	t.Helper()
+
+	if !allowTreasuryPreflight && strings.Contains(readout, "\"treasury_preflight\"") {
+		t.Fatalf("%s unexpectedly contains %s: %s", label, "\"treasury_preflight\"", readout)
+	}
+
+	for _, key := range operatorReadoutAdapterOnlyFields {
+		if strings.Contains(readout, key) {
+			t.Fatalf("%s unexpectedly contains %s: %s", label, key, readout)
+		}
+	}
 }
 
 func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {

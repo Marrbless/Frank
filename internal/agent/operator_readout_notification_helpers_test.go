@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/local/picobot/internal/missioncontrol"
 )
 
 func assertLoopCheckInJSONObjectKeys(t *testing.T, value any, want ...string) {
@@ -82,14 +84,31 @@ func assertLoopCheckInResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value 
 	assertLoopCheckInJSONObjectKeys(t, eligibility, "kind", "registry_id")
 }
 
-func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix string, allowTreasuryPreflight bool, wantKeys ...string) map[string]any {
+func mustLoopCheckInNotificationPayload(t *testing.T, content, prefix string) string {
 	t.Helper()
 
 	if !strings.HasPrefix(content, prefix) {
 		t.Fatalf("content = %q, want prefix %q", content, prefix)
 	}
 
-	payload := strings.TrimPrefix(content, prefix)
+	return strings.TrimPrefix(content, prefix)
+}
+
+func decodeLoopCheckInOperatorStatusSummary(t *testing.T, content, prefix string) missioncontrol.OperatorStatusSummary {
+	t.Helper()
+
+	payload := mustLoopCheckInNotificationPayload(t, content, prefix)
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(payload), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return summary
+}
+
+func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix string, allowTreasuryPreflight bool, wantKeys ...string) map[string]any {
+	t.Helper()
+
+	payload := mustLoopCheckInNotificationPayload(t, content, prefix)
 	var decoded any
 	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)

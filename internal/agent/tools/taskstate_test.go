@@ -3416,14 +3416,8 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		}
 		assertTaskStateReadoutAdapterBoundary(t, got, true)
 
-		var summary missioncontrol.InspectSummary
-		if err := json.Unmarshal([]byte(got), &summary); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
-		var envelope map[string]any
-		if err := json.Unmarshal([]byte(got), &envelope); err != nil {
-			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
-		}
+		summary := mustTaskStateReadoutJSON[missioncontrol.InspectSummary](t, got)
+		envelope := mustTaskStateJSONObject(t, got)
 		assertTaskStateJSONObjectKeys(t, envelope, "allowed_tools", "job_id", "max_authority", "steps")
 		steps := mustTaskStateJSONArray(t, envelope["steps"], "inspect.steps")
 		if len(steps) != 1 {
@@ -3479,14 +3473,8 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		}
 		assertTaskStateReadoutAdapterBoundary(t, got, false)
 
-		var summary missioncontrol.InspectSummary
-		if err := json.Unmarshal([]byte(got), &summary); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
-		var envelope map[string]any
-		if err := json.Unmarshal([]byte(got), &envelope); err != nil {
-			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
-		}
+		summary := mustTaskStateReadoutJSON[missioncontrol.InspectSummary](t, got)
+		envelope := mustTaskStateJSONObject(t, got)
 		assertTaskStateJSONObjectKeys(t, envelope, "allowed_tools", "job_id", "max_authority", "steps")
 		steps := mustTaskStateJSONArray(t, envelope["steps"], "inspect.steps")
 		if len(steps) != 1 {

@@ -1,9 +1,7 @@
 package missioncontrol
 
 import (
-	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -206,21 +204,6 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 		},
 	}
 
-	forbidden := []string{
-		"\"audience_class_or_target\"",
-		"\"message_family_or_participation_style\"",
-		"\"cadence\"",
-		"\"escalation_rules\"",
-		"\"budget\":",
-		"\"active_container_id\"",
-		"\"custody_model\"",
-		"\"permitted_transaction_classes\"",
-		"\"forbidden_transaction_classes\"",
-		"\"ledger_ref\"",
-		"\"direction\":\"internal\"",
-		"\"status\":\"recorded\"",
-	}
-
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,10 +214,7 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 				t.Fatalf("inspect summary error = %v", err)
 			}
 
-			var got map[string]any
-			if err := json.Unmarshal([]byte(formatted), &got); err != nil {
-				t.Fatalf("json.Unmarshal() error = %v", err)
-			}
+			got := mustOperatorReadoutJSONObject(t, formatted)
 			assertJSONObjectKeys(t, got, tc.keys...)
 			steps := mustJSONArray(t, got["steps"], "inspect.steps")
 			if len(steps) != 1 {
@@ -253,12 +233,7 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 				t.Fatalf("treasury_preflight = %#v, want omitted on %s path", step["treasury_preflight"], tc.name)
 			}
 			assertJSONObjectKeys(t, step, wantStepKeys...)
-
-			for _, key := range forbidden {
-				if strings.Contains(formatted, key) {
-					t.Fatalf("inspect JSON unexpectedly contains %s: %s", key, formatted)
-				}
-			}
+			assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", tc.name == "resolved_treasury_preflight")
 		})
 	}
 }

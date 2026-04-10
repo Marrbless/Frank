@@ -45,10 +45,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextZeroTreasuryRefPathUnchang
 		t.Fatalf("OperatorStatus() error = %v", err)
 	}
 
-	var got missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(summary), &got); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	if got.JobID != "job-1" {
 		t.Fatalf("JobID = %#v, want %q", got.JobID, "job-1")
 	}
@@ -92,10 +89,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPr
 		t.Fatalf("OperatorStatus() error = %v", err)
 	}
 
-	var got missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(summary), &got); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	if got.TreasuryPreflight == nil {
 		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 	}
@@ -133,14 +127,8 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		}
 		assertTaskStateReadoutAdapterBoundary(t, summary, true)
 
-		var got missioncontrol.OperatorStatusSummary
-		if err := json.Unmarshal([]byte(summary), &got); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
-		var envelope map[string]any
-		if err := json.Unmarshal([]byte(summary), &envelope); err != nil {
-			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
-		}
+		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+		envelope := mustTaskStateJSONObject(t, summary)
 		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
 		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, envelope["treasury_preflight"])
 		if got.TreasuryPreflight == nil || got.TreasuryPreflight.Treasury == nil {
@@ -179,14 +167,8 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		}
 		assertTaskStateReadoutAdapterBoundary(t, summary, false)
 
-		var got missioncontrol.OperatorStatusSummary
-		if err := json.Unmarshal([]byte(summary), &got); err != nil {
-			t.Fatalf("json.Unmarshal() error = %v", err)
-		}
-		var envelope map[string]any
-		if err := json.Unmarshal([]byte(summary), &envelope); err != nil {
-			t.Fatalf("json.Unmarshal(envelope) error = %v", err)
-		}
+		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+		envelope := mustTaskStateJSONObject(t, summary)
 		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "paused_reason", "state")
 		if got.TreasuryPreflight != nil {
 			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted runtime path", got.TreasuryPreflight)

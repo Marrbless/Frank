@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -136,7 +135,7 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 		if out.Channel != "telegram" || out.ChatID != "chat-42" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
-		summary := decodeMissionCheckInSummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission check-in:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -372,7 +371,7 @@ func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testin
 		if out.Channel != "telegram" || out.ChatID != "chat-42" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
-		summary := decodeMissionDailySummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Daily mission summary:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -769,7 +768,7 @@ func TestMissionRuntimeChangeHookApprovalNotificationSurfacesResolvedTreasuryPre
 		if out.Channel != "cli" || out.ChatID != "direct" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
-		summary := decodeApprovalNotificationSummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Approval required:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", true, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -971,7 +970,7 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationSurfacesResolvedTreasury
 		if out.Channel != "cli" || out.ChatID != "direct" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
-		summary := decodeWaitingUserSummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Waiting for user:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -1168,7 +1167,7 @@ func TestMaybeEmitCompletionNotificationSurfacesResolvedTreasuryPreflight(t *tes
 		if out.Channel != "telegram" || out.ChatID != "chat-42" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
-		summary := decodeMissionCompletedSummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission completed:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", true, "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -1394,7 +1393,7 @@ func TestMaybeEmitBudgetPauseNotificationSurfacesResolvedTreasuryPreflight(t *te
 		if out.Channel != "telegram" || out.ChatID != "chat-42" {
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
-		summary := decodeMissionPausedSummary(t, out.Content)
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission paused:\n")
 		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", true, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
@@ -1537,96 +1536,6 @@ func testWaitingUserNotificationMissionJob() missioncontrol.Job {
 			},
 		},
 	}
-}
-
-func decodeApprovalNotificationSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Approval required:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
-}
-
-func decodeMissionCheckInSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Mission check-in:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
-}
-
-func decodeMissionDailySummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Daily mission summary:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
-}
-
-func decodeWaitingUserSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Waiting for user:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
-}
-
-func decodeMissionCompletedSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Mission completed:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
-}
-
-func decodeMissionPausedSummary(t *testing.T, content string) missioncontrol.OperatorStatusSummary {
-	t.Helper()
-
-	const prefix = "Mission paused:\n"
-	if !strings.HasPrefix(content, prefix) {
-		t.Fatalf("content = %q, want prefix %q", content, prefix)
-	}
-
-	var summary missioncontrol.OperatorStatusSummary
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(content, prefix)), &summary); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	return summary
 }
 
 func writeApprovalNotificationTreasuryFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
