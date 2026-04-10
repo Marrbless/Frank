@@ -3393,6 +3393,90 @@ func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedTreasuryP
 	}
 }
 
+func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryContract(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-mail"}
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	t.Run("active", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewTaskState()
+		state.SetMissionStoreRoot(root)
+		if err := state.ActivateStep(job, "build"); err != nil {
+			t.Fatalf("ActivateStep() error = %v", err)
+		}
+
+		got, err := state.OperatorInspect("job-1", "build")
+		if err != nil {
+			t.Fatalf("OperatorInspect() error = %v", err)
+		}
+		assertTaskStateReadoutAdapterBoundary(t, got, true)
+
+		var summary missioncontrol.InspectSummary
+		if err := json.Unmarshal([]byte(got), &summary); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
+			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+		}
+		if summary.Steps[0].TreasuryPreflight == nil || summary.Steps[0].TreasuryPreflight.Treasury == nil {
+			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", summary.Steps[0].TreasuryPreflight)
+		}
+		if !reflect.DeepEqual(*summary.Steps[0].TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.Steps[0].TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(summary.Steps[0].TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.Steps[0].TreasuryPreflight.Containers, container)
+		}
+	})
+
+	t.Run("persisted", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewTaskState()
+		inspectablePlan, err := missioncontrol.BuildInspectablePlanContext(job)
+		if err != nil {
+			t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+		}
+		control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+		if err != nil {
+			t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+		}
+
+		state.runtimeState = missioncontrol.JobRuntimeState{
+			JobID:           "job-1",
+			State:           missioncontrol.JobStatePaused,
+			ActiveStepID:    "build",
+			InspectablePlan: &inspectablePlan,
+			PausedReason:    missioncontrol.RuntimePauseReasonOperatorCommand,
+		}
+		state.hasRuntimeState = true
+		state.runtimeControl = control
+		state.hasRuntimeControl = true
+
+		got, err := state.OperatorInspect("job-1", "build")
+		if err != nil {
+			t.Fatalf("OperatorInspect() error = %v", err)
+		}
+		assertTaskStateReadoutAdapterBoundary(t, got, false)
+
+		var summary missioncontrol.InspectSummary
+		if err := json.Unmarshal([]byte(got), &summary); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
+			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+		}
+		if summary.Steps[0].TreasuryPreflight != nil {
+			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted inspectable-plan path", summary.Steps[0].TreasuryPreflight)
+		}
+	})
+}
+
 func TestTaskStateOperatorInspectActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
 	t.Parallel()
 

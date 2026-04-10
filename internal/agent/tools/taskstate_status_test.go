@@ -10,6 +10,54 @@ import (
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
+func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowTreasuryPreflight bool) {
+	t.Helper()
+
+	var payload any
+	if err := json.Unmarshal([]byte(readout), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	forbiddenKeys := map[string]struct{}{
+		"audience_class_or_target":              {},
+		"message_family_or_participation_style": {},
+		"cadence":                               {},
+		"escalation_rules":                      {},
+		"budget":                                {},
+		"active_container_id":                   {},
+		"custody_model":                         {},
+		"permitted_transaction_classes":         {},
+		"forbidden_transaction_classes":         {},
+		"ledger_ref":                            {},
+		"direction":                             {},
+	}
+	if !allowTreasuryPreflight {
+		forbiddenKeys["treasury_preflight"] = struct{}{}
+	}
+
+	var walk func(any)
+	walk = func(node any) {
+		switch typed := node.(type) {
+		case map[string]any:
+			for key, value := range typed {
+				if _, ok := forbiddenKeys[key]; ok {
+					t.Fatalf("readout unexpectedly contains adapter-only field %q: %s", key, readout)
+				}
+				walk(value)
+			}
+		case []any:
+			for _, value := range typed {
+				walk(value)
+			}
+		}
+	}
+	walk(payload)
+
+	if strings.Contains(readout, `"status": "recorded"`) {
+		t.Fatalf("readout unexpectedly contains derived-only ledger status: %s", readout)
+	}
+}
+
 func writeMalformedTreasuryRecordForTaskStateStatusTest(t *testing.T, root string, treasury missioncontrol.TreasuryRecord) {
 	t.Helper()
 
@@ -108,6 +156,79 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPr
 	if !reflect.DeepEqual(got.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.TreasuryPreflight.Containers, container)
 	}
+}
+
+func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryContract(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-mail"}
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	t.Run("active", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewTaskState()
+		state.SetMissionStoreRoot(root)
+		if err := state.ActivateStep(job, "build"); err != nil {
+			t.Fatalf("ActivateStep() error = %v", err)
+		}
+
+		summary, err := state.OperatorStatus("job-1")
+		if err != nil {
+			t.Fatalf("OperatorStatus() error = %v", err)
+		}
+		assertTaskStateReadoutAdapterBoundary(t, summary, true)
+
+		var got missioncontrol.OperatorStatusSummary
+		if err := json.Unmarshal([]byte(summary), &got); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if got.TreasuryPreflight == nil || got.TreasuryPreflight.Treasury == nil {
+			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", got.TreasuryPreflight)
+		}
+		if !reflect.DeepEqual(*got.TreasuryPreflight.Treasury, treasury) {
+			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *got.TreasuryPreflight.Treasury, treasury)
+		}
+		if !reflect.DeepEqual(got.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
+			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.TreasuryPreflight.Containers, container)
+		}
+	})
+
+	t.Run("persisted", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewTaskState()
+		runtime := missioncontrol.JobRuntimeState{
+			JobID:        "job-1",
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			PausedReason: missioncontrol.RuntimePauseReasonOperatorCommand,
+		}
+		control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+		if err != nil {
+			t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+		}
+		if err := state.HydrateRuntimeControl(job, runtime, &control); err != nil {
+			t.Fatalf("HydrateRuntimeControl() error = %v", err)
+		}
+		state.ClearExecutionContext()
+
+		summary, err := state.OperatorStatus("job-1")
+		if err != nil {
+			t.Fatalf("OperatorStatus() error = %v", err)
+		}
+		assertTaskStateReadoutAdapterBoundary(t, summary, false)
+
+		var got missioncontrol.OperatorStatusSummary
+		if err := json.Unmarshal([]byte(summary), &got); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if got.TreasuryPreflight != nil {
+			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted runtime path", got.TreasuryPreflight)
+		}
+	})
 }
 
 func TestTaskStateOperatorStatusActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
