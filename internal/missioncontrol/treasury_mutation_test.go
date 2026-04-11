@@ -13,7 +13,7 @@ func TestRecordFirstTreasuryAcquisitionTransitionsBootstrapTreasuryToFundedAndAp
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	root := fixtures.root
 	now := time.Date(2026, 4, 10, 13, 0, 0, 0, time.UTC)
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-bootstrap"
 		record.ContainerRefs = []FrankRegistryObjectRef{{
 			Kind:     FrankRegistryObjectKindContainer,
@@ -65,7 +65,7 @@ func TestRecordFirstTreasuryAcquisitionDuplicateBootstrapTransitionFailsClosed(t
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	root := fixtures.root
 	now := time.Date(2026, 4, 10, 13, 10, 0, 0, time.UTC)
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-duplicate"
 		record.ContainerRefs = []FrankRegistryObjectRef{{
 			Kind:     FrankRegistryObjectKindContainer,
@@ -114,7 +114,7 @@ func TestRecordFirstTreasuryAcquisitionFailsClosedWithoutActiveContainer(t *test
 
 	root := writeExecutionContextFrankRegistryFixtures(t).root
 	now := time.Date(2026, 4, 10, 13, 20, 0, 0, time.UTC)
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-no-container"
 		record.ContainerRefs = nil
 	}))
@@ -161,7 +161,7 @@ func TestRecordFirstTreasuryAcquisitionFailsClosedWithAmbiguousActiveContainer(t
 	if err := StoreFrankContainerRecord(root, secondContainer); err != nil {
 		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
 	}
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now.Add(2*time.Minute), func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now.Add(2*time.Minute), func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-ambiguous-container"
 		record.ContainerRefs = []FrankRegistryObjectRef{
 			{
@@ -198,7 +198,7 @@ func TestRecordFirstTreasuryAcquisitionFailsClosedOutsideBootstrapState(t *testi
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	root := fixtures.root
 	now := time.Date(2026, 4, 10, 13, 40, 0, 0, time.UTC)
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-funded"
 		record.State = TreasuryStateFunded
 		record.ContainerRefs = []FrankRegistryObjectRef{{
@@ -230,7 +230,7 @@ func TestRecordFirstTreasuryAcquisitionPreservesTreasuryAndLedgerContractViews(t
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
 	root := fixtures.root
 	now := time.Date(2026, 4, 10, 13, 50, 0, 0, time.UTC)
-	mustStoreTreasuryForFirstAcquisitionTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-contract-view"
 		record.ContainerRefs = []FrankRegistryObjectRef{{
 			Kind:     FrankRegistryObjectKindContainer,
@@ -285,11 +285,285 @@ func TestRecordFirstTreasuryAcquisitionPreservesTreasuryAndLedgerContractViews(t
 	}
 }
 
-func mustStoreTreasuryForFirstAcquisitionTest(t *testing.T, root string, record TreasuryRecord) {
+func TestActivateFundedTreasuryTransitionsFundedTreasuryToActive(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-funded"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+	}))
+
+	activatedAt := now.Add(2 * time.Minute)
+	if err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-funded",
+	}, activatedAt); err != nil {
+		t.Fatalf("ActivateFundedTreasury() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-funded")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.State != TreasuryStateActive {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", treasury.State, TreasuryStateActive)
+	}
+	if !treasury.UpdatedAt.Equal(activatedAt.UTC()) {
+		t.Fatalf("LoadTreasuryRecord().UpdatedAt = %s, want %s", treasury.UpdatedAt, activatedAt.UTC())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-funded")
+}
+
+func TestActivateFundedTreasuryDuplicateActivationFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 14, 10, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-duplicate-activation"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+	}))
+
+	activeAt := now.Add(time.Minute)
+	if err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-duplicate-activation",
+	}, activeAt); err != nil {
+		t.Fatalf("ActivateFundedTreasury(first) error = %v", err)
+	}
+
+	err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-duplicate-activation",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("ActivateFundedTreasury() error = nil, want duplicate activation rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-duplicate-activation" activation requires state "funded", got "active"`) {
+		t.Fatalf("ActivateFundedTreasury() error = %q, want duplicate activation rejection", err.Error())
+	}
+
+	treasury, loadErr := LoadTreasuryRecord(root, "treasury-duplicate-activation")
+	if loadErr != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", loadErr)
+	}
+	if treasury.State != TreasuryStateActive {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", treasury.State, TreasuryStateActive)
+	}
+	if !treasury.UpdatedAt.Equal(activeAt.UTC()) {
+		t.Fatalf("LoadTreasuryRecord().UpdatedAt = %s, want unchanged %s", treasury.UpdatedAt, activeAt.UTC())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-duplicate-activation")
+}
+
+func TestActivateFundedTreasuryFailsClosedWithoutActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	root := writeExecutionContextFrankRegistryFixtures(t).root
+	now := time.Date(2026, 4, 10, 14, 20, 0, 0, time.UTC)
+	writeMalformedTreasuryRecordForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-no-active-container"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = nil
+	}))
+
+	err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-no-active-container",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("ActivateFundedTreasury() error = nil, want missing active-container rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury state "funded" requires exactly one active_container_id derivable from container_refs`) {
+		t.Fatalf("ActivateFundedTreasury() error = %q, want missing active-container rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-no-active-container")
+}
+
+func TestActivateFundedTreasuryFailsClosedWithAmbiguousActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 14, 30, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-wallet-2",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelAutonomyCompatible, "container-class-wallet-2", "check-container-class-wallet-2", now)
+	secondContainer := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-wallet-2",
+		ContainerKind:        "wallet",
+		Label:                "Secondary Wallet",
+		ContainerClassID:     "container-class-wallet-2",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, secondContainer); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+	writeMalformedTreasuryRecordForMutationTest(t, root, validTreasuryRecord(now.Add(2*time.Minute), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-ambiguous-activation"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: secondContainer.ContainerID,
+			},
+		}
+	}))
+
+	err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-ambiguous-activation",
+	}, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("ActivateFundedTreasury() error = nil, want ambiguous active-container rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury state "funded" requires exactly one active_container_id derivable from container_refs`) {
+		t.Fatalf("ActivateFundedTreasury() error = %q, want ambiguous active-container rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-ambiguous-activation")
+}
+
+func TestActivateFundedTreasuryFailsClosedOutsideFundedState(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 14, 40, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-bootstrap-activation"
+		record.State = TreasuryStateBootstrap
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+	}))
+
+	err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-bootstrap-activation",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("ActivateFundedTreasury() error = nil, want invalid state rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-bootstrap-activation" activation requires state "funded", got "bootstrap"`) {
+		t.Fatalf("ActivateFundedTreasury() error = %q, want invalid state rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-bootstrap-activation")
+}
+
+func TestActivateFundedTreasuryPreservesTreasuryPreflightAndActivePolicyReadModel(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 14, 50, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-read-model"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+	}))
+
+	activatedAt := now.Add(2 * time.Minute)
+	if err := ActivateFundedTreasury(root, WriterLockLease{LeaseHolderID: "holder-1"}, ActivateFundedTreasuryInput{
+		TreasuryID: "treasury-read-model",
+	}, activatedAt); err != nil {
+		t.Fatalf("ActivateFundedTreasury() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: "treasury-read-model"}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	preflight, err := ResolveExecutionContextTreasuryPreflight(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPreflight() error = %v", err)
+	}
+	if preflight.Treasury == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPreflight().Treasury = nil, want activated treasury")
+	}
+	if len(preflight.Containers) != 1 || !reflect.DeepEqual(preflight.Containers[0], fixtures.container) {
+		t.Fatalf("ResolveExecutionContextTreasuryPreflight().Containers = %#v, want [%#v]", preflight.Containers, fixtures.container)
+	}
+
+	view := preflight.Treasury.AsObjectView()
+	wantPermitted, wantForbidden := DefaultTreasuryTransactionPolicy(TreasuryStateActive)
+	if preflight.Treasury.State != TreasuryStateActive {
+		t.Fatalf("ResolveExecutionContextTreasuryPreflight().Treasury.State = %q, want %q", preflight.Treasury.State, TreasuryStateActive)
+	}
+	if !reflect.DeepEqual(view.PermittedTransactionClasses, wantPermitted) {
+		t.Fatalf("TreasuryRecord.AsObjectView().PermittedTransactionClasses = %#v, want %#v", view.PermittedTransactionClasses, wantPermitted)
+	}
+	if !reflect.DeepEqual(view.ForbiddenTransactionClasses, wantForbidden) {
+		t.Fatalf("TreasuryRecord.AsObjectView().ForbiddenTransactionClasses = %#v, want %#v", view.ForbiddenTransactionClasses, wantForbidden)
+	}
+	if view.ActiveContainerID != fixtures.container.ContainerID {
+		t.Fatalf("TreasuryRecord.AsObjectView().ActiveContainerID = %q, want %q", view.ActiveContainerID, fixtures.container.ContainerID)
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-read-model")
+}
+
+func mustStoreTreasuryForMutationTest(t *testing.T, root string, record TreasuryRecord) {
 	t.Helper()
 
 	if err := StoreTreasuryRecord(root, record); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+}
+
+func writeMalformedTreasuryRecordForMutationTest(t *testing.T, root string, treasury TreasuryRecord) {
+	t.Helper()
+
+	treasury = normalizeTreasuryRecord(treasury)
+	payload := map[string]any{
+		"record_version":   normalizeRecordVersion(treasury.RecordVersion),
+		"treasury_id":      treasury.TreasuryID,
+		"display_name":     treasury.DisplayName,
+		"state":            string(treasury.State),
+		"zero_seed_policy": string(treasury.ZeroSeedPolicy),
+		"created_at":       treasury.CreatedAt,
+		"updated_at":       treasury.UpdatedAt,
+	}
+	if len(treasury.ContainerRefs) > 0 {
+		refs := make([]map[string]any, 0, len(treasury.ContainerRefs))
+		for _, ref := range treasury.ContainerRefs {
+			refs = append(refs, map[string]any{
+				"kind":      string(ref.Kind),
+				"object_id": ref.ObjectID,
+			})
+		}
+		payload["container_refs"] = refs
+	}
+	if err := WriteStoreJSONAtomic(StoreTreasuryPath(root, treasury.TreasuryID), payload); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
 	}
 }
 
