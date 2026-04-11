@@ -111,10 +111,10 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 
 	job := testMissionJob([]string{"read"}, []string{"read"})
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
 	if err := ag.ActivateMissionStep(job, "build"); err != nil {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
-	ag.taskState.SetMissionStoreRoot(root)
 	ag.taskState.SetOperatorSession("telegram", "chat-42")
 
 	ec, ok := ag.ActiveMissionStep()
@@ -143,8 +143,11 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 		if summary.TreasuryPreflight.Treasury == nil {
 			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 		}
-		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		if summary.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
@@ -182,41 +185,13 @@ func TestMaybeEmitMissionCheckInInvalidTreasuryStateFailsClosed(t *testing.T) {
 
 	job := testMissionJob([]string{"read"}, []string{"read"})
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
-	if err := ag.ActivateMissionStep(job, "build"); err != nil {
-		t.Fatalf("ActivateMissionStep() error = %v", err)
-	}
 	ag.taskState.SetMissionStoreRoot(root)
-	ag.taskState.SetOperatorSession("telegram", "chat-42")
-
-	ec, ok := ag.ActiveMissionStep()
-	if !ok || ec.Runtime == nil {
-		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
-	}
-	checkInAt := now.Add(31 * time.Minute)
-	ec.Runtime.CreatedAt = checkInAt.Add(-31 * time.Minute)
-	ec.Runtime.UpdatedAt = checkInAt.Add(-31 * time.Minute)
-	ec.Runtime.StartedAt = checkInAt.Add(-31 * time.Minute)
-	ec.Runtime.ActiveStepAt = checkInAt.Add(-31 * time.Minute)
-	ag.taskState.SetExecutionContext(ec)
-
-	ag.maybeEmitMissionCheckIn(checkInAt)
-
-	select {
-	case out := <-hub.Out:
-		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
-	default:
-	}
-
-	runtime, ok := ag.MissionRuntimeState()
-	if !ok {
-		t.Fatal("MissionRuntimeState() ok = false, want true")
-	}
-	_, err := buildMissionCheckInContent(ag.taskState, runtime)
+	err := ag.ActivateMissionStep(job, "build")
 	if err == nil {
-		t.Fatal("buildMissionCheckInContent() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateMissionStep() error = nil, want fail-closed treasury activation rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("buildMissionCheckInContent() error = %q, want missing container rejection", err)
+		t.Fatalf("ActivateMissionStep() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -347,10 +322,10 @@ func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testin
 
 	job := testMissionJob([]string{"read"}, []string{"read"})
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+	ag.taskState.SetMissionStoreRoot(root)
 	if err := ag.ActivateMissionStep(job, "build"); err != nil {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
-	ag.taskState.SetMissionStoreRoot(root)
 	ag.taskState.SetOperatorSession("telegram", "chat-42")
 
 	ec, ok := ag.ActiveMissionStep()
@@ -379,8 +354,11 @@ func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testin
 		if summary.TreasuryPreflight.Treasury == nil {
 			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 		}
-		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		if summary.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
@@ -418,41 +396,13 @@ func TestMaybeEmitMissionDailySummaryInvalidTreasuryStateFailsClosed(t *testing.
 
 	job := testMissionJob([]string{"read"}, []string{"read"})
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
-	if err := ag.ActivateMissionStep(job, "build"); err != nil {
-		t.Fatalf("ActivateMissionStep() error = %v", err)
-	}
 	ag.taskState.SetMissionStoreRoot(root)
-	ag.taskState.SetOperatorSession("telegram", "chat-42")
-
-	ec, ok := ag.ActiveMissionStep()
-	if !ok || ec.Runtime == nil {
-		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
-	}
-	summaryAt := now.Add(30 * time.Minute)
-	ec.Runtime.CreatedAt = summaryAt.Add(-24 * time.Hour)
-	ec.Runtime.UpdatedAt = summaryAt.Add(-24 * time.Hour)
-	ec.Runtime.StartedAt = summaryAt.Add(-24 * time.Hour)
-	ec.Runtime.ActiveStepAt = summaryAt.Add(-24 * time.Hour)
-	ag.taskState.SetExecutionContext(ec)
-
-	ag.maybeEmitMissionDailySummary(summaryAt)
-
-	select {
-	case out := <-hub.Out:
-		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
-	default:
-	}
-
-	runtime, ok := ag.MissionRuntimeState()
-	if !ok {
-		t.Fatal("MissionRuntimeState() ok = false, want true")
-	}
-	_, err := buildMissionDailySummaryContent(ag.taskState, runtime)
+	err := ag.ActivateMissionStep(job, "build")
 	if err == nil {
-		t.Fatal("buildMissionDailySummaryContent() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateMissionStep() error = nil, want fail-closed treasury activation rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("buildMissionDailySummaryContent() error = %q, want missing container rejection", err)
+		t.Fatalf("ActivateMissionStep() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -776,8 +726,11 @@ func TestMissionRuntimeChangeHookApprovalNotificationSurfacesResolvedTreasuryPre
 		if summary.TreasuryPreflight.Treasury == nil {
 			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 		}
-		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		if summary.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
@@ -817,34 +770,12 @@ func TestMissionRuntimeChangeHookApprovalNotificationInvalidTreasuryStateFailsCl
 	job := testDiscussionMissionJob()
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 	ag.taskState.SetMissionStoreRoot(root)
-	if err := ag.ActivateMissionStep(job, "build"); err != nil {
-		t.Fatalf("ActivateMissionStep() error = %v", err)
-	}
-
-	resp, err := ag.ProcessDirect("continue", 2*time.Second)
-	if err != nil {
-		t.Fatalf("ProcessDirect() error = %v", err)
-	}
-	if resp != "Need approval before continuing." {
-		t.Fatalf("ProcessDirect() response = %q, want discussion response", resp)
-	}
-
-	select {
-	case out := <-hub.Out:
-		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
-	default:
-	}
-
-	runtime, ok := ag.MissionRuntimeState()
-	if !ok {
-		t.Fatal("MissionRuntimeState() ok = false, want true")
-	}
-	_, err = buildMissionApprovalRequestContent(ag.taskState, runtime)
+	err := ag.ActivateMissionStep(job, "build")
 	if err == nil {
-		t.Fatal("buildMissionApprovalRequestContent() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateMissionStep() error = nil, want fail-closed treasury activation rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("buildMissionApprovalRequestContent() error = %q, want missing container rejection", err)
+		t.Fatalf("ActivateMissionStep() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -978,8 +909,11 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationSurfacesResolvedTreasury
 		if summary.TreasuryPreflight.Treasury == nil {
 			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 		}
-		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		if summary.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
@@ -1019,34 +953,12 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationInvalidTreasuryStateFail
 	job := testWaitingUserNotificationMissionJob()
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 	ag.taskState.SetMissionStoreRoot(root)
-	if err := ag.ActivateMissionStep(job, "build"); err != nil {
-		t.Fatalf("ActivateMissionStep() error = %v", err)
-	}
-
-	resp, err := ag.ProcessDirect("continue", 2*time.Second)
-	if err != nil {
-		t.Fatalf("ProcessDirect() error = %v", err)
-	}
-	if resp != "Waiting for your answer." {
-		t.Fatalf("ProcessDirect() response = %q, want waiting-user response", resp)
-	}
-
-	select {
-	case out := <-hub.Out:
-		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
-	default:
-	}
-
-	runtime, ok := ag.MissionRuntimeState()
-	if !ok {
-		t.Fatal("MissionRuntimeState() ok = false, want true")
-	}
-	_, err = buildMissionWaitingUserContent(ag.taskState, runtime)
+	err := ag.ActivateMissionStep(job, "build")
 	if err == nil {
-		t.Fatal("buildMissionWaitingUserContent() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateMissionStep() error = nil, want fail-closed treasury activation rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("buildMissionWaitingUserContent() error = %q, want missing container rejection", err)
+		t.Fatalf("ActivateMissionStep() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -1401,8 +1313,11 @@ func TestMaybeEmitBudgetPauseNotificationSurfacesResolvedTreasuryPreflight(t *te
 		if summary.TreasuryPreflight.Treasury == nil {
 			t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 		}
-		if !reflect.DeepEqual(*summary.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.TreasuryPreflight.Treasury, treasury)
+		if summary.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
@@ -1442,43 +1357,12 @@ func TestMaybeEmitBudgetPauseNotificationInvalidTreasuryStateFailsClosed(t *test
 
 	job := testMissionJob([]string{"read"}, []string{"read"})
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
-	if err := ag.ActivateMissionStep(job, "build"); err != nil {
-		t.Fatalf("ActivateMissionStep() error = %v", err)
-	}
-
-	ec, ok := ag.ActiveMissionStep()
-	if !ok || ec.Runtime == nil {
-		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
-	}
-	ec.Runtime.State = missioncontrol.JobStatePaused
-	ec.Runtime.PausedReason = missioncontrol.RuntimePauseReasonBudgetExhausted
-	ec.Runtime.BudgetBlocker = &missioncontrol.RuntimeBudgetBlockerRecord{
-		Ceiling:     "owner_messages",
-		Limit:       20,
-		Observed:    20,
-		Message:     "owner-facing message budget exhausted",
-		TriggeredAt: now,
-	}
-	ag.taskState.SetExecutionContext(ec)
-
-	ag.maybeEmitBudgetPauseNotification()
-
-	select {
-	case out := <-hub.Out:
-		t.Fatalf("unexpected outbound notification for invalid treasury state: %#v", out)
-	default:
-	}
-
-	runtime, ok := ag.MissionRuntimeState()
-	if !ok {
-		t.Fatal("MissionRuntimeState() ok = false, want true")
-	}
-	_, err := buildMissionBudgetPauseContent(ag.taskState, runtime)
+	err := ag.ActivateMissionStep(job, "build")
 	if err == nil {
-		t.Fatal("buildMissionBudgetPauseContent() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateMissionStep() error = nil, want fail-closed treasury activation rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("buildMissionBudgetPauseContent() error = %q, want missing container rejection", err)
+		t.Fatalf("ActivateMissionStep() error = %q, want missing container rejection", err)
 	}
 }
 
@@ -1588,7 +1472,7 @@ func writeApprovalNotificationTreasuryFixtures(t *testing.T) (string, missioncon
 		RecordVersion:  missioncontrol.StoreRecordVersion,
 		TreasuryID:     "treasury-wallet",
 		DisplayName:    "Frank Treasury",
-		State:          missioncontrol.TreasuryStateBootstrap,
+		State:          missioncontrol.TreasuryStateFunded,
 		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
 		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
 			{

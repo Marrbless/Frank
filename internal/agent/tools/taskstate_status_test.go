@@ -96,8 +96,11 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPr
 	if got.TreasuryPreflight.Treasury == nil {
 		t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 	}
-	if !reflect.DeepEqual(*got.TreasuryPreflight.Treasury, treasury) {
-		t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *got.TreasuryPreflight.Treasury, treasury)
+	if got.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+		t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", got.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+	}
+	if got.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+		t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", got.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 	}
 	if !reflect.DeepEqual(got.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.TreasuryPreflight.Containers, container)
@@ -134,8 +137,11 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		if got.TreasuryPreflight == nil || got.TreasuryPreflight.Treasury == nil {
 			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", got.TreasuryPreflight)
 		}
-		if !reflect.DeepEqual(*got.TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *got.TreasuryPreflight.Treasury, treasury)
+		if got.TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", got.TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if got.TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", got.TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(got.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", got.TreasuryPreflight.Containers, container)
@@ -176,43 +182,26 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 	})
 }
 
-func TestTaskStateOperatorStatusActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
+func TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
-	treasury := missioncontrol.TreasuryRecord{
-		RecordVersion:  missioncontrol.StoreRecordVersion,
-		TreasuryID:     "treasury-missing-container",
-		DisplayName:    "Frank Treasury",
-		State:          missioncontrol.TreasuryStateBootstrap,
-		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
-		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
-			{
-				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
-				ObjectID: "missing-container",
-			},
-		},
-		CreatedAt: now.UTC(),
-		UpdatedAt: now.Add(time.Minute).UTC(),
+	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
+	treasury.State = missioncontrol.TreasuryStateBootstrap
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
-	writeMalformedTreasuryRecordForTaskStateStatusTest(t, root, treasury)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 
 	state := NewTaskState()
 	state.SetMissionStoreRoot(root)
-	if err := state.ActivateStep(job, "build"); err != nil {
-		t.Fatalf("ActivateStep() error = %v", err)
-	}
-
-	_, err := state.OperatorStatus("job-1")
+	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("OperatorStatus() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateStep() error = nil, want fail-closed treasury activation rejection")
 	}
-	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("OperatorStatus() error = %q, want missing container rejection", err)
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "bootstrap"`) {
+		t.Fatalf("ActivateStep() error = %q, want invalid treasury state rejection", err)
 	}
 }
 

@@ -13,28 +13,33 @@ import (
 // The main use right now is enforcing that a new deliverable task must
 // initialize projects/current via frank_new_project before writing there.
 type TaskState struct {
-	mu                    sync.Mutex
-	currentTaskID         string
-	projectInitialized    bool
-	missionStoreRoot      string
-	executionContext      missioncontrol.ExecutionContext
-	hasExecutionContext   bool
-	missionJob            missioncontrol.Job
-	hasMissionJob         bool
-	runtimeControl        missioncontrol.RuntimeControlContext
-	hasRuntimeControl     bool
-	runtimeState          missioncontrol.JobRuntimeState
-	hasRuntimeState       bool
-	operatorChannel       string
-	operatorChatID        string
-	auditEvents           []missioncontrol.AuditEvent
-	runtimePersistHook    func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeProjectionHook func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeChangeHook     func()
+	mu                           sync.Mutex
+	currentTaskID                string
+	projectInitialized           bool
+	missionStoreRoot             string
+	executionContext             missioncontrol.ExecutionContext
+	hasExecutionContext          bool
+	missionJob                   missioncontrol.Job
+	hasMissionJob                bool
+	runtimeControl               missioncontrol.RuntimeControlContext
+	hasRuntimeControl            bool
+	runtimeState                 missioncontrol.JobRuntimeState
+	hasRuntimeState              bool
+	operatorChannel              string
+	operatorChatID               string
+	auditEvents                  []missioncontrol.AuditEvent
+	runtimePersistHook           func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeProjectionHook        func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeChangeHook            func()
+	treasuryActivationPolicyHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
+const taskStateTreasuryActivationLeaseHolderID = "taskstate-activate-step-treasury"
+
 func NewTaskState() *TaskState {
-	return &TaskState{}
+	return &TaskState{
+		treasuryActivationPolicyHook: missioncontrol.ApplyDefaultTreasuryActivationPolicy,
+	}
 }
 
 func (s *TaskState) BeginTask(taskID string) {
@@ -246,8 +251,12 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	}
 	s.mu.Unlock()
 
-	runtimeState, err := missioncontrol.SetJobRuntimeActiveStep(job, current, stepID, time.Now())
+	now := time.Now()
+	runtimeState, err := missioncontrol.SetJobRuntimeActiveStep(job, current, stepID, now)
 	if err != nil {
+		return err
+	}
+	if err := s.applyTreasuryActivationPolicyForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -258,6 +267,34 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		s.notifyRuntimeChanged()
 	}
 	return err
+}
+
+func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || ec.Step.TreasuryRef == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.treasuryActivationPolicyHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+
+	return hook(root, missioncontrol.WriterLockLease{
+		LeaseHolderID: taskStateTreasuryActivationLeaseHolderID,
+	}, missioncontrol.DefaultTreasuryActivationPolicyInput{
+		TreasuryRef: *ec.Step.TreasuryRef,
+	}, now)
 }
 
 func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {

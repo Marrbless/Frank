@@ -530,6 +530,205 @@ func TestTaskStateActivateStepRejectsPreviouslyFailedStepReplay(t *testing.T) {
 	}
 }
 
+func TestTaskStateActivateStepTreasuryPathCallsActivationPolicyOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	calls := 0
+	var gotRoot string
+	var gotLease missioncontrol.WriterLockLease
+	var gotInput missioncontrol.DefaultTreasuryActivationPolicyInput
+	var gotAt time.Time
+	state.treasuryActivationPolicyHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.DefaultTreasuryActivationPolicyInput, now time.Time) error {
+		calls++
+		gotRoot = root
+		gotLease = lease
+		gotInput = input
+		gotAt = now
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("treasuryActivationPolicyHook calls = %d, want 1", calls)
+	}
+	if gotRoot != root {
+		t.Fatalf("treasuryActivationPolicyHook root = %q, want %q", gotRoot, root)
+	}
+	if gotLease.LeaseHolderID != taskStateTreasuryActivationLeaseHolderID {
+		t.Fatalf("treasuryActivationPolicyHook lease = %#v, want %q", gotLease, taskStateTreasuryActivationLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotInput, missioncontrol.DefaultTreasuryActivationPolicyInput{
+		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
+	}) {
+		t.Fatalf("treasuryActivationPolicyHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("treasuryActivationPolicyHook now = zero, want activation timestamp")
+	}
+
+	runtime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want stored runtime")
+	}
+	if runtime.State != missioncontrol.JobStateRunning || runtime.ActiveStepID != "build" {
+		t.Fatalf("MissionRuntimeState() = %#v, want running build runtime", runtime)
+	}
+}
+
+func TestTaskStateActivateStepTreasuryPolicyDisallowedFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 11, 16, 0, 0, 0, time.UTC)
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-human-wallet",
+	}
+	writeTaskStateAutonomyEligibilityFixture(t, root, target, missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "container-class-human-wallet",
+		TargetClass:      target.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelIneligible,
+		LastCheckID:      "check-container-class-human-wallet",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                     "check-container-class-human-wallet",
+		TargetKind:                  target.Kind,
+		TargetName:                  "container-class-human-wallet",
+		CanCreateWithoutOwner:       false,
+		CanOnboardWithoutOwner:      false,
+		CanControlAsAgent:           false,
+		CanRecoverAsAgent:           false,
+		RequiresHumanOnlyStep:       true,
+		RequiresOwnerOnlySecretOrID: true,
+		RulesAsObservedOK:           false,
+		Label:                       missioncontrol.EligibilityLabelIneligible,
+		Reasons:                     []string{string(missioncontrol.AutonomyEligibilityReasonOwnerIdentityRequired)},
+		CheckedAt:                   now,
+	})
+
+	container := missioncontrol.FrankContainerRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		ContainerID:          "container-human-wallet",
+		ContainerKind:        "wallet",
+		Label:                "Human Wallet",
+		ContainerClassID:     target.RegistryID,
+		State:                "candidate",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(time.Minute).UTC(),
+		UpdatedAt:            now.Add(2 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	treasury := missioncontrol.TreasuryRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		TreasuryID:     "treasury-policy-disallowed",
+		DisplayName:    "Frank Treasury",
+		State:          missioncontrol.TreasuryStateFunded,
+		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
+		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{{
+			Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+			ObjectID: container.ContainerID,
+		}},
+		CreatedAt: now.UTC(),
+		UpdatedAt: now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	_, wantErr := missioncontrol.RequireAutonomyEligibleTarget(root, target)
+	if wantErr == nil {
+		t.Fatal("RequireAutonomyEligibleTarget() error = nil, want policy rejection")
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want treasury policy rejection")
+	}
+	if err.Error() != wantErr.Error() {
+		t.Fatalf("ActivateStep() error = %q, want %q", err.Error(), wantErr.Error())
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want no active context after policy rejection")
+	}
+	if _, ok := state.MissionRuntimeState(); ok {
+		t.Fatal("MissionRuntimeState() ok = true, want no stored runtime after policy rejection")
+	}
+
+	loadedTreasury, loadErr := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if loadErr != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", loadErr)
+	}
+	if loadedTreasury.State != missioncontrol.TreasuryStateFunded {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", loadedTreasury.State, missioncontrol.TreasuryStateFunded)
+	}
+}
+
+func TestTaskStateActivateStepTreasuryReplayStaysDeterministic(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want stored runtime after first activation")
+	}
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+
+	err = state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(replay) error = nil, want deterministic treasury activation rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "active"`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want duplicate activation rejection", err.Error())
+	}
+
+	secondRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want unchanged runtime after replay rejection")
+	}
+	if !reflect.DeepEqual(secondRuntime, firstRuntime) {
+		t.Fatalf("MissionRuntimeState() = %#v, want unchanged %#v", secondRuntime, firstRuntime)
+	}
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord() = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	t.Parallel()
 
@@ -3385,8 +3584,11 @@ func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedTreasuryP
 	if summary.Steps[0].TreasuryPreflight.Treasury == nil {
 		t.Fatal("TreasuryPreflight.Treasury = nil, want resolved treasury record")
 	}
-	if !reflect.DeepEqual(*summary.Steps[0].TreasuryPreflight.Treasury, treasury) {
-		t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.Steps[0].TreasuryPreflight.Treasury, treasury)
+	if summary.Steps[0].TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+		t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.Steps[0].TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+	}
+	if summary.Steps[0].TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+		t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.Steps[0].TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 	}
 	if !reflect.DeepEqual(summary.Steps[0].TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 		t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.Steps[0].TreasuryPreflight.Containers, container)
@@ -3435,8 +3637,11 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if summary.Steps[0].TreasuryPreflight == nil || summary.Steps[0].TreasuryPreflight.Treasury == nil {
 			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", summary.Steps[0].TreasuryPreflight)
 		}
-		if !reflect.DeepEqual(*summary.Steps[0].TreasuryPreflight.Treasury, treasury) {
-			t.Fatalf("TreasuryPreflight.Treasury = %#v, want %#v", *summary.Steps[0].TreasuryPreflight.Treasury, treasury)
+		if summary.Steps[0].TreasuryPreflight.Treasury.TreasuryID != treasury.TreasuryID {
+			t.Fatalf("TreasuryPreflight.Treasury.TreasuryID = %q, want %q", summary.Steps[0].TreasuryPreflight.Treasury.TreasuryID, treasury.TreasuryID)
+		}
+		if summary.Steps[0].TreasuryPreflight.Treasury.State != missioncontrol.TreasuryStateActive {
+			t.Fatalf("TreasuryPreflight.Treasury.State = %q, want %q", summary.Steps[0].TreasuryPreflight.Treasury.State, missioncontrol.TreasuryStateActive)
 		}
 		if !reflect.DeepEqual(summary.Steps[0].TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.Steps[0].TreasuryPreflight.Containers, container)
@@ -3494,43 +3699,26 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 	})
 }
 
-func TestTaskStateOperatorInspectActiveExecutionContextInvalidTreasuryStateFailsClosed(t *testing.T) {
+func TestTaskStateActivateStepInvalidTreasuryStateFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
-	treasury := missioncontrol.TreasuryRecord{
-		RecordVersion:  missioncontrol.StoreRecordVersion,
-		TreasuryID:     "treasury-missing-container",
-		DisplayName:    "Frank Treasury",
-		State:          missioncontrol.TreasuryStateBootstrap,
-		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
-		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
-			{
-				Kind:     missioncontrol.FrankRegistryObjectKindContainer,
-				ObjectID: "missing-container",
-			},
-		},
-		CreatedAt: now.UTC(),
-		UpdatedAt: now.Add(time.Minute).UTC(),
+	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
+	treasury.State = missioncontrol.TreasuryStateBootstrap
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
-	writeMalformedTreasuryRecordForTaskStateTest(t, root, treasury)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 
 	state := NewTaskState()
 	state.SetMissionStoreRoot(root)
-	if err := state.ActivateStep(job, "build"); err != nil {
-		t.Fatalf("ActivateStep() error = %v", err)
-	}
-
-	_, err := state.OperatorInspect("job-1", "build")
+	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("OperatorInspect() error = nil, want fail-closed treasury preflight rejection")
+		t.Fatal("ActivateStep() error = nil, want fail-closed treasury activation rejection")
 	}
-	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
-		t.Fatalf("OperatorInspect() error = %q, want missing container rejection", err)
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "bootstrap"`) {
+		t.Fatalf("ActivateStep() error = %q, want invalid treasury state rejection", err)
 	}
 }
 
@@ -3828,7 +4016,7 @@ func writeTaskStateTreasuryFixtures(t *testing.T) (string, missioncontrol.Treasu
 		RecordVersion:  missioncontrol.StoreRecordVersion,
 		TreasuryID:     "treasury-wallet",
 		DisplayName:    "Frank Treasury",
-		State:          missioncontrol.TreasuryStateBootstrap,
+		State:          missioncontrol.TreasuryStateFunded,
 		ZeroSeedPolicy: missioncontrol.TreasuryZeroSeedPolicyOwnerSeedForbidden,
 		ContainerRefs: []missioncontrol.FrankRegistryObjectRef{
 			{
