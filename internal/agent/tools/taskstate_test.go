@@ -729,6 +729,91 @@ func TestTaskStateActivateStepTreasuryReplayStaysDeterministic(t *testing.T) {
 	}
 }
 
+func TestTaskStateActivateStepCampaignZeroRefPathUnchanged(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	calls := 0
+	state.campaignReadinessGuardHook = func(missioncontrol.ExecutionContext) error {
+		calls++
+		return nil
+	}
+
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("campaignReadinessGuardHook calls = %d, want 0 for zero-campaign-ref path", calls)
+	}
+}
+
+func TestTaskStateActivateStepCampaignPathCallsReadinessGuardOnce(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	calls := 0
+	var gotEC missioncontrol.ExecutionContext
+	state.campaignReadinessGuardHook = func(ec missioncontrol.ExecutionContext) error {
+		calls++
+		gotEC = missioncontrol.CloneExecutionContext(ec)
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("campaignReadinessGuardHook calls = %d, want 1", calls)
+	}
+	if gotEC.Step == nil || gotEC.Step.CampaignRef == nil {
+		t.Fatalf("campaignReadinessGuardHook execution context = %#v, want campaign-aware step", gotEC)
+	}
+	if gotEC.Step.CampaignRef.CampaignID != campaign.CampaignID {
+		t.Fatalf("campaignReadinessGuardHook campaign_id = %q, want %q", gotEC.Step.CampaignRef.CampaignID, campaign.CampaignID)
+	}
+	if gotEC.MissionStoreRoot != root {
+		t.Fatalf("campaignReadinessGuardHook mission_store_root = %q, want %q", gotEC.MissionStoreRoot, root)
+	}
+}
+
+func TestTaskStateActivateStepCampaignReadinessDisallowedFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	campaign.State = missioncontrol.CampaignStateDraft
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want campaign readiness rejection")
+	}
+	if !strings.Contains(err.Error(), `campaign readiness requires state "active"; got "draft"`) {
+		t.Fatalf("ActivateStep() error = %q, want campaign readiness rejection", err.Error())
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want no active context after campaign rejection")
+	}
+	if _, ok := state.MissionRuntimeState(); ok {
+		t.Fatal("MissionRuntimeState() ok = true, want no stored runtime after campaign rejection")
+	}
+}
+
 func TestTaskStateApplyStepOutputPausesCompletedOneShotCodeStep(t *testing.T) {
 	t.Parallel()
 
@@ -3756,23 +3841,19 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 	})
 }
 
-func TestTaskStateOperatorInspectActiveExecutionContextMissingCampaignFailsClosed(t *testing.T) {
+func TestTaskStateActivateStepMissingCampaignFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	state := NewTaskState()
 	job := testTaskStateJob()
 	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-missing"}
 	state.SetMissionStoreRoot(t.TempDir())
-	if err := state.ActivateStep(job, "build"); err != nil {
-		t.Fatalf("ActivateStep() error = %v", err)
-	}
-
-	_, err := state.OperatorInspect("job-1", "build")
+	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("OperatorInspect() error = nil, want missing campaign rejection")
+		t.Fatal("ActivateStep() error = nil, want missing campaign rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrCampaignRecordNotFound.Error()) {
-		t.Fatalf("OperatorInspect() error = %q, want missing campaign rejection", err)
+		t.Fatalf("ActivateStep() error = %q, want missing campaign rejection", err)
 	}
 }
 
@@ -4205,7 +4286,7 @@ func mustStoreTaskStateCampaignFixture(t *testing.T, root string, container miss
 		CampaignID:              "campaign-mail",
 		CampaignKind:            missioncontrol.CampaignKindOutreach,
 		DisplayName:             "Frank Outreach",
-		State:                   missioncontrol.CampaignStateDraft,
+		State:                   missioncontrol.CampaignStateActive,
 		Objective:               "Reach aligned operators",
 		GovernedExternalTargets: []missioncontrol.AutonomyEligibilityTargetRef{providerTarget},
 		FrankObjectRefs: []missioncontrol.FrankRegistryObjectRef{

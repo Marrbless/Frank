@@ -1635,7 +1635,7 @@ func mustStoreLoopCampaignFixture(t *testing.T, root string, container missionco
 		CampaignID:              "campaign-mail",
 		CampaignKind:            missioncontrol.CampaignKindOutreach,
 		DisplayName:             "Frank Outreach",
-		State:                   missioncontrol.CampaignStateDraft,
+		State:                   missioncontrol.CampaignStateActive,
 		Objective:               "Reach aligned operators",
 		GovernedExternalTargets: []missioncontrol.AutonomyEligibilityTargetRef{providerTarget},
 		FrankObjectRefs: []missioncontrol.FrankRegistryObjectRef{

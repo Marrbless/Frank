@@ -105,6 +105,134 @@ func TestDefaultToolGuardNoExternalTargetsPreservesBehaviorWhenIdentityModeOmitt
 	}
 }
 
+func TestRequireExecutionContextCampaignReadinessZeroRefPathPreservesBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	if err := RequireExecutionContextCampaignReadiness(ec); err != nil {
+		t.Fatalf("RequireExecutionContextCampaignReadiness() error = %v", err)
+	}
+}
+
+func TestRequireExecutionContextCampaignReadinessActiveCampaignPasses(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 11, 18, 0, 0, 0, time.UTC)
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-ready"
+		record.State = CampaignStateActive
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreCampaignRecord(root, record); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: record.CampaignID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	if err := RequireExecutionContextCampaignReadiness(ec); err != nil {
+		t.Fatalf("RequireExecutionContextCampaignReadiness() error = %v", err)
+	}
+}
+
+func TestRequireExecutionContextCampaignReadinessFailsClosedForDisallowedOrBrokenCampaignState(t *testing.T) {
+	t.Parallel()
+
+	t.Run("draft campaign disallowed", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		now := time.Date(2026, 4, 11, 18, 15, 0, 0, time.UTC)
+		record := validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-draft"
+			record.State = CampaignStateDraft
+			record.FrankObjectRefs = []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			}
+		})
+		if err := StoreCampaignRecord(root, record); err != nil {
+			t.Fatalf("StoreCampaignRecord() error = %v", err)
+		}
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: record.CampaignID}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		err = RequireExecutionContextCampaignReadiness(ec)
+		if err == nil {
+			t.Fatal("RequireExecutionContextCampaignReadiness() error = nil, want draft-state rejection")
+		}
+		if !strings.Contains(err.Error(), `campaign readiness requires state "active"; got "draft"`) {
+			t.Fatalf("RequireExecutionContextCampaignReadiness() error = %q, want draft-state rejection", err.Error())
+		}
+	})
+
+	t.Run("ineligible governed target", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		now := time.Date(2026, 4, 11, 18, 20, 0, 0, time.UTC)
+		target := AutonomyEligibilityTargetRef{
+			Kind:       EligibilityTargetKindProvider,
+			RegistryID: "provider-human-id",
+		}
+		writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelIneligible, "provider-human-id", "check-provider-human-id", now)
+		record := validCampaignRecord(now.Add(time.Minute), func(record *CampaignRecord) {
+			record.CampaignID = "campaign-ineligible"
+			record.State = CampaignStateActive
+			record.GovernedExternalTargets = []AutonomyEligibilityTargetRef{target}
+			record.FrankObjectRefs = []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			}
+		})
+		if err := StoreCampaignRecord(root, record); err != nil {
+			t.Fatalf("StoreCampaignRecord() error = %v", err)
+		}
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: record.CampaignID}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		_, wantErr := RequireAutonomyEligibleTarget(root, target)
+		if wantErr == nil {
+			t.Fatal("RequireAutonomyEligibleTarget() error = nil, want ineligible target rejection")
+		}
+
+		err = RequireExecutionContextCampaignReadiness(ec)
+		if err == nil {
+			t.Fatal("RequireExecutionContextCampaignReadiness() error = nil, want ineligible target rejection")
+		}
+		if err.Error() != wantErr.Error() {
+			t.Fatalf("RequireExecutionContextCampaignReadiness() error = %q, want %q", err.Error(), wantErr.Error())
+		}
+	})
+}
+
 func TestDefaultToolGuardTreasuryPreflightZeroRefPathPreservesBehavior(t *testing.T) {
 	t.Parallel()
 

@@ -31,6 +31,7 @@ type TaskState struct {
 	runtimePersistHook           func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
 	runtimeProjectionHook        func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
 	runtimeChangeHook            func()
+	campaignReadinessGuardHook   func(missioncontrol.ExecutionContext) error
 	treasuryActivationPolicyHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
@@ -38,6 +39,7 @@ const taskStateTreasuryActivationLeaseHolderID = "taskstate-activate-step-treasu
 
 func NewTaskState() *TaskState {
 	return &TaskState{
+		campaignReadinessGuardHook:   missioncontrol.RequireExecutionContextCampaignReadiness,
 		treasuryActivationPolicyHook: missioncontrol.ApplyDefaultTreasuryActivationPolicy,
 	}
 }
@@ -256,6 +258,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.applyCampaignReadinessGuardForStep(job, stepID); err != nil {
+		return err
+	}
 	if err := s.applyTreasuryActivationPolicyForStep(job, stepID, now); err != nil {
 		return err
 	}
@@ -295,6 +300,30 @@ func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job,
 	}, missioncontrol.DefaultTreasuryActivationPolicyInput{
 		TreasuryRef: *ec.Step.TreasuryRef,
 	}, now)
+}
+
+func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, stepID string) error {
+	if s == nil {
+		return nil
+	}
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || ec.Step.CampaignRef == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
+	hook := s.campaignReadinessGuardHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+
+	return hook(ec)
 }
 
 func (s *TaskState) ResumeRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {

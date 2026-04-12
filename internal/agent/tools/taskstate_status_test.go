@@ -233,23 +233,19 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 	})
 }
 
-func TestTaskStateOperatorStatusActiveExecutionContextMissingCampaignFailsClosed(t *testing.T) {
+func TestTaskStateActivateStepMissingCampaignFailsClosedForStatusPath(t *testing.T) {
 	t.Parallel()
 
 	state := NewTaskState()
 	job := testTaskStateJob()
 	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-missing"}
 	state.SetMissionStoreRoot(t.TempDir())
-	if err := state.ActivateStep(job, "build"); err != nil {
-		t.Fatalf("ActivateStep() error = %v", err)
-	}
-
-	_, err := state.OperatorStatus("job-1")
+	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("OperatorStatus() error = nil, want missing campaign rejection")
+		t.Fatal("ActivateStep() error = nil, want missing campaign rejection")
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrCampaignRecordNotFound.Error()) {
-		t.Fatalf("OperatorStatus() error = %q, want missing campaign rejection", err)
+		t.Fatalf("ActivateStep() error = %q, want missing campaign rejection", err)
 	}
 }
 
