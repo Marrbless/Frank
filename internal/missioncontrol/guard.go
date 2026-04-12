@@ -43,13 +43,15 @@ type ToolGuard interface {
 	EvaluateTool(ctx context.Context, ec ExecutionContext, toolName string, args map[string]interface{}) GuardDecision
 }
 
-type defaultToolGuard struct{}
-
-func NewDefaultToolGuard() ToolGuard {
-	return defaultToolGuard{}
+type defaultToolGuard struct {
+	campaignReadinessGuard func(ExecutionContext) error
 }
 
-func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, toolName string, args map[string]interface{}) GuardDecision {
+func NewDefaultToolGuard() ToolGuard {
+	return defaultToolGuard{campaignReadinessGuard: RequireExecutionContextCampaignReadiness}
+}
+
+func (g defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, toolName string, args map[string]interface{}) GuardDecision {
 	if ec.Job == nil || ec.Step == nil {
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "missing job or step context")
 	}
@@ -79,6 +81,14 @@ func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, t
 		return newGuardDecision(ec, toolName, args, false, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
 	}
 
+	if err := g.requireCampaignReadiness(ec); err != nil {
+		validationErr, ok := err.(ValidationError)
+		if !ok {
+			return newGuardDecision(ec, toolName, args, false, RejectionCodeInvalidRuntimeState, err.Error())
+		}
+		return newGuardDecision(ec, toolName, args, false, validationErr.Code, validationErr.Message)
+	}
+
 	if err := requireGovernedExternalIdentityMode(ec); err != nil {
 		validationErr, ok := err.(ValidationError)
 		if !ok {
@@ -95,6 +105,16 @@ func (defaultToolGuard) EvaluateTool(ctx context.Context, ec ExecutionContext, t
 	}
 
 	return newGuardDecision(ec, toolName, args, true, "", "")
+}
+
+func (g defaultToolGuard) requireCampaignReadiness(ec ExecutionContext) error {
+	if ec.Step == nil || ec.Step.CampaignRef == nil {
+		return nil
+	}
+	if g.campaignReadinessGuard == nil {
+		return nil
+	}
+	return g.campaignReadinessGuard(ec)
 }
 
 func requireGovernedExternalIdentityMode(ec ExecutionContext) error {

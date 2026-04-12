@@ -105,6 +105,69 @@ func TestDefaultToolGuardNoExternalTargetsPreservesBehaviorWhenIdentityModeOmitt
 	}
 }
 
+func TestDefaultToolGuardCampaignZeroRefPathUnchanged(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	calls := 0
+
+	decision := defaultToolGuard{
+		campaignReadinessGuard: func(ExecutionContext) error {
+			calls++
+			return nil
+		},
+	}.EvaluateTool(context.Background(), ec, "read", nil)
+
+	if calls != 0 {
+		t.Fatalf("campaignReadinessGuard calls = %d, want 0 for zero-campaign-ref path", calls)
+	}
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
+func TestDefaultToolGuardCampaignDeclaredStepCallsReadinessOnce(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Step.CampaignRef = &CampaignRef{CampaignID: "campaign-1"}
+
+	calls := 0
+	var gotEC ExecutionContext
+	decision := defaultToolGuard{
+		campaignReadinessGuard: func(ec ExecutionContext) error {
+			calls++
+			gotEC = CloneExecutionContext(ec)
+			return nil
+		},
+	}.EvaluateTool(context.Background(), ec, "read", nil)
+
+	if calls != 1 {
+		t.Fatalf("campaignReadinessGuard calls = %d, want 1", calls)
+	}
+	if gotEC.Step == nil || gotEC.Step.CampaignRef == nil {
+		t.Fatalf("campaignReadinessGuard execution context = %#v, want campaign-aware step", gotEC)
+	}
+	if gotEC.Step.CampaignRef.CampaignID != "campaign-1" {
+		t.Fatalf("campaignReadinessGuard campaign_id = %q, want %q", gotEC.Step.CampaignRef.CampaignID, "campaign-1")
+	}
+	if !decision.Allowed {
+		t.Fatalf("EvaluateTool().Allowed = false, want true: %#v", decision)
+	}
+	if decision.Code != "" {
+		t.Fatalf("EvaluateTool().Code = %q, want empty", decision.Code)
+	}
+	if decision.Reason != "" {
+		t.Fatalf("EvaluateTool().Reason = %q, want empty", decision.Reason)
+	}
+}
+
 func TestRequireExecutionContextCampaignReadinessZeroRefPathPreservesBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -230,6 +293,120 @@ func TestRequireExecutionContextCampaignReadinessFailsClosedForDisallowedOrBroke
 		if err.Error() != wantErr.Error() {
 			t.Fatalf("RequireExecutionContextCampaignReadiness() error = %q, want %q", err.Error(), wantErr.Error())
 		}
+	})
+}
+
+func TestDefaultToolGuardCampaignReadinessFailsClosedForDisallowedOrMalformedCampaignState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 12, 12, 0, 0, 0, time.UTC)
+
+	t.Run("missing campaign", func(t *testing.T) {
+		t.Parallel()
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-missing"}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = t.TempDir()
+
+		decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+		assertDenied(t, decision, RejectionCodeInvalidRuntimeState, ErrCampaignRecordNotFound.Error())
+	})
+
+	t.Run("malformed campaign record", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		writeMalformedCampaignRecordForPreflightTest(t, root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-malformed"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID}}
+			record.ComplianceChecks = nil
+		}))
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-malformed"}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+		if decision.Allowed {
+			t.Fatalf("EvaluateTool().Allowed = true, want false: %#v", decision)
+		}
+		if decision.Code != RejectionCodeInvalidRuntimeState {
+			t.Fatalf("EvaluateTool().Code = %q, want %q", decision.Code, RejectionCodeInvalidRuntimeState)
+		}
+		if !strings.Contains(decision.Reason, "mission store campaign compliance_checks are required") {
+			t.Fatalf("EvaluateTool().Reason = %q, want malformed campaign rejection", decision.Reason)
+		}
+	})
+
+	t.Run("broken linked object", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		writeMalformedCampaignRecordForPreflightTest(t, root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-broken-link"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-missing"}}
+		}))
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-broken-link"}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+		if decision.Allowed {
+			t.Fatalf("EvaluateTool().Allowed = true, want false: %#v", decision)
+		}
+		if decision.Code != RejectionCodeInvalidRuntimeState {
+			t.Fatalf("EvaluateTool().Code = %q, want %q", decision.Code, RejectionCodeInvalidRuntimeState)
+		}
+		if !strings.Contains(decision.Reason, ErrFrankIdentityRecordNotFound.Error()) {
+			t.Fatalf("EvaluateTool().Reason = %q, want missing identity rejection", decision.Reason)
+		}
+	})
+
+	t.Run("draft campaign disallowed", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		record := validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-draft"
+			record.State = CampaignStateDraft
+			record.FrankObjectRefs = []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			}
+		})
+		if err := StoreCampaignRecord(root, record); err != nil {
+			t.Fatalf("StoreCampaignRecord() error = %v", err)
+		}
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: record.CampaignID}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "read", nil)
+
+		assertDenied(t, decision, RejectionCodeInvalidRuntimeState, `campaign readiness requires state "active"; got "draft"`)
 	})
 }
 
