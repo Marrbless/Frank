@@ -530,6 +530,79 @@ func TestTaskStateActivateStepRejectsPreviouslyFailedStepReplay(t *testing.T) {
 	}
 }
 
+func TestTaskStateActivateStepAllowsDifferentJobAfterTerminalRuntime(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	previous := testTaskStateJob()
+	previous.ID = "previous-job"
+	if err := state.HydrateRuntimeControl(previous, missioncontrol.JobRuntimeState{
+		JobID:       previous.ID,
+		State:       missioncontrol.JobStateCompleted,
+		CompletedAt: time.Date(2026, 4, 12, 15, 0, 0, 0, time.UTC),
+		CompletedSteps: []missioncontrol.RuntimeStepRecord{
+			{StepID: "build", At: time.Date(2026, 4, 12, 14, 59, 0, 0, time.UTC)},
+		},
+	}, nil); err != nil {
+		t.Fatalf("HydrateRuntimeControl() setup error = %v", err)
+	}
+
+	next := testTaskStateJob()
+	next.ID = "next-job"
+	if err := state.ActivateStep(next, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.Job == nil || ec.Job.ID != "next-job" {
+		t.Fatalf("ExecutionContext().Job = %+v, want next-job", ec.Job)
+	}
+	if ec.Runtime == nil {
+		t.Fatal("ExecutionContext().Runtime = nil, want running runtime")
+	}
+	if ec.Runtime.JobID != "next-job" {
+		t.Fatalf("ExecutionContext().Runtime.JobID = %q, want %q", ec.Runtime.JobID, "next-job")
+	}
+	if ec.Runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("ExecutionContext().Runtime.State = %q, want %q", ec.Runtime.State, missioncontrol.JobStateRunning)
+	}
+}
+
+func TestTaskStateActivateStepRejectsDifferentJobWhileAnotherRuntimeRunning(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	current := testTaskStateJob()
+	current.ID = "current-job"
+	if err := state.ActivateStep(current, "build"); err != nil {
+		t.Fatalf("ActivateStep(current) error = %v", err)
+	}
+
+	next := testTaskStateJob()
+	next.ID = "next-job"
+	err := state.ActivateStep(next, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(next) error = nil, want running-job mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `runtime job "current-job" does not match mission job "next-job"`) {
+		t.Fatalf("ActivateStep(next) error = %q, want running-job mismatch rejection", err)
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want true")
+	}
+	if ec.Job == nil || ec.Job.ID != "current-job" {
+		t.Fatalf("ExecutionContext().Job = %+v, want current-job", ec.Job)
+	}
+	if ec.Runtime == nil || ec.Runtime.JobID != "current-job" {
+		t.Fatalf("ExecutionContext().Runtime = %+v, want current running job", ec.Runtime)
+	}
+}
+
 func TestTaskStateActivateStepTreasuryPathCallsActivationPolicyOnce(t *testing.T) {
 	t.Parallel()
 

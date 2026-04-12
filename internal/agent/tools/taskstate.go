@@ -250,6 +250,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if s.hasRuntimeState {
 		cloned := *missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 		current = &cloned
+		if current.JobID != "" && current.JobID != job.ID && missioncontrol.IsTerminalJobState(current.State) {
+			current = nil
+		}
 	}
 	s.mu.Unlock()
 

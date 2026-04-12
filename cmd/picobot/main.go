@@ -41,6 +41,78 @@ var packageCurrentLogSegmentOnGatewayStartup = missioncontrol.PackageCurrentLogS
 var packageCurrentLogSegmentOnUTCDayRollover = missioncontrol.PackageCurrentLogSegmentOnUTCDayRollover
 
 const missionStoreWriterLeaseHolderAnnotation = "picobot/mission-store-writer-lease-holder"
+const scheduledTriggerStepID = "scheduled_trigger"
+
+func scheduledTriggerFireAt(job cron.Job) time.Time {
+	fireAt := job.FireAt.UTC()
+	if fireAt.IsZero() {
+		fireAt = time.Unix(0, 0).UTC()
+	}
+	return fireAt
+}
+
+func buildGovernedScheduledTriggerJob(job cron.Job) missioncontrol.Job {
+	fireAt := scheduledTriggerFireAt(job)
+	return missioncontrol.Job{
+		ID:           fmt.Sprintf("scheduled-trigger-%s-%s", strings.TrimSpace(job.ID), fireAt.Format("20060102T150405.000000000Z")),
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		State:        missioncontrol.JobStatePending,
+		MaxAuthority: missioncontrol.AuthorityTierLow,
+		AllowedTools: nil,
+		Plan: missioncontrol.Plan{
+			ID: fmt.Sprintf("scheduled-trigger-plan-%s", strings.TrimSpace(job.ID)),
+			Steps: []missioncontrol.Step{
+				{
+					ID:                scheduledTriggerStepID,
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      nil,
+					RequiresApproval:  false,
+					SuccessCriteria: []string{
+						"Deliver the scheduled reminder plainly and truthfully to the operator.",
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildGovernedScheduledTriggerContent(job cron.Job) string {
+	name := strings.TrimSpace(job.Name)
+	message := strings.TrimSpace(job.Message)
+	switch {
+	case name != "" && message != "":
+		return fmt.Sprintf("Scheduled reminder %q fired: %s", name, message)
+	case message != "":
+		return fmt.Sprintf("Scheduled reminder fired: %s", message)
+	case name != "":
+		return fmt.Sprintf("Scheduled reminder %q fired.", name)
+	default:
+		return "Scheduled reminder fired."
+	}
+}
+
+func routeScheduledTriggerThroughGovernedJob(ag *agent.AgentLoop, hub *chat.Hub, trigger cron.Job) error {
+	if ag == nil {
+		return fmt.Errorf("scheduler trigger requires an active agent loop")
+	}
+	if hub == nil {
+		return fmt.Errorf("scheduler trigger requires a chat hub")
+	}
+
+	job := buildGovernedScheduledTriggerJob(trigger)
+	if err := ag.ActivateMissionStep(job, scheduledTriggerStepID); err != nil {
+		return err
+	}
+
+	hub.In <- chat.Inbound{
+		Channel:  trigger.Channel,
+		SenderID: "cron",
+		ChatID:   trigger.ChatID,
+		Content:  buildGovernedScheduledTriggerContent(trigger),
+	}
+	return nil
+}
 
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
@@ -184,6 +256,7 @@ func NewRootCmd() *cobra.Command {
 			hub := chat.NewHub(200)
 			cfg, _ := config.LoadConfig()
 			provider := providers.NewProviderFromConfig(cfg)
+			var ag *agent.AgentLoop
 
 			// choose model: flag > config > provider default
 			modelFlag, _ := cmd.Flags().GetString("model")
@@ -201,14 +274,11 @@ func NewRootCmd() *cobra.Command {
 			}
 			defer restoreGatewayLogger()
 
-			// create scheduler with fire callback that routes back through the agent loop, so the LLM can process the reminder and respond naturally to the user.
+			// Route fired schedules through a governed mission step before they re-enter the ordinary agent loop.
 			scheduler := cron.NewScheduler(func(job cron.Job) {
 				log.Printf("cron fired: %s — %s", job.Name, job.Message)
-				hub.In <- chat.Inbound{
-					Channel:  job.Channel,
-					SenderID: "cron",
-					ChatID:   job.ChatID,
-					Content:  fmt.Sprintf("[Scheduled reminder fired] %s — Please relay this to the user in a friendly way.", job.Message),
+				if err := routeScheduledTriggerThroughGovernedJob(ag, hub, job); err != nil {
+					log.Printf("cron governed trigger skipped for %s: %v", job.ID, err)
 				}
 			})
 
@@ -216,7 +286,7 @@ func NewRootCmd() *cobra.Command {
 			if maxIter <= 0 {
 				maxIter = 100
 			}
-			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
+			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
 			installMissionRuntimeChangeHook(cmd, ag)
 			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
 			if err != nil {
