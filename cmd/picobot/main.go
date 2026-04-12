@@ -454,9 +454,9 @@ func NewRootCmd() *cobra.Command {
 
 			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
 			if waitTimeout <= 0 {
-				return assertMissionStatusSnapshot(statusFile, expected)
+				return assertMissionGatewayStatusSnapshot(statusFile, expected)
 			}
-			return waitForMissionStatusAssertion(statusFile, expected, waitTimeout)
+			return waitForMissionGatewayStatusAssertion(statusFile, expected, waitTimeout)
 		},
 	}
 	missionAssertCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
@@ -505,9 +505,9 @@ func NewRootCmd() *cobra.Command {
 
 			waitTimeout, _ := cmd.Flags().GetDuration("wait-timeout")
 			if waitTimeout <= 0 {
-				return assertMissionStatusSnapshot(statusFile, expected)
+				return assertMissionGatewayStatusSnapshot(statusFile, expected)
 			}
-			return waitForMissionStatusAssertion(statusFile, expected, waitTimeout)
+			return waitForMissionGatewayStatusAssertion(statusFile, expected, waitTimeout)
 		},
 	}
 	missionAssertStepCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
@@ -1400,6 +1400,7 @@ type missionPruneStoreSummary struct {
 type missionInspectSummary = missioncontrol.InspectSummary
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
+var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
 var loadGatewayStatusObservationFile = missioncontrol.LoadGatewayStatusObservationFile
 var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
 var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
@@ -1716,6 +1717,14 @@ func assertMissionStatusSnapshot(path string, expected missionStatusAssertionExp
 	return checkMissionStatusAssertion(path, snapshot, expected)
 }
 
+func assertMissionGatewayStatusSnapshot(path string, expected missionStatusAssertionExpectation) error {
+	snapshot, err := loadGatewayStatusObservation(path)
+	if err != nil {
+		return err
+	}
+	return checkMissionStatusAssertion(path, projectGatewayStatusAssertionSnapshot(snapshot), expected)
+}
+
 func waitForMissionStatusAssertion(path string, expected missionStatusAssertionExpectation, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -1735,6 +1744,43 @@ func waitForMissionStatusAssertion(path string, expected missionStatusAssertionE
 			}
 			time.Sleep(sleep)
 		}
+	}
+}
+
+func waitForMissionGatewayStatusAssertion(path string, expected missionStatusAssertionExpectation, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+
+	for {
+		lastErr = assertMissionGatewayStatusSnapshot(path, expected)
+		if lastErr == nil {
+			return nil
+		}
+
+		if remaining := time.Until(deadline); remaining <= 0 {
+			return fmt.Errorf("timed out waiting up to %s for mission status file %q to satisfy assertion: %w", timeout, path, lastErr)
+		} else {
+			sleep := 100 * time.Millisecond
+			if remaining < sleep {
+				sleep = remaining
+			}
+			time.Sleep(sleep)
+		}
+	}
+}
+
+func projectGatewayStatusAssertionSnapshot(snapshot missioncontrol.GatewayStatusSnapshot) missionStatusSnapshot {
+	return missionStatusSnapshot{
+		MissionRequired:   snapshot.MissionRequired,
+		Active:            snapshot.Active,
+		MissionFile:       snapshot.MissionFile,
+		JobID:             snapshot.JobID,
+		StepID:            snapshot.StepID,
+		StepType:          snapshot.StepType,
+		RequiredAuthority: snapshot.RequiredAuthority,
+		RequiresApproval:  snapshot.RequiresApproval,
+		AllowedTools:      append([]string(nil), snapshot.AllowedTools...),
+		UpdatedAt:         snapshot.UpdatedAt,
 	}
 }
 

@@ -1812,33 +1812,106 @@ func TestMissionAssertCommandWithInvalidJSONReturnsClearError(t *testing.T) {
 	}
 }
 
-func TestMissionAssertCommandUsesSharedObservationReader(t *testing.T) {
-	original := loadMissionStatusObservation
-	t.Cleanup(func() { loadMissionStatusObservation = original })
+func TestMissionAssertCommandUsesSharedGatewayObservationReader(t *testing.T) {
+	original := loadGatewayStatusObservation
+	t.Cleanup(func() { loadGatewayStatusObservation = original })
 
 	called := 0
-	loadMissionStatusObservation = func(path string) (missioncontrol.MissionStatusSnapshot, error) {
+	loadGatewayStatusObservation = func(path string) (missioncontrol.GatewayStatusSnapshot, error) {
 		called++
 		if path != "status.json" {
-			t.Fatalf("shared observation path = %q, want %q", path, "status.json")
+			t.Fatalf("shared gateway observation path = %q, want %q", path, "status.json")
 		}
-		return missioncontrol.MissionStatusSnapshot{
-			Active: true,
-			JobID:  "job-1",
-			StepID: "build",
+		return missioncontrol.GatewayStatusSnapshot{
+			Active:            true,
+			JobID:             "job-1",
+			StepID:            "build",
+			StepType:          string(missioncontrol.StepTypeOneShotCode),
+			RequiredAuthority: missioncontrol.AuthorityTierMedium,
+			RequiresApproval:  true,
+			AllowedTools:      []string{"read", "write"},
 		}, nil
 	}
 
 	cmd := NewRootCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"mission", "assert", "--status-file", "status.json", "--job-id", "job-1", "--step-id", "build", "--active=true"})
+	cmd.SetArgs([]string{
+		"mission", "assert",
+		"--status-file", "status.json",
+		"--job-id", "job-1",
+		"--step-id", "build",
+		"--active=true",
+		"--step-type", string(missioncontrol.StepTypeOneShotCode),
+		"--required-authority", string(missioncontrol.AuthorityTierMedium),
+		"--requires-approval",
+		"--exact-tool", "read",
+		"--exact-tool", "write",
+	})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if called != 1 {
-		t.Fatalf("shared observation calls = %d, want 1", called)
+		t.Fatalf("shared gateway observation calls = %d, want 1", called)
+	}
+}
+
+func TestMissionAssertStepCommandUsesSharedGatewayObservationReader(t *testing.T) {
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"read", "write"},
+		Plan: missioncontrol.Plan{
+			ID: "plan-1",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "build",
+					Type:              missioncontrol.StepTypeOneShotCode,
+					RequiredAuthority: missioncontrol.AuthorityTierMedium,
+					RequiresApproval:  true,
+					AllowedTools:      []string{"write", "read"},
+				},
+				{
+					ID:        "final",
+					Type:      missioncontrol.StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	missionPath := writeMissionBootstrapJobFile(t, job)
+
+	original := loadGatewayStatusObservation
+	t.Cleanup(func() { loadGatewayStatusObservation = original })
+
+	called := 0
+	loadGatewayStatusObservation = func(path string) (missioncontrol.GatewayStatusSnapshot, error) {
+		called++
+		if path != "status.json" {
+			t.Fatalf("shared gateway observation path = %q, want %q", path, "status.json")
+		}
+		return missioncontrol.GatewayStatusSnapshot{
+			Active:            true,
+			JobID:             "job-1",
+			StepID:            "build",
+			StepType:          string(missioncontrol.StepTypeOneShotCode),
+			RequiredAuthority: missioncontrol.AuthorityTierMedium,
+			RequiresApproval:  true,
+			AllowedTools:      []string{"read", "write"},
+		}, nil
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "assert-step", "--mission-file", missionPath, "--status-file", "status.json", "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("shared gateway observation calls = %d, want 1", called)
 	}
 }
 
