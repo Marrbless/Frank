@@ -1,0 +1,197 @@
+package missioncontrol
+
+import (
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
+	t.Parallel()
+
+	expected := []struct {
+		name string
+		tag  string
+	}{
+		{name: "MissionRequired", tag: `json:"mission_required"`},
+		{name: "Active", tag: `json:"active"`},
+		{name: "MissionFile", tag: `json:"mission_file"`},
+		{name: "JobID", tag: `json:"job_id"`},
+		{name: "StepID", tag: `json:"step_id"`},
+		{name: "StepType", tag: `json:"step_type"`},
+		{name: "RequiredAuthority", tag: `json:"required_authority"`},
+		{name: "RequiresApproval", tag: `json:"requires_approval"`},
+		{name: "AllowedTools", tag: `json:"allowed_tools"`},
+		{name: "UpdatedAt", tag: `json:"updated_at"`},
+	}
+
+	typ := reflect.TypeOf(GatewayStatusSnapshot{})
+	if typ.NumField() != len(expected) {
+		t.Fatalf("GatewayStatusSnapshot field count = %d, want %d", typ.NumField(), len(expected))
+	}
+	for i, want := range expected {
+		field := typ.Field(i)
+		if field.Name != want.name {
+			t.Fatalf("GatewayStatusSnapshot field[%d].Name = %q, want %q", i, field.Name, want.name)
+		}
+		if string(field.Tag) != want.tag {
+			t.Fatalf("GatewayStatusSnapshot field[%d].Tag = %q, want %q", i, string(field.Tag), want.tag)
+		}
+	}
+}
+
+func TestWriteGatewayStatusSnapshotAtomicAndProjectedShareAtomicWriter(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		CreatedAt:       now.Add(-2 * time.Minute),
+		UpdatedAt:       now,
+		StartedAt:       now.Add(-2 * time.Minute),
+		ActiveStepAt:    now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	originalWrite := missionStatusSnapshotWriteFileAtomic
+	t.Cleanup(func() { missionStatusSnapshotWriteFileAtomic = originalWrite })
+
+	calls := make([]string, 0, 2)
+	missionStatusSnapshotWriteFileAtomic = func(path string, data []byte) error {
+		calls = append(calls, path)
+		if len(data) == 0 {
+			t.Fatal("atomic writer data = empty, want encoded snapshot bytes")
+		}
+		if strings.Contains(string(data), `"runtime_control"`) {
+			t.Fatalf("atomic writer data = %q, want sanitized gateway envelope without runtime_control", string(data))
+		}
+		return nil
+	}
+
+	livePath := filepath.Join(t.TempDir(), "gateway-status-live.json")
+	if err := WriteGatewayStatusSnapshotAtomic(livePath, GatewayStatusSnapshot{
+		MissionRequired: true,
+		Active:          true,
+		MissionFile:     "mission.json",
+		JobID:           job.ID,
+		StepID:          "build",
+		StepType:        string(StepTypeOneShotCode),
+		AllowedTools:    []string{"read"},
+		UpdatedAt:       now.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("WriteGatewayStatusSnapshotAtomic() error = %v", err)
+	}
+
+	projectedPath := filepath.Join(t.TempDir(), "gateway-status-projected.json")
+	if err := WriteProjectedGatewayStatusSnapshot(projectedPath, root, job.ID, GatewayStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("WriteProjectedGatewayStatusSnapshot() error = %v", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("atomic writer calls = %d, want 2", len(calls))
+	}
+	if calls[0] != livePath {
+		t.Fatalf("atomic writer live path = %q, want %q", calls[0], livePath)
+	}
+	if calls[1] != projectedPath {
+		t.Fatalf("atomic writer projected path = %q, want %q", calls[1], projectedPath)
+	}
+}
+
+func TestLoadGatewayStatusObservationAndFileUseMissionStatusReadPath(t *testing.T) {
+	originalRead := missionStatusSnapshotReadFile
+	originalDecode := missionStatusSnapshotDecode
+	t.Cleanup(func() {
+		missionStatusSnapshotReadFile = originalRead
+		missionStatusSnapshotDecode = originalDecode
+	})
+
+	missionStatusSnapshotReadFile = func(path string) ([]byte, error) {
+		return []byte(`{"job_id":"job-1"}`), nil
+	}
+
+	calls := 0
+	missionStatusSnapshotDecode = func(path string, data []byte) (MissionStatusSnapshot, error) {
+		calls++
+		if path != "gateway-status.json" {
+			t.Fatalf("decode helper path = %q, want %q", path, "gateway-status.json")
+		}
+		return MissionStatusSnapshot{
+			MissionRequired: true,
+			Active:          true,
+			MissionFile:     "mission.json",
+			JobID:           "job-1",
+			StepID:          "build",
+			StepType:        string(StepTypeOneShotCode),
+			AllowedTools:    []string{"read"},
+			Runtime: &JobRuntimeState{
+				JobID:        "job-1",
+				State:        JobStatePaused,
+				ActiveStepID: "build",
+			},
+			RuntimeSummary: &OperatorStatusSummary{
+				JobID:        "job-1",
+				State:        JobStatePaused,
+				ActiveStepID: "build",
+				Artifacts: []OperatorArtifactStatus{
+					{StepID: "build", Path: "/tmp/secret.txt"},
+				},
+			},
+			RuntimeControl: &RuntimeControlContext{
+				JobID: "job-1",
+				Step:  Step{ID: "build"},
+			},
+			UpdatedAt: "2026-04-12T12:00:00Z",
+		}, nil
+	}
+
+	observation, err := LoadGatewayStatusObservation("gateway-status.json")
+	if err != nil {
+		t.Fatalf("LoadGatewayStatusObservation() error = %v", err)
+	}
+	if observation.JobID != "job-1" {
+		t.Fatalf("LoadGatewayStatusObservation().JobID = %q, want %q", observation.JobID, "job-1")
+	}
+
+	data, err := LoadGatewayStatusObservationFile("gateway-status.json")
+	if err != nil {
+		t.Fatalf("LoadGatewayStatusObservationFile() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("shared decode helper calls = %d, want 2", calls)
+	}
+	got := string(data)
+	if strings.Contains(got, `"runtime"`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without runtime", got)
+	}
+	if strings.Contains(got, `"runtime_summary"`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without runtime_summary", got)
+	}
+	if strings.Contains(got, `"runtime_control"`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without runtime_control", got)
+	}
+	if strings.Contains(got, `/tmp/secret.txt`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without artifact paths", got)
+	}
+	if !strings.Contains(got, `"job_id": "job-1"`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want projected gateway job_id", got)
+	}
+}

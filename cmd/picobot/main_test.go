@@ -185,7 +185,7 @@ func TestAgentCLI_ModelFlag(t *testing.T) {
 
 func TestMissionStatusCommandWithValidFilePrintsExpectedJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
-	want := []byte("{\n  \"mission_required\": true,\n  \"active\": true,\n  \"mission_file\": \"mission.json\",\n  \"job_id\": \"job-1\",\n  \"step_id\": \"build\",\n  \"step_type\": \"one_shot_code\",\n  \"allowed_tools\": [\n    \"read\"\n  ],\n  \"updated_at\": \"2026-03-20T12:00:00Z\"\n}\n")
+	want := []byte("{\n  \"mission_required\": true,\n  \"active\": true,\n  \"mission_file\": \"mission.json\",\n  \"job_id\": \"job-1\",\n  \"step_id\": \"build\",\n  \"step_type\": \"one_shot_code\",\n  \"required_authority\": \"\",\n  \"requires_approval\": false,\n  \"allowed_tools\": [\n    \"read\"\n  ],\n  \"updated_at\": \"2026-03-20T12:00:00Z\"\n}\n")
 	if err := os.WriteFile(path, want, 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -244,12 +244,12 @@ func TestMissionStatusCommandWithActiveStepFieldsPrintsExpectedJSON(t *testing.T
 }
 
 func TestMissionStatusCommandUsesSharedObservationReader(t *testing.T) {
-	original := loadMissionStatusObservationFile
-	t.Cleanup(func() { loadMissionStatusObservationFile = original })
+	original := loadGatewayStatusObservationFile
+	t.Cleanup(func() { loadGatewayStatusObservationFile = original })
 
 	want := []byte("{\"job_id\":\"job-1\"}\n")
 	called := 0
-	loadMissionStatusObservationFile = func(path string) ([]byte, error) {
+	loadGatewayStatusObservationFile = func(path string) ([]byte, error) {
 		called++
 		if path != "status.json" {
 			t.Fatalf("shared observation path = %q, want %q", path, "status.json")
@@ -271,6 +271,74 @@ func TestMissionStatusCommandUsesSharedObservationReader(t *testing.T) {
 	}
 	if out.String() != string(want) {
 		t.Fatalf("stdout = %q, want %q", out.String(), string(want))
+	}
+}
+
+func TestMissionStatusCommandPrintsCanonicalGatewayStatusJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	fullSnapshot := missionStatusSnapshot{
+		MissionRequired:   true,
+		Active:            true,
+		MissionFile:       "mission.json",
+		JobID:             "job-1",
+		StepID:            "build",
+		StepType:          string(missioncontrol.StepTypeOneShotCode),
+		RequiredAuthority: missioncontrol.AuthorityTierMedium,
+		RequiresApproval:  true,
+		AllowedTools:      []string{"read"},
+		Runtime: &missioncontrol.JobRuntimeState{
+			JobID:        "job-1",
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+		},
+		RuntimeSummary: &missioncontrol.OperatorStatusSummary{
+			JobID:        "job-1",
+			State:        missioncontrol.JobStatePaused,
+			ActiveStepID: "build",
+			Artifacts: []missioncontrol.OperatorArtifactStatus{
+				{StepID: "build", Path: "/tmp/private.txt"},
+			},
+		},
+		RuntimeControl: &missioncontrol.RuntimeControlContext{
+			JobID: "job-1",
+			Step:  missioncontrol.Step{ID: "build"},
+		},
+		UpdatedAt: "2026-04-12T12:00:00Z",
+	}
+	data, err := json.MarshalIndent(fullSnapshot, "", "  ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent() error = %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "status", "--status-file", path})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, `"runtime"`) {
+		t.Fatalf("stdout = %q, want canonical gateway status without runtime", got)
+	}
+	if strings.Contains(got, `"runtime_summary"`) {
+		t.Fatalf("stdout = %q, want canonical gateway status without runtime_summary", got)
+	}
+	if strings.Contains(got, `"runtime_control"`) {
+		t.Fatalf("stdout = %q, want canonical gateway status without runtime_control", got)
+	}
+	if strings.Contains(got, `/tmp/private.txt`) {
+		t.Fatalf("stdout = %q, want canonical gateway status without artifact paths", got)
+	}
+	if !strings.Contains(got, `"job_id": "job-1"`) || !strings.Contains(got, `"step_id": "build"`) {
+		t.Fatalf("stdout = %q, want projected gateway status fields", got)
 	}
 }
 
@@ -1165,7 +1233,7 @@ func TestMissionStatusCommandWithMissingFileReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Execute() error = nil, want non-nil")
 	}
-	if !strings.Contains(err.Error(), "failed to read mission status file") {
+	if !strings.Contains(err.Error(), "mission status file") || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("Execute() error = %q, want missing file message", err)
 	}
 }

@@ -338,7 +338,7 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("--status-file is required")
 			}
 
-			data, err := loadMissionStatusObservationFile(statusFile)
+			data, err := loadGatewayStatusObservationFile(statusFile)
 			if err != nil {
 				return err
 			}
@@ -1400,6 +1400,7 @@ type missionPruneStoreSummary struct {
 type missionInspectSummary = missioncontrol.InspectSummary
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
+var loadGatewayStatusObservationFile = missioncontrol.LoadGatewayStatusObservationFile
 var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
 var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
 var writeMissionStatusSnapshotAtomic = missioncontrol.WriteMissionStatusSnapshotAtomic
