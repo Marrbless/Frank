@@ -84,6 +84,23 @@ func assertLoopCheckInResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value 
 	assertLoopCheckInJSONObjectKeys(t, eligibility, "kind", "registry_id")
 }
 
+func assertLoopCheckInResolvedCampaignPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight = %#v, want object", value)
+	}
+	assertLoopCheckInJSONObjectKeys(t, preflight, "accounts", "campaign", "containers", "identities")
+
+	campaign, ok := preflight["campaign"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign = %#v, want object", preflight["campaign"])
+	}
+	assertLoopCheckInJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at")
+	assertLoopCheckInJSONObjectKeys(t, campaign["failure_threshold"], "limit", "metric")
+}
+
 func mustLoopCheckInNotificationPayload(t *testing.T, content, prefix string) string {
 	t.Helper()
 
@@ -105,7 +122,7 @@ func decodeLoopCheckInOperatorStatusSummary(t *testing.T, content, prefix string
 	return summary
 }
 
-func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix string, allowTreasuryPreflight bool, wantKeys ...string) map[string]any {
+func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix string, allowCampaignPreflight bool, allowTreasuryPreflight bool, wantKeys ...string) map[string]any {
 	t.Helper()
 
 	payload := mustLoopCheckInNotificationPayload(t, content, prefix)
@@ -129,6 +146,9 @@ func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix strin
 	}
 	if !allowTreasuryPreflight {
 		forbiddenKeys["treasury_preflight"] = struct{}{}
+	}
+	if !allowCampaignPreflight {
+		forbiddenKeys["campaign_preflight"] = struct{}{}
 	}
 
 	var walk func(any)
@@ -159,6 +179,9 @@ func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix strin
 	}
 	assertLoopCheckInJSONObjectKeys(t, object, wantKeys...)
 
+	if allowCampaignPreflight {
+		assertLoopCheckInResolvedCampaignPreflightJSONEnvelope(t, object["campaign_preflight"])
+	}
 	if allowTreasuryPreflight {
 		assertLoopCheckInResolvedTreasuryPreflightJSONEnvelope(t, object["treasury_preflight"])
 	}

@@ -370,15 +370,11 @@ func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontr
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight)
 		if err != nil {
 			return "", err
 		}
@@ -396,15 +392,11 @@ func buildMissionDailySummaryContent(taskState *tools.TaskState, runtime mission
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight)
 		if err != nil {
 			return "", err
 		}
@@ -478,15 +470,11 @@ func buildMissionApprovalRequestContent(taskState *tools.TaskState, runtime miss
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight)
 		if err != nil {
 			return "", err
 		}
@@ -602,15 +590,16 @@ func buildMissionCompletionContent(taskState *tools.TaskState, runtime missionco
 	if err != nil {
 		return "", err
 	}
-	if ok && ec.Step != nil && ec.Step.TreasuryRef != nil {
-		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+	if ok && ec.Step != nil && (ec.Step.CampaignRef != nil || ec.Step.TreasuryRef != nil) {
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
 		if err != nil {
 			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
 			runtime,
 			missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step),
-			&resolved,
+			campaignPreflight,
+			treasuryPreflight,
 		)
 		if err != nil {
 			return "", err
@@ -629,15 +618,11 @@ func buildMissionWaitingUserContent(taskState *tools.TaskState, runtime missionc
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight)
 		if err != nil {
 			return "", err
 		}
@@ -655,15 +640,11 @@ func buildMissionBudgetPauseContent(taskState *tools.TaskState, runtime missionc
 	ec, ok := currentExecutionContext(taskState)
 	if ok && ec.Job != nil {
 		allowedTools := missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step)
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveOperatorReadoutCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, allowedTools, preflight)
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight)
 		if err != nil {
 			return "", err
 		}
@@ -675,6 +656,28 @@ func buildMissionBudgetPauseContent(taskState *tools.TaskState, runtime missionc
 		return "", err
 	}
 	return "Mission paused:\n" + summary, nil
+}
+
+func resolveOperatorReadoutCampaignAndTreasuryPreflight(ec missioncontrol.ExecutionContext) (*missioncontrol.ResolvedExecutionContextCampaignPreflight, *missioncontrol.ResolvedExecutionContextTreasuryPreflight, error) {
+	var campaignPreflight *missioncontrol.ResolvedExecutionContextCampaignPreflight
+	if ec.Step != nil && ec.Step.CampaignRef != nil {
+		resolved, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+		if err != nil {
+			return nil, nil, err
+		}
+		campaignPreflight = &resolved
+	}
+
+	var treasuryPreflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
+	if ec.Step != nil && ec.Step.TreasuryRef != nil {
+		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+		if err != nil {
+			return nil, nil, err
+		}
+		treasuryPreflight = &resolved
+	}
+
+	return campaignPreflight, treasuryPreflight, nil
 }
 
 func (a *AgentLoop) maybeEmitApprovalRequestNotification() {

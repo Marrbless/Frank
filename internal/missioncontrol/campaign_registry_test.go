@@ -876,6 +876,181 @@ func TestResolveExecutionContextCampaignRefDoesNotIntroduceIdentityEligibilityOr
 	}
 }
 
+func TestResolveExecutionContextCampaignPreflightZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	got, err := ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, ResolvedExecutionContextCampaignPreflight{}) {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight() = %#v, want zero value for zero-campaign step", got)
+	}
+}
+
+func TestResolveExecutionContextCampaignPreflightResolvesCampaignAndFrankObjects(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 8, 8, 0, 0, 0, time.UTC)
+	record := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-preflight"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreCampaignRecord(root, record); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: record.CampaignID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = root
+
+	got, err := ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight() error = %v", err)
+	}
+	if got.Campaign == nil {
+		t.Fatal("ResolveExecutionContextCampaignPreflight().Campaign = nil, want resolved campaign record")
+	}
+	if !reflect.DeepEqual(*got.Campaign, record) {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight().Campaign = %#v, want %#v", *got.Campaign, record)
+	}
+	if !reflect.DeepEqual(got.Identities, []FrankIdentityRecord{fixtures.identity}) {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight().Identities = %#v, want [%#v]", got.Identities, fixtures.identity)
+	}
+	if !reflect.DeepEqual(got.Accounts, []FrankAccountRecord{fixtures.account}) {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight().Accounts = %#v, want [%#v]", got.Accounts, fixtures.account)
+	}
+	if !reflect.DeepEqual(got.Containers, []FrankContainerRecord{fixtures.container}) {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight().Containers = %#v, want [%#v]", got.Containers, fixtures.container)
+	}
+}
+
+func TestResolveExecutionContextCampaignPreflightFailsClosedWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Step.CampaignRef = &CampaignRef{CampaignID: "campaign-1"}
+
+	_, err := ResolveExecutionContextCampaignPreflight(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextCampaignPreflight() error = nil, want missing mission store root rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store root is required to resolve campaign refs") {
+		t.Fatalf("ResolveExecutionContextCampaignPreflight() error = %q, want missing mission store root rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextCampaignPreflightFailsClosedOnMalformedCampaignRecordOrBrokenLinks(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+
+	t.Run("malformed campaign record", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		writeMalformedCampaignRecordForPreflightTest(t, root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-malformed"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID}}
+			record.ComplianceChecks = nil
+		}))
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-malformed"}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		_, err = ResolveExecutionContextCampaignPreflight(ec)
+		if err == nil {
+			t.Fatal("ResolveExecutionContextCampaignPreflight() error = nil, want malformed campaign rejection")
+		}
+		if !strings.Contains(err.Error(), "mission store campaign compliance_checks are required") {
+			t.Fatalf("ResolveExecutionContextCampaignPreflight() error = %q, want malformed campaign rejection", err.Error())
+		}
+	})
+
+	t.Run("broken linked object ref", func(t *testing.T) {
+		t.Parallel()
+
+		fixtures := writeExecutionContextFrankRegistryFixtures(t)
+		root := fixtures.root
+		record := validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-broken-link"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-missing"}}
+		})
+		if err := StoreCampaignRecord(root, record); err == nil {
+			t.Fatal("StoreCampaignRecord() error = nil, want broken campaign Frank object link rejection")
+		}
+		writeMalformedCampaignRecordForPreflightTest(t, root, validCampaignRecord(now, func(record *CampaignRecord) {
+			record.CampaignID = "campaign-broken-link"
+			record.FrankObjectRefs = []FrankRegistryObjectRef{{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-missing"}}
+		}))
+
+		job := testExecutionJob()
+		job.Plan.Steps[0].CampaignRef = &CampaignRef{CampaignID: "campaign-broken-link"}
+		ec, err := ResolveExecutionContext(job, "build")
+		if err != nil {
+			t.Fatalf("ResolveExecutionContext() error = %v", err)
+		}
+		ec.MissionStoreRoot = root
+
+		_, err = ResolveExecutionContextCampaignPreflight(ec)
+		if err == nil {
+			t.Fatal("ResolveExecutionContextCampaignPreflight() error = nil, want broken linked object rejection")
+		}
+		if !strings.Contains(err.Error(), ErrFrankIdentityRecordNotFound.Error()) {
+			t.Fatalf("ResolveExecutionContextCampaignPreflight() error = %q, want missing identity rejection", err.Error())
+		}
+	})
+}
+
+func writeMalformedCampaignRecordForPreflightTest(t *testing.T, root string, record CampaignRecord) {
+	t.Helper()
+
+	record = normalizeCampaignRecord(record)
+	payload := map[string]any{
+		"record_version":            normalizeRecordVersion(record.RecordVersion),
+		"campaign_id":               record.CampaignID,
+		"campaign_kind":             string(record.CampaignKind),
+		"display_name":              record.DisplayName,
+		"state":                     string(record.State),
+		"objective":                 record.Objective,
+		"governed_external_targets": record.GovernedExternalTargets,
+		"frank_object_refs":         record.FrankObjectRefs,
+		"identity_mode":             string(record.IdentityMode),
+		"stop_conditions":           record.StopConditions,
+		"failure_threshold":         record.FailureThreshold,
+		"created_at":                record.CreatedAt,
+		"updated_at":                record.UpdatedAt,
+	}
+	if len(record.ComplianceChecks) > 0 {
+		payload["compliance_checks"] = record.ComplianceChecks
+	}
+	if err := WriteStoreJSONAtomic(StoreCampaignPath(root, record.CampaignID), payload); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+}
+
 func validCampaignRecord(now time.Time, mutate func(*CampaignRecord)) CampaignRecord {
 	record := CampaignRecord{
 		CampaignID:   "campaign-1",

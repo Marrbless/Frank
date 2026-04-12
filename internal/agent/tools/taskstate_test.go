@@ -3548,6 +3548,9 @@ func TestTaskStateOperatorInspectActiveExecutionContextZeroTreasuryRefPathUnchan
 	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
 		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
 	}
+	if summary.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil for zero-ref path", summary.Steps[0].CampaignPreflight)
+	}
 	if summary.Steps[0].TreasuryPreflight != nil {
 		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", summary.Steps[0].TreasuryPreflight)
 	}
@@ -3578,6 +3581,9 @@ func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedTreasuryP
 	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
 		t.Fatalf("Steps = %#v, want one build step", summary.Steps)
 	}
+	if summary.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on treasury-only path", summary.Steps[0].CampaignPreflight)
+	}
 	if summary.Steps[0].TreasuryPreflight == nil {
 		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 	}
@@ -3595,12 +3601,53 @@ func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedTreasuryP
 	}
 }
 
+func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedCampaignPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	got, err := state.OperatorInspect("job-1", "build")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+	}
+	if summary.Steps[0].CampaignPreflight == nil || summary.Steps[0].CampaignPreflight.Campaign == nil {
+		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", summary.Steps[0].CampaignPreflight)
+	}
+	if summary.Steps[0].CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+		t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", summary.Steps[0].CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
+	}
+	if len(summary.Steps[0].CampaignPreflight.Identities) != 1 || len(summary.Steps[0].CampaignPreflight.Accounts) != 1 || len(summary.Steps[0].CampaignPreflight.Containers) != 1 {
+		t.Fatalf("CampaignPreflight = %#v, want one identity/account/container", summary.Steps[0].CampaignPreflight)
+	}
+	if summary.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", summary.Steps[0].TreasuryPreflight)
+	}
+}
+
 func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryContract(t *testing.T) {
 	t.Parallel()
 
 	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
 	job := testTaskStateJob()
-	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-mail"}
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 
 	t.Run("active", func(t *testing.T) {
@@ -3616,7 +3663,7 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if err != nil {
 			t.Fatalf("OperatorInspect() error = %v", err)
 		}
-		assertTaskStateReadoutAdapterBoundary(t, got, true)
+		assertTaskStateReadoutAdapterBoundary(t, got, true, true)
 
 		summary := mustTaskStateReadoutJSON[missioncontrol.InspectSummary](t, got)
 		envelope := mustTaskStateJSONObject(t, got)
@@ -3629,10 +3676,17 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if !ok {
 			t.Fatalf("steps[0] = %#v, want object", steps[0])
 		}
-		assertTaskStateJSONObjectKeys(t, step, "allowed_tools", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, step, "allowed_tools", "campaign_preflight", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria", "treasury_preflight")
+		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, step["campaign_preflight"])
 		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
 		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
 			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
+		}
+		if summary.Steps[0].CampaignPreflight == nil || summary.Steps[0].CampaignPreflight.Campaign == nil {
+			t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight on active path", summary.Steps[0].CampaignPreflight)
+		}
+		if summary.Steps[0].CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+			t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", summary.Steps[0].CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
 		}
 		if summary.Steps[0].TreasuryPreflight == nil || summary.Steps[0].TreasuryPreflight.Treasury == nil {
 			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", summary.Steps[0].TreasuryPreflight)
@@ -3676,7 +3730,7 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if err != nil {
 			t.Fatalf("OperatorInspect() error = %v", err)
 		}
-		assertTaskStateReadoutAdapterBoundary(t, got, false)
+		assertTaskStateReadoutAdapterBoundary(t, got, false, false)
 
 		summary := mustTaskStateReadoutJSON[missioncontrol.InspectSummary](t, got)
 		envelope := mustTaskStateJSONObject(t, got)
@@ -3693,10 +3747,33 @@ func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryC
 		if len(summary.Steps) != 1 || summary.Steps[0].StepID != "build" {
 			t.Fatalf("Steps = %#v, want one build step", summary.Steps)
 		}
+		if summary.Steps[0].CampaignPreflight != nil {
+			t.Fatalf("CampaignPreflight = %#v, want nil for persisted inspectable-plan path", summary.Steps[0].CampaignPreflight)
+		}
 		if summary.Steps[0].TreasuryPreflight != nil {
 			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted inspectable-plan path", summary.Steps[0].TreasuryPreflight)
 		}
 	})
+}
+
+func TestTaskStateOperatorInspectActiveExecutionContextMissingCampaignFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-missing"}
+	state.SetMissionStoreRoot(t.TempDir())
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, err := state.OperatorInspect("job-1", "build")
+	if err == nil {
+		t.Fatal("OperatorInspect() error = nil, want missing campaign rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrCampaignRecordNotFound.Error()) {
+		t.Fatalf("OperatorInspect() error = %q, want missing campaign rejection", err)
+	}
 }
 
 func TestTaskStateActivateStepInvalidTreasuryStateFailsClosed(t *testing.T) {
@@ -4032,4 +4109,119 @@ func writeTaskStateTreasuryFixtures(t *testing.T) (string, missioncontrol.Treasu
 	}
 
 	return root, treasury, container
+}
+
+func mustStoreTaskStateCampaignFixture(t *testing.T, root string, container missioncontrol.FrankContainerRecord) missioncontrol.CampaignRecord {
+	t.Helper()
+
+	now := time.Date(2026, 4, 8, 20, 45, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}
+	writeTaskStateAutonomyEligibilityFixture(t, root, providerTarget, missioncontrol.PlatformRecord{
+		PlatformID:       providerTarget.RegistryID,
+		PlatformName:     "provider-mail.example",
+		TargetClass:      providerTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-provider-mail",
+		TargetKind:             providerTarget.Kind,
+		TargetName:             "provider-mail.example",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now,
+	})
+	writeTaskStateAutonomyEligibilityFixture(t, root, accountTarget, missioncontrol.PlatformRecord{
+		PlatformID:       accountTarget.RegistryID,
+		PlatformName:     "account-class-mailbox",
+		TargetClass:      accountTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-account-class-mailbox",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.Add(time.Minute),
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-account-class-mailbox",
+		TargetKind:             accountTarget.Kind,
+		TargetName:             "account-class-mailbox",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.Add(time.Minute),
+	})
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	campaign := missioncontrol.CampaignRecord{
+		RecordVersion:           missioncontrol.StoreRecordVersion,
+		CampaignID:              "campaign-mail",
+		CampaignKind:            missioncontrol.CampaignKindOutreach,
+		DisplayName:             "Frank Outreach",
+		State:                   missioncontrol.CampaignStateDraft,
+		Objective:               "Reach aligned operators",
+		GovernedExternalTargets: []missioncontrol.AutonomyEligibilityTargetRef{providerTarget},
+		FrankObjectRefs: []missioncontrol.FrankRegistryObjectRef{
+			{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+			{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+			{Kind: missioncontrol.FrankRegistryObjectKindContainer, ObjectID: container.ContainerID},
+		},
+		IdentityMode:     missioncontrol.IdentityModeAgentAlias,
+		StopConditions:   []string{"stop after 3 replies"},
+		FailureThreshold: missioncontrol.CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+		ComplianceChecks: []string{"can-spam-reviewed"},
+		CreatedAt:        now.Add(4 * time.Minute).UTC(),
+		UpdatedAt:        now.Add(5 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+	return campaign
 }

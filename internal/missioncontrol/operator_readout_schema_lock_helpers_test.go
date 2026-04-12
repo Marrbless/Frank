@@ -69,9 +69,12 @@ func mustOperatorReadoutJSONObject(t *testing.T, readout string) map[string]any 
 	return object
 }
 
-func assertOperatorReadoutAdapterBoundary(t *testing.T, readout, label string, allowTreasuryPreflight bool) {
+func assertOperatorReadoutAdapterBoundary(t *testing.T, readout, label string, allowCampaignPreflight bool, allowTreasuryPreflight bool) {
 	t.Helper()
 
+	if !allowCampaignPreflight && strings.Contains(readout, "\"campaign_preflight\"") {
+		t.Fatalf("%s unexpectedly contains %s: %s", label, "\"campaign_preflight\"", readout)
+	}
 	if !allowTreasuryPreflight && strings.Contains(readout, "\"treasury_preflight\"") {
 		t.Fatalf("%s unexpectedly contains %s: %s", label, "\"treasury_preflight\"", readout)
 	}
@@ -81,6 +84,72 @@ func assertOperatorReadoutAdapterBoundary(t *testing.T, readout, label string, a
 			t.Fatalf("%s unexpectedly contains %s: %s", label, key, readout)
 		}
 	}
+}
+
+func assertResolvedCampaignPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight = %#v, want object", value)
+	}
+	assertJSONObjectKeys(t, preflight, "accounts", "campaign", "containers", "identities")
+
+	campaign, ok := preflight["campaign"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign = %#v, want object", preflight["campaign"])
+	}
+	assertJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at")
+
+	failureThreshold, ok := campaign["failure_threshold"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign.failure_threshold = %#v, want object", campaign["failure_threshold"])
+	}
+	assertJSONObjectKeys(t, failureThreshold, "limit", "metric")
+
+	governedTargets := mustJSONArray(t, campaign["governed_external_targets"], "campaign_preflight.campaign.governed_external_targets")
+	if len(governedTargets) != 1 {
+		t.Fatalf("campaign_preflight.campaign.governed_external_targets len = %d, want 1", len(governedTargets))
+	}
+	assertJSONObjectKeys(t, governedTargets[0], "kind", "registry_id")
+
+	objectRefs := mustJSONArray(t, campaign["frank_object_refs"], "campaign_preflight.campaign.frank_object_refs")
+	if len(objectRefs) != 3 {
+		t.Fatalf("campaign_preflight.campaign.frank_object_refs len = %d, want 3", len(objectRefs))
+	}
+	for _, value := range objectRefs {
+		assertJSONObjectKeys(t, value, "kind", "object_id")
+	}
+
+	identities := mustJSONArray(t, preflight["identities"], "campaign_preflight.identities")
+	if len(identities) != 1 {
+		t.Fatalf("campaign_preflight.identities len = %d, want 1", len(identities))
+	}
+	identity, ok := identities[0].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.identities[0] = %#v, want object", identities[0])
+	}
+	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at")
+
+	accounts := mustJSONArray(t, preflight["accounts"], "campaign_preflight.accounts")
+	if len(accounts) != 1 {
+		t.Fatalf("campaign_preflight.accounts len = %d, want 1", len(accounts))
+	}
+	account, ok := accounts[0].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.accounts[0] = %#v, want object", accounts[0])
+	}
+	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at")
+
+	containers := mustJSONArray(t, preflight["containers"], "campaign_preflight.containers")
+	if len(containers) != 1 {
+		t.Fatalf("campaign_preflight.containers len = %d, want 1", len(containers))
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.containers[0] = %#v, want object", containers[0])
+	}
+	assertJSONObjectKeys(t, container, "container_class_id", "container_id", "container_kind", "created_at", "eligibility_target_ref", "label", "record_version", "state", "updated_at")
 }
 
 func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {

@@ -18,6 +18,7 @@ type InspectStep struct {
 	SuccessCriteria       []string                                   `json:"success_criteria"`
 	EffectiveAllowedTools []string                                   `json:"effective_allowed_tools"`
 	RequiresApproval      bool                                       `json:"requires_approval"`
+	CampaignPreflight     *ResolvedExecutionContextCampaignPreflight `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight     *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
 }
 
@@ -28,9 +29,20 @@ func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
 }
 
 func NewInspectSummaryWithTreasuryPreflight(job Job, stepID string, storeRoot string) (InspectSummary, error) {
+	return NewInspectSummaryWithCampaignAndTreasuryPreflight(job, stepID, storeRoot)
+}
+
+func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, storeRoot string) (InspectSummary, error) {
 	return newInspectSummary(job, stepID, func(step Step, ec ExecutionContext) (InspectStep, error) {
 		ec.MissionStoreRoot = storeRoot
 		summary := newInspectStepSummary(step, ec)
+		campaignPreflight, err := ResolveExecutionContextCampaignPreflight(ec)
+		if err != nil {
+			return InspectStep{}, err
+		}
+		if campaignPreflight.Campaign != nil {
+			summary.CampaignPreflight = &campaignPreflight
+		}
 		preflight, err := ResolveExecutionContextTreasuryPreflight(ec)
 		if err != nil {
 			return InspectStep{}, err

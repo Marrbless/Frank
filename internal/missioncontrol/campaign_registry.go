@@ -93,6 +93,13 @@ type CampaignObjectView struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type ResolvedExecutionContextCampaignPreflight struct {
+	Campaign   *CampaignRecord        `json:"campaign,omitempty"`
+	Identities []FrankIdentityRecord  `json:"identities,omitempty"`
+	Accounts   []FrankAccountRecord   `json:"accounts,omitempty"`
+	Containers []FrankContainerRecord `json:"containers,omitempty"`
+}
+
 var ErrCampaignRecordNotFound = errors.New("mission store campaign record not found")
 
 func StoreCampaignsDir(root string) string {
@@ -324,6 +331,43 @@ func ResolveExecutionContextCampaignRef(ec ExecutionContext) (*CampaignRecord, e
 		return nil, err
 	}
 	return &record, nil
+}
+
+func ResolveExecutionContextCampaignPreflight(ec ExecutionContext) (ResolvedExecutionContextCampaignPreflight, error) {
+	campaign, err := ResolveExecutionContextCampaignRef(ec)
+	if err != nil {
+		return ResolvedExecutionContextCampaignPreflight{}, err
+	}
+	if campaign == nil {
+		return ResolvedExecutionContextCampaignPreflight{}, nil
+	}
+
+	resolvedRefs, err := ResolveFrankRegistryObjectRefs(ec.MissionStoreRoot, campaign.FrankObjectRefs)
+	if err != nil {
+		return ResolvedExecutionContextCampaignPreflight{}, err
+	}
+
+	preflight := ResolvedExecutionContextCampaignPreflight{
+		Campaign: campaign,
+	}
+	if len(resolvedRefs) == 0 {
+		return preflight, nil
+	}
+
+	for _, resolved := range resolvedRefs {
+		switch {
+		case resolved.Identity != nil:
+			preflight.Identities = append(preflight.Identities, *resolved.Identity)
+		case resolved.Account != nil:
+			preflight.Accounts = append(preflight.Accounts, *resolved.Account)
+		case resolved.Container != nil:
+			preflight.Containers = append(preflight.Containers, *resolved.Container)
+		default:
+			return ResolvedExecutionContextCampaignPreflight{}, fmt.Errorf("resolve campaign Frank object ref kind %q object_id %q: expected Frank registry object record", resolved.Ref.Kind, resolved.Ref.ObjectID)
+		}
+	}
+
+	return preflight, nil
 }
 
 func normalizeCampaignGovernedExternalTargets(targets []AutonomyEligibilityTargetRef) []AutonomyEligibilityTargetRef {

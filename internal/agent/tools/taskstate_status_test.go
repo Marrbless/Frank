@@ -58,6 +58,9 @@ func TestTaskStateOperatorStatusActiveExecutionContextZeroTreasuryRefPathUnchang
 	if !reflect.DeepEqual(got.AllowedTools, []string{"read"}) {
 		t.Fatalf("AllowedTools = %#v, want [%q]", got.AllowedTools, "read")
 	}
+	if got.CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil for zero-ref path", got.CampaignPreflight)
+	}
 	if got.TreasuryPreflight != nil {
 		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", got.TreasuryPreflight)
 	}
@@ -90,6 +93,9 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPr
 	}
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on treasury-only path", got.CampaignPreflight)
+	}
 	if got.TreasuryPreflight == nil {
 		t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 	}
@@ -107,12 +113,47 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedTreasuryPr
 	}
 }
 
+func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedCampaignPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.CampaignPreflight == nil || got.CampaignPreflight.Campaign == nil {
+		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", got.CampaignPreflight)
+	}
+	if got.CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+		t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", got.CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
+	}
+	if len(got.CampaignPreflight.Identities) != 1 || len(got.CampaignPreflight.Accounts) != 1 || len(got.CampaignPreflight.Containers) != 1 {
+		t.Fatalf("CampaignPreflight = %#v, want one identity/account/container", got.CampaignPreflight)
+	}
+	if got.TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", got.TreasuryPreflight)
+	}
+}
+
 func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryContract(t *testing.T) {
 	t.Parallel()
 
 	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
 	job := testTaskStateJob()
-	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-mail"}
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
 	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
 
 	t.Run("active", func(t *testing.T) {
@@ -128,12 +169,19 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		if err != nil {
 			t.Fatalf("OperatorStatus() error = %v", err)
 		}
-		assertTaskStateReadoutAdapterBoundary(t, summary, true)
+		assertTaskStateReadoutAdapterBoundary(t, summary, true, true)
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "state", "treasury_preflight")
+		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, envelope["treasury_preflight"])
+		if got.CampaignPreflight == nil || got.CampaignPreflight.Campaign == nil {
+			t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight on active path", got.CampaignPreflight)
+		}
+		if got.CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+			t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", got.CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
+		}
 		if got.TreasuryPreflight == nil || got.TreasuryPreflight.Treasury == nil {
 			t.Fatalf("TreasuryPreflight = %#v, want resolved treasury preflight on active path", got.TreasuryPreflight)
 		}
@@ -171,15 +219,38 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 		if err != nil {
 			t.Fatalf("OperatorStatus() error = %v", err)
 		}
-		assertTaskStateReadoutAdapterBoundary(t, summary, false)
+		assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
 		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "job_id", "paused_reason", "state")
+		if got.CampaignPreflight != nil {
+			t.Fatalf("CampaignPreflight = %#v, want nil for persisted runtime path", got.CampaignPreflight)
+		}
 		if got.TreasuryPreflight != nil {
 			t.Fatalf("TreasuryPreflight = %#v, want nil for persisted runtime path", got.TreasuryPreflight)
 		}
 	})
+}
+
+func TestTaskStateOperatorStatusActiveExecutionContextMissingCampaignFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-missing"}
+	state.SetMissionStoreRoot(t.TempDir())
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, err := state.OperatorStatus("job-1")
+	if err == nil {
+		t.Fatal("OperatorStatus() error = nil, want missing campaign rejection")
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrCampaignRecordNotFound.Error()) {
+		t.Fatalf("OperatorStatus() error = %q, want missing campaign rejection", err)
+	}
 }
 
 func TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath(t *testing.T) {

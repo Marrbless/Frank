@@ -75,7 +75,7 @@ func TestMaybeEmitMissionCheckInEmitsOncePerThirtyMinuteBucket(t *testing.T) {
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref check-in path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", false, false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a mission check-in outbound notification")
 	}
@@ -136,7 +136,7 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission check-in:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", false, true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -151,6 +151,57 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedTreasuryPreflight(t *testing.T) 
 		}
 		if !reflect.DeepEqual(summary.TreasuryPreflight.Containers, []missioncontrol.FrankContainerRecord{container}) {
 			t.Fatalf("TreasuryPreflight.Containers = %#v, want [%#v]", summary.TreasuryPreflight.Containers, container)
+		}
+	default:
+		t.Fatal("expected a mission check-in outbound notification")
+	}
+}
+
+func TestMaybeEmitMissionCheckInSurfacesResolvedCampaignPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeApprovalNotificationTreasuryFixtures(t)
+	campaign := mustStoreLoopCampaignFixture(t, root, container)
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+
+	job := testMissionJob([]string{"read"}, []string{"read"})
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	ag.taskState.SetOperatorSession("telegram", "chat-42")
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+	now := time.Date(2026, 4, 8, 22, 0, 0, 0, time.UTC)
+	ec.Runtime.CreatedAt = now.Add(-31 * time.Minute)
+	ec.Runtime.UpdatedAt = now.Add(-31 * time.Minute)
+	ec.Runtime.StartedAt = now.Add(-31 * time.Minute)
+	ec.Runtime.ActiveStepAt = now.Add(-31 * time.Minute)
+	ag.taskState.SetExecutionContext(ec)
+
+	ag.maybeEmitMissionCheckIn(now)
+
+	select {
+	case out := <-hub.Out:
+		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission check-in:\n")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, false, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "recent_audit", "state")
+		if summary.CampaignPreflight == nil || summary.CampaignPreflight.Campaign == nil {
+			t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", summary.CampaignPreflight)
+		}
+		if summary.CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+			t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", summary.CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
+		}
+		if len(summary.CampaignPreflight.Identities) != 1 || len(summary.CampaignPreflight.Accounts) != 1 || len(summary.CampaignPreflight.Containers) != 1 {
+			t.Fatalf("CampaignPreflight = %#v, want one identity/account/container", summary.CampaignPreflight)
+		}
+		if summary.TreasuryPreflight != nil {
+			t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", summary.TreasuryPreflight)
 		}
 	default:
 		t.Fatal("expected a mission check-in outbound notification")
@@ -220,7 +271,7 @@ func TestBuildMissionCheckInContentPersistedRuntimePathUnchangedForTreasurySteps
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
-	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission check-in:\n", false, "active_step_id", "job_id", "state")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission check-in:\n", false, false, "active_step_id", "job_id", "state")
 }
 
 func TestMaybeEmitMissionCheckInSkipsBeforeThirtyMinutes(t *testing.T) {
@@ -292,7 +343,7 @@ func TestMaybeEmitMissionDailySummaryEmitsOncePerTwentyFourHourBucket(t *testing
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref daily summary path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", false, false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a daily mission summary outbound notification")
 	}
@@ -347,7 +398,7 @@ func TestMaybeEmitMissionDailySummarySurfacesResolvedTreasuryPreflight(t *testin
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Daily mission summary:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Daily mission summary:\n", false, true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -431,7 +482,7 @@ func TestBuildMissionDailySummaryContentPersistedRuntimePathUnchangedForTreasury
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
-	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Daily mission summary:\n", false, "active_step_id", "job_id", "state")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Daily mission summary:\n", false, false, "active_step_id", "job_id", "state")
 }
 
 func TestMaybeEmitMissionDailySummarySkipsBeforeTwentyFourHours(t *testing.T) {
@@ -667,7 +718,7 @@ func TestMissionRuntimeChangeHookEmitsApprovalRequiredNotificationOncePerPending
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref approval notification path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", false, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", false, false, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
 	default:
 		t.Fatal("expected an approval-required outbound notification")
 	}
@@ -719,7 +770,7 @@ func TestMissionRuntimeChangeHookApprovalNotificationSurfacesResolvedTreasuryPre
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Approval required:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", true, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Approval required:\n", false, true, "active_step_id", "allowed_tools", "approval_history", "approval_request", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -813,7 +864,7 @@ func TestBuildMissionApprovalRequestContentPersistedRuntimePathUnchangedForTreas
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
-	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Approval required:\n", false, "active_step_id", "approval_history", "approval_request", "job_id", "state", "waiting_at", "waiting_reason")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Approval required:\n", false, false, "active_step_id", "approval_history", "approval_request", "job_id", "state", "waiting_at", "waiting_reason")
 }
 
 func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState(t *testing.T) {
@@ -849,7 +900,7 @@ func TestMissionRuntimeChangeHookEmitsWaitingUserNotificationOncePerWaitingState
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref waiting-user path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", false, false, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "waiting_at", "waiting_reason")
 	default:
 		t.Fatal("expected a waiting-user outbound notification")
 	}
@@ -902,7 +953,7 @@ func TestMissionRuntimeChangeHookWaitingUserNotificationSurfacesResolvedTreasury
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "cli", "direct")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Waiting for user:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Waiting for user:\n", false, true, "active_step_id", "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight", "waiting_at", "waiting_reason")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -985,7 +1036,7 @@ func TestBuildMissionWaitingUserContentPersistedRuntimePathUnchangedForTreasuryS
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
-	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Waiting for user:\n", false, "active_step_id", "job_id", "state", "waiting_at", "waiting_reason")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Waiting for user:\n", false, false, "active_step_id", "job_id", "state", "waiting_at", "waiting_reason")
 }
 
 func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.T) {
@@ -1025,7 +1076,7 @@ func TestMaybeEmitCompletionNotificationEmitsOncePerCompletedRuntime(t *testing.
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref completion path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", false, "job_id", "recent_audit", "state")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", false, false, "job_id", "recent_audit", "state")
 	default:
 		t.Fatal("expected a completion outbound notification")
 	}
@@ -1080,7 +1131,7 @@ func TestMaybeEmitCompletionNotificationSurfacesResolvedTreasuryPreflight(t *tes
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission completed:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", true, "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission completed:\n", false, true, "allowed_tools", "job_id", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -1244,7 +1295,7 @@ func TestMaybeEmitBudgetPauseNotificationEmitsOncePerBudgetBlocker(t *testing.T)
 		if strings.Contains(out.Content, `"treasury_preflight"`) {
 			t.Fatalf("outbound content = %q, want zero-ref budget-pause path unchanged", out.Content)
 		}
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", false, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", false, false, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state")
 	default:
 		t.Fatal("expected a budget pause outbound notification")
 	}
@@ -1306,7 +1357,7 @@ func TestMaybeEmitBudgetPauseNotificationSurfacesResolvedTreasuryPreflight(t *te
 			t.Fatalf("outbound session = (%q, %q), want (%q, %q)", out.Channel, out.ChatID, "telegram", "chat-42")
 		}
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission paused:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", true, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state", "treasury_preflight")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission paused:\n", false, true, "active_step_id", "allowed_tools", "budget_blocker", "job_id", "paused_reason", "recent_audit", "state", "treasury_preflight")
 		if summary.TreasuryPreflight == nil {
 			t.Fatal("TreasuryPreflight = nil, want resolved treasury/container data")
 		}
@@ -1395,7 +1446,7 @@ func TestBuildMissionBudgetPauseContentPersistedRuntimePathUnchangedForTreasuryS
 	if strings.Contains(summary, `"treasury_preflight"`) {
 		t.Fatalf("summary = %q, want persisted runtime path unchanged", summary)
 	}
-	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission paused:\n", false, "active_step_id", "budget_blocker", "job_id", "paused_reason", "state")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Mission paused:\n", false, false, "active_step_id", "budget_blocker", "job_id", "paused_reason", "state")
 }
 
 func testWaitingUserNotificationMissionJob() missioncontrol.Job {
@@ -1488,6 +1539,122 @@ func writeApprovalNotificationTreasuryFixtures(t *testing.T) (string, missioncon
 	}
 
 	return root, treasury, container
+}
+
+func mustStoreLoopCampaignFixture(t *testing.T, root string, container missioncontrol.FrankContainerRecord) missioncontrol.CampaignRecord {
+	t.Helper()
+
+	now := time.Date(2026, 4, 8, 20, 45, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}
+	writeApprovalNotificationEligibilityFixture(t, root, missioncontrol.PlatformRecord{
+		PlatformID:       providerTarget.RegistryID,
+		PlatformName:     "provider-mail.example",
+		TargetClass:      providerTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.UTC(),
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-provider-mail",
+		TargetKind:             providerTarget.Kind,
+		TargetName:             "provider-mail.example",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.UTC(),
+	})
+	writeApprovalNotificationEligibilityFixture(t, root, missioncontrol.PlatformRecord{
+		PlatformID:       accountTarget.RegistryID,
+		PlatformName:     "account-class-mailbox",
+		TargetClass:      accountTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-account-class-mailbox",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.Add(time.Minute).UTC(),
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-account-class-mailbox",
+		TargetKind:             accountTarget.Kind,
+		TargetName:             "account-class-mailbox",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.Add(time.Minute).UTC(),
+	})
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	campaign := missioncontrol.CampaignRecord{
+		RecordVersion:           missioncontrol.StoreRecordVersion,
+		CampaignID:              "campaign-mail",
+		CampaignKind:            missioncontrol.CampaignKindOutreach,
+		DisplayName:             "Frank Outreach",
+		State:                   missioncontrol.CampaignStateDraft,
+		Objective:               "Reach aligned operators",
+		GovernedExternalTargets: []missioncontrol.AutonomyEligibilityTargetRef{providerTarget},
+		FrankObjectRefs: []missioncontrol.FrankRegistryObjectRef{
+			{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+			{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+			{Kind: missioncontrol.FrankRegistryObjectKindContainer, ObjectID: container.ContainerID},
+		},
+		IdentityMode:     missioncontrol.IdentityModeAgentAlias,
+		StopConditions:   []string{"stop after 3 replies"},
+		FailureThreshold: missioncontrol.CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+		ComplianceChecks: []string{"can-spam-reviewed"},
+		CreatedAt:        now.Add(4 * time.Minute).UTC(),
+		UpdatedAt:        now.Add(5 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	return campaign
 }
 
 func writeApprovalNotificationEligibilityFixture(t *testing.T, root string, platform missioncontrol.PlatformRecord, check missioncontrol.EligibilityCheckRecord) {

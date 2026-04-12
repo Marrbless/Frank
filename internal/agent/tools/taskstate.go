@@ -1239,15 +1239,16 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 				Message: "operator command does not match the active job",
 			}
 		}
-		var preflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
-		if ec.Step != nil && ec.Step.TreasuryRef != nil {
-			resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
-			if err != nil {
-				return "", err
-			}
-			preflight = &resolved
+		campaignPreflight, treasuryPreflight, err := resolveExecutionContextCampaignAndTreasuryPreflight(ec)
+		if err != nil {
+			return "", err
 		}
-		return missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(*ec.Runtime, missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step), preflight)
+		return missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
+			*ec.Runtime,
+			missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step),
+			campaignPreflight,
+			treasuryPreflight,
+		)
 	}
 
 	if !hasRuntimeState || runtimeState == nil {
@@ -1268,6 +1269,27 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 		allowedTools = missioncontrol.EffectiveAllowedTools(&missioncontrol.Job{AllowedTools: append([]string(nil), control.AllowedTools...)}, &control.Step)
 	}
 	return missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
+}
+
+func resolveExecutionContextCampaignAndTreasuryPreflight(ec missioncontrol.ExecutionContext) (*missioncontrol.ResolvedExecutionContextCampaignPreflight, *missioncontrol.ResolvedExecutionContextTreasuryPreflight, error) {
+	var campaignPreflight *missioncontrol.ResolvedExecutionContextCampaignPreflight
+	if ec.Step != nil && ec.Step.CampaignRef != nil {
+		resolved, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+		if err != nil {
+			return nil, nil, err
+		}
+		campaignPreflight = &resolved
+	}
+
+	var treasuryPreflight *missioncontrol.ResolvedExecutionContextTreasuryPreflight
+	if ec.Step != nil && ec.Step.TreasuryRef != nil {
+		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
+		if err != nil {
+			return nil, nil, err
+		}
+		treasuryPreflight = &resolved
+	}
+	return campaignPreflight, treasuryPreflight, nil
 }
 
 func (s *TaskState) OperatorInspect(jobID string, stepID string) (string, error) {
@@ -1309,7 +1331,7 @@ func (s *TaskState) OperatorInspect(jobID string, stepID string) (string, error)
 			}
 		}
 
-		summary, err := missioncontrol.NewInspectSummaryWithTreasuryPreflight(*ec.Job, stepID, ec.MissionStoreRoot)
+		summary, err := missioncontrol.NewInspectSummaryWithCampaignAndTreasuryPreflight(*ec.Job, stepID, ec.MissionStoreRoot)
 		if err != nil {
 			return "", err
 		}

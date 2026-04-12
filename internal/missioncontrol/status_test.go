@@ -375,12 +375,71 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 
 		got := mustOperatorReadoutJSONObject(t, formatted)
 		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state")
-		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false)
+		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, false)
 	})
 
-	t.Run("with_resolved_treasury_preflight", func(t *testing.T) {
+	t.Run("with_resolved_campaign_and_treasury_preflight", func(t *testing.T) {
 		t.Parallel()
 
+		campaignPreflight := ResolvedExecutionContextCampaignPreflight{
+			Campaign: &CampaignRecord{
+				RecordVersion:           StoreRecordVersion,
+				CampaignID:              "campaign-mail",
+				CampaignKind:            CampaignKindOutreach,
+				DisplayName:             "Frank Outreach",
+				State:                   CampaignStateDraft,
+				Objective:               "Reach aligned operators",
+				GovernedExternalTargets: []AutonomyEligibilityTargetRef{{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"}},
+				FrankObjectRefs: []FrankRegistryObjectRef{
+					{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-mail"},
+					{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail"},
+					{Kind: FrankRegistryObjectKindContainer, ObjectID: "container-wallet"},
+				},
+				IdentityMode:     IdentityModeAgentAlias,
+				StopConditions:   []string{"stop after 3 replies"},
+				FailureThreshold: CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+				ComplianceChecks: []string{"can-spam-reviewed"},
+				CreatedAt:        time.Date(2026, 4, 8, 20, 55, 0, 0, time.UTC),
+				UpdatedAt:        time.Date(2026, 4, 8, 20, 56, 0, 0, time.UTC),
+			},
+			Identities: []FrankIdentityRecord{{
+				RecordVersion:        StoreRecordVersion,
+				IdentityID:           "identity-mail",
+				IdentityKind:         "email",
+				DisplayName:          "Frank Mail",
+				ProviderOrPlatformID: "provider-mail",
+				IdentityMode:         IdentityModeAgentAlias,
+				State:                "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+				CreatedAt:            time.Date(2026, 4, 8, 20, 50, 0, 0, time.UTC),
+				UpdatedAt:            time.Date(2026, 4, 8, 20, 51, 0, 0, time.UTC),
+			}},
+			Accounts: []FrankAccountRecord{{
+				RecordVersion:        StoreRecordVersion,
+				AccountID:            "account-mail",
+				AccountKind:          "mailbox",
+				Label:                "Inbox",
+				ProviderOrPlatformID: "provider-mail",
+				IdentityID:           "identity-mail",
+				ControlModel:         "agent_managed",
+				RecoveryModel:        "agent_recoverable",
+				State:                "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+				CreatedAt:            time.Date(2026, 4, 8, 20, 52, 0, 0, time.UTC),
+				UpdatedAt:            time.Date(2026, 4, 8, 20, 53, 0, 0, time.UTC),
+			}},
+			Containers: []FrankContainerRecord{{
+				RecordVersion:        StoreRecordVersion,
+				ContainerID:          "container-wallet",
+				ContainerKind:        "wallet",
+				Label:                "Primary Wallet",
+				ContainerClassID:     "container-class-wallet",
+				State:                "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindTreasuryContainerClass, RegistryID: "container-class-wallet"},
+				CreatedAt:            time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt:            time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			}},
+		}
 		preflight := ResolvedExecutionContextTreasuryPreflight{
 			Treasury: &TreasuryRecord{
 				RecordVersion:  StoreRecordVersion,
@@ -415,15 +474,16 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 			},
 		}
 
-		formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+		formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, []string{"read"}, &campaignPreflight, &preflight)
 		if err != nil {
-			t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+			t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight() error = %v", err)
 		}
 
 		got := mustOperatorReadoutJSONObject(t, formatted)
-		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "job_id", "state", "treasury_preflight")
+		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "state", "treasury_preflight")
+		assertResolvedCampaignPreflightJSONEnvelope(t, got["campaign_preflight"])
 		assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
-		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", true)
+		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", true, true)
 	})
 }
 

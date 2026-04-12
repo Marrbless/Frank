@@ -15,6 +15,7 @@ type OperatorStatusSummary struct {
 	State             JobState                                   `json:"state"`
 	ActiveStepID      string                                     `json:"active_step_id,omitempty"`
 	AllowedTools      []string                                   `json:"allowed_tools,omitempty"`
+	CampaignPreflight *ResolvedExecutionContextCampaignPreflight `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
 	BudgetBlocker     *OperatorBudgetBlockerStatus               `json:"budget_blocker,omitempty"`
 	WaitingReason     string                                     `json:"waiting_reason,omitempty"`
@@ -114,9 +115,16 @@ func FormatOperatorStatusSummaryWithAllowedTools(runtime JobRuntimeState, allowe
 }
 
 func FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime JobRuntimeState, allowedTools []string, preflight *ResolvedExecutionContextTreasuryPreflight) (string, error) {
+	return FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, allowedTools, nil, preflight)
+}
+
+func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime JobRuntimeState, allowedTools []string, campaignPreflight *ResolvedExecutionContextCampaignPreflight, treasuryPreflight *ResolvedExecutionContextTreasuryPreflight) (string, error) {
 	summary := buildOperatorStatusSummary(runtime, allowedTools)
-	if preflight != nil && preflight.Treasury != nil {
-		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(preflight)
+	if campaignPreflight != nil && campaignPreflight.Campaign != nil {
+		summary.CampaignPreflight = cloneResolvedExecutionContextCampaignPreflight(campaignPreflight)
+	}
+	if treasuryPreflight != nil && treasuryPreflight.Treasury != nil {
+		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(treasuryPreflight)
 	}
 	return formatOperatorStatusSummary(summary)
 }
@@ -244,6 +252,23 @@ func cloneResolvedExecutionContextTreasuryPreflight(preflight *ResolvedExecution
 	if preflight.Treasury != nil {
 		treasury := *preflight.Treasury
 		cloned.Treasury = &treasury
+	}
+	return &cloned
+}
+
+func cloneResolvedExecutionContextCampaignPreflight(preflight *ResolvedExecutionContextCampaignPreflight) *ResolvedExecutionContextCampaignPreflight {
+	if preflight == nil {
+		return nil
+	}
+
+	cloned := ResolvedExecutionContextCampaignPreflight{
+		Identities: append([]FrankIdentityRecord(nil), preflight.Identities...),
+		Accounts:   append([]FrankAccountRecord(nil), preflight.Accounts...),
+		Containers: append([]FrankContainerRecord(nil), preflight.Containers...),
+	}
+	if preflight.Campaign != nil {
+		campaign := *preflight.Campaign
+		cloned.Campaign = &campaign
 	}
 	return &cloned
 }

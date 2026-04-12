@@ -791,6 +791,9 @@ func TestMissionInspectCommandTreasuryPreflightZeroRefPathUnchanged(t *testing.T
 	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
 		t.Fatalf("Steps = %#v, want one build step", got.Steps)
 	}
+	if got.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil for zero-ref path", got.Steps[0].CampaignPreflight)
+	}
 	if got.Steps[0].TreasuryPreflight != nil {
 		t.Fatalf("TreasuryPreflight = %#v, want nil for zero-ref path", got.Steps[0].TreasuryPreflight)
 	}
@@ -837,6 +840,45 @@ func TestMissionInspectCommandTreasuryStepSurfacesResolvedTreasuryPreflight(t *t
 	}
 }
 
+func TestMissionInspectCommandCampaignStepSurfacesResolvedCampaignPreflight(t *testing.T) {
+	root, _, container := writeMissionInspectTreasuryFixtures(t)
+	campaign := mustStoreMissionInspectCampaignFixture(t, root, container)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].CampaignPreflight == nil || got.Steps[0].CampaignPreflight.Campaign == nil {
+		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", got.Steps[0].CampaignPreflight)
+	}
+	if got.Steps[0].CampaignPreflight.Campaign.CampaignID != campaign.CampaignID {
+		t.Fatalf("CampaignPreflight.Campaign.CampaignID = %q, want %q", got.Steps[0].CampaignPreflight.Campaign.CampaignID, campaign.CampaignID)
+	}
+	if len(got.Steps[0].CampaignPreflight.Identities) != 1 || len(got.Steps[0].CampaignPreflight.Accounts) != 1 || len(got.Steps[0].CampaignPreflight.Containers) != 1 {
+		t.Fatalf("CampaignPreflight = %#v, want one identity/account/container", got.Steps[0].CampaignPreflight)
+	}
+	if got.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", got.Steps[0].TreasuryPreflight)
+	}
+}
+
 func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
@@ -875,6 +917,28 @@ func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(
 	}
 	if !strings.Contains(err.Error(), missioncontrol.ErrFrankContainerRecordNotFound.Error()) {
 		t.Fatalf("Execute() error = %q, want missing container rejection", err)
+	}
+}
+
+func TestMissionInspectCommandMissingCampaignFailsClosed(t *testing.T) {
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: "campaign-missing"}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", t.TempDir(), "--mission-file", path, "--step-id", "build"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing campaign rejection")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve mission inspection summary") {
+		t.Fatalf("Execute() error = %q, want inspection summary failure", err)
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrCampaignRecordNotFound.Error()) {
+		t.Fatalf("Execute() error = %q, want missing campaign rejection", err)
 	}
 }
 
@@ -8552,6 +8616,82 @@ func writeMissionInspectTreasuryFixtures(t *testing.T) (string, missioncontrol.T
 	}
 
 	return root, treasury, container
+}
+
+func mustStoreMissionInspectCampaignFixture(t *testing.T, root string, container missioncontrol.FrankContainerRecord) missioncontrol.CampaignRecord {
+	t.Helper()
+
+	now := time.Date(2026, 4, 8, 20, 45, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}
+	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "provider-mail.example", "check-provider-mail", now)
+	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "account-class-mailbox", "check-account-class-mailbox", now.Add(time.Minute))
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "active",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "active",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	campaign := missioncontrol.CampaignRecord{
+		RecordVersion:           missioncontrol.StoreRecordVersion,
+		CampaignID:              "campaign-mail",
+		CampaignKind:            missioncontrol.CampaignKindOutreach,
+		DisplayName:             "Frank Outreach",
+		State:                   missioncontrol.CampaignStateDraft,
+		Objective:               "Reach aligned operators",
+		GovernedExternalTargets: []missioncontrol.AutonomyEligibilityTargetRef{providerTarget},
+		FrankObjectRefs: []missioncontrol.FrankRegistryObjectRef{
+			{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+			{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+			{Kind: missioncontrol.FrankRegistryObjectKindContainer, ObjectID: container.ContainerID},
+		},
+		IdentityMode:     missioncontrol.IdentityModeAgentAlias,
+		StopConditions:   []string{"stop after 3 replies"},
+		FailureThreshold: missioncontrol.CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+		ComplianceChecks: []string{"can-spam-reviewed"},
+		CreatedAt:        now.Add(4 * time.Minute).UTC(),
+		UpdatedAt:        now.Add(5 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	return campaign
 }
 
 func writeMissionInspectEligibilityFixture(t *testing.T, root string, target missioncontrol.AutonomyEligibilityTargetRef, label missioncontrol.EligibilityLabel, targetName string, checkID string, checkedAt time.Time) {

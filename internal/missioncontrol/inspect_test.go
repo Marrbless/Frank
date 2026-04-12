@@ -157,6 +157,17 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
 	}
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	campaign := validCampaignRecord(time.Date(2026, 4, 8, 20, 55, 0, 0, time.UTC), func(record *CampaignRecord) {
+		record.CampaignID = "campaign-mail"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreCampaignRecord(fixtures.root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
 	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-wallet"
 	})
@@ -192,9 +203,9 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 			keys: []string{"allowed_tools", "job_id", "max_authority", "steps"},
 		},
 		{
-			name: "resolved_treasury_preflight",
+			name: "resolved_campaign_and_treasury_preflight",
 			run: func() (string, error) {
-				summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+				summary, err := NewInspectSummaryWithCampaignAndTreasuryPreflight(job, "build", fixtures.root)
 				if err != nil {
 					return "", err
 				}
@@ -226,14 +237,20 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 			}
 
 			wantStepKeys := []string{"allowed_tools", "depends_on", "effective_allowed_tools", "required_authority", "requires_approval", "step_id", "step_type", "success_criteria"}
-			if tc.name == "resolved_treasury_preflight" {
-				wantStepKeys = append(wantStepKeys, "treasury_preflight")
+			if tc.name == "resolved_campaign_and_treasury_preflight" {
+				wantStepKeys = append(wantStepKeys, "campaign_preflight", "treasury_preflight")
+				assertResolvedCampaignPreflightJSONEnvelope(t, step["campaign_preflight"])
 				assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
-			} else if _, ok := step["treasury_preflight"]; ok {
-				t.Fatalf("treasury_preflight = %#v, want omitted on %s path", step["treasury_preflight"], tc.name)
+			} else {
+				if _, ok := step["campaign_preflight"]; ok {
+					t.Fatalf("campaign_preflight = %#v, want omitted on %s path", step["campaign_preflight"], tc.name)
+				}
+				if _, ok := step["treasury_preflight"]; ok {
+					t.Fatalf("treasury_preflight = %#v, want omitted on %s path", step["treasury_preflight"], tc.name)
+				}
 			}
 			assertJSONObjectKeys(t, step, wantStepKeys...)
-			assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", tc.name == "resolved_treasury_preflight")
+			assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", tc.name == "resolved_campaign_and_treasury_preflight", tc.name == "resolved_campaign_and_treasury_preflight")
 		})
 	}
 }

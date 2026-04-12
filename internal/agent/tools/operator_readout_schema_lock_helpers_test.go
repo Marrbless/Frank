@@ -60,6 +60,55 @@ func mustTaskStateJSONObject(t *testing.T, readout string) map[string]any {
 	return mustTaskStateReadoutJSON[map[string]any](t, readout)
 }
 
+func assertTaskStateResolvedCampaignPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight = %#v, want object", value)
+	}
+	assertTaskStateJSONObjectKeys(t, preflight, "accounts", "campaign", "containers", "identities")
+
+	campaign, ok := preflight["campaign"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign = %#v, want object", preflight["campaign"])
+	}
+	assertTaskStateJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at")
+	assertTaskStateJSONObjectKeys(t, campaign["failure_threshold"], "limit", "metric")
+
+	governedTargets := mustTaskStateJSONArray(t, campaign["governed_external_targets"], "campaign_preflight.campaign.governed_external_targets")
+	if len(governedTargets) != 1 {
+		t.Fatalf("campaign_preflight.campaign.governed_external_targets len = %d, want 1", len(governedTargets))
+	}
+	assertTaskStateJSONObjectKeys(t, governedTargets[0], "kind", "registry_id")
+
+	objectRefs := mustTaskStateJSONArray(t, campaign["frank_object_refs"], "campaign_preflight.campaign.frank_object_refs")
+	if len(objectRefs) != 3 {
+		t.Fatalf("campaign_preflight.campaign.frank_object_refs len = %d, want 3", len(objectRefs))
+	}
+	for _, value := range objectRefs {
+		assertTaskStateJSONObjectKeys(t, value, "kind", "object_id")
+	}
+
+	identities := mustTaskStateJSONArray(t, preflight["identities"], "campaign_preflight.identities")
+	if len(identities) != 1 {
+		t.Fatalf("campaign_preflight.identities len = %d, want 1", len(identities))
+	}
+	assertTaskStateJSONObjectKeys(t, identities[0], "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at")
+
+	accounts := mustTaskStateJSONArray(t, preflight["accounts"], "campaign_preflight.accounts")
+	if len(accounts) != 1 {
+		t.Fatalf("campaign_preflight.accounts len = %d, want 1", len(accounts))
+	}
+	assertTaskStateJSONObjectKeys(t, accounts[0], "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at")
+
+	containers := mustTaskStateJSONArray(t, preflight["containers"], "campaign_preflight.containers")
+	if len(containers) != 1 {
+		t.Fatalf("campaign_preflight.containers len = %d, want 1", len(containers))
+	}
+	assertTaskStateJSONObjectKeys(t, containers[0], "container_class_id", "container_id", "container_kind", "created_at", "eligibility_target_ref", "label", "record_version", "state", "updated_at")
+}
+
 func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
 	t.Helper()
 
@@ -98,7 +147,7 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 	assertTaskStateJSONObjectKeys(t, eligibility, "kind", "registry_id")
 }
 
-func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowTreasuryPreflight bool) {
+func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowCampaignPreflight bool, allowTreasuryPreflight bool) {
 	t.Helper()
 
 	var payload any
@@ -121,6 +170,9 @@ func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowTr
 	}
 	if !allowTreasuryPreflight {
 		forbiddenKeys["treasury_preflight"] = struct{}{}
+	}
+	if !allowCampaignPreflight {
+		forbiddenKeys["campaign_preflight"] = struct{}{}
 	}
 
 	var walk func(any)
