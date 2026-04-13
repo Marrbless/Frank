@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -42,6 +45,50 @@ var packageCurrentLogSegmentOnUTCDayRollover = missioncontrol.PackageCurrentLogS
 
 const missionStoreWriterLeaseHolderAnnotation = "picobot/mission-store-writer-lease-holder"
 const scheduledTriggerStepID = "scheduled_trigger"
+
+const (
+	scheduledTriggerDeferralRecordVersion = 1
+	scheduledTriggerHandleRouted          = "routed"
+	scheduledTriggerHandleDeferred        = "deferred"
+	scheduledTriggerHandleDuplicate       = "duplicate"
+)
+
+type deferredScheduledTriggerRecord struct {
+	RecordVersion  int       `json:"record_version"`
+	TriggerID      string    `json:"trigger_id"`
+	SchedulerJobID string    `json:"scheduler_job_id"`
+	Name           string    `json:"name,omitempty"`
+	Message        string    `json:"message,omitempty"`
+	Channel        string    `json:"channel,omitempty"`
+	ChatID         string    `json:"chat_id,omitempty"`
+	FireAt         time.Time `json:"fire_at"`
+	DeferredAt     time.Time `json:"deferred_at"`
+}
+
+func (r deferredScheduledTriggerRecord) cronJob() cron.Job {
+	return cron.Job{
+		ID:      r.SchedulerJobID,
+		Name:    r.Name,
+		Message: r.Message,
+		Channel: r.Channel,
+		ChatID:  r.ChatID,
+		FireAt:  r.FireAt,
+	}
+}
+
+type governedScheduledTriggerDeferrer struct {
+	mu        sync.Mutex
+	storeRoot string
+	inMemory  map[string]deferredScheduledTriggerRecord
+	draining  bool
+}
+
+func newGovernedScheduledTriggerDeferrer(storeRoot string) *governedScheduledTriggerDeferrer {
+	return &governedScheduledTriggerDeferrer{
+		storeRoot: strings.TrimSpace(storeRoot),
+		inMemory:  make(map[string]deferredScheduledTriggerRecord),
+	}
+}
 
 func scheduledTriggerFireAt(job cron.Job) time.Time {
 	fireAt := job.FireAt.UTC()
@@ -89,6 +136,268 @@ func buildGovernedScheduledTriggerContent(job cron.Job) string {
 		return fmt.Sprintf("Scheduled reminder %q fired.", name)
 	default:
 		return "Scheduled reminder fired."
+	}
+}
+
+func deferredScheduledTriggerDir(root string) string {
+	return filepath.Join(root, "scheduler", "deferred_triggers")
+}
+
+func deferredScheduledTriggerPath(root, triggerID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(triggerID)))
+	return filepath.Join(deferredScheduledTriggerDir(root), hex.EncodeToString(sum[:])+".json")
+}
+
+func deferredScheduledTriggerRecordFromJob(trigger cron.Job, now time.Time) deferredScheduledTriggerRecord {
+	governedJob := buildGovernedScheduledTriggerJob(trigger)
+	return deferredScheduledTriggerRecord{
+		RecordVersion:  scheduledTriggerDeferralRecordVersion,
+		TriggerID:      governedJob.ID,
+		SchedulerJobID: strings.TrimSpace(trigger.ID),
+		Name:           strings.TrimSpace(trigger.Name),
+		Message:        strings.TrimSpace(trigger.Message),
+		Channel:        strings.TrimSpace(trigger.Channel),
+		ChatID:         strings.TrimSpace(trigger.ChatID),
+		FireAt:         scheduledTriggerFireAt(trigger),
+		DeferredAt:     now.UTC(),
+	}
+}
+
+func deferredScheduledTriggerSortLess(left deferredScheduledTriggerRecord, right deferredScheduledTriggerRecord) bool {
+	leftFireAt := left.FireAt.UTC()
+	rightFireAt := right.FireAt.UTC()
+	if !leftFireAt.Equal(rightFireAt) {
+		return leftFireAt.Before(rightFireAt)
+	}
+	return left.TriggerID < right.TriggerID
+}
+
+func (d *governedScheduledTriggerDeferrer) recordDeferredTrigger(trigger cron.Job, now time.Time) error {
+	if d == nil {
+		return fmt.Errorf("scheduler trigger deferrer is required")
+	}
+
+	record := deferredScheduledTriggerRecordFromJob(trigger, now)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.storeRoot == "" {
+		if _, exists := d.inMemory[record.TriggerID]; !exists {
+			d.inMemory[record.TriggerID] = record
+		}
+		return nil
+	}
+
+	path := deferredScheduledTriggerPath(d.storeRoot, record.TriggerID)
+	var existing deferredScheduledTriggerRecord
+	if err := missioncontrol.LoadStoreJSON(path, &existing); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return missioncontrol.WriteStoreJSONAtomic(path, record)
+}
+
+func (d *governedScheduledTriggerDeferrer) listDeferredTriggers() ([]deferredScheduledTriggerRecord, error) {
+	if d == nil {
+		return nil, nil
+	}
+
+	d.mu.Lock()
+	storeRoot := d.storeRoot
+	if storeRoot == "" {
+		records := make([]deferredScheduledTriggerRecord, 0, len(d.inMemory))
+		for _, record := range d.inMemory {
+			records = append(records, record)
+		}
+		d.mu.Unlock()
+		sort.Slice(records, func(i, j int) bool {
+			return deferredScheduledTriggerSortLess(records[i], records[j])
+		})
+		return records, nil
+	}
+	d.mu.Unlock()
+
+	entries, err := os.ReadDir(deferredScheduledTriggerDir(storeRoot))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	records := make([]deferredScheduledTriggerRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var record deferredScheduledTriggerRecord
+		if err := missioncontrol.LoadStoreJSON(filepath.Join(deferredScheduledTriggerDir(storeRoot), entry.Name()), &record); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return deferredScheduledTriggerSortLess(records[i], records[j])
+	})
+	return records, nil
+}
+
+func (d *governedScheduledTriggerDeferrer) removeDeferredTrigger(triggerID string) error {
+	if d == nil {
+		return nil
+	}
+
+	triggerID = strings.TrimSpace(triggerID)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.storeRoot == "" {
+		delete(d.inMemory, triggerID)
+		return nil
+	}
+
+	path := deferredScheduledTriggerPath(d.storeRoot, triggerID)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (d *governedScheduledTriggerDeferrer) blockingMissionJobID(ag *agent.AgentLoop) (string, bool, error) {
+	if ag != nil {
+		if runtime, ok := ag.MissionRuntimeState(); ok && runtime.JobID != "" && !missioncontrol.IsTerminalJobState(runtime.State) {
+			return runtime.JobID, true, nil
+		}
+	}
+	if d == nil || d.storeRoot == "" {
+		return "", false, nil
+	}
+
+	record, err := missioncontrol.LoadActiveJobRecord(d.storeRoot)
+	if err != nil {
+		if errors.Is(err, missioncontrol.ErrActiveJobRecordNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if record.JobID == "" || !missioncontrol.HoldsGlobalActiveJobOccupancy(record.State) {
+		return "", false, nil
+	}
+	return record.JobID, true, nil
+}
+
+func (d *governedScheduledTriggerDeferrer) triggerAlreadyGoverned(ag *agent.AgentLoop, triggerID string) (bool, error) {
+	triggerID = strings.TrimSpace(triggerID)
+	if ag != nil {
+		if runtime, ok := ag.MissionRuntimeState(); ok && runtime.JobID == triggerID {
+			return true, nil
+		}
+	}
+	if d == nil || d.storeRoot == "" {
+		return false, nil
+	}
+	_, err := missioncontrol.LoadCommittedJobRuntimeRecord(d.storeRoot, triggerID)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, missioncontrol.ErrJobRuntimeRecordNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (d *governedScheduledTriggerDeferrer) routeOrDefer(ag *agent.AgentLoop, hub *chat.Hub, trigger cron.Job) (string, error) {
+	record := deferredScheduledTriggerRecordFromJob(trigger, time.Now().UTC())
+	alreadyGoverned, err := d.triggerAlreadyGoverned(ag, record.TriggerID)
+	if err != nil {
+		return "", err
+	}
+	if alreadyGoverned {
+		if err := d.removeDeferredTrigger(record.TriggerID); err != nil {
+			return "", err
+		}
+		return scheduledTriggerHandleDuplicate, nil
+	}
+
+	if blockerJobID, blocked, err := d.blockingMissionJobID(ag); err != nil {
+		return "", err
+	} else if blocked && blockerJobID != "" && blockerJobID != record.TriggerID {
+		if err := d.recordDeferredTrigger(trigger, time.Now().UTC()); err != nil {
+			return "", err
+		}
+		return scheduledTriggerHandleDeferred, nil
+	}
+
+	if err := routeScheduledTriggerThroughGovernedJob(ag, hub, trigger); err != nil {
+		if blockerJobID, blocked, blockErr := d.blockingMissionJobID(ag); blockErr != nil {
+			return "", blockErr
+		} else if blocked && blockerJobID != "" && blockerJobID != record.TriggerID {
+			if deferErr := d.recordDeferredTrigger(trigger, time.Now().UTC()); deferErr != nil {
+				return "", deferErr
+			}
+			return scheduledTriggerHandleDeferred, nil
+		}
+		return "", err
+	}
+
+	return scheduledTriggerHandleRouted, nil
+}
+
+func (d *governedScheduledTriggerDeferrer) drainReady(ag *agent.AgentLoop, hub *chat.Hub) error {
+	if d == nil {
+		return nil
+	}
+
+	d.mu.Lock()
+	if d.draining {
+		d.mu.Unlock()
+		return nil
+	}
+	d.draining = true
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.draining = false
+		d.mu.Unlock()
+	}()
+
+	for {
+		if _, blocked, err := d.blockingMissionJobID(ag); err != nil {
+			return err
+		} else if blocked {
+			return nil
+		}
+
+		records, err := d.listDeferredTriggers()
+		if err != nil {
+			return err
+		}
+		if len(records) == 0 {
+			return nil
+		}
+
+		record := records[0]
+		alreadyGoverned, err := d.triggerAlreadyGoverned(ag, record.TriggerID)
+		if err != nil {
+			return err
+		}
+		if alreadyGoverned {
+			if err := d.removeDeferredTrigger(record.TriggerID); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := routeScheduledTriggerThroughGovernedJob(ag, hub, record.cronJob()); err != nil {
+			if _, blocked, blockErr := d.blockingMissionJobID(ag); blockErr != nil {
+				return blockErr
+			} else if blocked {
+				return nil
+			}
+			return err
+		}
+		return d.removeDeferredTrigger(record.TriggerID)
 	}
 }
 
@@ -274,11 +583,21 @@ func NewRootCmd() *cobra.Command {
 			}
 			defer restoreGatewayLogger()
 
+			deferredScheduledTriggers := newGovernedScheduledTriggerDeferrer(resolveMissionStoreRoot(cmd))
+
 			// Route fired schedules through a governed mission step before they re-enter the ordinary agent loop.
 			scheduler := cron.NewScheduler(func(job cron.Job) {
 				log.Printf("cron fired: %s — %s", job.Name, job.Message)
-				if err := routeScheduledTriggerThroughGovernedJob(ag, hub, job); err != nil {
-					log.Printf("cron governed trigger skipped for %s: %v", job.ID, err)
+				result, err := deferredScheduledTriggers.routeOrDefer(ag, hub, job)
+				if err != nil {
+					log.Printf("cron governed trigger failed for %s: %v", job.ID, err)
+					return
+				}
+				switch result {
+				case scheduledTriggerHandleDeferred:
+					log.Printf("cron governed trigger deferred for %s", job.ID)
+				case scheduledTriggerHandleDuplicate:
+					log.Printf("cron governed trigger already governed for %s", job.ID)
 				}
 			})
 
@@ -287,7 +606,11 @@ func NewRootCmd() *cobra.Command {
 				maxIter = 100
 			}
 			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
-			installMissionRuntimeChangeHook(cmd, ag)
+			installMissionRuntimeChangeHookWithExtension(cmd, ag, func() {
+				if err := deferredScheduledTriggers.drainReady(ag, hub); err != nil {
+					log.Printf("cron governed deferred trigger drain failed: %v", err)
+				}
+			})
 			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
 			if err != nil {
 				return err
@@ -296,6 +619,9 @@ func NewRootCmd() *cobra.Command {
 			var missionStepControlBaseline []byte
 			if bootstrappedJob != nil {
 				missionStepControlBaseline = restoreMissionStepControlFileOnStartup(cmd, ag, *bootstrappedJob)
+			}
+			if err := deferredScheduledTriggers.drainReady(ag, hub); err != nil {
+				return err
 			}
 			if err := writeMissionStatusSnapshotFromCommand(cmd, ag, time.Now()); err != nil {
 				return err
@@ -1086,6 +1412,10 @@ func watchGatewayLogDayRollover(ctx context.Context, storeRoot string, lease mis
 }
 
 func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
+	installMissionRuntimeChangeHookWithExtension(cmd, ag, nil)
+}
+
+func installMissionRuntimeChangeHookWithExtension(cmd *cobra.Command, ag *agent.AgentLoop, after func()) {
 	if cmd == nil || ag == nil {
 		return
 	}
@@ -1105,7 +1435,7 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 
 	if statusFile == "" {
 		ag.SetMissionRuntimeProjectionHook(nil)
-		ag.SetMissionRuntimeChangeHook(nil)
+		ag.SetMissionRuntimeChangeHook(after)
 		return
 	}
 
@@ -1119,6 +1449,12 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 			return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now())
 		})
 		ag.SetMissionRuntimeChangeHook(func() {
+			defer func() {
+				if after != nil {
+					after()
+				}
+			}()
+
 			jobID := ""
 			if runtimeState, ok := ag.MissionRuntimeState(); ok {
 				jobID = runtimeState.JobID
@@ -1147,6 +1483,9 @@ func installMissionRuntimeChangeHook(cmd *cobra.Command, ag *agent.AgentLoop) {
 	ag.SetMissionRuntimeChangeHook(func() {
 		if err := writeMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), ag, time.Now()); err != nil {
 			log.Printf("mission runtime status snapshot update failed for %q: %v", statusFile, err)
+		}
+		if after != nil {
+			after()
 		}
 	})
 }
