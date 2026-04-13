@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,14 @@ func writeMalformedTreasuryRecordForTaskStateStatusTest(t *testing.T, root strin
 		"updated_at": treasury.UpdatedAt,
 	}); err != nil {
 		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+	}
+}
+
+func writeDeferredSchedulerTriggerForTaskStateStatusTest(t *testing.T, root string, filename string, payload map[string]any) {
+	t.Helper()
+
+	if err := missioncontrol.WriteStoreJSONAtomic(filepath.Join(root, "scheduler", "deferred_triggers", filename), payload); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(deferred trigger) error = %v", err)
 	}
 }
 
@@ -144,6 +153,102 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedCampaignPr
 	}
 	if got.TreasuryPreflight != nil {
 		t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", got.TreasuryPreflight)
+	}
+}
+
+func TestTaskStateOperatorStatusShowsDeferredSchedulerTriggersOnChosenReadoutPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	writeDeferredSchedulerTriggerForTaskStateStatusTest(t, root, "later.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-job-2-20260413T150000.000000000Z",
+		"scheduler_job_id": "job-2",
+		"name":             "stretch",
+		"message":          "stand up and stretch",
+		"fire_at":          "2026-04-13T15:00:00Z",
+		"deferred_at":      "2026-04-13T15:01:00Z",
+	})
+	writeDeferredSchedulerTriggerForTaskStateStatusTest(t, root, "earlier.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-job-1-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-1",
+		"name":             "water",
+		"message":          "drink water",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:02:00Z",
+	})
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if len(got.DeferredSchedulerTriggers) != 2 {
+		t.Fatalf("DeferredSchedulerTriggers = %#v, want 2 queued deferred scheduler triggers", got.DeferredSchedulerTriggers)
+	}
+	if got.DeferredSchedulerTriggers[0].TriggerID != "scheduled-trigger-job-1-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0] = %#v, want earliest fire first", got.DeferredSchedulerTriggers[0])
+	}
+	if got.DeferredSchedulerTriggers[0].Message != "drink water" {
+		t.Fatalf("DeferredSchedulerTriggers[0].Message = %q, want %q", got.DeferredSchedulerTriggers[0].Message, "drink water")
+	}
+	if got.DeferredSchedulerTriggers[1].TriggerID != "scheduled-trigger-job-2-20260413T150000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[1] = %#v, want later fire second", got.DeferredSchedulerTriggers[1])
+	}
+}
+
+func TestTaskStateOperatorStatusPreservesDeterministicDeferredSchedulerOrdering(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	writeDeferredSchedulerTriggerForTaskStateStatusTest(t, root, "b.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-b-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-b",
+		"name":             "later-name",
+		"message":          "later message",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:05:00Z",
+	})
+	writeDeferredSchedulerTriggerForTaskStateStatusTest(t, root, "a.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-a-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-a",
+		"name":             "earlier-name",
+		"message":          "earlier message",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:01:00Z",
+	})
+
+	first, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus(first) error = %v", err)
+	}
+	second, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus(second) error = %v", err)
+	}
+	if first != second {
+		t.Fatalf("OperatorStatus() differs across identical reads\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, first)
+	if got.DeferredSchedulerTriggers[0].TriggerID != "scheduled-trigger-a-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0] = %#v, want lexicographically first trigger ID tie-breaker", got.DeferredSchedulerTriggers[0])
 	}
 }
 

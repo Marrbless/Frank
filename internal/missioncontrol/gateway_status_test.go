@@ -185,6 +185,9 @@ func TestLoadGatewayStatusObservationAndFileUseMissionStatusReadPath(t *testing.
 	if strings.Contains(got, `"runtime_summary"`) {
 		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without runtime_summary", got)
 	}
+	if strings.Contains(got, `"deferred_scheduler_triggers"`) {
+		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want canonical gateway envelope without deferred scheduler trigger visibility", got)
+	}
 	if strings.Contains(got, `"runtime_control"`) {
 		t.Fatalf("LoadGatewayStatusObservationFile() = %q, want sanitized gateway envelope without runtime_control", got)
 	}

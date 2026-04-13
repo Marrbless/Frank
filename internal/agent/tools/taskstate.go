@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -1256,6 +1257,7 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 	hasRuntimeControl := s.hasRuntimeControl
 	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
 	hasRuntimeState := s.hasRuntimeState
+	missionStoreRoot := strings.TrimSpace(s.missionStoreRoot)
 	s.mu.Unlock()
 
 	if hasExecutionContext && ec.Runtime != nil {
@@ -1275,12 +1277,16 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
 			*ec.Runtime,
 			missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step),
 			campaignPreflight,
 			treasuryPreflight,
 		)
+		if err != nil {
+			return "", err
+		}
+		return formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary, ec.MissionStoreRoot)
 	}
 
 	if !hasRuntimeState || runtimeState == nil {
@@ -1300,7 +1306,35 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 	if hasRuntimeControl && control != nil {
 		allowedTools = missioncontrol.EffectiveAllowedTools(&missioncontrol.Job{AllowedTools: append([]string(nil), control.AllowedTools...)}, &control.Step)
 	}
-	return missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
+	summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
+	if err != nil {
+		return "", err
+	}
+	return formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary, missionStoreRoot)
+}
+
+func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, missionStoreRoot string) (string, error) {
+	missionStoreRoot = strings.TrimSpace(missionStoreRoot)
+	if missionStoreRoot == "" {
+		return summary, nil
+	}
+
+	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
+	if err != nil || len(deferred) == 0 {
+		return summary, nil
+	}
+
+	var statusSummary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(summary), &statusSummary); err != nil {
+		return "", err
+	}
+	statusSummary = missioncontrol.WithDeferredSchedulerTriggers(statusSummary, deferred)
+
+	data, err := json.MarshalIndent(statusSummary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(append(data, '\n')), nil
 }
 
 func resolveExecutionContextCampaignAndTreasuryPreflight(ec missioncontrol.ExecutionContext) (*missioncontrol.ResolvedExecutionContextCampaignPreflight, *missioncontrol.ResolvedExecutionContextTreasuryPreflight, error) {
