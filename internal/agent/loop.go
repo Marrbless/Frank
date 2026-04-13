@@ -378,14 +378,43 @@ func buildMissionCheckInContent(taskState *tools.TaskState, runtime missioncontr
 		if err != nil {
 			return "", err
 		}
-		return "Mission check-in:\n" + summary, nil
+		return missionCheckInContentWithDeferredSchedulerTriggers(summary, ec.MissionStoreRoot)
 	}
 
 	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
 	if err != nil {
 		return "", err
 	}
-	return "Mission check-in:\n" + summary, nil
+
+	storeRoot := ""
+	if taskState != nil {
+		_, storeRoot, _ = taskState.MissionJobWithStoreRoot()
+	}
+	return missionCheckInContentWithDeferredSchedulerTriggers(summary, storeRoot)
+}
+
+func missionCheckInContentWithDeferredSchedulerTriggers(summary string, missionStoreRoot string) (string, error) {
+	missionStoreRoot = strings.TrimSpace(missionStoreRoot)
+	if missionStoreRoot == "" {
+		return "Mission check-in:\n" + summary, nil
+	}
+
+	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
+	if err != nil || len(deferred) == 0 {
+		return "Mission check-in:\n" + summary, nil
+	}
+
+	var statusSummary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(summary), &statusSummary); err != nil {
+		return "", err
+	}
+	statusSummary = missioncontrol.WithDeferredSchedulerTriggers(statusSummary, deferred)
+
+	data, err := json.MarshalIndent(statusSummary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return "Mission check-in:\n" + string(append(data, '\n')), nil
 }
 
 func buildMissionDailySummaryContent(taskState *tools.TaskState, runtime missioncontrol.JobRuntimeState) (string, error) {
