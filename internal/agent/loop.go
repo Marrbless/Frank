@@ -429,14 +429,43 @@ func buildMissionDailySummaryContent(taskState *tools.TaskState, runtime mission
 		if err != nil {
 			return "", err
 		}
-		return "Daily mission summary:\n" + summary, nil
+		return missionDailySummaryContentWithDeferredSchedulerTriggers(summary, ec.MissionStoreRoot)
 	}
 
 	summary, err := missioncontrol.FormatOperatorStatusSummary(runtime)
 	if err != nil {
 		return "", err
 	}
-	return "Daily mission summary:\n" + summary, nil
+
+	storeRoot := ""
+	if taskState != nil {
+		_, storeRoot, _ = taskState.MissionJobWithStoreRoot()
+	}
+	return missionDailySummaryContentWithDeferredSchedulerTriggers(summary, storeRoot)
+}
+
+func missionDailySummaryContentWithDeferredSchedulerTriggers(summary string, missionStoreRoot string) (string, error) {
+	missionStoreRoot = strings.TrimSpace(missionStoreRoot)
+	if missionStoreRoot == "" {
+		return "Daily mission summary:\n" + summary, nil
+	}
+
+	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
+	if err != nil || len(deferred) == 0 {
+		return "Daily mission summary:\n" + summary, nil
+	}
+
+	var statusSummary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(summary), &statusSummary); err != nil {
+		return "", err
+	}
+	statusSummary = missioncontrol.WithDeferredSchedulerTriggers(statusSummary, deferred)
+
+	data, err := json.MarshalIndent(statusSummary, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return "Daily mission summary:\n" + string(append(data, '\n')), nil
 }
 
 func selectPendingApprovalRequest(runtime missioncontrol.JobRuntimeState) (missioncontrol.ApprovalRequest, bool) {

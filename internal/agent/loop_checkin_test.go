@@ -622,6 +622,134 @@ func TestBuildMissionDailySummaryContentPersistedRuntimePathUnchangedForTreasury
 	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Daily mission summary:\n", false, false, "active_step_id", "job_id", "state")
 }
 
+func TestBuildMissionDailySummaryContentShowsDeferredSchedulerTriggers(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	root := t.TempDir()
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	writeDeferredSchedulerTriggerForLoopCheckInTest(t, root, "later.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-job-2-20260413T150000.000000000Z",
+		"scheduler_job_id": "job-2",
+		"name":             "stretch",
+		"message":          "stand up and stretch",
+		"fire_at":          "2026-04-13T15:00:00Z",
+		"deferred_at":      "2026-04-13T15:01:00Z",
+	})
+	writeDeferredSchedulerTriggerForLoopCheckInTest(t, root, "earlier.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-job-1-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-1",
+		"name":             "water",
+		"message":          "drink water",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:02:00Z",
+	})
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+
+	summary, err := buildMissionDailySummaryContent(ag.taskState, *ec.Runtime)
+	if err != nil {
+		t.Fatalf("buildMissionDailySummaryContent() error = %v", err)
+	}
+
+	got := decodeLoopCheckInOperatorStatusSummary(t, summary, "Daily mission summary:\n")
+	assertLoopCheckInOperatorStatusEnvelope(t, summary, "Daily mission summary:\n", false, false, "active_step_id", "allowed_tools", "deferred_scheduler_triggers", "job_id", "state")
+	if len(got.DeferredSchedulerTriggers) != 2 {
+		t.Fatalf("DeferredSchedulerTriggers = %#v, want 2 queued deferred scheduler triggers", got.DeferredSchedulerTriggers)
+	}
+	if got.DeferredSchedulerTriggers[0].TriggerID != "scheduled-trigger-job-1-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0] = %#v, want earliest fire first", got.DeferredSchedulerTriggers[0])
+	}
+	if got.DeferredSchedulerTriggers[0].Message != "drink water" {
+		t.Fatalf("DeferredSchedulerTriggers[0].Message = %q, want %q", got.DeferredSchedulerTriggers[0].Message, "drink water")
+	}
+	if got.DeferredSchedulerTriggers[1].TriggerID != "scheduled-trigger-job-2-20260413T150000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[1] = %#v, want later fire second", got.DeferredSchedulerTriggers[1])
+	}
+
+	runtime, ok := ag.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want true")
+	}
+	if runtime.State != missioncontrol.JobStateRunning {
+		t.Fatalf("MissionRuntimeState().State = %q, want unchanged %q", runtime.State, missioncontrol.JobStateRunning)
+	}
+	if len(runtime.AuditHistory) != 0 {
+		t.Fatalf("MissionRuntimeState().AuditHistory = %#v, want unchanged empty audit history", runtime.AuditHistory)
+	}
+}
+
+func TestBuildMissionDailySummaryContentPreservesDeterministicDeferredSchedulerOrdering(t *testing.T) {
+	t.Parallel()
+
+	hub := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(hub, prov, prov.GetDefaultModel(), 3, "", nil)
+	root := t.TempDir()
+	ag.taskState.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	writeDeferredSchedulerTriggerForLoopCheckInTest(t, root, "z.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-b-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-b",
+		"name":             "later-name",
+		"message":          "later message",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:05:00Z",
+	})
+	writeDeferredSchedulerTriggerForLoopCheckInTest(t, root, "a.json", map[string]any{
+		"record_version":   1,
+		"trigger_id":       "scheduled-trigger-a-20260413T140000.000000000Z",
+		"scheduler_job_id": "job-a",
+		"name":             "earlier-name",
+		"message":          "earlier message",
+		"fire_at":          "2026-04-13T14:00:00Z",
+		"deferred_at":      "2026-04-13T14:01:00Z",
+	})
+
+	ec, ok := ag.ActiveMissionStep()
+	if !ok || ec.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() = (%#v, %t), want active runtime", ec, ok)
+	}
+
+	first, err := buildMissionDailySummaryContent(ag.taskState, *ec.Runtime)
+	if err != nil {
+		t.Fatalf("buildMissionDailySummaryContent(first) error = %v", err)
+	}
+	second, err := buildMissionDailySummaryContent(ag.taskState, *ec.Runtime)
+	if err != nil {
+		t.Fatalf("buildMissionDailySummaryContent(second) error = %v", err)
+	}
+	if first != second {
+		t.Fatalf("buildMissionDailySummaryContent() differs across identical reads\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+
+	got := decodeLoopCheckInOperatorStatusSummary(t, first, "Daily mission summary:\n")
+	if len(got.DeferredSchedulerTriggers) != 2 {
+		t.Fatalf("DeferredSchedulerTriggers = %#v, want 2 queued deferred scheduler triggers", got.DeferredSchedulerTriggers)
+	}
+	if got.DeferredSchedulerTriggers[0].TriggerID != "scheduled-trigger-a-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0] = %#v, want lexicographically first trigger ID tie-breaker", got.DeferredSchedulerTriggers[0])
+	}
+	if got.DeferredSchedulerTriggers[1].TriggerID != "scheduled-trigger-b-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[1] = %#v, want lexicographically second trigger ID", got.DeferredSchedulerTriggers[1])
+	}
+}
+
 func TestMaybeEmitMissionDailySummarySkipsBeforeTwentyFourHours(t *testing.T) {
 	t.Parallel()
 
