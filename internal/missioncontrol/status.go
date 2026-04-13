@@ -11,32 +11,42 @@ const OperatorStatusApprovalHistoryLimit = 5
 const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
-	JobID             string                                     `json:"job_id"`
-	State             JobState                                   `json:"state"`
-	ActiveStepID      string                                     `json:"active_step_id,omitempty"`
-	AllowedTools      []string                                   `json:"allowed_tools,omitempty"`
-	CampaignPreflight *ResolvedExecutionContextCampaignPreflight `json:"campaign_preflight,omitempty"`
-	TreasuryPreflight *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
-	BudgetBlocker     *OperatorBudgetBlockerStatus               `json:"budget_blocker,omitempty"`
-	WaitingReason     string                                     `json:"waiting_reason,omitempty"`
-	WaitingAt         *string                                    `json:"waiting_at,omitempty"`
-	PausedReason      string                                     `json:"paused_reason,omitempty"`
-	PausedAt          *string                                    `json:"paused_at,omitempty"`
-	AbortedReason     string                                     `json:"aborted_reason,omitempty"`
-	FailedStepID      string                                     `json:"failed_step_id,omitempty"`
-	FailureReason     string                                     `json:"failure_reason,omitempty"`
-	FailedAt          *string                                    `json:"failed_at,omitempty"`
-	ApprovalRequest   *OperatorApprovalRequestStatus             `json:"approval_request,omitempty"`
-	ApprovalHistory   []OperatorApprovalHistoryEntry             `json:"approval_history,omitempty"`
-	RecentAudit       []OperatorRecentAuditStatus                `json:"recent_audit,omitempty"`
-	Artifacts         []OperatorArtifactStatus                   `json:"artifacts,omitempty"`
-	Truncation        *OperatorStatusTruncation                  `json:"truncation,omitempty"`
+	JobID                     string                                     `json:"job_id"`
+	State                     JobState                                   `json:"state"`
+	ActiveStepID              string                                     `json:"active_step_id,omitempty"`
+	AllowedTools              []string                                   `json:"allowed_tools,omitempty"`
+	DeferredSchedulerTriggers []OperatorDeferredSchedulerTriggerStatus   `json:"deferred_scheduler_triggers,omitempty"`
+	CampaignPreflight         *ResolvedExecutionContextCampaignPreflight `json:"campaign_preflight,omitempty"`
+	TreasuryPreflight         *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
+	BudgetBlocker             *OperatorBudgetBlockerStatus               `json:"budget_blocker,omitempty"`
+	WaitingReason             string                                     `json:"waiting_reason,omitempty"`
+	WaitingAt                 *string                                    `json:"waiting_at,omitempty"`
+	PausedReason              string                                     `json:"paused_reason,omitempty"`
+	PausedAt                  *string                                    `json:"paused_at,omitempty"`
+	AbortedReason             string                                     `json:"aborted_reason,omitempty"`
+	FailedStepID              string                                     `json:"failed_step_id,omitempty"`
+	FailureReason             string                                     `json:"failure_reason,omitempty"`
+	FailedAt                  *string                                    `json:"failed_at,omitempty"`
+	ApprovalRequest           *OperatorApprovalRequestStatus             `json:"approval_request,omitempty"`
+	ApprovalHistory           []OperatorApprovalHistoryEntry             `json:"approval_history,omitempty"`
+	RecentAudit               []OperatorRecentAuditStatus                `json:"recent_audit,omitempty"`
+	Artifacts                 []OperatorArtifactStatus                   `json:"artifacts,omitempty"`
+	Truncation                *OperatorStatusTruncation                  `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
 	ApprovalHistoryOmitted int `json:"approval_history_omitted,omitempty"`
 	RecentAuditOmitted     int `json:"recent_audit_omitted,omitempty"`
 	ArtifactsOmitted       int `json:"artifacts_omitted,omitempty"`
+}
+
+type OperatorDeferredSchedulerTriggerStatus struct {
+	TriggerID      string `json:"trigger_id"`
+	SchedulerJobID string `json:"scheduler_job_id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Message        string `json:"message,omitempty"`
+	FireAt         string `json:"fire_at"`
+	DeferredAt     string `json:"deferred_at"`
 }
 
 type OperatorArtifactStatus struct {
@@ -127,6 +137,14 @@ func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
 		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(treasuryPreflight)
 	}
 	return formatOperatorStatusSummary(summary)
+}
+
+func WithDeferredSchedulerTriggers(summary OperatorStatusSummary, deferred []OperatorDeferredSchedulerTriggerStatus) OperatorStatusSummary {
+	if len(deferred) == 0 {
+		return summary
+	}
+	summary.DeferredSchedulerTriggers = append([]OperatorDeferredSchedulerTriggerStatus(nil), deferred...)
+	return summary
 }
 
 func EffectiveAllowedTools(job *Job, step *Step) []string {

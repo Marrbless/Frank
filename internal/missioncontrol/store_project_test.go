@@ -2,6 +2,8 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -333,6 +335,165 @@ func TestBuildCommittedMissionStatusSnapshotDoesNotProjectTreasuryPreflight(t *t
 		if strings.Contains(string(data), key) {
 			t.Fatalf("snapshot JSON unexpectedly contains %s: %s", key, string(data))
 		}
+	}
+}
+
+func writeDeferredSchedulerTriggerForTest(t *testing.T, root string, record deferredScheduledTriggerStoreRecord, filename string) {
+	t.Helper()
+
+	if err := WriteStoreJSONAtomic(filepath.Join(deferredSchedulerTriggersDir(root), filename), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(deferred trigger) error = %v", err)
+	}
+}
+
+func TestBuildCommittedMissionStatusSnapshotIncludesDeferredSchedulerTriggersInRuntimeSummary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    now.Add(-2 * time.Minute),
+		UpdatedAt:    now,
+		StartedAt:    now.Add(-2 * time.Minute),
+		ActiveStepAt: now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	records := []deferredScheduledTriggerStoreRecord{
+		{
+			RecordVersion:  1,
+			TriggerID:      "scheduled-trigger-job-2-20260413T150000.000000000Z",
+			SchedulerJobID: "job-2",
+			Name:           "stretch",
+			Message:        "stand up and stretch",
+			FireAt:         time.Date(2026, 4, 13, 15, 0, 0, 0, time.UTC),
+			DeferredAt:     time.Date(2026, 4, 13, 15, 1, 0, 0, time.UTC),
+		},
+		{
+			RecordVersion:  1,
+			TriggerID:      "scheduled-trigger-job-1-20260413T140000.000000000Z",
+			SchedulerJobID: "job-1",
+			Name:           "water",
+			Message:        "drink water",
+			FireAt:         time.Date(2026, 4, 13, 14, 0, 0, 0, time.UTC),
+			DeferredAt:     time.Date(2026, 4, 13, 14, 2, 0, 0, time.UTC),
+		},
+	}
+	for i, record := range records {
+		writeDeferredSchedulerTriggerForTest(t, root, record, fmt.Sprintf("%02d.json", i))
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if !snapshot.Active {
+		t.Fatal("Active = false, want unchanged active runtime state")
+	}
+	if snapshot.JobID != job.ID {
+		t.Fatalf("JobID = %q, want %q", snapshot.JobID, job.ID)
+	}
+	if snapshot.StepID != "build" {
+		t.Fatalf("StepID = %q, want %q", snapshot.StepID, "build")
+	}
+	if snapshot.Runtime == nil || snapshot.Runtime.State != JobStateRunning {
+		t.Fatalf("Runtime = %#v, want running runtime state", snapshot.Runtime)
+	}
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want operator summary with deferred scheduler visibility")
+	}
+	if len(snapshot.RuntimeSummary.DeferredSchedulerTriggers) != 2 {
+		t.Fatalf("DeferredSchedulerTriggers len = %d, want 2", len(snapshot.RuntimeSummary.DeferredSchedulerTriggers))
+	}
+	if snapshot.RuntimeSummary.DeferredSchedulerTriggers[0].TriggerID != "scheduled-trigger-job-1-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0] = %#v, want earliest deferred trigger first", snapshot.RuntimeSummary.DeferredSchedulerTriggers[0])
+	}
+	if snapshot.RuntimeSummary.DeferredSchedulerTriggers[0].Message != "drink water" {
+		t.Fatalf("DeferredSchedulerTriggers[0].Message = %q, want %q", snapshot.RuntimeSummary.DeferredSchedulerTriggers[0].Message, "drink water")
+	}
+	if snapshot.RuntimeSummary.DeferredSchedulerTriggers[1].TriggerID != "scheduled-trigger-job-2-20260413T150000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[1] = %#v, want later deferred trigger second", snapshot.RuntimeSummary.DeferredSchedulerTriggers[1])
+	}
+}
+
+func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSchedulerTriggers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:        job.ID,
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		CreatedAt:    now.Add(-2 * time.Minute),
+		UpdatedAt:    now,
+		StartedAt:    now.Add(-2 * time.Minute),
+		ActiveStepAt: now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	writeDeferredSchedulerTriggerForTest(t, root, deferredScheduledTriggerStoreRecord{
+		RecordVersion:  1,
+		TriggerID:      "scheduled-trigger-b-20260413T140000.000000000Z",
+		SchedulerJobID: "job-b",
+		Name:           "later-name",
+		Message:        "later message",
+		FireAt:         time.Date(2026, 4, 13, 14, 0, 0, 0, time.UTC),
+		DeferredAt:     time.Date(2026, 4, 13, 14, 5, 0, 0, time.UTC),
+	}, "b.json")
+	writeDeferredSchedulerTriggerForTest(t, root, deferredScheduledTriggerStoreRecord{
+		RecordVersion:  1,
+		TriggerID:      "scheduled-trigger-a-20260413T140000.000000000Z",
+		SchedulerJobID: "job-a",
+		Name:           "earlier-name",
+		Message:        "earlier message",
+		FireAt:         time.Date(2026, 4, 13, 14, 0, 0, 0, time.UTC),
+		DeferredAt:     time.Date(2026, 4, 13, 14, 1, 0, 0, time.UTC),
+	}, "a.json")
+
+	first, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot(first) error = %v", err)
+	}
+	second, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot(second) error = %v", err)
+	}
+
+	if !reflect.DeepEqual(first.RuntimeSummary.DeferredSchedulerTriggers, second.RuntimeSummary.DeferredSchedulerTriggers) {
+		t.Fatalf("DeferredSchedulerTriggers differ across identical projections:\nfirst=%#v\nsecond=%#v", first.RuntimeSummary.DeferredSchedulerTriggers, second.RuntimeSummary.DeferredSchedulerTriggers)
+	}
+	if got := first.RuntimeSummary.DeferredSchedulerTriggers[0].TriggerID; got != "scheduled-trigger-a-20260413T140000.000000000Z" {
+		t.Fatalf("DeferredSchedulerTriggers[0].TriggerID = %q, want lexicographically first tie-breaker", got)
 	}
 }
 

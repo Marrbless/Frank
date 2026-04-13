@@ -75,6 +75,11 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	}
 
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
+	deferredSchedulerTriggers, err := LoadDeferredSchedulerTriggerStatuses(root)
+	if err != nil {
+		return MissionStatusSnapshot{}, err
+	}
+	summary = WithDeferredSchedulerTriggers(summary, deferredSchedulerTriggers)
 	snapshot.RuntimeSummary = &summary
 
 	return snapshot, nil
