@@ -31,6 +31,7 @@ type OperatorStatusSummary struct {
 	ApprovalHistory           []OperatorApprovalHistoryEntry             `json:"approval_history,omitempty"`
 	RecentAudit               []OperatorRecentAuditStatus                `json:"recent_audit,omitempty"`
 	Artifacts                 []OperatorArtifactStatus                   `json:"artifacts,omitempty"`
+	FrankZohoSendProof        []OperatorFrankZohoSendProofStatus         `json:"frank_zoho_send_proof,omitempty"`
 	Truncation                *OperatorStatusTruncation                  `json:"truncation,omitempty"`
 }
 
@@ -54,6 +55,15 @@ type OperatorArtifactStatus struct {
 	StepType StepType `json:"step_type"`
 	Path     string   `json:"path"`
 	State    string   `json:"state,omitempty"`
+}
+
+type OperatorFrankZohoSendProofStatus struct {
+	StepID             string `json:"step_id,omitempty"`
+	ProviderMessageID  string `json:"provider_message_id"`
+	ProviderMailID     string `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string `json:"mime_message_id,omitempty"`
+	ProviderAccountID  string `json:"provider_account_id"`
+	OriginalMessageURL string `json:"original_message_url"`
 }
 
 type OperatorBudgetBlockerStatus struct {
@@ -237,6 +247,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	summary.ApprovalHistory = selectOperatorStatusApprovalHistory(runtime)
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 	summary.Artifacts = selectOperatorStatusArtifacts(runtime)
+	summary.FrankZohoSendProof = selectOperatorStatusFrankZohoSendProof(runtime)
 	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit), len(summary.Artifacts))
 
 	return summary
@@ -422,6 +433,26 @@ func selectOperatorStatusArtifacts(runtime JobRuntimeState) []OperatorArtifactSt
 		}
 	}
 	return artifacts
+}
+
+func selectOperatorStatusFrankZohoSendProof(runtime JobRuntimeState) []OperatorFrankZohoSendProofStatus {
+	if len(runtime.FrankZohoSendReceipts) == 0 {
+		return nil
+	}
+
+	proof := make([]OperatorFrankZohoSendProofStatus, 0, len(runtime.FrankZohoSendReceipts))
+	for _, receipt := range runtime.FrankZohoSendReceipts {
+		normalized := NormalizeFrankZohoSendReceipt(receipt)
+		proof = append(proof, OperatorFrankZohoSendProofStatus{
+			StepID:             normalized.StepID,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	return proof
 }
 
 type operatorArtifactCandidate struct {

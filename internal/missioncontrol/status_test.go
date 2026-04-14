@@ -700,6 +700,51 @@ func TestBuildOperatorStatusSummaryFallsBackToLexicographicArtifactsWithoutPlan(
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesFrankZohoSendProof(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID: "job-1",
+		State: JobStatePaused,
+		FrankZohoSendReceipts: []FrankZohoSendReceipt{
+			{
+				StepID:             "build",
+				Provider:           "zoho_mail",
+				ProviderAccountID:  "3323462000000008002",
+				FromAddress:        "frank@omou.online",
+				FromDisplayName:    "Frank",
+				ProviderMessageID:  "1711540357880100000",
+				ProviderMailID:     "<mail-1@zoho.test>",
+				MIMEMessageID:      "<mime-1@example.test>",
+				OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+			},
+		},
+	})
+
+	if len(summary.FrankZohoSendProof) != 1 {
+		t.Fatalf("FrankZohoSendProof len = %d, want 1", len(summary.FrankZohoSendProof))
+	}
+	proof := summary.FrankZohoSendProof[0]
+	if proof.StepID != "build" {
+		t.Fatalf("FrankZohoSendProof[0].StepID = %q, want %q", proof.StepID, "build")
+	}
+	if proof.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("FrankZohoSendProof[0].ProviderMessageID = %q, want canonical provider message id", proof.ProviderMessageID)
+	}
+	if proof.ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("FrankZohoSendProof[0].ProviderMailID = %q, want secondary provider mail id", proof.ProviderMailID)
+	}
+	if proof.MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("FrankZohoSendProof[0].MIMEMessageID = %q, want secondary MIME message id", proof.MIMEMessageID)
+	}
+	if proof.ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("FrankZohoSendProof[0].ProviderAccountID = %q, want proof locator account id", proof.ProviderAccountID)
+	}
+	if proof.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("FrankZohoSendProof[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", proof.OriginalMessageURL)
+	}
+}
+
 func TestFormatOperatorStatusSummaryWithAllowedToolsUsesSortedUniqueIntersection(t *testing.T) {
 	t.Parallel()
 

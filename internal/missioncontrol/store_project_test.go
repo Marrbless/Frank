@@ -431,6 +431,80 @@ func TestBuildCommittedMissionStatusSnapshotIncludesDeferredSchedulerTriggersInR
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommittedRuntime(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		CreatedAt:       now.Add(-2 * time.Minute),
+		UpdatedAt:       now,
+		StartedAt:       now.Add(-2 * time.Minute),
+		ActiveStepAt:    now.Add(-time.Minute),
+		FrankZohoSendReceipts: []FrankZohoSendReceipt{
+			{
+				StepID:             "build",
+				Provider:           "zoho_mail",
+				ProviderAccountID:  "3323462000000008002",
+				FromAddress:        "frank@omou.online",
+				FromDisplayName:    "Frank",
+				ProviderMessageID:  "1711540357880100000",
+				ProviderMailID:     "<mail-1@zoho.test>",
+				MIMEMessageID:      "<mime-1@example.test>",
+				OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+			},
+		},
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	if len(snapshot.RuntimeSummary.FrankZohoSendProof) != 1 {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoSendProof))
+	}
+	proof := snapshot.RuntimeSummary.FrankZohoSendProof[0]
+	if proof.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMessageID = %q, want canonical provider message id", proof.ProviderMessageID)
+	}
+	if proof.ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMailID = %q, want secondary provider mail id", proof.ProviderMailID)
+	}
+	if proof.MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].MIMEMessageID = %q, want secondary MIME message id", proof.MIMEMessageID)
+	}
+	if proof.ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderAccountID = %q, want proof locator account id", proof.ProviderAccountID)
+	}
+	if proof.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", proof.OriginalMessageURL)
+	}
+}
+
 func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSchedulerTriggers(t *testing.T) {
 	t.Parallel()
 
