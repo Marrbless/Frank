@@ -294,3 +294,90 @@ func TestPersistProjectedRuntimeStateNormalizesBlankArtifactState(t *testing.T) 
 		t.Fatalf("ListCommittedArtifactRecords()[0].State = %q, want %q", artifacts[0].State, "verified")
 	}
 }
+
+func TestPersistProjectedRuntimeStateProjectsFrankZohoSendReceiptsAppendOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	receiptOne := FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}
+	receiptTwo := FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100001",
+		ProviderMailID:     "<mail-2@zoho.test>",
+		MIMEMessageID:      "<mime-2@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100001/originalmessage",
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                 job.ID,
+		State:                 JobStateRunning,
+		ActiveStepID:          "build",
+		InspectablePlan:       &inspectablePlan,
+		FrankZohoSendReceipts: []FrankZohoSendReceipt{receiptOne},
+		CreatedAt:             now.Add(-2 * time.Minute),
+		UpdatedAt:             now,
+		StartedAt:             now.Add(-2 * time.Minute),
+		ActiveStepAt:          now.Add(-time.Minute),
+	}
+
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(first) error = %v", err)
+	}
+
+	runtime.FrankZohoSendReceipts = append(runtime.FrankZohoSendReceipts, receiptTwo)
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(second) error = %v", err)
+	}
+
+	records, err := ListCommittedFrankZohoSendReceiptRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoSendReceiptRecords() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("ListCommittedFrankZohoSendReceiptRecords() len = %d, want 2", len(records))
+	}
+	if records[0].ProviderMessageID != receiptOne.ProviderMessageID {
+		t.Fatalf("records[0].ProviderMessageID = %q, want %q", records[0].ProviderMessageID, receiptOne.ProviderMessageID)
+	}
+	if records[0].ProviderMailID != receiptOne.ProviderMailID {
+		t.Fatalf("records[0].ProviderMailID = %q, want %q", records[0].ProviderMailID, receiptOne.ProviderMailID)
+	}
+	if records[0].MIMEMessageID != receiptOne.MIMEMessageID {
+		t.Fatalf("records[0].MIMEMessageID = %q, want %q", records[0].MIMEMessageID, receiptOne.MIMEMessageID)
+	}
+	if records[0].OriginalMessageURL != receiptOne.OriginalMessageURL {
+		t.Fatalf("records[0].OriginalMessageURL = %q, want %q", records[0].OriginalMessageURL, receiptOne.OriginalMessageURL)
+	}
+	if records[1].ProviderMessageID != receiptTwo.ProviderMessageID {
+		t.Fatalf("records[1].ProviderMessageID = %q, want %q", records[1].ProviderMessageID, receiptTwo.ProviderMessageID)
+	}
+	if records[1].OriginalMessageURL != receiptTwo.OriginalMessageURL {
+		t.Fatalf("records[1].OriginalMessageURL = %q, want %q", records[1].OriginalMessageURL, receiptTwo.OriginalMessageURL)
+	}
+}

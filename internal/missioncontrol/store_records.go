@@ -142,6 +142,23 @@ type ArtifactRecord struct {
 	VerificationOutput  string    `json:"verification_output,omitempty"`
 }
 
+type FrankZohoSendReceiptRecord struct {
+	RecordVersion      int    `json:"record_version"`
+	LastSeq            uint64 `json:"last_seq"`
+	ReceiptID          string `json:"receipt_id"`
+	JobID              string `json:"job_id"`
+	StepID             string `json:"step_id"`
+	AttemptID          string `json:"attempt_id,omitempty"`
+	Provider           string `json:"provider"`
+	ProviderAccountID  string `json:"provider_account_id"`
+	FromAddress        string `json:"from_address,omitempty"`
+	FromDisplayName    string `json:"from_display_name,omitempty"`
+	ProviderMessageID  string `json:"provider_message_id"`
+	ProviderMailID     string `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string `json:"mime_message_id,omitempty"`
+	OriginalMessageURL string `json:"original_message_url"`
+}
+
 type BatchCommitRecord struct {
 	RecordVersion int       `json:"record_version"`
 	JobID         string    `json:"job_id"`
@@ -352,6 +369,39 @@ func ValidateArtifactRecord(record ArtifactRecord) error {
 	return nil
 }
 
+func ValidateFrankZohoSendReceiptRecord(record FrankZohoSendReceiptRecord) error {
+	if record.RecordVersion <= 0 {
+		return fmt.Errorf("mission store frank zoho send receipt record_version must be positive")
+	}
+	if record.LastSeq == 0 {
+		return fmt.Errorf("mission store frank zoho send receipt last_seq must be positive")
+	}
+	if strings.TrimSpace(record.ReceiptID) == "" {
+		return fmt.Errorf("mission store frank zoho send receipt receipt_id is required")
+	}
+	if strings.TrimSpace(record.JobID) == "" {
+		return fmt.Errorf("mission store frank zoho send receipt job_id is required")
+	}
+	if strings.TrimSpace(record.StepID) == "" {
+		return fmt.Errorf("mission store frank zoho send receipt step_id is required")
+	}
+	receipt := FrankZohoSendReceipt{
+		StepID:             record.StepID,
+		Provider:           record.Provider,
+		ProviderAccountID:  record.ProviderAccountID,
+		FromAddress:        record.FromAddress,
+		FromDisplayName:    record.FromDisplayName,
+		ProviderMessageID:  record.ProviderMessageID,
+		ProviderMailID:     record.ProviderMailID,
+		MIMEMessageID:      record.MIMEMessageID,
+		OriginalMessageURL: record.OriginalMessageURL,
+	}
+	if err := ValidateFrankZohoSendReceipt(receipt); err != nil {
+		return err
+	}
+	return nil
+}
+
 func ValidateBatchCommitRecord(record BatchCommitRecord) error {
 	if record.RecordVersion <= 0 {
 		return fmt.Errorf("mission store batch commit record_version must be positive")
@@ -490,6 +540,16 @@ func StoreArtifactRecord(root string, record ArtifactRecord) error {
 		return err
 	}
 	return WriteStoreJSONAtomic(storeArtifactVersionPath(root, record.JobID, record.ArtifactID, record.LastSeq, record.AttemptID), record)
+}
+
+func StoreFrankZohoSendReceiptRecord(root string, record FrankZohoSendReceiptRecord) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if err := ValidateFrankZohoSendReceiptRecord(record); err != nil {
+		return err
+	}
+	return WriteStoreJSONAtomic(storeFrankZohoSendReceiptVersionPath(root, record.JobID, record.ReceiptID, record.LastSeq, record.AttemptID), record)
 }
 
 func StoreBatchCommitRecord(root string, record BatchCommitRecord) error {
@@ -732,6 +792,49 @@ func ListCommittedArtifactRecords(root, jobID string) ([]ArtifactRecord, error) 
 	return records, nil
 }
 
+func ListCommittedFrankZohoSendReceiptRecords(root, jobID string) ([]FrankZohoSendReceiptRecord, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, err
+	}
+	jobRuntime, err := LoadCommittedJobRuntimeRecord(root, jobID)
+	if err != nil {
+		if errors.Is(err, ErrJobRuntimeRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	resolver := newStoreCommittedAttemptResolver(root, jobID)
+	receiptIDs, err := listStoreRecordKeys(StoreFrankZohoSendReceiptsDir(root, jobID))
+	if err != nil {
+		return nil, err
+	}
+	records := make([]FrankZohoSendReceiptRecord, 0, len(receiptIDs))
+	for _, receiptID := range receiptIDs {
+		record, err := loadLatestVisibleVersionedJSONRecordAtOrBefore(
+			storeFrankZohoSendReceiptVersionsDir(root, jobID, receiptID),
+			jobRuntime.AppliedSeq,
+			resolver,
+			loadFrankZohoSendReceiptRecordFile,
+			func(record FrankZohoSendReceiptRecord) uint64 { return record.LastSeq },
+			func(record FrankZohoSendReceiptRecord) string { return record.AttemptID },
+		)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].ProviderMessageID != records[j].ProviderMessageID {
+			return records[i].ProviderMessageID < records[j].ProviderMessageID
+		}
+		return records[i].ReceiptID < records[j].ReceiptID
+	})
+	return records, nil
+}
+
 func LoadCommittedActiveJobRecord(root, jobID string) (ActiveJobRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return ActiveJobRecord{}, err
@@ -832,6 +935,17 @@ func loadArtifactRecordFile(path string) (ArtifactRecord, error) {
 	return record, nil
 }
 
+func loadFrankZohoSendReceiptRecordFile(path string) (FrankZohoSendReceiptRecord, error) {
+	var record FrankZohoSendReceiptRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		return FrankZohoSendReceiptRecord{}, err
+	}
+	if err := ValidateFrankZohoSendReceiptRecord(record); err != nil {
+		return FrankZohoSendReceiptRecord{}, err
+	}
+	return record, nil
+}
+
 type storeCommittedAttemptResolver struct {
 	root     string
 	jobID    string
@@ -920,6 +1034,14 @@ func storeArtifactVersionsDir(root, jobID, artifactID string) string {
 
 func storeArtifactVersionPath(root, jobID, artifactID string, seq uint64, attemptID string) string {
 	return filepath.Join(storeArtifactVersionsDir(root, jobID, artifactID), storeVersionFilename(seq, attemptID))
+}
+
+func storeFrankZohoSendReceiptVersionsDir(root, jobID, receiptID string) string {
+	return filepath.Join(StoreFrankZohoSendReceiptsDir(root, jobID), receiptID)
+}
+
+func storeFrankZohoSendReceiptVersionPath(root, jobID, receiptID string, seq uint64, attemptID string) string {
+	return filepath.Join(storeFrankZohoSendReceiptVersionsDir(root, jobID, receiptID), storeVersionFilename(seq, attemptID))
 }
 
 func storeBatchCommitsDir(root, jobID string) string {

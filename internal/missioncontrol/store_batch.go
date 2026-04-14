@@ -12,13 +12,14 @@ var storeBatchNewAttemptID = func() string {
 }
 
 type StoreBatch struct {
-	JobRuntime       JobRuntimeRecord
-	RuntimeControl   *RuntimeControlRecord
-	StepRecords      []StepRuntimeRecord
-	ApprovalRequests []ApprovalRequestRecord
-	ApprovalGrants   []ApprovalGrantRecord
-	AuditEvents      []AuditEventRecord
-	Artifacts        []ArtifactRecord
+	JobRuntime            JobRuntimeRecord
+	RuntimeControl        *RuntimeControlRecord
+	StepRecords           []StepRuntimeRecord
+	ApprovalRequests      []ApprovalRequestRecord
+	ApprovalGrants        []ApprovalGrantRecord
+	AuditEvents           []AuditEventRecord
+	Artifacts             []ArtifactRecord
+	FrankZohoSendReceipts []FrankZohoSendReceiptRecord
 	// active_job.json remains a fixed-path arbitration record and must be
 	// reconciled against committed job_runtime.applied_seq during recovery.
 	ActiveJob       *ActiveJobRecord
@@ -75,6 +76,12 @@ func CommitStoreBatch(root string, heldLock WriterLockRecord, batch StoreBatch) 
 	for _, record := range batch.Artifacts {
 		record.AttemptID = attemptID
 		if err := storeBatchWriteRecord(storeArtifactVersionPath(root, record.JobID, record.ArtifactID, record.LastSeq, record.AttemptID), record); err != nil {
+			return err
+		}
+	}
+	for _, record := range batch.FrankZohoSendReceipts {
+		record.AttemptID = attemptID
+		if err := storeBatchWriteRecord(storeFrankZohoSendReceiptVersionPath(root, record.JobID, record.ReceiptID, record.LastSeq, record.AttemptID), record); err != nil {
 			return err
 		}
 	}
@@ -191,6 +198,17 @@ func ValidateStoreBatch(batch StoreBatch, heldLock WriterLockRecord) error {
 		}
 		if record.LastSeq != targetSeq {
 			return fmt.Errorf("mission store batch artifact %q last_seq %d does not match applied_seq %d", record.ArtifactID, record.LastSeq, targetSeq)
+		}
+	}
+	for _, record := range batch.FrankZohoSendReceipts {
+		if err := ValidateFrankZohoSendReceiptRecord(record); err != nil {
+			return err
+		}
+		if record.JobID != jobID {
+			return fmt.Errorf("mission store batch frank zoho send receipt %q job_id %q does not match job runtime %q", record.ReceiptID, record.JobID, jobID)
+		}
+		if record.LastSeq != targetSeq {
+			return fmt.Errorf("mission store batch frank zoho send receipt %q last_seq %d does not match applied_seq %d", record.ReceiptID, record.LastSeq, targetSeq)
 		}
 	}
 	if batch.ActiveJob != nil && batch.RemoveActiveJob {

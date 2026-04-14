@@ -495,6 +495,33 @@ func (s *TaskState) RecordFailedToolAction(toolName string, reason string) (bool
 	return exhausted, err
 }
 
+func (s *TaskState) RecordFrankZohoSendReceipt(result string) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return nil
+	}
+
+	nextRuntime, appended, err := missioncontrol.AppendFrankZohoSendReceipt(*ec.Runtime, ec.Step.ID, result)
+	if err != nil || !appended {
+		return err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return err
+}
+
 func (s *TaskState) RecordOwnerFacingMessage() (bool, error) {
 	if s == nil {
 		return false, nil

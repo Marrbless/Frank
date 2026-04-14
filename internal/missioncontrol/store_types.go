@@ -228,6 +228,14 @@ func StoreArtifactPath(root string, jobID string, artifactID string) string {
 	return filepath.Join(StoreArtifactsDir(root, jobID), artifactID+".json")
 }
 
+func StoreFrankZohoSendReceiptsDir(root string, jobID string) string {
+	return filepath.Join(StoreJobDir(root, jobID), "frank_zoho_send_receipts")
+}
+
+func StoreFrankZohoSendReceiptPath(root string, jobID string, receiptID string) string {
+	return filepath.Join(StoreFrankZohoSendReceiptsDir(root, jobID), receiptID+".json")
+}
+
 func ValidateStoreRoot(root string) error {
 	if strings.TrimSpace(root) == "" {
 		return fmt.Errorf("mission store root is required")

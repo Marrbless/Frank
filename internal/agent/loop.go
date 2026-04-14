@@ -1388,6 +1388,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 						res, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
 						elapsed := time.Since(start).Round(time.Millisecond)
 
+						if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+							if persistErr := a.taskState.RecordFrankZohoSendReceipt(res); persistErr != nil {
+								err = persistErr
+							}
+						}
 						if err != nil {
 							if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
 								finalContent = budgetResponse
@@ -1535,6 +1540,11 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 				}
 			}
 			result, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
+			if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+				if persistErr := a.taskState.RecordFrankZohoSendReceipt(result); persistErr != nil {
+					err = persistErr
+				}
+			}
 			if err != nil {
 				if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
 					return budgetResponse, nil

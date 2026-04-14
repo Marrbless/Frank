@@ -87,15 +87,16 @@ func projectRuntimeStateToStoreBatch(root string, lock WriterLockRecord, job *Jo
 	}
 
 	return StoreBatch{
-		JobRuntime:       jobRuntime,
-		RuntimeControl:   runtimeControl,
-		StepRecords:      stepRecords,
-		ApprovalRequests: projectApprovalRequestRecords(runtime, nextSeq),
-		ApprovalGrants:   projectApprovalGrantRecords(runtime, nextSeq),
-		AuditEvents:      projectAuditEventRecords(runtime, nextSeq, committedAudits),
-		Artifacts:        projectArtifactRecords(runtime, plan, nextSeq),
-		ActiveJob:        activeJob,
-		RemoveActiveJob:  removeActiveJob,
+		JobRuntime:            jobRuntime,
+		RuntimeControl:        runtimeControl,
+		StepRecords:           stepRecords,
+		ApprovalRequests:      projectApprovalRequestRecords(runtime, nextSeq),
+		ApprovalGrants:        projectApprovalGrantRecords(runtime, nextSeq),
+		AuditEvents:           projectAuditEventRecords(runtime, nextSeq, committedAudits),
+		Artifacts:             projectArtifactRecords(runtime, plan, nextSeq),
+		FrankZohoSendReceipts: projectFrankZohoSendReceiptRecords(runtime, nextSeq),
+		ActiveJob:             activeJob,
+		RemoveActiveJob:       removeActiveJob,
 	}, nil
 }
 
@@ -539,6 +540,35 @@ func projectArtifactRecords(runtime JobRuntimeState, plan *InspectablePlanContex
 	return records
 }
 
+func projectFrankZohoSendReceiptRecords(runtime JobRuntimeState, nextSeq uint64) []FrankZohoSendReceiptRecord {
+	if len(runtime.FrankZohoSendReceipts) == 0 {
+		return nil
+	}
+	records := make([]FrankZohoSendReceiptRecord, 0, len(runtime.FrankZohoSendReceipts))
+	for _, receipt := range runtime.FrankZohoSendReceipts {
+		normalized := NormalizeFrankZohoSendReceipt(receipt)
+		records = append(records, FrankZohoSendReceiptRecord{
+			RecordVersion:      StoreRecordVersion,
+			LastSeq:            nextSeq,
+			ReceiptID:          projectedFrankZohoSendReceiptID(runtime.JobID, normalized),
+			JobID:              runtime.JobID,
+			StepID:             normalized.StepID,
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].ReceiptID < records[j].ReceiptID
+	})
+	return records
+}
+
 func projectedApprovalRequestContent(content *ApprovalRequestContent) *ApprovalRequestContent {
 	if content == nil {
 		return nil
@@ -605,6 +635,17 @@ func projectedApprovalBindingKey(jobID, stepID, requestedAction, scope string) s
 
 func projectedArtifactID(stepType StepType, stepID, path string) string {
 	return "artifact_" + projectedStoreHash(string(stepType), stepID, cleanedArtifactPath(path))
+}
+
+func projectedFrankZohoSendReceiptID(jobID string, receipt FrankZohoSendReceipt) string {
+	normalized := NormalizeFrankZohoSendReceipt(receipt)
+	return "zoho_send_" + projectedStoreHash(
+		jobID,
+		normalized.StepID,
+		normalized.Provider,
+		normalized.ProviderAccountID,
+		normalized.ProviderMessageID,
+	)
 }
 
 func projectedStoreHash(parts ...string) string {

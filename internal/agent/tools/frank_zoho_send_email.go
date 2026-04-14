@@ -24,6 +24,8 @@ const (
 	frankZohoMailDefaultEncoding   = "UTF-8"
 )
 
+const FrankZohoSendEmailToolName = frankZohoSendEmailToolName
+
 type FrankZohoSendEmailTool struct {
 	client      *http.Client
 	apiBase     string

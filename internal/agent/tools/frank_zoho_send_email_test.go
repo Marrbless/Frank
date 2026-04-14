@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/local/picobot/internal/missioncontrol"
 )
@@ -220,6 +221,140 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 	wantOriginalMessageURL := "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage"
 	if receipt.OriginalMessageURL != wantOriginalMessageURL {
 		t.Fatalf("OriginalMessageURL = %q, want %q", receipt.OriginalMessageURL, wantOriginalMessageURL)
+	}
+}
+
+func TestFrankZohoSendEmailToolPersistsReceiptAppendOnlyForLaterProofReadBack(t *testing.T) {
+	t.Parallel()
+
+	var sendCallCount atomic.Int32
+	tool := NewFrankZohoSendEmailTool()
+	tool.apiBase = "https://mail.zoho.test/api"
+	tool.send = func(context.Context, frankZohoSendRequest) (frankZohoSendResponseData, error) {
+		switch sendCallCount.Add(1) {
+		case 1:
+			return frankZohoSendResponseData{
+				MessageID:     frankZohoFlexibleString("1711540357880100000"),
+				MailID:        frankZohoFlexibleString("<mail-1@zoho.test>"),
+				MIMEMessageID: frankZohoFlexibleString("<mime-1@example.test>"),
+			}, nil
+		case 2:
+			return frankZohoSendResponseData{
+				MessageID:       frankZohoFlexibleString("1711540357880100001"),
+				MailID:          frankZohoFlexibleString("<mail-2@zoho.test>"),
+				MessageIDHeader: frankZohoFlexibleString("<mime-2@example.test>"),
+			}, nil
+		default:
+			t.Fatalf("unexpected send call %d", sendCallCount.Load())
+			return frankZohoSendResponseData{}, nil
+		}
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-persist",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-persist",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	args := map[string]interface{}{
+		"to":      []interface{}{"person@example.com"},
+		"subject": "Frank intro",
+		"body":    "Hello from Frank",
+	}
+
+	ec, ok := state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false, want active mission execution context")
+	}
+	firstOut, err := reg.Execute(missioncontrol.WithExecutionContext(context.Background(), ec), tool.Name(), args)
+	if err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if err := state.RecordFrankZohoSendReceipt(firstOut); err != nil {
+		t.Fatalf("RecordFrankZohoSendReceipt(first) error = %v", err)
+	}
+
+	ec, ok = state.ExecutionContext()
+	if !ok {
+		t.Fatal("ExecutionContext() ok = false after first receipt persistence")
+	}
+	secondOut, err := reg.Execute(missioncontrol.WithExecutionContext(context.Background(), ec), tool.Name(), args)
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if err := state.RecordFrankZohoSendReceipt(secondOut); err != nil {
+		t.Fatalf("RecordFrankZohoSendReceipt(second) error = %v", err)
+	}
+
+	records, err := missioncontrol.ListCommittedFrankZohoSendReceiptRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoSendReceiptRecords() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("ListCommittedFrankZohoSendReceiptRecords() len = %d, want 2", len(records))
+	}
+
+	first := records[0]
+	if first.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("first.ProviderMessageID = %q, want canonical Zoho messageId", first.ProviderMessageID)
+	}
+	if first.ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("first.ProviderMailID = %q, want secondary Zoho mailId", first.ProviderMailID)
+	}
+	if first.MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("first.MIMEMessageID = %q, want secondary MIME Message-ID", first.MIMEMessageID)
+	}
+	if first.ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("first.ProviderAccountID = %q, want fixed proof locator account", first.ProviderAccountID)
+	}
+	if first.OriginalMessageURL != "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("first.OriginalMessageURL = %q, want proof-compatible originalmessage URL", first.OriginalMessageURL)
+	}
+
+	second := records[1]
+	if second.ProviderMessageID != "1711540357880100001" {
+		t.Fatalf("second.ProviderMessageID = %q, want canonical Zoho messageId", second.ProviderMessageID)
+	}
+	if second.ProviderMailID != "<mail-2@zoho.test>" {
+		t.Fatalf("second.ProviderMailID = %q, want secondary Zoho mailId", second.ProviderMailID)
+	}
+	if second.MIMEMessageID != "<mime-2@example.test>" {
+		t.Fatalf("second.MIMEMessageID = %q, want secondary MIME Message-ID", second.MIMEMessageID)
+	}
+	if second.OriginalMessageURL != "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100001/originalmessage" {
+		t.Fatalf("second.OriginalMessageURL = %q, want proof-compatible originalmessage URL", second.OriginalMessageURL)
 	}
 }
 
