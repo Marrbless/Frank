@@ -1,0 +1,459 @@
+package tools
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/mail"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/local/picobot/internal/missioncontrol"
+)
+
+const (
+	frankZohoSendEmailToolName     = "frank_zoho_send_email"
+	frankZohoMailAPIBase           = "https://mail.zoho.com/api"
+	frankZohoMailAccountID         = "3323462000000008002"
+	frankZohoMailFromAddress       = "frank@omou.online"
+	frankZohoMailFromDisplayName   = "Frank"
+	frankZohoMailDefaultBodyFormat = "plaintext"
+	frankZohoMailDefaultEncoding   = "UTF-8"
+)
+
+type FrankZohoSendEmailTool struct {
+	client      *http.Client
+	apiBase     string
+	accessToken func(context.Context) (string, error)
+	send        func(context.Context, frankZohoSendRequest) (frankZohoSendResponseData, error)
+}
+
+type FrankZohoSendReceipt struct {
+	Provider           string `json:"provider"`
+	ProviderAccountID  string `json:"provider_account_id"`
+	FromAddress        string `json:"from_address"`
+	FromDisplayName    string `json:"from_display_name"`
+	ProviderMessageID  string `json:"provider_message_id"`
+	ProviderMailID     string `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string `json:"mime_message_id,omitempty"`
+	OriginalMessageURL string `json:"original_message_url"`
+}
+
+type frankZohoSendRequest struct {
+	AccountID  string
+	From       string
+	To         []string
+	CC         []string
+	BCC        []string
+	Subject    string
+	Body       string
+	BodyFormat string
+	Encoding   string
+}
+
+type frankZohoSendAPIRequest struct {
+	FromAddress string `json:"fromAddress"`
+	ToAddress   string `json:"toAddress"`
+	CCAddress   string `json:"ccAddress,omitempty"`
+	BCCAddress  string `json:"bccAddress,omitempty"`
+	Subject     string `json:"subject"`
+	Content     string `json:"content"`
+	MailFormat  string `json:"mailFormat,omitempty"`
+	Encoding    string `json:"encoding,omitempty"`
+}
+
+type frankZohoSendAPIResponse struct {
+	Status struct {
+		Code        int    `json:"code"`
+		Description string `json:"description"`
+	} `json:"status"`
+	Data frankZohoSendResponseData `json:"data"`
+}
+
+type frankZohoSendResponseData struct {
+	MessageID       frankZohoFlexibleString `json:"messageId"`
+	MailID          frankZohoFlexibleString `json:"mailId"`
+	MIMEMessageID   frankZohoFlexibleString `json:"mimeMessageId"`
+	MessageIDHeader frankZohoFlexibleString `json:"messageIdHeader"`
+	InternetMessage frankZohoFlexibleString `json:"internetMessageId"`
+}
+
+type frankZohoFlexibleString string
+
+func (s *frankZohoFlexibleString) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	switch {
+	case trimmed == "", trimmed == "null":
+		*s = ""
+		return nil
+	case strings.HasPrefix(trimmed, `"`):
+		var v string
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		*s = frankZohoFlexibleString(strings.TrimSpace(v))
+		return nil
+	default:
+		*s = frankZohoFlexibleString(trimmed)
+		return nil
+	}
+}
+
+func NewFrankZohoSendEmailTool() *FrankZohoSendEmailTool {
+	return &FrankZohoSendEmailTool{
+		client:      &http.Client{Timeout: 30 * time.Second},
+		apiBase:     frankZohoMailAPIBase,
+		accessToken: frankZohoMailAccessTokenFromEnv,
+	}
+}
+
+func (t *FrankZohoSendEmailTool) Name() string {
+	return frankZohoSendEmailToolName
+}
+
+func (t *FrankZohoSendEmailTool) Description() string {
+	return "Send one email from Frank <frank@omou.online> using the fixed Zoho Mail account"
+}
+
+func (t *FrankZohoSendEmailTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"to": map[string]interface{}{
+				"type":        "array",
+				"description": "Recipient email addresses for the To field",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+			"cc": map[string]interface{}{
+				"type":        "array",
+				"description": "Optional recipient email addresses for the Cc field",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+			"bcc": map[string]interface{}{
+				"type":        "array",
+				"description": "Optional recipient email addresses for the Bcc field",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+			"subject": map[string]interface{}{
+				"type":        "string",
+				"description": "Email subject line",
+			},
+			"body": map[string]interface{}{
+				"type":        "string",
+				"description": "Email body content",
+			},
+			"body_format": map[string]interface{}{
+				"type":        "string",
+				"description": "Body format to send via Zoho Mail",
+				"enum":        []string{"plaintext", "html"},
+			},
+		},
+		"required": []string{"to", "subject", "body"},
+	}
+}
+
+func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+	ec, ok := missioncontrol.ExecutionContextFromContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("%s requires mission execution context", t.Name())
+	}
+	if ec.Step == nil || ec.Step.CampaignRef == nil {
+		return "", fmt.Errorf("%s requires step.campaign_ref", t.Name())
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return "", fmt.Errorf("%s requires mission_store_root to resolve campaign context", t.Name())
+	}
+	if err := missioncontrol.RequireExecutionContextCampaignReadiness(ec); err != nil {
+		return "", err
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return "", err
+	}
+	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+		return "", err
+	}
+
+	req, err := buildFrankZohoSendRequest(args)
+	if err != nil {
+		return "", err
+	}
+
+	req.AccountID = frankZohoMailAccountID
+	req.From = frankZohoMailFromAddress
+
+	send := t.send
+	if send == nil {
+		send = t.sendViaAPI
+	}
+
+	data, err := send(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(data.MessageID)) == "" {
+		return "", fmt.Errorf("%s: Zoho send response missing data.messageId", t.Name())
+	}
+
+	receipt := FrankZohoSendReceipt{
+		Provider:           "zoho_mail",
+		ProviderAccountID:  frankZohoMailAccountID,
+		FromAddress:        frankZohoMailFromAddress,
+		FromDisplayName:    frankZohoMailFromDisplayName,
+		ProviderMessageID:  string(data.MessageID),
+		ProviderMailID:     string(data.MailID),
+		MIMEMessageID:      firstNonEmpty(string(data.MIMEMessageID), string(data.MessageIDHeader), string(data.InternetMessage)),
+		OriginalMessageURL: frankZohoOriginalMessageURL(t.apiBase, frankZohoMailAccountID, string(data.MessageID)),
+	}
+
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func (t *FrankZohoSendEmailTool) sendViaAPI(ctx context.Context, req frankZohoSendRequest) (frankZohoSendResponseData, error) {
+	tokenProvider := t.accessToken
+	if tokenProvider == nil {
+		tokenProvider = frankZohoMailAccessTokenFromEnv
+	}
+	token, err := tokenProvider(ctx)
+	if err != nil {
+		return frankZohoSendResponseData{}, err
+	}
+
+	payload := frankZohoSendAPIRequest{
+		FromAddress: req.From,
+		ToAddress:   strings.Join(req.To, ","),
+		CCAddress:   strings.Join(req.CC, ","),
+		BCCAddress:  strings.Join(req.BCC, ","),
+		Subject:     req.Subject,
+		Content:     req.Body,
+		MailFormat:  req.BodyFormat,
+		Encoding:    req.Encoding,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return frankZohoSendResponseData{}, err
+	}
+
+	url := frankZohoMessagesURL(t.apiBase, req.AccountID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return frankZohoSendResponseData{}, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+	client := t.client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return frankZohoSendResponseData{}, fmt.Errorf("%s request failed: %w", t.Name(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail returned HTTP %d", t.Name(), resp.StatusCode)
+	}
+
+	var decoded frankZohoSendAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return frankZohoSendResponseData{}, fmt.Errorf("%s: failed to decode Zoho response: %w", t.Name(), err)
+	}
+	if decoded.Status.Code != 0 && decoded.Status.Code != 200 {
+		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail status %d: %s", t.Name(), decoded.Status.Code, strings.TrimSpace(decoded.Status.Description))
+	}
+	return decoded.Data, nil
+}
+
+func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight) error {
+	if preflight.Campaign == nil {
+		return fmt.Errorf("%s requires a resolved campaign preflight", frankZohoSendEmailToolName)
+	}
+
+	emailIdentityIDs := make(map[string]struct{})
+	for _, identity := range preflight.Identities {
+		if strings.EqualFold(strings.TrimSpace(identity.IdentityKind), "email") {
+			emailIdentityIDs[strings.TrimSpace(identity.IdentityID)] = struct{}{}
+		}
+	}
+	if len(emailIdentityIDs) == 0 {
+		return fmt.Errorf("%s requires a campaign-linked Frank email identity", frankZohoSendEmailToolName)
+	}
+
+	for _, account := range preflight.Accounts {
+		if !strings.EqualFold(strings.TrimSpace(account.AccountKind), "mailbox") {
+			continue
+		}
+		if _, ok := emailIdentityIDs[strings.TrimSpace(account.IdentityID)]; ok {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%s requires a campaign-linked Frank mailbox account", frankZohoSendEmailToolName)
+}
+
+func buildFrankZohoSendRequest(args map[string]interface{}) (frankZohoSendRequest, error) {
+	to, err := frankZohoAddressListArg(args, "to", true)
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+	cc, err := frankZohoAddressListArg(args, "cc", false)
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+	bcc, err := frankZohoAddressListArg(args, "bcc", false)
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+	subject, err := frankZohoRequiredStringArg(args, "subject")
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+	body, err := frankZohoRequiredStringArg(args, "body")
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+	bodyFormat, err := frankZohoBodyFormatArg(args, "body_format")
+	if err != nil {
+		return frankZohoSendRequest{}, err
+	}
+
+	return frankZohoSendRequest{
+		To:         to,
+		CC:         cc,
+		BCC:        bcc,
+		Subject:    subject,
+		Body:       body,
+		BodyFormat: bodyFormat,
+		Encoding:   frankZohoMailDefaultEncoding,
+	}, nil
+}
+
+func frankZohoRequiredStringArg(args map[string]interface{}, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: %q must be a string", frankZohoSendEmailToolName, key)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
+	}
+	return value, nil
+}
+
+func frankZohoBodyFormatArg(args map[string]interface{}, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return frankZohoMailDefaultBodyFormat, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: %q must be a string", frankZohoSendEmailToolName, key)
+	}
+	value = strings.TrimSpace(strings.ToLower(value))
+	switch value {
+	case "":
+		return frankZohoMailDefaultBodyFormat, nil
+	case "html", "plaintext":
+		return value, nil
+	default:
+		return "", fmt.Errorf("%s: %q must be %q or %q", frankZohoSendEmailToolName, key, "plaintext", "html")
+	}
+}
+
+func frankZohoAddressListArg(args map[string]interface{}, key string, required bool) ([]string, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		if required {
+			return nil, fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
+		}
+		return nil, nil
+	}
+
+	var values []string
+	switch typed := raw.(type) {
+	case string:
+		values = []string{typed}
+	case []string:
+		values = append([]string(nil), typed...)
+	case []interface{}:
+		values = make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: %q entries must be strings", frankZohoSendEmailToolName, key)
+			}
+			values = append(values, value)
+		}
+	default:
+		return nil, fmt.Errorf("%s: %q must be an array of email addresses", frankZohoSendEmailToolName, key)
+	}
+
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %q contains invalid email address %q", frankZohoSendEmailToolName, key, value)
+		}
+		out = append(out, parsed.Address)
+	}
+
+	if required && len(out) == 0 {
+		return nil, fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
+	}
+	return out, nil
+}
+
+func frankZohoMailAccessTokenFromEnv(context.Context) (string, error) {
+	for _, key := range []string{
+		"PICOBOT_ZOHO_MAIL_OAUTH_ACCESS_TOKEN",
+		"ZOHO_OAUTH_ACCESS_TOKEN",
+	} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("%s requires PICOBOT_ZOHO_MAIL_OAUTH_ACCESS_TOKEN or ZOHO_OAUTH_ACCESS_TOKEN", frankZohoSendEmailToolName)
+}
+
+func frankZohoMessagesURL(apiBase string, accountID string) string {
+	base := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	return base + "/accounts/" + accountID + "/messages"
+}
+
+func frankZohoOriginalMessageURL(apiBase string, accountID string, messageID string) string {
+	base := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	return base + "/accounts/" + accountID + "/messages/" + strings.TrimSpace(messageID) + "/originalmessage"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}

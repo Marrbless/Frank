@@ -1067,6 +1067,7 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
 	reg.SetAuditEmitter(taskState)
 	reg.Register(tools.NewMessageTool(b))
+	reg.Register(tools.NewFrankZohoSendEmailTool())
 
 	// Open an os.Root anchored at the workspace for kernel-enforced sandboxing.
 	root, err := os.OpenRoot(workspace)
