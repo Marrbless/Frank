@@ -61,6 +61,10 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
 	}
+	frankZohoSendReceiptRecords, err := ListCommittedFrankZohoSendReceiptRecords(root, jobID)
+	if err != nil {
+		return hydratedCommittedStoreState{}, err
+	}
 
 	runtime := hydrateCommittedJobRuntimeRecord(jobRuntime)
 	completedSteps, failedSteps := hydrateCommittedRuntimeStepOutcomes(stepRecords)
@@ -69,6 +73,7 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	runtime.ApprovalRequests = hydrateCommittedApprovalRequests(requestRecords)
 	runtime.ApprovalGrants = hydrateCommittedApprovalGrants(grantRecords)
 	runtime.AuditHistory = hydrateCommittedAuditHistory(auditRecords)
+	runtime.FrankZohoSendReceipts = hydrateCommittedFrankZohoSendReceipts(frankZohoSendReceiptRecords)
 	runtime, _ = NormalizeHydratedApprovalRequests(runtime, now)
 
 	control, err := hydrateCommittedRuntimeControl(root, jobRuntime)
@@ -321,6 +326,28 @@ func hydrateCommittedArtifacts(records []ArtifactRecord) []ArtifactRecord {
 		return artifacts[i].SourceStepID < artifacts[j].SourceStepID
 	})
 	return artifacts
+}
+
+func hydrateCommittedFrankZohoSendReceipts(records []FrankZohoSendReceiptRecord) []FrankZohoSendReceipt {
+	if len(records) == 0 {
+		return nil
+	}
+
+	receipts := make([]FrankZohoSendReceipt, len(records))
+	for i, record := range records {
+		receipts[i] = NormalizeFrankZohoSendReceipt(FrankZohoSendReceipt{
+			StepID:             record.StepID,
+			Provider:           record.Provider,
+			ProviderAccountID:  record.ProviderAccountID,
+			FromAddress:        record.FromAddress,
+			FromDisplayName:    record.FromDisplayName,
+			ProviderMessageID:  record.ProviderMessageID,
+			ProviderMailID:     record.ProviderMailID,
+			MIMEMessageID:      record.MIMEMessageID,
+			OriginalMessageURL: record.OriginalMessageURL,
+		})
+	}
+	return receipts
 }
 
 func hydrateCommittedRuntimeControl(root string, jobRuntime JobRuntimeRecord) (*RuntimeControlContext, error) {

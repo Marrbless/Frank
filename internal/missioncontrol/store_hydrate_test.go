@@ -453,6 +453,108 @@ func TestHydrateCommittedArtifactStateIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestHydrateCommittedJobRuntimeStateLoadsFrankZohoSendReceiptsAppendOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	receiptOne := FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}
+	receiptTwo := FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100001",
+		ProviderMailID:     "<mail-2@zoho.test>",
+		MIMEMessageID:      "<mime-2@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100001/originalmessage",
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                 job.ID,
+		State:                 JobStateRunning,
+		ActiveStepID:          "build",
+		InspectablePlan:       &inspectablePlan,
+		FrankZohoSendReceipts: []FrankZohoSendReceipt{receiptOne},
+		CreatedAt:             now.Add(-2 * time.Minute),
+		UpdatedAt:             now,
+		StartedAt:             now.Add(-2 * time.Minute),
+		ActiveStepAt:          now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(first) error = %v", err)
+	}
+
+	runtime.FrankZohoSendReceipts = append(runtime.FrankZohoSendReceipts, receiptTwo)
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(second) error = %v", err)
+	}
+
+	hydrated, err := HydrateCommittedJobRuntimeState(root, job.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
+	}
+	if len(hydrated.FrankZohoSendReceipts) != 2 {
+		t.Fatalf("len(Runtime.FrankZohoSendReceipts) = %d, want 2", len(hydrated.FrankZohoSendReceipts))
+	}
+
+	first := hydrated.FrankZohoSendReceipts[0]
+	if first.ProviderMessageID != receiptOne.ProviderMessageID {
+		t.Fatalf("first.ProviderMessageID = %q, want canonical provider message id %q", first.ProviderMessageID, receiptOne.ProviderMessageID)
+	}
+	if first.ProviderMailID != receiptOne.ProviderMailID {
+		t.Fatalf("first.ProviderMailID = %q, want secondary provider mail id %q", first.ProviderMailID, receiptOne.ProviderMailID)
+	}
+	if first.MIMEMessageID != receiptOne.MIMEMessageID {
+		t.Fatalf("first.MIMEMessageID = %q, want secondary MIME message id %q", first.MIMEMessageID, receiptOne.MIMEMessageID)
+	}
+	if first.ProviderAccountID != receiptOne.ProviderAccountID {
+		t.Fatalf("first.ProviderAccountID = %q, want proof locator account id %q", first.ProviderAccountID, receiptOne.ProviderAccountID)
+	}
+	if first.OriginalMessageURL != receiptOne.OriginalMessageURL {
+		t.Fatalf("first.OriginalMessageURL = %q, want proof-compatible originalmessage URL %q", first.OriginalMessageURL, receiptOne.OriginalMessageURL)
+	}
+
+	second := hydrated.FrankZohoSendReceipts[1]
+	if second.ProviderMessageID != receiptTwo.ProviderMessageID {
+		t.Fatalf("second.ProviderMessageID = %q, want canonical provider message id %q", second.ProviderMessageID, receiptTwo.ProviderMessageID)
+	}
+	if second.ProviderMailID != receiptTwo.ProviderMailID {
+		t.Fatalf("second.ProviderMailID = %q, want secondary provider mail id %q", second.ProviderMailID, receiptTwo.ProviderMailID)
+	}
+	if second.MIMEMessageID != receiptTwo.MIMEMessageID {
+		t.Fatalf("second.MIMEMessageID = %q, want secondary MIME message id %q", second.MIMEMessageID, receiptTwo.MIMEMessageID)
+	}
+	if second.ProviderAccountID != receiptTwo.ProviderAccountID {
+		t.Fatalf("second.ProviderAccountID = %q, want proof locator account id %q", second.ProviderAccountID, receiptTwo.ProviderAccountID)
+	}
+	if second.OriginalMessageURL != receiptTwo.OriginalMessageURL {
+		t.Fatalf("second.OriginalMessageURL = %q, want proof-compatible originalmessage URL %q", second.OriginalMessageURL, receiptTwo.OriginalMessageURL)
+	}
+}
+
 func TestHydrateCommittedRuntimeControlMatchesActiveStep(t *testing.T) {
 	t.Parallel()
 
