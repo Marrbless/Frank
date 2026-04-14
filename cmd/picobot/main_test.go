@@ -799,6 +799,95 @@ func TestMissionStatusCommandPrintsCanonicalGatewayStatusJSON(t *testing.T) {
 	}
 }
 
+func TestMissionStatusCommandReturnsFrankZohoSendProofLocatorsFromRuntimeSummary(t *testing.T) {
+	originalGateway := loadGatewayStatusObservationFile
+	originalMission := loadMissionStatusObservation
+	t.Cleanup(func() {
+		loadGatewayStatusObservationFile = originalGateway
+		loadMissionStatusObservation = originalMission
+	})
+
+	loadGatewayStatusObservationFile = func(path string) ([]byte, error) {
+		t.Fatalf("loadGatewayStatusObservationFile(%q) called, want full mission status reader for proof output", path)
+		return nil, nil
+	}
+
+	loadMissionStatusObservation = func(path string) (missioncontrol.MissionStatusSnapshot, error) {
+		if path != "status.json" {
+			t.Fatalf("loadMissionStatusObservation path = %q, want %q", path, "status.json")
+		}
+		return missioncontrol.MissionStatusSnapshot{
+			JobID: "job-1",
+			Runtime: &missioncontrol.JobRuntimeState{
+				JobID: "job-1",
+				FrankZohoSendReceipts: []missioncontrol.FrankZohoSendReceipt{
+					{
+						ProviderMessageID:  "runtime-provider-message",
+						ProviderMailID:     "<runtime-mail@zoho.test>",
+						MIMEMessageID:      "<runtime-mime@example.test>",
+						ProviderAccountID:  "runtime-account",
+						OriginalMessageURL: "https://mail.zoho.com/api/accounts/runtime-account/messages/runtime-provider-message/originalmessage",
+					},
+				},
+			},
+			RuntimeSummary: &missioncontrol.OperatorStatusSummary{
+				FrankZohoSendProof: []missioncontrol.OperatorFrankZohoSendProofStatus{
+					{
+						StepID:             "send",
+						ProviderMessageID:  "1711540357880100000",
+						ProviderMailID:     "<mail-1@zoho.test>",
+						MIMEMessageID:      "<mime-1@example.test>",
+						ProviderAccountID:  "3323462000000008002",
+						OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+					},
+				},
+			},
+		}, nil
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "status", "--status-file", "status.json", "--frank-zoho-send-proof"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got []struct {
+		ProviderMessageID  string `json:"provider_message_id"`
+		ProviderMailID     string `json:"provider_mail_id"`
+		MIMEMessageID      string `json:"mime_message_id"`
+		ProviderAccountID  string `json:"provider_account_id"`
+		OriginalMessageURL string `json:"original_message_url"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal(stdout) error = %v\nstdout=%s", err, out.String())
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(proof locators) = %d, want 1", len(got))
+	}
+	if got[0].ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("ProviderMessageID = %q, want canonical provider message id from runtime_summary", got[0].ProviderMessageID)
+	}
+	if got[0].ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("ProviderMailID = %q, want secondary provider mail id from runtime_summary", got[0].ProviderMailID)
+	}
+	if got[0].MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("MIMEMessageID = %q, want secondary MIME message id from runtime_summary", got[0].MIMEMessageID)
+	}
+	if got[0].ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("ProviderAccountID = %q, want proof locator account id from runtime_summary", got[0].ProviderAccountID)
+	}
+	if got[0].OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("OriginalMessageURL = %q, want later-verification originalmessage URL", got[0].OriginalMessageURL)
+	}
+	if strings.Contains(out.String(), `"step_id"`) {
+		t.Fatalf("stdout = %q, want proof locator output without step_id", out.String())
+	}
+}
+
 func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
 	root := t.TempDir()
 	openedAt := time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC)

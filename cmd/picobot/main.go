@@ -734,7 +734,17 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("--status-file is required")
 			}
 
-			data, err := loadGatewayStatusObservationFile(statusFile)
+			frankZohoSendProofOnly, _ := cmd.Flags().GetBool("frank-zoho-send-proof")
+
+			var (
+				data []byte
+				err  error
+			)
+			if frankZohoSendProofOnly {
+				data, err = loadMissionStatusFrankZohoSendProofFile(statusFile)
+			} else {
+				data, err = loadGatewayStatusObservationFile(statusFile)
+			}
 			if err != nil {
 				return err
 			}
@@ -747,6 +757,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 	missionStatusCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
+	missionStatusCmd.Flags().Bool("frank-zoho-send-proof", false, "Print Frank Zoho send proof locators from runtime_summary for later originalmessage verification")
 
 	missionInspectCmd := &cobra.Command{
 		Use:          "inspect",
@@ -1766,6 +1777,14 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 
 type missionStatusSnapshot = missioncontrol.MissionStatusSnapshot
 
+type missionStatusFrankZohoSendProofLocator struct {
+	ProviderMessageID  string `json:"provider_message_id"`
+	ProviderMailID     string `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string `json:"mime_message_id,omitempty"`
+	ProviderAccountID  string `json:"provider_account_id"`
+	OriginalMessageURL string `json:"original_message_url"`
+}
+
 type missionStepControlFile struct {
 	StepID    string `json:"step_id"`
 	UpdatedAt string `json:"updated_at"`
@@ -1814,6 +1833,34 @@ var loadGatewayStatusObservationFile = missioncontrol.LoadGatewayStatusObservati
 var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
 var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
 var writeMissionStatusSnapshotAtomic = missioncontrol.WriteMissionStatusSnapshotAtomic
+
+func loadMissionStatusFrankZohoSendProofFile(path string) ([]byte, error) {
+	snapshot, err := loadMissionStatusObservation(path)
+	if err != nil {
+		return nil, err
+	}
+
+	proof := make([]missionStatusFrankZohoSendProofLocator, 0)
+	if snapshot.RuntimeSummary != nil {
+		proof = make([]missionStatusFrankZohoSendProofLocator, 0, len(snapshot.RuntimeSummary.FrankZohoSendProof))
+		for _, candidate := range snapshot.RuntimeSummary.FrankZohoSendProof {
+			proof = append(proof, missionStatusFrankZohoSendProofLocator{
+				ProviderMessageID:  candidate.ProviderMessageID,
+				ProviderMailID:     candidate.ProviderMailID,
+				MIMEMessageID:      candidate.MIMEMessageID,
+				ProviderAccountID:  candidate.ProviderAccountID,
+				OriginalMessageURL: candidate.OriginalMessageURL,
+			})
+		}
+	}
+
+	data, err := json.MarshalIndent(proof, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode mission status Frank Zoho send proof for %q: %w", path, err)
+	}
+	data = append(data, '\n')
+	return data, nil
+}
 
 func validateMissionJob(job missioncontrol.Job) error {
 	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
