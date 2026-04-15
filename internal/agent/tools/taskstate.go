@@ -522,6 +522,103 @@ func (s *TaskState) RecordFrankZohoSendReceipt(result string) error {
 	return err
 }
 
+func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (string, bool, error) {
+	if s == nil {
+		return "", false, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return "", false, nil
+	}
+
+	action, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	if err != nil {
+		return "", false, err
+	}
+	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, action.ActionID); ok {
+		switch existing.State {
+		case missioncontrol.CampaignZohoEmailOutboundActionStateSent:
+			receipt, err := frankZohoSendReceiptFromCampaignAction(existing)
+			if err != nil {
+				return "", false, err
+			}
+			return receipt, true, nil
+		case missioncontrol.CampaignZohoEmailOutboundActionStatePrepared:
+			return "", true, fmt.Errorf("%s: campaign outbound action %q is already prepared without provider receipt proof; refusing to resend until reconciled", frankZohoSendEmailToolName, existing.ActionID)
+		default:
+			return "", true, fmt.Errorf("%s: campaign outbound action %q has unsupported state %q", frankZohoSendEmailToolName, existing.ActionID, existing.State)
+		}
+	}
+
+	nextRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailOutboundAction(*ec.Runtime, action)
+	if err != nil || !changed {
+		return "", false, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return "", false, err
+}
+
+func (s *TaskState) RecordFrankZohoCampaignSend(args map[string]interface{}, result string) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return nil
+	}
+
+	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, prepared.ActionID); ok {
+		prepared = existing
+	}
+	receipt, err := missioncontrol.ParseFrankZohoSendReceipt(result)
+	if err != nil {
+		return err
+	}
+	receipt.StepID = ec.Step.ID
+	if err := missioncontrol.ValidateFrankZohoSendReceipt(receipt); err != nil {
+		return err
+	}
+	sent, err := missioncontrol.BuildCampaignZohoEmailOutboundSentAction(prepared, receipt, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+
+	nextRuntime, _, err := missioncontrol.UpsertCampaignZohoEmailOutboundAction(*ec.Runtime, sent)
+	if err != nil {
+		return err
+	}
+	nextRuntime, _, err = missioncontrol.AppendFrankZohoSendReceipt(nextRuntime, ec.Step.ID, result)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return err
+}
+
 func (s *TaskState) RecordOwnerFacingMessage() (bool, error) {
 	if s == nil {
 		return false, nil

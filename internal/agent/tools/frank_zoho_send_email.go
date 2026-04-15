@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/mail"
 	"os"
 	"strings"
 	"time"
@@ -146,27 +145,6 @@ func (t *FrankZohoSendEmailTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"to": map[string]interface{}{
-				"type":        "array",
-				"description": "Recipient email addresses for the To field",
-				"items": map[string]interface{}{
-					"type": "string",
-				},
-			},
-			"cc": map[string]interface{}{
-				"type":        "array",
-				"description": "Optional recipient email addresses for the Cc field",
-				"items": map[string]interface{}{
-					"type": "string",
-				},
-			},
-			"bcc": map[string]interface{}{
-				"type":        "array",
-				"description": "Optional recipient email addresses for the Bcc field",
-				"items": map[string]interface{}{
-					"type": "string",
-				},
-			},
 			"subject": map[string]interface{}{
 				"type":        "string",
 				"description": "Email subject line",
@@ -181,7 +159,7 @@ func (t *FrankZohoSendEmailTool) Parameters() map[string]interface{} {
 				"enum":        []string{"plaintext", "html"},
 			},
 		},
-		"required": []string{"to", "subject", "body"},
+		"required": []string{"subject", "body"},
 	}
 }
 
@@ -207,7 +185,7 @@ func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]in
 		return "", err
 	}
 
-	req, err := buildFrankZohoSendRequest(args)
+	req, err := buildFrankZohoSendRequest(preflight, args)
 	if err != nil {
 		return "", err
 	}
@@ -383,6 +361,9 @@ func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionCo
 	if len(emailIdentityIDs) == 0 {
 		return fmt.Errorf("%s requires a campaign-linked Frank email identity", frankZohoSendEmailToolName)
 	}
+	if preflight.Campaign.ZohoEmailAddressing == nil {
+		return fmt.Errorf("%s requires campaign zoho_email_addressing", frankZohoSendEmailToolName)
+	}
 
 	for _, account := range preflight.Accounts {
 		if !strings.EqualFold(strings.TrimSpace(account.AccountKind), "mailbox") {
@@ -396,17 +377,8 @@ func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionCo
 	return fmt.Errorf("%s requires a campaign-linked Frank mailbox account", frankZohoSendEmailToolName)
 }
 
-func buildFrankZohoSendRequest(args map[string]interface{}) (frankZohoSendRequest, error) {
-	to, err := frankZohoAddressListArg(args, "to", true)
-	if err != nil {
-		return frankZohoSendRequest{}, err
-	}
-	cc, err := frankZohoAddressListArg(args, "cc", false)
-	if err != nil {
-		return frankZohoSendRequest{}, err
-	}
-	bcc, err := frankZohoAddressListArg(args, "bcc", false)
-	if err != nil {
+func buildFrankZohoSendRequest(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, args map[string]interface{}) (frankZohoSendRequest, error) {
+	if err := frankZohoRejectAddressArgs(args); err != nil {
 		return frankZohoSendRequest{}, err
 	}
 	subject, err := frankZohoRequiredStringArg(args, "subject")
@@ -421,16 +393,71 @@ func buildFrankZohoSendRequest(args map[string]interface{}) (frankZohoSendReques
 	if err != nil {
 		return frankZohoSendRequest{}, err
 	}
+	addressing := preflight.Campaign.ZohoEmailAddressing
 
 	return frankZohoSendRequest{
-		To:         to,
-		CC:         cc,
-		BCC:        bcc,
+		To:         append([]string(nil), addressing.To...),
+		CC:         append([]string(nil), addressing.CC...),
+		BCC:        append([]string(nil), addressing.BCC...),
 		Subject:    subject,
 		Body:       body,
 		BodyFormat: bodyFormat,
 		Encoding:   frankZohoMailDefaultEncoding,
 	}, nil
+}
+
+func buildFrankZohoPreparedCampaignAction(ec missioncontrol.ExecutionContext, args map[string]interface{}, now time.Time) (missioncontrol.CampaignZohoEmailOutboundAction, error) {
+	if err := missioncontrol.RequireExecutionContextCampaignReadiness(ec); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	req, err := buildFrankZohoSendRequest(preflight, args)
+	if err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	return missioncontrol.BuildCampaignZohoEmailOutboundPreparedAction(
+		ec.Step.ID,
+		preflight.Campaign.CampaignID,
+		frankZohoMailAccountID,
+		frankZohoMailFromAddress,
+		frankZohoMailFromDisplayName,
+		missioncontrol.CampaignZohoEmailAddressing{
+			To:  append([]string(nil), req.To...),
+			CC:  append([]string(nil), req.CC...),
+			BCC: append([]string(nil), req.BCC...),
+		},
+		req.Subject,
+		req.BodyFormat,
+		req.Body,
+		now,
+	)
+}
+
+func frankZohoSendReceiptFromCampaignAction(action missioncontrol.CampaignZohoEmailOutboundAction) (string, error) {
+	if action.State != missioncontrol.CampaignZohoEmailOutboundActionStateSent {
+		return "", fmt.Errorf("%s: campaign outbound action %q is not sent", frankZohoSendEmailToolName, action.ActionID)
+	}
+	receipt := FrankZohoSendReceipt{
+		Provider:           action.Provider,
+		ProviderAccountID:  action.ProviderAccountID,
+		FromAddress:        action.FromAddress,
+		FromDisplayName:    action.FromDisplayName,
+		ProviderMessageID:  action.ProviderMessageID,
+		ProviderMailID:     action.ProviderMailID,
+		MIMEMessageID:      action.MIMEMessageID,
+		OriginalMessageURL: action.OriginalMessageURL,
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func frankZohoRequiredStringArg(args map[string]interface{}, key string) (string, error) {
@@ -469,51 +496,35 @@ func frankZohoBodyFormatArg(args map[string]interface{}, key string) (string, er
 	}
 }
 
-func frankZohoAddressListArg(args map[string]interface{}, key string, required bool) ([]string, error) {
-	raw, ok := args[key]
-	if !ok || raw == nil {
-		if required {
-			return nil, fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
-		}
-		return nil, nil
-	}
-
-	var values []string
-	switch typed := raw.(type) {
-	case string:
-		values = []string{typed}
-	case []string:
-		values = append([]string(nil), typed...)
-	case []interface{}:
-		values = make([]string, 0, len(typed))
-		for _, item := range typed {
-			value, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("%s: %q entries must be strings", frankZohoSendEmailToolName, key)
-			}
-			values = append(values, value)
-		}
-	default:
-		return nil, fmt.Errorf("%s: %q must be an array of email addresses", frankZohoSendEmailToolName, key)
-	}
-
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
+func frankZohoRejectAddressArgs(args map[string]interface{}) error {
+	for _, key := range []string{"to", "cc", "bcc"} {
+		raw, ok := args[key]
+		if !ok || raw == nil {
 			continue
 		}
-		parsed, err := mail.ParseAddress(value)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %q contains invalid email address %q", frankZohoSendEmailToolName, key, value)
+		switch typed := raw.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return fmt.Errorf("%s: %q is campaign-owned and must come from step.campaign_ref zoho_email_addressing", frankZohoSendEmailToolName, key)
+			}
+		case []string:
+			for _, value := range typed {
+				if strings.TrimSpace(value) != "" {
+					return fmt.Errorf("%s: %q is campaign-owned and must come from step.campaign_ref zoho_email_addressing", frankZohoSendEmailToolName, key)
+				}
+			}
+		case []interface{}:
+			for _, value := range typed {
+				text, ok := value.(string)
+				if !ok || strings.TrimSpace(text) != "" {
+					return fmt.Errorf("%s: %q is campaign-owned and must come from step.campaign_ref zoho_email_addressing", frankZohoSendEmailToolName, key)
+				}
+			}
+		default:
+			return fmt.Errorf("%s: %q is campaign-owned and must come from step.campaign_ref zoho_email_addressing", frankZohoSendEmailToolName, key)
 		}
-		out = append(out, parsed.Address)
 	}
-
-	if required && len(out) == 0 {
-		return nil, fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
-	}
-	return out, nil
+	return nil
 }
 
 func frankZohoMailAccessTokenFromEnv(context.Context) (string, error) {

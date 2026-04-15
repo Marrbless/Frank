@@ -1385,11 +1385,21 @@ func (a *AgentLoop) Run(ctx context.Context) {
 								execCtx = missioncontrol.WithExecutionContext(ctx, ec)
 							}
 						}
-						res, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
+						var (
+							res             string
+							err             error
+							skipToolExecute bool
+						)
+						if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+							res, skipToolExecute, err = a.taskState.PrepareFrankZohoCampaignSend(tc.Arguments)
+						}
+						if err == nil && !skipToolExecute {
+							res, err = a.tools.Execute(execCtx, tc.Name, tc.Arguments)
+						}
 						elapsed := time.Since(start).Round(time.Millisecond)
 
-						if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
-							if persistErr := a.taskState.RecordFrankZohoSendReceipt(res); persistErr != nil {
+						if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil && !skipToolExecute {
+							if persistErr := a.taskState.RecordFrankZohoCampaignSend(tc.Arguments, res); persistErr != nil {
 								err = persistErr
 							}
 						}
@@ -1539,9 +1549,19 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 					execCtx = missioncontrol.WithExecutionContext(ctx, ec)
 				}
 			}
-			result, err := a.tools.Execute(execCtx, tc.Name, tc.Arguments)
-			if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
-				if persistErr := a.taskState.RecordFrankZohoSendReceipt(result); persistErr != nil {
+			var (
+				result          string
+				err             error
+				skipToolExecute bool
+			)
+			if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+				result, skipToolExecute, err = a.taskState.PrepareFrankZohoCampaignSend(tc.Arguments)
+			}
+			if err == nil && !skipToolExecute {
+				result, err = a.tools.Execute(execCtx, tc.Name, tc.Arguments)
+			}
+			if err == nil && tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil && !skipToolExecute {
+				if persistErr := a.taskState.RecordFrankZohoCampaignSend(tc.Arguments, result); persistErr != nil {
 					err = persistErr
 				}
 			}
