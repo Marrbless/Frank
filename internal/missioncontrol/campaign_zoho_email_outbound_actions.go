@@ -25,27 +25,29 @@ type CampaignZohoEmailOutboundFailure struct {
 }
 
 type CampaignZohoEmailOutboundAction struct {
-	ActionID           string                               `json:"action_id"`
-	StepID             string                               `json:"-"`
-	CampaignID         string                               `json:"campaign_id"`
-	State              CampaignZohoEmailOutboundActionState `json:"state"`
-	Provider           string                               `json:"provider"`
-	ProviderAccountID  string                               `json:"provider_account_id"`
-	FromAddress        string                               `json:"from_address"`
-	FromDisplayName    string                               `json:"from_display_name,omitempty"`
-	Addressing         CampaignZohoEmailAddressing          `json:"addressing"`
-	Subject            string                               `json:"subject"`
-	BodyFormat         string                               `json:"body_format"`
-	BodySHA256         string                               `json:"body_sha256"`
-	PreparedAt         time.Time                            `json:"prepared_at"`
-	SentAt             time.Time                            `json:"sent_at,omitempty"`
-	VerifiedAt         time.Time                            `json:"verified_at,omitempty"`
-	FailedAt           time.Time                            `json:"failed_at,omitempty"`
-	ProviderMessageID  string                               `json:"provider_message_id,omitempty"`
-	ProviderMailID     string                               `json:"provider_mail_id,omitempty"`
-	MIMEMessageID      string                               `json:"mime_message_id,omitempty"`
-	OriginalMessageURL string                               `json:"original_message_url,omitempty"`
-	Failure            CampaignZohoEmailOutboundFailure     `json:"failure,omitempty"`
+	ActionID                string                               `json:"action_id"`
+	StepID                  string                               `json:"-"`
+	CampaignID              string                               `json:"campaign_id"`
+	State                   CampaignZohoEmailOutboundActionState `json:"state"`
+	Provider                string                               `json:"provider"`
+	ProviderAccountID       string                               `json:"provider_account_id"`
+	FromAddress             string                               `json:"from_address"`
+	FromDisplayName         string                               `json:"from_display_name,omitempty"`
+	Addressing              CampaignZohoEmailAddressing          `json:"addressing"`
+	Subject                 string                               `json:"subject"`
+	BodyFormat              string                               `json:"body_format"`
+	BodySHA256              string                               `json:"body_sha256"`
+	PreparedAt              time.Time                            `json:"prepared_at"`
+	SentAt                  time.Time                            `json:"sent_at,omitempty"`
+	VerifiedAt              time.Time                            `json:"verified_at,omitempty"`
+	FailedAt                time.Time                            `json:"failed_at,omitempty"`
+	ReplyToInboundReplyID   string                               `json:"reply_to_inbound_reply_id,omitempty"`
+	ReplyToOutboundActionID string                               `json:"reply_to_outbound_action_id,omitempty"`
+	ProviderMessageID       string                               `json:"provider_message_id,omitempty"`
+	ProviderMailID          string                               `json:"provider_mail_id,omitempty"`
+	MIMEMessageID           string                               `json:"mime_message_id,omitempty"`
+	OriginalMessageURL      string                               `json:"original_message_url,omitempty"`
+	Failure                 CampaignZohoEmailOutboundFailure     `json:"failure,omitempty"`
 }
 
 func NormalizeCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAction) CampaignZohoEmailOutboundAction {
@@ -69,6 +71,8 @@ func NormalizeCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAc
 	action.SentAt = action.SentAt.UTC()
 	action.VerifiedAt = action.VerifiedAt.UTC()
 	action.FailedAt = action.FailedAt.UTC()
+	action.ReplyToInboundReplyID = strings.TrimSpace(action.ReplyToInboundReplyID)
+	action.ReplyToOutboundActionID = strings.TrimSpace(action.ReplyToOutboundActionID)
 	action.ProviderMessageID = strings.TrimSpace(action.ProviderMessageID)
 	action.ProviderMailID = strings.TrimSpace(action.ProviderMailID)
 	action.MIMEMessageID = strings.TrimSpace(action.MIMEMessageID)
@@ -118,6 +122,15 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 	}
 	if normalized.PreparedAt.IsZero() {
 		return fmt.Errorf("mission runtime campaign zoho email outbound action prepared_at is required")
+	}
+	replyFollowUp := normalized.ReplyToInboundReplyID != "" || normalized.ReplyToOutboundActionID != ""
+	if replyFollowUp {
+		if normalized.ReplyToInboundReplyID == "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound reply follow-up action reply_to_inbound_reply_id is required")
+		}
+		if normalized.ReplyToOutboundActionID == "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound reply follow-up action reply_to_outbound_action_id is required")
+		}
 	}
 	switch normalized.State {
 	case CampaignZohoEmailOutboundActionStatePrepared:
@@ -214,6 +227,21 @@ func BuildCampaignZohoEmailOutboundPreparedAction(stepID, campaignID, providerAc
 		BodySHA256:        CampaignZohoEmailBodySHA256(body),
 		PreparedAt:        preparedAt.UTC(),
 	}
+	action = NormalizeCampaignZohoEmailOutboundAction(action)
+	action.ActionID = normalizedCampaignZohoEmailOutboundActionID(action)
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		return CampaignZohoEmailOutboundAction{}, err
+	}
+	return action, nil
+}
+
+func BuildCampaignZohoEmailOutboundPreparedReplyAction(stepID, campaignID, providerAccountID, fromAddress, fromDisplayName string, addressing CampaignZohoEmailAddressing, subject, bodyFormat, body string, preparedAt time.Time, replyToInboundReplyID, replyToOutboundActionID string) (CampaignZohoEmailOutboundAction, error) {
+	action, err := BuildCampaignZohoEmailOutboundPreparedAction(stepID, campaignID, providerAccountID, fromAddress, fromDisplayName, addressing, subject, bodyFormat, body, preparedAt)
+	if err != nil {
+		return CampaignZohoEmailOutboundAction{}, err
+	}
+	action.ReplyToInboundReplyID = strings.TrimSpace(replyToInboundReplyID)
+	action.ReplyToOutboundActionID = strings.TrimSpace(replyToOutboundActionID)
 	action = NormalizeCampaignZohoEmailOutboundAction(action)
 	action.ActionID = normalizedCampaignZohoEmailOutboundActionID(action)
 	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
@@ -321,6 +349,8 @@ func normalizedCampaignZohoEmailOutboundActionID(action CampaignZohoEmailOutboun
 		normalized.Subject,
 		normalized.BodyFormat,
 		normalized.BodySHA256,
+		normalized.ReplyToInboundReplyID,
+		normalized.ReplyToOutboundActionID,
 	)
 }
 

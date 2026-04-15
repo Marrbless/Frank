@@ -26,6 +26,7 @@ type FrankZohoInboundReplyRecord struct {
 	References         []string  `json:"references,omitempty"`
 	FromAddress        string    `json:"from_address,omitempty"`
 	FromDisplayName    string    `json:"from_display_name,omitempty"`
+	FromAddressCount   int       `json:"from_address_count,omitempty"`
 	Subject            string    `json:"subject,omitempty"`
 	ReceivedAt         time.Time `json:"received_at"`
 	OriginalMessageURL string    `json:"original_message_url"`
@@ -56,6 +57,7 @@ func ValidateFrankZohoInboundReplyRecord(record FrankZohoInboundReplyRecord) err
 		References:         append([]string(nil), record.References...),
 		FromAddress:        record.FromAddress,
 		FromDisplayName:    record.FromDisplayName,
+		FromAddressCount:   record.FromAddressCount,
 		Subject:            record.Subject,
 		ReceivedAt:         record.ReceivedAt,
 		OriginalMessageURL: record.OriginalMessageURL,

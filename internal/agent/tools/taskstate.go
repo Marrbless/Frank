@@ -544,7 +544,7 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+	if err := validateFrankZohoMailPreflight(preflight, false); err != nil {
 		return 0, err
 	}
 
@@ -597,7 +597,11 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 	if err != nil {
 		return "", false, err
 	}
-	if preflight.Campaign != nil && missioncontrol.CampaignZohoEmailStopConditionsRequireInboundReplies(preflight.Campaign.StopConditions) {
+	inboundReplyID, hasInboundReplyID, err := frankZohoOptionalStringArg(args, "inbound_reply_id")
+	if err != nil {
+		return "", false, err
+	}
+	if hasInboundReplyID || (preflight.Campaign != nil && missioncontrol.CampaignZohoEmailStopConditionsRequireInboundReplies(preflight.Campaign.StopConditions)) {
 		if _, err := s.SyncFrankZohoCampaignInboundReplies(); err != nil {
 			return "", false, err
 		}
@@ -659,6 +663,21 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			return "", true, fmt.Errorf("%s: campaign outbound action %q is terminally failed and will not be resent automatically", frankZohoSendEmailToolName, existing.ActionID)
 		default:
 			return "", true, fmt.Errorf("%s: campaign outbound action %q has unsupported state %q", frankZohoSendEmailToolName, existing.ActionID, existing.State)
+		}
+	}
+	if hasInboundReplyID {
+		followUpActions, err := missioncontrol.ListCommittedCampaignZohoEmailFollowUpActionsByInboundReply(ec.MissionStoreRoot, inboundReplyID)
+		if err != nil {
+			return "", false, err
+		}
+		for _, record := range followUpActions {
+			if strings.TrimSpace(record.ActionID) == action.ActionID {
+				continue
+			}
+			switch missioncontrol.CampaignZohoEmailOutboundActionState(strings.TrimSpace(record.State)) {
+			case missioncontrol.CampaignZohoEmailOutboundActionStatePrepared, missioncontrol.CampaignZohoEmailOutboundActionStateSent:
+				return "", false, fmt.Errorf("%s: inbound_reply_id %q already has unresolved follow-up action %q in state %q; refusing to prepare another follow-up until it is finalized", frankZohoSendEmailToolName, inboundReplyID, strings.TrimSpace(record.ActionID), strings.TrimSpace(record.State))
+			}
 		}
 	}
 

@@ -143,31 +143,33 @@ type ArtifactRecord struct {
 }
 
 type CampaignZohoEmailOutboundActionRecord struct {
-	RecordVersion      int                              `json:"record_version"`
-	LastSeq            uint64                           `json:"last_seq"`
-	ActionID           string                           `json:"action_id"`
-	JobID              string                           `json:"job_id"`
-	StepID             string                           `json:"step_id"`
-	AttemptID          string                           `json:"attempt_id,omitempty"`
-	CampaignID         string                           `json:"campaign_id"`
-	State              string                           `json:"state"`
-	Provider           string                           `json:"provider"`
-	ProviderAccountID  string                           `json:"provider_account_id"`
-	FromAddress        string                           `json:"from_address"`
-	FromDisplayName    string                           `json:"from_display_name,omitempty"`
-	Addressing         CampaignZohoEmailAddressing      `json:"addressing"`
-	Subject            string                           `json:"subject"`
-	BodyFormat         string                           `json:"body_format"`
-	BodySHA256         string                           `json:"body_sha256"`
-	PreparedAt         time.Time                        `json:"prepared_at"`
-	SentAt             time.Time                        `json:"sent_at,omitempty"`
-	VerifiedAt         time.Time                        `json:"verified_at,omitempty"`
-	FailedAt           time.Time                        `json:"failed_at,omitempty"`
-	ProviderMessageID  string                           `json:"provider_message_id,omitempty"`
-	ProviderMailID     string                           `json:"provider_mail_id,omitempty"`
-	MIMEMessageID      string                           `json:"mime_message_id,omitempty"`
-	OriginalMessageURL string                           `json:"original_message_url,omitempty"`
-	Failure            CampaignZohoEmailOutboundFailure `json:"failure,omitempty"`
+	RecordVersion           int                              `json:"record_version"`
+	LastSeq                 uint64                           `json:"last_seq"`
+	ActionID                string                           `json:"action_id"`
+	JobID                   string                           `json:"job_id"`
+	StepID                  string                           `json:"step_id"`
+	AttemptID               string                           `json:"attempt_id,omitempty"`
+	CampaignID              string                           `json:"campaign_id"`
+	State                   string                           `json:"state"`
+	Provider                string                           `json:"provider"`
+	ProviderAccountID       string                           `json:"provider_account_id"`
+	FromAddress             string                           `json:"from_address"`
+	FromDisplayName         string                           `json:"from_display_name,omitempty"`
+	Addressing              CampaignZohoEmailAddressing      `json:"addressing"`
+	Subject                 string                           `json:"subject"`
+	BodyFormat              string                           `json:"body_format"`
+	BodySHA256              string                           `json:"body_sha256"`
+	PreparedAt              time.Time                        `json:"prepared_at"`
+	SentAt                  time.Time                        `json:"sent_at,omitempty"`
+	VerifiedAt              time.Time                        `json:"verified_at,omitempty"`
+	FailedAt                time.Time                        `json:"failed_at,omitempty"`
+	ReplyToInboundReplyID   string                           `json:"reply_to_inbound_reply_id,omitempty"`
+	ReplyToOutboundActionID string                           `json:"reply_to_outbound_action_id,omitempty"`
+	ProviderMessageID       string                           `json:"provider_message_id,omitempty"`
+	ProviderMailID          string                           `json:"provider_mail_id,omitempty"`
+	MIMEMessageID           string                           `json:"mime_message_id,omitempty"`
+	OriginalMessageURL      string                           `json:"original_message_url,omitempty"`
+	Failure                 CampaignZohoEmailOutboundFailure `json:"failure,omitempty"`
 }
 
 type FrankZohoSendReceiptRecord struct {
@@ -414,27 +416,29 @@ func ValidateCampaignZohoEmailOutboundActionRecord(record CampaignZohoEmailOutbo
 		return fmt.Errorf("mission store campaign zoho email outbound action step_id is required")
 	}
 	action := CampaignZohoEmailOutboundAction{
-		ActionID:           record.ActionID,
-		StepID:             record.StepID,
-		CampaignID:         record.CampaignID,
-		State:              CampaignZohoEmailOutboundActionState(record.State),
-		Provider:           record.Provider,
-		ProviderAccountID:  record.ProviderAccountID,
-		FromAddress:        record.FromAddress,
-		FromDisplayName:    record.FromDisplayName,
-		Addressing:         record.Addressing,
-		Subject:            record.Subject,
-		BodyFormat:         record.BodyFormat,
-		BodySHA256:         record.BodySHA256,
-		PreparedAt:         record.PreparedAt,
-		SentAt:             record.SentAt,
-		VerifiedAt:         record.VerifiedAt,
-		FailedAt:           record.FailedAt,
-		ProviderMessageID:  record.ProviderMessageID,
-		ProviderMailID:     record.ProviderMailID,
-		MIMEMessageID:      record.MIMEMessageID,
-		OriginalMessageURL: record.OriginalMessageURL,
-		Failure:            record.Failure,
+		ActionID:                record.ActionID,
+		StepID:                  record.StepID,
+		CampaignID:              record.CampaignID,
+		State:                   CampaignZohoEmailOutboundActionState(record.State),
+		Provider:                record.Provider,
+		ProviderAccountID:       record.ProviderAccountID,
+		FromAddress:             record.FromAddress,
+		FromDisplayName:         record.FromDisplayName,
+		Addressing:              record.Addressing,
+		Subject:                 record.Subject,
+		BodyFormat:              record.BodyFormat,
+		BodySHA256:              record.BodySHA256,
+		PreparedAt:              record.PreparedAt,
+		SentAt:                  record.SentAt,
+		VerifiedAt:              record.VerifiedAt,
+		FailedAt:                record.FailedAt,
+		ReplyToInboundReplyID:   record.ReplyToInboundReplyID,
+		ReplyToOutboundActionID: record.ReplyToOutboundActionID,
+		ProviderMessageID:       record.ProviderMessageID,
+		ProviderMailID:          record.ProviderMailID,
+		MIMEMessageID:           record.MIMEMessageID,
+		OriginalMessageURL:      record.OriginalMessageURL,
+		Failure:                 record.Failure,
 	}
 	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
 		return err

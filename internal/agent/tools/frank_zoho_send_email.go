@@ -75,15 +75,16 @@ type FrankZohoSendProofVerification struct {
 }
 
 type frankZohoSendRequest struct {
-	AccountID  string
-	From       string
-	To         []string
-	CC         []string
-	BCC        []string
-	Subject    string
-	Body       string
-	BodyFormat string
-	Encoding   string
+	AccountID                string
+	From                     string
+	To                       []string
+	CC                       []string
+	BCC                      []string
+	Subject                  string
+	Body                     string
+	BodyFormat               string
+	Encoding                 string
+	ReplyToProviderMessageID string
 }
 
 type frankZohoSendAPIRequest struct {
@@ -95,6 +96,7 @@ type frankZohoSendAPIRequest struct {
 	Content     string `json:"content"`
 	MailFormat  string `json:"mailFormat,omitempty"`
 	Encoding    string `json:"encoding,omitempty"`
+	Action      string `json:"action,omitempty"`
 }
 
 type frankZohoSendAPIResponse struct {
@@ -117,6 +119,12 @@ type frankZohoMailboxMessageData struct {
 	MessageID    frankZohoFlexibleString `json:"messageId"`
 	MailID       frankZohoFlexibleString `json:"mailId"`
 	ReceivedTime frankZohoFlexibleString `json:"receivedTime"`
+}
+
+type frankZohoCampaignSendIntent struct {
+	Request                frankZohoSendRequest
+	PreparedAction         missioncontrol.CampaignZohoEmailOutboundAction
+	FollowUpInboundReplyID string
 }
 
 type frankZohoTerminalSendFailureError struct {
@@ -219,6 +227,10 @@ func (t *FrankZohoSendEmailTool) Parameters() map[string]interface{} {
 				"description": "Body format to send via Zoho Mail",
 				"enum":        []string{"plaintext", "html"},
 			},
+			"inbound_reply_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Committed Zoho inbound reply record to answer with a provider-threaded follow-up",
+			},
 		},
 		"required": []string{"subject", "body"},
 	}
@@ -242,17 +254,22 @@ func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]in
 	if err != nil {
 		return "", err
 	}
-	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+	followUpInboundReplyID, _, err := frankZohoOptionalStringArg(args, "inbound_reply_id")
+	if err != nil {
+		return "", err
+	}
+	if err := validateFrankZohoMailPreflight(preflight, followUpInboundReplyID == ""); err != nil {
 		return "", err
 	}
 	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
 		return "", err
 	}
 
-	req, err := buildFrankZohoSendRequest(preflight, args)
+	intent, err := buildFrankZohoCampaignSendIntent(ec, args, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
+	req := intent.Request
 
 	req.AccountID = frankZohoMailAccountID
 	req.From = frankZohoMailFromAddress
@@ -314,6 +331,14 @@ func (t *FrankZohoSendEmailTool) sendViaAPI(ctx context.Context, req frankZohoSe
 	}
 
 	url := frankZohoMessagesURL(t.apiBase, req.AccountID)
+	if strings.TrimSpace(req.ReplyToProviderMessageID) != "" {
+		payload.Action = "reply"
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return frankZohoSendResponseData{}, err
+		}
+		url = frankZohoReplyMessageURL(t.apiBase, req.AccountID, req.ReplyToProviderMessageID)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return frankZohoSendResponseData{}, err
@@ -507,7 +532,7 @@ func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontro
 	return replies, nil
 }
 
-func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight) error {
+func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, requireCampaignAddressing bool) error {
 	if preflight.Campaign == nil {
 		return fmt.Errorf("%s requires a resolved campaign preflight", frankZohoSendEmailToolName)
 	}
@@ -521,7 +546,7 @@ func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionCo
 	if len(emailIdentityIDs) == 0 {
 		return fmt.Errorf("%s requires a campaign-linked Frank email identity", frankZohoSendEmailToolName)
 	}
-	if preflight.Campaign.ZohoEmailAddressing == nil {
+	if requireCampaignAddressing && preflight.Campaign.ZohoEmailAddressing == nil {
 		return fmt.Errorf("%s requires campaign zoho_email_addressing", frankZohoSendEmailToolName)
 	}
 
@@ -555,69 +580,115 @@ func requireFrankZohoCampaignSendGate(ec missioncontrol.ExecutionContext, campai
 	return nil
 }
 
-func buildFrankZohoSendRequest(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, args map[string]interface{}) (frankZohoSendRequest, error) {
+func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args map[string]interface{}, now time.Time) (frankZohoCampaignSendIntent, error) {
+	if err := missioncontrol.RequireExecutionContextCampaignReadiness(ec); err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
 	if err := frankZohoRejectAddressArgs(args); err != nil {
-		return frankZohoSendRequest{}, err
+		return frankZohoCampaignSendIntent{}, err
+	}
+	followUpInboundReplyID, _, err := frankZohoOptionalStringArg(args, "inbound_reply_id")
+	if err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
+	if err := validateFrankZohoMailPreflight(preflight, followUpInboundReplyID == ""); err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
+	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
+		return frankZohoCampaignSendIntent{}, err
 	}
 	subject, err := frankZohoRequiredStringArg(args, "subject")
 	if err != nil {
-		return frankZohoSendRequest{}, err
+		return frankZohoCampaignSendIntent{}, err
 	}
 	body, err := frankZohoRequiredStringArg(args, "body")
 	if err != nil {
-		return frankZohoSendRequest{}, err
+		return frankZohoCampaignSendIntent{}, err
 	}
 	bodyFormat, err := frankZohoBodyFormatArg(args, "body_format")
 	if err != nil {
-		return frankZohoSendRequest{}, err
+		return frankZohoCampaignSendIntent{}, err
 	}
-	addressing := preflight.Campaign.ZohoEmailAddressing
-
-	return frankZohoSendRequest{
-		To:         append([]string(nil), addressing.To...),
-		CC:         append([]string(nil), addressing.CC...),
-		BCC:        append([]string(nil), addressing.BCC...),
+	req := frankZohoSendRequest{
 		Subject:    subject,
 		Body:       body,
 		BodyFormat: bodyFormat,
 		Encoding:   frankZohoMailDefaultEncoding,
-	}, nil
-}
+	}
+	if followUpInboundReplyID == "" {
+		addressing := preflight.Campaign.ZohoEmailAddressing
+		req.To = append([]string(nil), addressing.To...)
+		req.CC = append([]string(nil), addressing.CC...)
+		req.BCC = append([]string(nil), addressing.BCC...)
+		prepared, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedAction(
+			ec.Step.ID,
+			preflight.Campaign.CampaignID,
+			frankZohoMailAccountID,
+			frankZohoMailFromAddress,
+			frankZohoMailFromDisplayName,
+			missioncontrol.CampaignZohoEmailAddressing{
+				To:  append([]string(nil), req.To...),
+				CC:  append([]string(nil), req.CC...),
+				BCC: append([]string(nil), req.BCC...),
+			},
+			req.Subject,
+			req.BodyFormat,
+			req.Body,
+			now,
+		)
+		if err != nil {
+			return frankZohoCampaignSendIntent{}, err
+		}
+		return frankZohoCampaignSendIntent{Request: req, PreparedAction: prepared}, nil
+	}
 
-func buildFrankZohoPreparedCampaignAction(ec missioncontrol.ExecutionContext, args map[string]interface{}, now time.Time) (missioncontrol.CampaignZohoEmailOutboundAction, error) {
-	if err := missioncontrol.RequireExecutionContextCampaignReadiness(ec); err != nil {
-		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
-	}
-	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	followUp, err := missioncontrol.LoadCommittedCampaignZohoEmailFollowUpTarget(ec.MissionStoreRoot, preflight.Campaign.CampaignID, followUpInboundReplyID)
 	if err != nil {
-		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+		return frankZohoCampaignSendIntent{}, fmt.Errorf("%s: %w", frankZohoSendEmailToolName, err)
 	}
-	if err := validateFrankZohoMailPreflight(preflight); err != nil {
-		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	if followUp.InboundReply.FromAddressCount != 1 || strings.TrimSpace(followUp.InboundReply.FromAddress) == "" {
+		return frankZohoCampaignSendIntent{}, fmt.Errorf("%s: inbound_reply_id %q does not resolve to exactly one durable sender identity", frankZohoSendEmailToolName, followUpInboundReplyID)
 	}
-	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
-		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	if strings.TrimSpace(followUp.InboundReply.ProviderMessageID) == "" {
+		return frankZohoCampaignSendIntent{}, fmt.Errorf("%s: inbound_reply_id %q is missing provider message identity for provider-threaded reply send", frankZohoSendEmailToolName, followUpInboundReplyID)
 	}
-	req, err := buildFrankZohoSendRequest(preflight, args)
-	if err != nil {
-		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
-	}
-	return missioncontrol.BuildCampaignZohoEmailOutboundPreparedAction(
+	req.To = []string{strings.TrimSpace(followUp.InboundReply.FromAddress)}
+	req.ReplyToProviderMessageID = strings.TrimSpace(followUp.InboundReply.ProviderMessageID)
+
+	prepared, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedReplyAction(
 		ec.Step.ID,
 		preflight.Campaign.CampaignID,
 		frankZohoMailAccountID,
 		frankZohoMailFromAddress,
 		frankZohoMailFromDisplayName,
-		missioncontrol.CampaignZohoEmailAddressing{
-			To:  append([]string(nil), req.To...),
-			CC:  append([]string(nil), req.CC...),
-			BCC: append([]string(nil), req.BCC...),
-		},
+		missioncontrol.CampaignZohoEmailAddressing{To: append([]string(nil), req.To...)},
 		req.Subject,
 		req.BodyFormat,
 		req.Body,
 		now,
+		followUp.InboundReply.ReplyID,
+		followUp.OutboundAction.ActionID,
 	)
+	if err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
+	return frankZohoCampaignSendIntent{
+		Request:                req,
+		PreparedAction:         prepared,
+		FollowUpInboundReplyID: followUp.InboundReply.ReplyID,
+	}, nil
+}
+
+func buildFrankZohoPreparedCampaignAction(ec missioncontrol.ExecutionContext, args map[string]interface{}, now time.Time) (missioncontrol.CampaignZohoEmailOutboundAction, error) {
+	intent, err := buildFrankZohoCampaignSendIntent(ec, args, now)
+	if err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	return intent.PreparedAction, nil
 }
 
 func frankZohoSendReceiptFromCampaignAction(action missioncontrol.CampaignZohoEmailOutboundAction) (string, error) {
@@ -753,9 +824,13 @@ func frankZohoInboundReplyFromOriginalMessage(providerMessageID, providerMailID 
 
 	var fromAddress string
 	var fromDisplayName string
-	if from, err := parsed.Header.AddressList("From"); err == nil && len(from) > 0 {
-		fromAddress = strings.TrimSpace(from[0].Address)
-		fromDisplayName = strings.TrimSpace(from[0].Name)
+	fromAddressCount := 0
+	if from, err := parsed.Header.AddressList("From"); err == nil {
+		fromAddressCount = len(from)
+		if len(from) == 1 {
+			fromAddress = strings.TrimSpace(from[0].Address)
+			fromDisplayName = strings.TrimSpace(from[0].Name)
+		}
 	}
 
 	reply := missioncontrol.NormalizeFrankZohoInboundReply(missioncontrol.FrankZohoInboundReply{
@@ -768,6 +843,7 @@ func frankZohoInboundReplyFromOriginalMessage(providerMessageID, providerMailID 
 		References:         references,
 		FromAddress:        fromAddress,
 		FromDisplayName:    fromDisplayName,
+		FromAddressCount:   fromAddressCount,
 		Subject:            strings.TrimSpace(parsed.Header.Get("Subject")),
 		ReceivedAt:         receivedAt.UTC(),
 		OriginalMessageURL: strings.TrimSpace(originalMessageURL),
@@ -833,6 +909,22 @@ func frankZohoRequiredStringArg(args map[string]interface{}, key string) (string
 		return "", fmt.Errorf("%s: %q is required", frankZohoSendEmailToolName, key)
 	}
 	return value, nil
+}
+
+func frankZohoOptionalStringArg(args map[string]interface{}, key string) (string, bool, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return "", false, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", false, fmt.Errorf("%s: %q must be a string", frankZohoSendEmailToolName, key)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false, fmt.Errorf("%s: %q must not be empty when provided", frankZohoSendEmailToolName, key)
+	}
+	return value, true, nil
 }
 
 func frankZohoBodyFormatArg(args map[string]interface{}, key string) (string, error) {
@@ -906,6 +998,11 @@ func frankZohoMessagesURL(apiBase string, accountID string) string {
 func frankZohoOriginalMessageURL(apiBase string, accountID string, messageID string) string {
 	base := strings.TrimRight(strings.TrimSpace(apiBase), "/")
 	return base + "/accounts/" + accountID + "/messages/" + strings.TrimSpace(messageID) + "/originalmessage"
+}
+
+func frankZohoReplyMessageURL(apiBase string, accountID string, messageID string) string {
+	base := strings.TrimRight(strings.TrimSpace(apiBase), "/")
+	return base + "/accounts/" + accountID + "/messages/" + strings.TrimSpace(messageID)
 }
 
 func firstNonEmpty(values ...string) string {

@@ -19,6 +19,7 @@ type FrankZohoInboundReply struct {
 	References         []string  `json:"references,omitempty"`
 	FromAddress        string    `json:"from_address,omitempty"`
 	FromDisplayName    string    `json:"from_display_name,omitempty"`
+	FromAddressCount   int       `json:"from_address_count,omitempty"`
 	Subject            string    `json:"subject,omitempty"`
 	ReceivedAt         time.Time `json:"received_at"`
 	OriginalMessageURL string    `json:"original_message_url"`
@@ -36,6 +37,9 @@ func NormalizeFrankZohoInboundReply(reply FrankZohoInboundReply) FrankZohoInboun
 	reply.References = normalizeFrankZohoInboundReplyReferences(reply.References)
 	reply.FromAddress = strings.TrimSpace(reply.FromAddress)
 	reply.FromDisplayName = strings.TrimSpace(reply.FromDisplayName)
+	if reply.FromAddressCount < 0 {
+		reply.FromAddressCount = 0
+	}
 	reply.Subject = strings.TrimSpace(reply.Subject)
 	reply.ReceivedAt = reply.ReceivedAt.UTC()
 	reply.OriginalMessageURL = strings.TrimSpace(reply.OriginalMessageURL)
@@ -61,6 +65,9 @@ func ValidateFrankZohoInboundReply(reply FrankZohoInboundReply) error {
 	}
 	if normalized.OriginalMessageURL == "" {
 		return fmt.Errorf("mission runtime frank zoho inbound reply original_message_url is required")
+	}
+	if normalized.FromAddressCount == 1 && normalized.FromAddress == "" {
+		return fmt.Errorf("mission runtime frank zoho inbound reply from_address is required when from_address_count is 1")
 	}
 	if normalized.ReplyID != normalizedFrankZohoInboundReplyID(normalized) {
 		return fmt.Errorf("mission runtime frank zoho inbound reply reply_id %q does not match normalized provider identity", normalized.ReplyID)

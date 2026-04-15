@@ -78,6 +78,8 @@ type OperatorCampaignZohoEmailOutboundActionStatus struct {
 	SentAt                           *string  `json:"sent_at,omitempty"`
 	VerifiedAt                       *string  `json:"verified_at,omitempty"`
 	FailedAt                         *string  `json:"failed_at,omitempty"`
+	ReplyToInboundReplyID            string   `json:"reply_to_inbound_reply_id,omitempty"`
+	ReplyToOutboundActionID          string   `json:"reply_to_outbound_action_id,omitempty"`
 	ProviderMessageID                string   `json:"provider_message_id,omitempty"`
 	ProviderMailID                   string   `json:"provider_mail_id,omitempty"`
 	MIMEMessageID                    string   `json:"mime_message_id,omitempty"`
@@ -513,6 +515,8 @@ func selectOperatorStatusCampaignZohoEmailOutbounds(runtime JobRuntimeState) []O
 			SentAt:                           formatOperatorStatusTime(normalized.SentAt),
 			VerifiedAt:                       formatOperatorStatusTime(normalized.VerifiedAt),
 			FailedAt:                         formatOperatorStatusTime(normalized.FailedAt),
+			ReplyToInboundReplyID:            normalized.ReplyToInboundReplyID,
+			ReplyToOutboundActionID:          normalized.ReplyToOutboundActionID,
 			ProviderMessageID:                normalized.ProviderMessageID,
 			ProviderMailID:                   normalized.ProviderMailID,
 			MIMEMessageID:                    normalized.MIMEMessageID,

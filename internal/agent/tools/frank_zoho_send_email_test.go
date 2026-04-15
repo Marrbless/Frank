@@ -1008,6 +1008,294 @@ func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
 	}
 }
 
+func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
+	t.Parallel()
+
+	originalRead := readFrankZohoCampaignInboundReplies
+	t.Cleanup(func() {
+		readFrankZohoCampaignInboundReplies = originalRead
+	})
+	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+		return nil, nil
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	now := time.Date(2026, 4, 15, 21, 0, 0, 0, time.UTC)
+
+	parent := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", now)
+	parent.MIMEMessageID = "<parent-follow-up@example.test>"
+	if err := missioncontrol.ValidateCampaignZohoEmailOutboundAction(parent); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(parent) error = %v", err)
+	}
+	reply := missioncontrol.FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102000",
+		ProviderMailID:     "<reply-follow-up-1@zoho.test>",
+		MIMEMessageID:      "<reply-follow-up-1@example.test>",
+		InReplyTo:          parent.MIMEMessageID,
+		References:         []string{"<seed@example.test>", parent.MIMEMessageID},
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		FromAddressCount:   1,
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         now.Add(time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102000/originalmessage",
+	}
+	replyRecord := persistFrankZohoCampaignRuntime(t, root, "job-frank-zoho-follow-up-history", campaign.CampaignID, []missioncontrol.CampaignZohoEmailOutboundAction{parent}, []missioncontrol.FrankZohoInboundReply{reply}, now)[0]
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-follow-up-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-follow-up-prepare",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{FrankZohoSendEmailToolName},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-follow-up-prepare",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{FrankZohoSendEmailToolName},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	args := map[string]interface{}{
+		"inbound_reply_id": replyRecord.ReplyID,
+		"subject":          "Re: Frank intro",
+		"body":             "Thanks for the reply.",
+	}
+	if _, skip, err := state.PrepareFrankZohoCampaignSend(args); err != nil {
+		t.Fatalf("PrepareFrankZohoCampaignSend(follow-up) error = %v", err)
+	} else if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(follow-up) skip = true, want new prepared follow-up")
+	}
+
+	records, err := missioncontrol.ListCommittedCampaignZohoEmailOutboundActionRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() len = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.ReplyToInboundReplyID != replyRecord.ReplyID {
+		t.Fatalf("ReplyToInboundReplyID = %q, want %q", record.ReplyToInboundReplyID, replyRecord.ReplyID)
+	}
+	if record.ReplyToOutboundActionID != parent.ActionID {
+		t.Fatalf("ReplyToOutboundActionID = %q, want %q", record.ReplyToOutboundActionID, parent.ActionID)
+	}
+	if len(record.Addressing.To) != 1 || record.Addressing.To[0] != "person@example.com" {
+		t.Fatalf("Addressing.To = %#v, want uniquely resolved reply sender", record.Addressing.To)
+	}
+	if len(record.Addressing.CC) != 0 || len(record.Addressing.BCC) != 0 {
+		t.Fatalf("Addressing = %#v, want reply follow-up to target only the committed sender", record.Addressing)
+	}
+}
+
+func TestPrepareFrankZohoCampaignFollowUpBlocksDuplicateUnresolvedAction(t *testing.T) {
+	t.Parallel()
+
+	originalRead := readFrankZohoCampaignInboundReplies
+	t.Cleanup(func() {
+		readFrankZohoCampaignInboundReplies = originalRead
+	})
+	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+		return nil, nil
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	now := time.Date(2026, 4, 15, 21, 30, 0, 0, time.UTC)
+
+	parent := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", now)
+	parent.MIMEMessageID = "<parent-duplicate@example.test>"
+	if err := missioncontrol.ValidateCampaignZohoEmailOutboundAction(parent); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(parent) error = %v", err)
+	}
+	reply := missioncontrol.FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102001",
+		ProviderMailID:     "<reply-follow-up-2@zoho.test>",
+		MIMEMessageID:      "<reply-follow-up-2@example.test>",
+		InReplyTo:          parent.MIMEMessageID,
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		FromAddressCount:   1,
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         now.Add(time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+	}
+	replyRecord := persistFrankZohoCampaignRuntime(t, root, "job-frank-zoho-follow-up-history", campaign.CampaignID, []missioncontrol.CampaignZohoEmailOutboundAction{parent}, []missioncontrol.FrankZohoInboundReply{reply}, now)[0]
+
+	existing, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedReplyAction(
+		"send-outbound-email",
+		campaign.CampaignID,
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		missioncontrol.CampaignZohoEmailAddressing{To: []string{"person@example.com"}},
+		"Re: Frank intro",
+		"plaintext",
+		"Existing follow-up",
+		now.Add(2*time.Minute),
+		replyRecord.ReplyID,
+		parent.ActionID,
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedReplyAction(existing) error = %v", err)
+	}
+	persistFrankZohoCampaignRuntime(t, root, "job-frank-zoho-follow-up-existing", campaign.CampaignID, []missioncontrol.CampaignZohoEmailOutboundAction{existing}, nil, now.Add(2*time.Minute))
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-follow-up-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-follow-up-duplicate",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{FrankZohoSendEmailToolName},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-follow-up-duplicate",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{FrankZohoSendEmailToolName},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(map[string]interface{}{
+		"inbound_reply_id": replyRecord.ReplyID,
+		"subject":          "Re: Frank intro 2",
+		"body":             "Second follow-up",
+	})
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend(duplicate) error = nil, want unresolved follow-up block")
+	}
+	if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(duplicate) skip = true, want hard block before preparation")
+	}
+	if !strings.Contains(err.Error(), "already has unresolved follow-up action") {
+		t.Fatalf("PrepareFrankZohoCampaignSend(duplicate) error = %q, want unresolved follow-up block", err)
+	}
+}
+
+func TestFrankZohoSendEmailToolUsesZohoReplyEndpointForCampaignFollowUp(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	var gotBody map[string]interface{}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	now := time.Date(2026, 4, 15, 22, 0, 0, 0, time.UTC)
+
+	parent := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", now)
+	parent.MIMEMessageID = "<parent-reply-send@example.test>"
+	if err := missioncontrol.ValidateCampaignZohoEmailOutboundAction(parent); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(parent) error = %v", err)
+	}
+	reply := missioncontrol.FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102002",
+		ProviderMailID:     "<reply-follow-up-3@zoho.test>",
+		MIMEMessageID:      "<reply-follow-up-3@example.test>",
+		InReplyTo:          parent.MIMEMessageID,
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		FromAddressCount:   1,
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         now.Add(time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102002/originalmessage",
+	}
+	replyRecord := persistFrankZohoCampaignRuntime(t, root, "job-frank-zoho-follow-up-send-history", campaign.CampaignID, []missioncontrol.CampaignZohoEmailOutboundAction{parent}, []missioncontrol.FrankZohoInboundReply{reply}, now)[0]
+
+	tool := NewFrankZohoSendEmailTool()
+	tool.apiBase = "https://mail.zoho.test/api"
+	tool.accessToken = func(context.Context) (string, error) { return "test-zoho-token", nil }
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("Decode(request body) error = %v", err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{
+					"status": {"code": 200, "description": "success"},
+					"data": {"messageId": 1711540357880103000}
+				}`)),
+			}, nil
+		}),
+	}
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
+	_, err := reg.Execute(
+		missioncontrol.WithExecutionContext(context.Background(), ec),
+		tool.Name(),
+		map[string]interface{}{
+			"inbound_reply_id": replyRecord.ReplyID,
+			"subject":          "Re: Frank intro",
+			"body":             "Thanks for writing back.",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if gotPath != "/api/accounts/3323462000000008002/messages/1711540357880102002" {
+		t.Fatalf("request path = %q, want provider-threaded reply endpoint", gotPath)
+	}
+	if gotBody["action"] != "reply" {
+		t.Fatalf("action = %#v, want reply", gotBody["action"])
+	}
+	if gotBody["toAddress"] != "person@example.com" {
+		t.Fatalf("toAddress = %#v, want committed reply sender", gotBody["toAddress"])
+	}
+}
+
 func TestFrankZohoSendProofVerifierUsesZohoBearerTokenAndFetchesOriginalMessage(t *testing.T) {
 	t.Parallel()
 
@@ -1250,27 +1538,129 @@ func mustBuildVerifiedFrankZohoCampaignAction(t *testing.T, stepID, campaignID, 
 func testFrankZohoCampaignActionRecord(jobID string, lastSeq uint64, action missioncontrol.CampaignZohoEmailOutboundAction) missioncontrol.CampaignZohoEmailOutboundActionRecord {
 	normalized := missioncontrol.NormalizeCampaignZohoEmailOutboundAction(action)
 	return missioncontrol.CampaignZohoEmailOutboundActionRecord{
+		RecordVersion:           missioncontrol.StoreRecordVersion,
+		LastSeq:                 lastSeq,
+		ActionID:                normalized.ActionID,
+		JobID:                   jobID,
+		StepID:                  normalized.StepID,
+		CampaignID:              normalized.CampaignID,
+		State:                   string(normalized.State),
+		Provider:                normalized.Provider,
+		ProviderAccountID:       normalized.ProviderAccountID,
+		FromAddress:             normalized.FromAddress,
+		FromDisplayName:         normalized.FromDisplayName,
+		Addressing:              normalized.Addressing,
+		Subject:                 normalized.Subject,
+		BodyFormat:              normalized.BodyFormat,
+		BodySHA256:              normalized.BodySHA256,
+		PreparedAt:              normalized.PreparedAt,
+		SentAt:                  normalized.SentAt,
+		VerifiedAt:              normalized.VerifiedAt,
+		FailedAt:                normalized.FailedAt,
+		ReplyToInboundReplyID:   normalized.ReplyToInboundReplyID,
+		ReplyToOutboundActionID: normalized.ReplyToOutboundActionID,
+		ProviderMessageID:       normalized.ProviderMessageID,
+		ProviderMailID:          normalized.ProviderMailID,
+		MIMEMessageID:           normalized.MIMEMessageID,
+		OriginalMessageURL:      normalized.OriginalMessageURL,
+		Failure:                 normalized.Failure,
+	}
+}
+
+func testFrankZohoInboundReplyRecord(t *testing.T, jobID string, lastSeq uint64, reply missioncontrol.FrankZohoInboundReply) missioncontrol.FrankZohoInboundReplyRecord {
+	t.Helper()
+	normalized := missioncontrol.NormalizeFrankZohoInboundReply(reply)
+	if normalized.ReplyID == "" {
+		runtime, changed, err := missioncontrol.AppendFrankZohoInboundReply(missioncontrol.JobRuntimeState{}, normalized)
+		if err != nil {
+			t.Fatalf("AppendFrankZohoInboundReply() error = %v", err)
+		}
+		if !changed || len(runtime.FrankZohoInboundReplies) != 1 {
+			t.Fatalf("AppendFrankZohoInboundReply() changed = %v len = %d, want one normalized reply", changed, len(runtime.FrankZohoInboundReplies))
+		}
+		normalized = runtime.FrankZohoInboundReplies[0]
+	}
+	stepID := normalized.StepID
+	if stepID == "" {
+		stepID = "sync-replies"
+	}
+	return missioncontrol.FrankZohoInboundReplyRecord{
 		RecordVersion:      missioncontrol.StoreRecordVersion,
 		LastSeq:            lastSeq,
-		ActionID:           normalized.ActionID,
+		ReplyID:            normalized.ReplyID,
 		JobID:              jobID,
-		StepID:             normalized.StepID,
-		CampaignID:         normalized.CampaignID,
-		State:              string(normalized.State),
+		StepID:             stepID,
 		Provider:           normalized.Provider,
 		ProviderAccountID:  normalized.ProviderAccountID,
-		FromAddress:        normalized.FromAddress,
-		FromDisplayName:    normalized.FromDisplayName,
-		Addressing:         normalized.Addressing,
-		Subject:            normalized.Subject,
-		BodyFormat:         normalized.BodyFormat,
-		BodySHA256:         normalized.BodySHA256,
-		PreparedAt:         normalized.PreparedAt,
-		SentAt:             normalized.SentAt,
-		VerifiedAt:         normalized.VerifiedAt,
 		ProviderMessageID:  normalized.ProviderMessageID,
 		ProviderMailID:     normalized.ProviderMailID,
 		MIMEMessageID:      normalized.MIMEMessageID,
+		InReplyTo:          normalized.InReplyTo,
+		References:         append([]string(nil), normalized.References...),
+		FromAddress:        normalized.FromAddress,
+		FromDisplayName:    normalized.FromDisplayName,
+		FromAddressCount:   normalized.FromAddressCount,
+		Subject:            normalized.Subject,
+		ReceivedAt:         normalized.ReceivedAt,
 		OriginalMessageURL: normalized.OriginalMessageURL,
 	}
+}
+
+func persistFrankZohoCampaignRuntime(t *testing.T, root, jobID, campaignID string, actions []missioncontrol.CampaignZohoEmailOutboundAction, replies []missioncontrol.FrankZohoInboundReply, now time.Time) []missioncontrol.FrankZohoInboundReply {
+	t.Helper()
+
+	job := missioncontrol.Job{
+		ID:           jobID,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{FrankZohoSendEmailToolName},
+		Plan: missioncontrol.Plan{
+			ID: "plan-" + jobID,
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{FrankZohoSendEmailToolName},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "send-outbound-email")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext(%q) error = %v", jobID, err)
+	}
+
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:                            jobID,
+		State:                            missioncontrol.JobStateRunning,
+		ActiveStepID:                     "send-outbound-email",
+		CampaignZohoEmailOutboundActions: append([]missioncontrol.CampaignZohoEmailOutboundAction(nil), actions...),
+		CreatedAt:                        now,
+		UpdatedAt:                        now,
+		StartedAt:                        now,
+		ActiveStepAt:                     now,
+	}
+	normalizedReplies := make([]missioncontrol.FrankZohoInboundReply, 0, len(replies))
+	for _, reply := range replies {
+		nextRuntime, changed, err := missioncontrol.AppendFrankZohoInboundReply(runtime, reply)
+		if err != nil {
+			t.Fatalf("AppendFrankZohoInboundReply(%q) error = %v", jobID, err)
+		}
+		if !changed {
+			t.Fatalf("AppendFrankZohoInboundReply(%q) changed = false, want reply append", jobID)
+		}
+		runtime = nextRuntime
+		normalizedReplies = append(normalizedReplies, runtime.FrankZohoInboundReplies[len(runtime.FrankZohoInboundReplies)-1])
+	}
+
+	if err := missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-follow-up-test"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(%q) error = %v", jobID, err)
+	}
+	return normalizedReplies
 }

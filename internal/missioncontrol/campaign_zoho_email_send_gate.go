@@ -300,85 +300,14 @@ func campaignZohoEmailReplyStopLimit(stopCondition string) (int, bool) {
 }
 
 func campaignZohoEmailAttributedReplyCount(campaignID string, outboundRecords []CampaignZohoEmailOutboundActionRecord, inboundReplyRecords []FrankZohoInboundReplyRecord) int {
-	index := make(map[string][]CampaignZohoEmailOutboundAction)
-	for _, record := range outboundRecords {
-		action := NormalizeCampaignZohoEmailOutboundAction(CampaignZohoEmailOutboundAction{
-			ActionID:           record.ActionID,
-			StepID:             record.StepID,
-			CampaignID:         record.CampaignID,
-			State:              CampaignZohoEmailOutboundActionState(record.State),
-			Provider:           record.Provider,
-			ProviderAccountID:  record.ProviderAccountID,
-			FromAddress:        record.FromAddress,
-			FromDisplayName:    record.FromDisplayName,
-			Addressing:         record.Addressing,
-			Subject:            record.Subject,
-			BodyFormat:         record.BodyFormat,
-			BodySHA256:         record.BodySHA256,
-			PreparedAt:         record.PreparedAt,
-			SentAt:             record.SentAt,
-			VerifiedAt:         record.VerifiedAt,
-			FailedAt:           record.FailedAt,
-			ProviderMessageID:  record.ProviderMessageID,
-			ProviderMailID:     record.ProviderMailID,
-			MIMEMessageID:      record.MIMEMessageID,
-			OriginalMessageURL: record.OriginalMessageURL,
-			Failure:            record.Failure,
-		})
-		if action.MIMEMessageID == "" {
-			continue
-		}
-		index[action.MIMEMessageID] = append(index[action.MIMEMessageID], action)
-	}
-
 	count := 0
 	for _, record := range inboundReplyRecords {
-		reply := NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
-			ReplyID:            record.ReplyID,
-			StepID:             record.StepID,
-			Provider:           record.Provider,
-			ProviderAccountID:  record.ProviderAccountID,
-			ProviderMessageID:  record.ProviderMessageID,
-			ProviderMailID:     record.ProviderMailID,
-			MIMEMessageID:      record.MIMEMessageID,
-			InReplyTo:          record.InReplyTo,
-			References:         append([]string(nil), record.References...),
-			FromAddress:        record.FromAddress,
-			FromDisplayName:    record.FromDisplayName,
-			Subject:            record.Subject,
-			ReceivedAt:         record.ReceivedAt,
-			OriginalMessageURL: record.OriginalMessageURL,
-		})
-		if attributedCampaignID, ok := campaignZohoEmailAttributedReplyCampaign(reply, index); ok && attributedCampaignID == campaignID {
+		action, ok := attributedCampaignZohoEmailOutboundActionForReply(record, outboundRecords)
+		if ok && strings.TrimSpace(action.CampaignID) == campaignID {
 			count++
 		}
 	}
 	return count
-}
-
-func campaignZohoEmailAttributedReplyCampaign(reply FrankZohoInboundReply, index map[string][]CampaignZohoEmailOutboundAction) (string, bool) {
-	candidates := make(map[string]CampaignZohoEmailOutboundAction)
-	matchIDs := make([]string, 0, 1+len(reply.References))
-	if reply.InReplyTo != "" {
-		matchIDs = append(matchIDs, reply.InReplyTo)
-	}
-	matchIDs = append(matchIDs, reply.References...)
-	for _, messageID := range matchIDs {
-		for _, action := range index[strings.TrimSpace(messageID)] {
-			matchedAt := firstProjectedTime(action.VerifiedAt, action.SentAt, action.PreparedAt)
-			if !matchedAt.IsZero() && reply.ReceivedAt.Before(matchedAt) {
-				continue
-			}
-			candidates[action.ActionID] = action
-		}
-	}
-	if len(candidates) != 1 {
-		return "", false
-	}
-	for _, action := range candidates {
-		return action.CampaignID, true
-	}
-	return "", false
 }
 
 func sortCampaignZohoEmailOutboundActionRecords(byActionID map[string]CampaignZohoEmailOutboundActionRecord) []CampaignZohoEmailOutboundActionRecord {

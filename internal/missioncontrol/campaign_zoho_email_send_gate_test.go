@@ -399,6 +399,7 @@ func testFrankZohoInboundReplyRecord(jobID string, lastSeq uint64, reply FrankZo
 		References:         append([]string(nil), normalized.References...),
 		FromAddress:        normalized.FromAddress,
 		FromDisplayName:    normalized.FromDisplayName,
+		FromAddressCount:   normalized.FromAddressCount,
 		Subject:            normalized.Subject,
 		ReceivedAt:         normalized.ReceivedAt,
 		OriginalMessageURL: normalized.OriginalMessageURL,
