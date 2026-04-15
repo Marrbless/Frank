@@ -65,6 +65,10 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
 	}
+	campaignZohoEmailReplyWorkItemRecords, err := ListCommittedCampaignZohoEmailReplyWorkItemRecords(root, jobID)
+	if err != nil {
+		return hydratedCommittedStoreState{}, err
+	}
 	frankZohoSendReceiptRecords, err := ListCommittedFrankZohoSendReceiptRecords(root, jobID)
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
@@ -82,6 +86,7 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	runtime.ApprovalGrants = hydrateCommittedApprovalGrants(grantRecords)
 	runtime.AuditHistory = hydrateCommittedAuditHistory(auditRecords)
 	runtime.CampaignZohoEmailOutboundActions = hydrateCommittedCampaignZohoEmailOutboundActions(campaignZohoEmailOutboundActionRecords)
+	runtime.CampaignZohoEmailReplyWorkItems = hydrateCommittedCampaignZohoEmailReplyWorkItems(campaignZohoEmailReplyWorkItemRecords)
 	runtime.FrankZohoSendReceipts = hydrateCommittedFrankZohoSendReceipts(frankZohoSendReceiptRecords)
 	runtime.FrankZohoInboundReplies = hydrateCommittedFrankZohoInboundReplies(frankZohoInboundReplyRecords)
 	runtime, _ = NormalizeHydratedApprovalRequests(runtime, now)
@@ -422,6 +427,27 @@ func hydrateCommittedFrankZohoInboundReplies(records []FrankZohoInboundReplyReco
 		})
 	}
 	return replies
+}
+
+func hydrateCommittedCampaignZohoEmailReplyWorkItems(records []CampaignZohoEmailReplyWorkItemRecord) []CampaignZohoEmailReplyWorkItem {
+	if len(records) == 0 {
+		return nil
+	}
+
+	items := make([]CampaignZohoEmailReplyWorkItem, len(records))
+	for i, record := range records {
+		items[i] = NormalizeCampaignZohoEmailReplyWorkItem(CampaignZohoEmailReplyWorkItem{
+			ReplyWorkItemID:         record.ReplyWorkItemID,
+			InboundReplyID:          record.InboundReplyID,
+			CampaignID:              record.CampaignID,
+			State:                   CampaignZohoEmailReplyWorkItemState(record.State),
+			DeferredUntil:           record.DeferredUntil,
+			ClaimedFollowUpActionID: record.ClaimedFollowUpActionID,
+			CreatedAt:               record.CreatedAt,
+			UpdatedAt:               record.UpdatedAt,
+		})
+	}
+	return items
 }
 
 func hydrateCommittedRuntimeControl(root string, jobRuntime JobRuntimeRecord) (*RuntimeControlContext, error) {

@@ -752,6 +752,71 @@ func TestHydrateCommittedJobRuntimeStateLoadsCampaignZohoEmailOutboundActionsLat
 	}
 }
 
+func TestHydrateCommittedJobRuntimeStateLoadsCampaignZohoEmailReplyWorkItemsLatestState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	openItem, err := BuildCampaignZohoEmailReplyWorkItemOpen("campaign-mail", "frank_zoho_inbound_reply_123", now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemOpen() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                           job.ID,
+		State:                           JobStateRunning,
+		ActiveStepID:                    "build",
+		InspectablePlan:                 &inspectablePlan,
+		CampaignZohoEmailReplyWorkItems: []CampaignZohoEmailReplyWorkItem{openItem},
+		CreatedAt:                       now.Add(-2 * time.Minute),
+		UpdatedAt:                       now,
+		StartedAt:                       now.Add(-2 * time.Minute),
+		ActiveStepAt:                    now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(open) error = %v", err)
+	}
+
+	deferredItem, err := BuildCampaignZohoEmailReplyWorkItemDeferred(openItem, now.Add(10*time.Minute), now)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemDeferred() error = %v", err)
+	}
+	runtime.CampaignZohoEmailReplyWorkItems = []CampaignZohoEmailReplyWorkItem{deferredItem}
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(deferred) error = %v", err)
+	}
+
+	hydrated, err := HydrateCommittedJobRuntimeState(root, job.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
+	}
+	if len(hydrated.CampaignZohoEmailReplyWorkItems) != 1 {
+		t.Fatalf("len(Runtime.CampaignZohoEmailReplyWorkItems) = %d, want 1", len(hydrated.CampaignZohoEmailReplyWorkItems))
+	}
+
+	got := hydrated.CampaignZohoEmailReplyWorkItems[0]
+	if got.ReplyWorkItemID != openItem.ReplyWorkItemID {
+		t.Fatalf("ReplyWorkItemID = %q, want stable work item id %q", got.ReplyWorkItemID, openItem.ReplyWorkItemID)
+	}
+	if got.State != CampaignZohoEmailReplyWorkItemStateDeferred {
+		t.Fatalf("State = %q, want deferred", got.State)
+	}
+	if got.DeferredUntil.IsZero() {
+		t.Fatal("DeferredUntil = zero, want hydrated defer timestamp")
+	}
+}
+
 func TestHydrateCommittedRuntimeControlMatchesActiveStep(t *testing.T) {
 	t.Parallel()
 

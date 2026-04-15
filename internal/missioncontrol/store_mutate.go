@@ -95,6 +95,7 @@ func projectRuntimeStateToStoreBatch(root string, lock WriterLockRecord, job *Jo
 		AuditEvents:                      projectAuditEventRecords(runtime, nextSeq, committedAudits),
 		Artifacts:                        projectArtifactRecords(runtime, plan, nextSeq),
 		CampaignZohoEmailOutboundActions: projectCampaignZohoEmailOutboundActionRecords(runtime, nextSeq),
+		CampaignZohoEmailReplyWorkItems:  projectCampaignZohoEmailReplyWorkItemRecords(runtime, nextSeq),
 		FrankZohoSendReceipts:            projectFrankZohoSendReceiptRecords(runtime, nextSeq),
 		FrankZohoInboundReplies:          projectFrankZohoInboundReplyRecords(runtime, nextSeq),
 		ActiveJob:                        activeJob,
@@ -609,6 +610,37 @@ func projectFrankZohoSendReceiptRecords(runtime JobRuntimeState, nextSeq uint64)
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].ReceiptID < records[j].ReceiptID
+	})
+	return records
+}
+
+func projectCampaignZohoEmailReplyWorkItemRecords(runtime JobRuntimeState, nextSeq uint64) []CampaignZohoEmailReplyWorkItemRecord {
+	if len(runtime.CampaignZohoEmailReplyWorkItems) == 0 {
+		return nil
+	}
+	records := make([]CampaignZohoEmailReplyWorkItemRecord, 0, len(runtime.CampaignZohoEmailReplyWorkItems))
+	for _, item := range runtime.CampaignZohoEmailReplyWorkItems {
+		normalized := NormalizeCampaignZohoEmailReplyWorkItem(item)
+		records = append(records, CampaignZohoEmailReplyWorkItemRecord{
+			RecordVersion:           StoreRecordVersion,
+			LastSeq:                 nextSeq,
+			ReplyWorkItemID:         normalized.ReplyWorkItemID,
+			JobID:                   runtime.JobID,
+			StepID:                  runtime.ActiveStepID,
+			InboundReplyID:          normalized.InboundReplyID,
+			CampaignID:              normalized.CampaignID,
+			State:                   string(normalized.State),
+			DeferredUntil:           normalized.DeferredUntil,
+			ClaimedFollowUpActionID: normalized.ClaimedFollowUpActionID,
+			CreatedAt:               normalized.CreatedAt,
+			UpdatedAt:               normalized.UpdatedAt,
+		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if !records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].CreatedAt.Before(records[j].CreatedAt)
+		}
+		return records[i].ReplyWorkItemID < records[j].ReplyWorkItemID
 	})
 	return records
 }

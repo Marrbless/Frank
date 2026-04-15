@@ -236,6 +236,14 @@ func StoreCampaignZohoEmailOutboundActionPath(root string, jobID string, actionI
 	return filepath.Join(StoreCampaignZohoEmailOutboundActionsDir(root, jobID), actionID+".json")
 }
 
+func StoreCampaignZohoEmailReplyWorkItemsDir(root string, jobID string) string {
+	return filepath.Join(StoreJobDir(root, jobID), "campaign_zoho_email_reply_work_items")
+}
+
+func StoreCampaignZohoEmailReplyWorkItemPath(root string, jobID string, replyWorkItemID string) string {
+	return filepath.Join(StoreCampaignZohoEmailReplyWorkItemsDir(root, jobID), replyWorkItemID+".json")
+}
+
 func StoreFrankZohoSendReceiptsDir(root string, jobID string) string {
 	return filepath.Join(StoreJobDir(root, jobID), "frank_zoho_send_receipts")
 }

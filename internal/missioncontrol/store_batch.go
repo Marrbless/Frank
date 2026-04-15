@@ -20,6 +20,7 @@ type StoreBatch struct {
 	AuditEvents                      []AuditEventRecord
 	Artifacts                        []ArtifactRecord
 	CampaignZohoEmailOutboundActions []CampaignZohoEmailOutboundActionRecord
+	CampaignZohoEmailReplyWorkItems  []CampaignZohoEmailReplyWorkItemRecord
 	FrankZohoSendReceipts            []FrankZohoSendReceiptRecord
 	FrankZohoInboundReplies          []FrankZohoInboundReplyRecord
 	// active_job.json remains a fixed-path arbitration record and must be
@@ -84,6 +85,12 @@ func CommitStoreBatch(root string, heldLock WriterLockRecord, batch StoreBatch) 
 	for _, record := range batch.CampaignZohoEmailOutboundActions {
 		record.AttemptID = attemptID
 		if err := storeBatchWriteRecord(storeCampaignZohoEmailOutboundActionVersionPath(root, record.JobID, record.ActionID, record.LastSeq, record.AttemptID), record); err != nil {
+			return err
+		}
+	}
+	for _, record := range batch.CampaignZohoEmailReplyWorkItems {
+		record.AttemptID = attemptID
+		if err := storeBatchWriteRecord(storeCampaignZohoEmailReplyWorkItemVersionPath(root, record.JobID, record.ReplyWorkItemID, record.LastSeq, record.AttemptID), record); err != nil {
 			return err
 		}
 	}
@@ -223,6 +230,17 @@ func ValidateStoreBatch(batch StoreBatch, heldLock WriterLockRecord) error {
 		}
 		if record.LastSeq != targetSeq {
 			return fmt.Errorf("mission store batch campaign zoho email outbound action %q last_seq %d does not match applied_seq %d", record.ActionID, record.LastSeq, targetSeq)
+		}
+	}
+	for _, record := range batch.CampaignZohoEmailReplyWorkItems {
+		if err := ValidateCampaignZohoEmailReplyWorkItemRecord(record); err != nil {
+			return err
+		}
+		if record.JobID != jobID {
+			return fmt.Errorf("mission store batch campaign zoho email reply work item %q job_id %q does not match job runtime %q", record.ReplyWorkItemID, record.JobID, jobID)
+		}
+		if record.LastSeq != targetSeq {
+			return fmt.Errorf("mission store batch campaign zoho email reply work item %q last_seq %d does not match applied_seq %d", record.ReplyWorkItemID, record.LastSeq, targetSeq)
 		}
 	}
 	for _, record := range batch.FrankZohoSendReceipts {

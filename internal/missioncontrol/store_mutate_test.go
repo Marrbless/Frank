@@ -574,3 +574,67 @@ func TestPersistProjectedRuntimeStateProjectsCampaignZohoEmailOutboundActionsLat
 		t.Fatalf("ProviderMessageID = %q, want canonical Zoho message id", record.ProviderMessageID)
 	}
 }
+
+func TestPersistProjectedRuntimeStateProjectsCampaignZohoEmailReplyWorkItemsLatestState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	openItem, err := BuildCampaignZohoEmailReplyWorkItemOpen("campaign-mail", "frank_zoho_inbound_reply_123", now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemOpen() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                           job.ID,
+		State:                           JobStateRunning,
+		ActiveStepID:                    "build",
+		InspectablePlan:                 &inspectablePlan,
+		CampaignZohoEmailReplyWorkItems: []CampaignZohoEmailReplyWorkItem{openItem},
+		CreatedAt:                       now.Add(-2 * time.Minute),
+		UpdatedAt:                       now,
+		StartedAt:                       now.Add(-2 * time.Minute),
+		ActiveStepAt:                    now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(open) error = %v", err)
+	}
+
+	claimedItem, err := BuildCampaignZohoEmailReplyWorkItemClaimed(openItem, "campaign_zoho_email_outbound_456", now)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemClaimed() error = %v", err)
+	}
+	runtime.CampaignZohoEmailReplyWorkItems = []CampaignZohoEmailReplyWorkItem{claimedItem}
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(claimed) error = %v", err)
+	}
+
+	records, err := ListCommittedCampaignZohoEmailReplyWorkItemRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailReplyWorkItemRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailReplyWorkItemRecords() len = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.ReplyWorkItemID != openItem.ReplyWorkItemID {
+		t.Fatalf("ReplyWorkItemID = %q, want stable open work item id %q", record.ReplyWorkItemID, openItem.ReplyWorkItemID)
+	}
+	if record.State != string(CampaignZohoEmailReplyWorkItemStateClaimed) {
+		t.Fatalf("State = %q, want claimed", record.State)
+	}
+	if record.ClaimedFollowUpActionID != "campaign_zoho_email_outbound_456" {
+		t.Fatalf("ClaimedFollowUpActionID = %q, want committed follow-up claim", record.ClaimedFollowUpActionID)
+	}
+}

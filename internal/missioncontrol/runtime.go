@@ -83,6 +83,7 @@ type JobRuntimeState struct {
 	FailedSteps                      []RuntimeStepRecord               `json:"failed_steps,omitempty"`
 	AuditHistory                     []AuditEvent                      `json:"audit_history,omitempty"`
 	CampaignZohoEmailOutboundActions []CampaignZohoEmailOutboundAction `json:"-"`
+	CampaignZohoEmailReplyWorkItems  []CampaignZohoEmailReplyWorkItem  `json:"-"`
 	FrankZohoSendReceipts            []FrankZohoSendReceipt            `json:"-"`
 	FrankZohoInboundReplies          []FrankZohoInboundReply           `json:"-"`
 	ApprovalRequests                 []ApprovalRequest                 `json:"approval_requests,omitempty"`
@@ -143,6 +144,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	}
 	cloned.AuditHistory = CloneAuditHistory(runtime.AuditHistory)
 	cloned.CampaignZohoEmailOutboundActions = cloneCampaignZohoEmailOutboundActions(runtime.CampaignZohoEmailOutboundActions)
+	cloned.CampaignZohoEmailReplyWorkItems = cloneCampaignZohoEmailReplyWorkItems(runtime.CampaignZohoEmailReplyWorkItems)
 	cloned.FrankZohoSendReceipts = cloneFrankZohoSendReceipts(runtime.FrankZohoSendReceipts)
 	cloned.FrankZohoInboundReplies = cloneFrankZohoInboundReplies(runtime.FrankZohoInboundReplies)
 	if len(runtime.ApprovalRequests) > 0 {

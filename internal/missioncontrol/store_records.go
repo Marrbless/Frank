@@ -172,6 +172,22 @@ type CampaignZohoEmailOutboundActionRecord struct {
 	Failure                 CampaignZohoEmailOutboundFailure `json:"failure,omitempty"`
 }
 
+type CampaignZohoEmailReplyWorkItemRecord struct {
+	RecordVersion           int       `json:"record_version"`
+	LastSeq                 uint64    `json:"last_seq"`
+	ReplyWorkItemID         string    `json:"reply_work_item_id"`
+	JobID                   string    `json:"job_id"`
+	StepID                  string    `json:"step_id"`
+	AttemptID               string    `json:"attempt_id,omitempty"`
+	InboundReplyID          string    `json:"inbound_reply_id"`
+	CampaignID              string    `json:"campaign_id"`
+	State                   string    `json:"state"`
+	DeferredUntil           time.Time `json:"deferred_until,omitempty"`
+	ClaimedFollowUpActionID string    `json:"claimed_followup_action_id,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
 type FrankZohoSendReceiptRecord struct {
 	RecordVersion      int    `json:"record_version"`
 	LastSeq            uint64 `json:"last_seq"`
@@ -276,6 +292,38 @@ func ValidateRuntimeControlRecord(record RuntimeControlRecord) error {
 	}
 	if record.Step.ID != record.StepID {
 		return fmt.Errorf("mission store runtime control step_id %q does not match step.id %q", record.StepID, record.Step.ID)
+	}
+	return nil
+}
+
+func ValidateCampaignZohoEmailReplyWorkItemRecord(record CampaignZohoEmailReplyWorkItemRecord) error {
+	if record.RecordVersion <= 0 {
+		return fmt.Errorf("mission store campaign zoho email reply work item record_version must be positive")
+	}
+	if record.LastSeq == 0 {
+		return fmt.Errorf("mission store campaign zoho email reply work item last_seq must be positive")
+	}
+	if strings.TrimSpace(record.ReplyWorkItemID) == "" {
+		return fmt.Errorf("mission store campaign zoho email reply work item reply_work_item_id is required")
+	}
+	if strings.TrimSpace(record.JobID) == "" {
+		return fmt.Errorf("mission store campaign zoho email reply work item job_id is required")
+	}
+	item := CampaignZohoEmailReplyWorkItem{
+		ReplyWorkItemID:         record.ReplyWorkItemID,
+		InboundReplyID:          record.InboundReplyID,
+		CampaignID:              record.CampaignID,
+		State:                   CampaignZohoEmailReplyWorkItemState(record.State),
+		DeferredUntil:           record.DeferredUntil,
+		ClaimedFollowUpActionID: record.ClaimedFollowUpActionID,
+		CreatedAt:               record.CreatedAt,
+		UpdatedAt:               record.UpdatedAt,
+	}
+	if err := ValidateCampaignZohoEmailReplyWorkItem(item); err != nil {
+		return err
+	}
+	if strings.TrimSpace(record.StepID) == "" {
+		return fmt.Errorf("mission store campaign zoho email reply work item step_id is required")
 	}
 	return nil
 }
