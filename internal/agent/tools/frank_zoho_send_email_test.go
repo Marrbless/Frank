@@ -784,6 +784,23 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
 		t.Fatalf("ActivateStep() error = %v", err)
 	}
+	seedNow := time.Date(2026, 4, 15, 16, 10, 0, 0, time.UTC)
+	if err := missioncontrol.StoreJobRuntimeRecord(root, missioncontrol.JobRuntimeRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		WriterEpoch:   1,
+		AppliedSeq:    1,
+		JobID:         "job-frank-zoho-reply-seed",
+		State:         missioncontrol.JobStateRunning,
+		ActiveStepID:  "send-outbound-email",
+		CreatedAt:     seedNow,
+		UpdatedAt:     seedNow,
+	}); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord(seed) error = %v", err)
+	}
+	seedAction := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", seedNow)
+	if err := missioncontrol.StoreCampaignZohoEmailOutboundActionRecord(root, testFrankZohoCampaignActionRecord("job-frank-zoho-reply-seed", 1, seedAction)); err != nil {
+		t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord(seed) error = %v", err)
+	}
 
 	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return []missioncontrol.FrankZohoInboundReply{
@@ -835,6 +852,23 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 	}
 	if len(records[0].References) != 2 || records[0].References[0] != "<seed@example.test>" {
 		t.Fatalf("records[0].References = %#v, want durable reference chain", records[0].References)
+	}
+
+	workItems, err := missioncontrol.ListCommittedAllCampaignZohoEmailReplyWorkItemRecords(root)
+	if err != nil {
+		t.Fatalf("ListCommittedAllCampaignZohoEmailReplyWorkItemRecords() error = %v", err)
+	}
+	if len(workItems) != 1 {
+		t.Fatalf("ListCommittedAllCampaignZohoEmailReplyWorkItemRecords() len = %d, want 1 auto-created reply work item", len(workItems))
+	}
+	if workItems[0].InboundReplyID != records[0].ReplyID {
+		t.Fatalf("workItems[0].InboundReplyID = %q, want committed reply id %q", workItems[0].InboundReplyID, records[0].ReplyID)
+	}
+	if workItems[0].CampaignID != campaign.CampaignID {
+		t.Fatalf("workItems[0].CampaignID = %q, want %q", workItems[0].CampaignID, campaign.CampaignID)
+	}
+	if workItems[0].State != string(missioncontrol.CampaignZohoEmailReplyWorkItemStateOpen) {
+		t.Fatalf("workItems[0].State = %q, want open", workItems[0].State)
 	}
 }
 
@@ -1655,7 +1689,11 @@ func persistFrankZohoCampaignRuntime(t *testing.T, root, jobID, campaignID strin
 		normalizedReplies = append(normalizedReplies, runtime.FrankZohoInboundReplies[len(runtime.FrankZohoInboundReplies)-1])
 	}
 
-	if err := missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-follow-up-test"}, &job, runtime, &control, now); err != nil {
+	persistAt := time.Now().UTC()
+	if persistAt.Before(now) {
+		persistAt = now
+	}
+	if err := missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-follow-up-test"}, &job, runtime, &control, persistAt); err != nil {
 		t.Fatalf("PersistProjectedRuntimeState(%q) error = %v", jobID, err)
 	}
 	return normalizedReplies

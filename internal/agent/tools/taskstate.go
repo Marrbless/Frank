@@ -567,7 +567,23 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 		nextRuntime = updatedRuntime
 		appended++
 	}
-	if appended == 0 {
+	workItems, err := missioncontrol.LoadMissingCommittedCampaignZohoEmailReplyWorkItems(ec.MissionStoreRoot, preflight.Campaign.CampaignID, time.Now().UTC())
+	if err != nil {
+		return 0, err
+	}
+	workItemChanged := false
+	for _, item := range workItems {
+		updatedRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(nextRuntime, item)
+		if err != nil {
+			return 0, err
+		}
+		if !changed {
+			continue
+		}
+		nextRuntime = updatedRuntime
+		workItemChanged = true
+	}
+	if appended == 0 && !workItemChanged {
 		return 0, nil
 	}
 
