@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -581,6 +582,8 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			return receipt, true, nil
 		case missioncontrol.CampaignZohoEmailOutboundActionStatePrepared:
 			return "", true, fmt.Errorf("%s: campaign outbound action %q is already prepared without provider receipt proof; refusing to resend until reconciled", frankZohoSendEmailToolName, existing.ActionID)
+		case missioncontrol.CampaignZohoEmailOutboundActionStateFailed:
+			return "", true, fmt.Errorf("%s: campaign outbound action %q is terminally failed and will not be resent automatically", frankZohoSendEmailToolName, existing.ActionID)
 		default:
 			return "", true, fmt.Errorf("%s: campaign outbound action %q has unsupported state %q", frankZohoSendEmailToolName, existing.ActionID, existing.State)
 		}
@@ -639,6 +642,54 @@ func (s *TaskState) RecordFrankZohoCampaignSend(args map[string]interface{}, res
 	}
 	nextRuntime, _, err = missioncontrol.AppendFrankZohoSendReceipt(nextRuntime, ec.Step.ID, result)
 	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return err
+}
+
+func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface{}, sendErr error) error {
+	if s == nil || sendErr == nil {
+		return nil
+	}
+
+	var terminalFailure interface {
+		Failure() missioncontrol.CampaignZohoEmailOutboundFailure
+	}
+	if !errors.As(sendErr, &terminalFailure) {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return nil
+	}
+
+	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, prepared.ActionID); ok {
+		prepared = existing
+	}
+	if prepared.State != missioncontrol.CampaignZohoEmailOutboundActionStatePrepared {
+		return nil
+	}
+	failed, err := missioncontrol.BuildCampaignZohoEmailOutboundFailedAction(prepared, terminalFailure.Failure(), time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	nextRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailOutboundAction(*ec.Runtime, failed)
+	if err != nil || !changed {
 		return err
 	}
 

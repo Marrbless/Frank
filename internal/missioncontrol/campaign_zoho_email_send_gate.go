@@ -21,7 +21,7 @@ type CampaignZohoEmailSendGateDecision struct {
 	Reason                 string `json:"reason,omitempty"`
 	TriggeredStopCondition string `json:"triggered_stop_condition,omitempty"`
 	VerifiedSuccessCount   int    `json:"verified_success_count"`
-	VerifiedFailureCount   int    `json:"verified_failure_count"`
+	FailureCount           int    `json:"failure_count"`
 	AmbiguousOutcomeCount  int    `json:"ambiguous_outcome_count"`
 	FailureThresholdMetric string `json:"failure_threshold_metric,omitempty"`
 	FailureThresholdLimit  int    `json:"failure_threshold_limit,omitempty"`
@@ -118,10 +118,12 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, records []
 			PreparedAt:         record.PreparedAt,
 			SentAt:             record.SentAt,
 			VerifiedAt:         record.VerifiedAt,
+			FailedAt:           record.FailedAt,
 			ProviderMessageID:  record.ProviderMessageID,
 			ProviderMailID:     record.ProviderMailID,
 			MIMEMessageID:      record.MIMEMessageID,
 			OriginalMessageURL: record.OriginalMessageURL,
+			Failure:            record.Failure,
 		})
 		if normalized.CampaignID != decision.CampaignID {
 			continue
@@ -129,6 +131,8 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, records []
 		switch normalized.State {
 		case CampaignZohoEmailOutboundActionStateVerified:
 			decision.VerifiedSuccessCount++
+		case CampaignZohoEmailOutboundActionStateFailed:
+			decision.FailureCount++
 		case CampaignZohoEmailOutboundActionStatePrepared, CampaignZohoEmailOutboundActionStateSent:
 			decision.AmbiguousOutcomeCount++
 		default:
@@ -157,10 +161,10 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, records []
 	default:
 		return CampaignZohoEmailSendGateDecision{}, fmt.Errorf("campaign zoho email failure_threshold.metric %q is not evaluable from committed outbound action records", normalizedCampaign.FailureThreshold.Metric)
 	}
-	if decision.VerifiedFailureCount >= normalizedCampaign.FailureThreshold.Limit {
+	if decision.FailureCount >= normalizedCampaign.FailureThreshold.Limit {
 		decision.Allowed = false
 		decision.Halted = true
-		decision.Reason = fmt.Sprintf("campaign zoho email failure_threshold %q reached %d/%d verified failures", normalizedCampaign.FailureThreshold.Metric, decision.VerifiedFailureCount, normalizedCampaign.FailureThreshold.Limit)
+		decision.Reason = fmt.Sprintf("campaign zoho email failure_threshold %q reached %d/%d counted failures", normalizedCampaign.FailureThreshold.Metric, decision.FailureCount, normalizedCampaign.FailureThreshold.Limit)
 		return decision, nil
 	}
 
@@ -205,11 +209,13 @@ func campaignZohoEmailOutboundRecordRank(record CampaignZohoEmailOutboundActionR
 	switch CampaignZohoEmailOutboundActionState(strings.TrimSpace(record.State)) {
 	case CampaignZohoEmailOutboundActionStateVerified:
 		return 2, firstProjectedTime(record.VerifiedAt, record.SentAt, record.PreparedAt)
+	case CampaignZohoEmailOutboundActionStateFailed:
+		return 2, firstProjectedTime(record.FailedAt, record.PreparedAt)
 	case CampaignZohoEmailOutboundActionStateSent:
 		return 1, firstProjectedTime(record.SentAt, record.PreparedAt)
 	case CampaignZohoEmailOutboundActionStatePrepared:
 		return 0, firstProjectedTime(record.PreparedAt)
 	default:
-		return -1, firstProjectedTime(record.VerifiedAt, record.SentAt, record.PreparedAt)
+		return -1, firstProjectedTime(record.VerifiedAt, record.FailedAt, record.SentAt, record.PreparedAt)
 	}
 }

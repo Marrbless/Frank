@@ -1404,6 +1404,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							}
 						}
 						if err != nil {
+							if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+								if persistErr := a.taskState.RecordFrankZohoCampaignSendFailure(tc.Arguments, err); persistErr != nil {
+									err = persistErr
+								}
+							}
 							if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
 								finalContent = budgetResponse
 								break
@@ -1566,6 +1571,11 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 				}
 			}
 			if err != nil {
+				if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
+					if persistErr := a.taskState.RecordFrankZohoCampaignSendFailure(tc.Arguments, err); persistErr != nil {
+						err = persistErr
+					}
+				}
 				if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
 					return budgetResponse, nil
 				}

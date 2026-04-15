@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -263,6 +264,55 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 	wantOriginalMessageURL := "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage"
 	if receipt.OriginalMessageURL != wantOriginalMessageURL {
 		t.Fatalf("OriginalMessageURL = %q, want %q", receipt.OriginalMessageURL, wantOriginalMessageURL)
+	}
+}
+
+func TestFrankZohoSendEmailToolClassifiesProviderDeclaredRejectionAsTerminalFailure(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFrankZohoSendEmailTool()
+	tool.apiBase = "https://mail.zoho.test/api"
+	tool.accessToken = func(context.Context) (string, error) {
+		return "test-zoho-token", nil
+	}
+	tool.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{
+					"status": {"code": 1510, "description": "recipient rejected"},
+					"data": {}
+				}`)),
+			}, nil
+		}),
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
+	_, err := reg.Execute(
+		missioncontrol.WithExecutionContext(context.Background(), ec),
+		tool.Name(),
+		map[string]interface{}{
+			"subject": "Frank intro",
+			"body":    "Hello from Frank",
+		},
+	)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want terminal provider rejection")
+	}
+	var terminal *frankZohoTerminalSendFailureError
+	if !errors.As(err, &terminal) {
+		t.Fatalf("Execute() error type = %T, want terminal provider rejection", err)
+	}
+	if terminal.Failure().ProviderStatusCode != 1510 {
+		t.Fatalf("terminal failure provider status = %d, want 1510", terminal.Failure().ProviderStatusCode)
 	}
 }
 
@@ -534,6 +584,164 @@ func TestFrankZohoCampaignSendReplayStaysBlockedWhenProviderMailboxVerificationF
 	}
 	if !strings.Contains(err.Error(), "remains blocked until provider-mailbox verification/finalize succeeds") {
 		t.Fatalf("PrepareFrankZohoCampaignSend(replay) error = %q, want provider verification block", err)
+	}
+}
+
+func TestFrankZohoCampaignSendTerminalFailurePersistsAndBlocksReplay(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	tool := NewFrankZohoSendEmailTool()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-terminal-failure",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-terminal-failure",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	args := map[string]interface{}{
+		"subject": "Frank intro",
+		"body":    "Hello from Frank",
+	}
+	if _, skip, err := state.PrepareFrankZohoCampaignSend(args); err != nil {
+		t.Fatalf("PrepareFrankZohoCampaignSend(first) error = %v", err)
+	} else if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(first) skip = true, want new prepared action")
+	}
+	if err := state.RecordFrankZohoCampaignSendFailure(args, &frankZohoTerminalSendFailureError{
+		httpStatus: 400,
+		failure: missioncontrol.CampaignZohoEmailOutboundFailure{
+			HTTPStatus:                400,
+			ProviderStatusCode:        1510,
+			ProviderStatusDescription: "recipient rejected",
+		},
+	}); err != nil {
+		t.Fatalf("RecordFrankZohoCampaignSendFailure() error = %v", err)
+	}
+
+	records, err := missioncontrol.ListCommittedCampaignZohoEmailOutboundActionRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() len = %d, want 1", len(records))
+	}
+	if records[0].State != string(missioncontrol.CampaignZohoEmailOutboundActionStateFailed) {
+		t.Fatalf("record state = %q, want failed", records[0].State)
+	}
+	if records[0].Failure.ProviderStatusCode != 1510 {
+		t.Fatalf("record failure provider status = %d, want 1510", records[0].Failure.ProviderStatusCode)
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(args)
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) error = nil, want terminal failure replay block")
+	}
+	if !skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) skip = false, want blocked replay")
+	}
+	if !strings.Contains(err.Error(), "terminally failed and will not be resent automatically") {
+		t.Fatalf("PrepareFrankZohoCampaignSend(replay) error = %q, want terminal failure replay block", err)
+	}
+}
+
+func TestFrankZohoCampaignSendAmbiguousFailureLeavesPreparedActionBlocked(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	tool := NewFrankZohoSendEmailTool()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-ambiguous-failure",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-ambiguous-failure",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	args := map[string]interface{}{
+		"subject": "Frank intro",
+		"body":    "Hello from Frank",
+	}
+	if _, skip, err := state.PrepareFrankZohoCampaignSend(args); err != nil {
+		t.Fatalf("PrepareFrankZohoCampaignSend(first) error = %v", err)
+	} else if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(first) skip = true, want new prepared action")
+	}
+	if err := state.RecordFrankZohoCampaignSendFailure(args, fmt.Errorf("network timeout")); err != nil {
+		t.Fatalf("RecordFrankZohoCampaignSendFailure() error = %v, want no-op on ambiguous failure", err)
+	}
+
+	records, err := missioncontrol.ListCommittedCampaignZohoEmailOutboundActionRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() len = %d, want 1", len(records))
+	}
+	if records[0].State != string(missioncontrol.CampaignZohoEmailOutboundActionStatePrepared) {
+		t.Fatalf("record state = %q, want prepared after ambiguous failure", records[0].State)
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(args)
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) error = nil, want ambiguous replay block")
+	}
+	if !skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) skip = false, want blocked replay")
+	}
+	if !strings.Contains(err.Error(), "already prepared without provider receipt proof") {
+		t.Fatalf("PrepareFrankZohoCampaignSend(replay) error = %q, want prepared replay block", err)
 	}
 }
 

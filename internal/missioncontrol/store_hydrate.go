@@ -356,10 +356,12 @@ func hydrateCommittedCampaignZohoEmailOutboundActions(records []CampaignZohoEmai
 			PreparedAt:         record.PreparedAt,
 			SentAt:             record.SentAt,
 			VerifiedAt:         record.VerifiedAt,
+			FailedAt:           record.FailedAt,
 			ProviderMessageID:  record.ProviderMessageID,
 			ProviderMailID:     record.ProviderMailID,
 			MIMEMessageID:      record.MIMEMessageID,
 			OriginalMessageURL: record.OriginalMessageURL,
+			Failure:            record.Failure,
 		})
 	}
 	return actions

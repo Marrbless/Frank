@@ -36,6 +36,9 @@ func TestDeriveCampaignZohoEmailSendGateDecisionAllowsBelowVerifiedSendStopLimit
 	if decision.AmbiguousOutcomeCount != 0 {
 		t.Fatalf("Decision.AmbiguousOutcomeCount = %d, want 0", decision.AmbiguousOutcomeCount)
 	}
+	if decision.FailureCount != 0 {
+		t.Fatalf("Decision.FailureCount = %d, want 0", decision.FailureCount)
+	}
 }
 
 func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtVerifiedSendStopLimit(t *testing.T) {
@@ -91,6 +94,40 @@ func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCond
 	}
 	if got := err.Error(); got != `campaign zoho email stop_condition "stop after 3 replies" is not evaluable from committed outbound action records` {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported stop-condition rejection", got)
+	}
+}
+
+func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtFailureThreshold(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 19, 15, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 5 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 2}
+	})
+
+	records := []CampaignZohoEmailOutboundActionRecord{
+		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildFailedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now)),
+		testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildFailedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute))),
+		testCampaignZohoEmailOutboundActionRecord("job-3", 1, mustBuildPreparedCampaignZohoEmailOutboundAction(t, "step-3", "campaign-zoho", "subject-3", now.Add(2*time.Minute))),
+	}
+
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records)
+	if err != nil {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
+	}
+	if decision.Allowed {
+		t.Fatal("Decision.Allowed = true, want false once failure threshold is reached")
+	}
+	if !decision.Halted {
+		t.Fatal("Decision.Halted = false, want true once failure threshold is reached")
+	}
+	if decision.FailureCount != 2 {
+		t.Fatalf("Decision.FailureCount = %d, want 2", decision.FailureCount)
+	}
+	if decision.AmbiguousOutcomeCount != 1 {
+		t.Fatalf("Decision.AmbiguousOutcomeCount = %d, want 1", decision.AmbiguousOutcomeCount)
 	}
 }
 
@@ -194,6 +231,21 @@ func mustBuildVerifiedCampaignZohoEmailOutboundAction(t *testing.T, stepID, camp
 	return sent
 }
 
+func mustBuildFailedCampaignZohoEmailOutboundAction(t *testing.T, stepID, campaignID, subject string, preparedAt time.Time) CampaignZohoEmailOutboundAction {
+	t.Helper()
+
+	prepared := mustBuildPreparedCampaignZohoEmailOutboundAction(t, stepID, campaignID, subject, preparedAt)
+	failed, err := BuildCampaignZohoEmailOutboundFailedAction(prepared, CampaignZohoEmailOutboundFailure{
+		HTTPStatus:                400,
+		ProviderStatusCode:        1510,
+		ProviderStatusDescription: "recipient rejected",
+	}, preparedAt.Add(5*time.Second))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundFailedAction() error = %v", err)
+	}
+	return failed
+}
+
 func testCampaignZohoEmailOutboundActionRecord(jobID string, lastSeq uint64, action CampaignZohoEmailOutboundAction) CampaignZohoEmailOutboundActionRecord {
 	normalized := NormalizeCampaignZohoEmailOutboundAction(action)
 	return CampaignZohoEmailOutboundActionRecord{
@@ -215,9 +267,11 @@ func testCampaignZohoEmailOutboundActionRecord(jobID string, lastSeq uint64, act
 		PreparedAt:         normalized.PreparedAt,
 		SentAt:             normalized.SentAt,
 		VerifiedAt:         normalized.VerifiedAt,
+		FailedAt:           normalized.FailedAt,
 		ProviderMessageID:  normalized.ProviderMessageID,
 		ProviderMailID:     normalized.ProviderMailID,
 		MIMEMessageID:      normalized.MIMEMessageID,
 		OriginalMessageURL: normalized.OriginalMessageURL,
+		Failure:            normalized.Failure,
 	}
 }

@@ -567,10 +567,12 @@ func projectCampaignZohoEmailOutboundActionRecords(runtime JobRuntimeState, next
 			PreparedAt:         normalized.PreparedAt,
 			SentAt:             normalized.SentAt,
 			VerifiedAt:         normalized.VerifiedAt,
+			FailedAt:           normalized.FailedAt,
 			ProviderMessageID:  normalized.ProviderMessageID,
 			ProviderMailID:     normalized.ProviderMailID,
 			MIMEMessageID:      normalized.MIMEMessageID,
 			OriginalMessageURL: normalized.OriginalMessageURL,
+			Failure:            normalized.Failure,
 		})
 	}
 	sort.SliceStable(records, func(i, j int) bool {

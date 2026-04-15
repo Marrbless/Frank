@@ -15,7 +15,14 @@ const (
 	CampaignZohoEmailOutboundActionStatePrepared CampaignZohoEmailOutboundActionState = "prepared"
 	CampaignZohoEmailOutboundActionStateSent     CampaignZohoEmailOutboundActionState = "sent"
 	CampaignZohoEmailOutboundActionStateVerified CampaignZohoEmailOutboundActionState = "verified"
+	CampaignZohoEmailOutboundActionStateFailed   CampaignZohoEmailOutboundActionState = "failed"
 )
+
+type CampaignZohoEmailOutboundFailure struct {
+	HTTPStatus                int    `json:"http_status"`
+	ProviderStatusCode        int    `json:"provider_status_code"`
+	ProviderStatusDescription string `json:"provider_status_description,omitempty"`
+}
 
 type CampaignZohoEmailOutboundAction struct {
 	ActionID           string                               `json:"action_id"`
@@ -33,10 +40,12 @@ type CampaignZohoEmailOutboundAction struct {
 	PreparedAt         time.Time                            `json:"prepared_at"`
 	SentAt             time.Time                            `json:"sent_at,omitempty"`
 	VerifiedAt         time.Time                            `json:"verified_at,omitempty"`
+	FailedAt           time.Time                            `json:"failed_at,omitempty"`
 	ProviderMessageID  string                               `json:"provider_message_id,omitempty"`
 	ProviderMailID     string                               `json:"provider_mail_id,omitempty"`
 	MIMEMessageID      string                               `json:"mime_message_id,omitempty"`
 	OriginalMessageURL string                               `json:"original_message_url,omitempty"`
+	Failure            CampaignZohoEmailOutboundFailure     `json:"failure,omitempty"`
 }
 
 func NormalizeCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAction) CampaignZohoEmailOutboundAction {
@@ -59,10 +68,12 @@ func NormalizeCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAc
 	action.PreparedAt = action.PreparedAt.UTC()
 	action.SentAt = action.SentAt.UTC()
 	action.VerifiedAt = action.VerifiedAt.UTC()
+	action.FailedAt = action.FailedAt.UTC()
 	action.ProviderMessageID = strings.TrimSpace(action.ProviderMessageID)
 	action.ProviderMailID = strings.TrimSpace(action.ProviderMailID)
 	action.MIMEMessageID = strings.TrimSpace(action.MIMEMessageID)
 	action.OriginalMessageURL = strings.TrimSpace(action.OriginalMessageURL)
+	action.Failure.ProviderStatusDescription = strings.TrimSpace(action.Failure.ProviderStatusDescription)
 	return action
 }
 
@@ -78,7 +89,7 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 		return err
 	}
 	switch normalized.State {
-	case CampaignZohoEmailOutboundActionStatePrepared, CampaignZohoEmailOutboundActionStateSent, CampaignZohoEmailOutboundActionStateVerified:
+	case CampaignZohoEmailOutboundActionStatePrepared, CampaignZohoEmailOutboundActionStateSent, CampaignZohoEmailOutboundActionStateVerified, CampaignZohoEmailOutboundActionStateFailed:
 	default:
 		return fmt.Errorf("mission runtime campaign zoho email outbound action state %q is invalid", strings.TrimSpace(string(normalized.State)))
 	}
@@ -110,7 +121,7 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 	}
 	switch normalized.State {
 	case CampaignZohoEmailOutboundActionStatePrepared:
-		if normalized.ProviderMessageID != "" || normalized.ProviderMailID != "" || normalized.MIMEMessageID != "" || normalized.OriginalMessageURL != "" || !normalized.SentAt.IsZero() || !normalized.VerifiedAt.IsZero() {
+		if normalized.ProviderMessageID != "" || normalized.ProviderMailID != "" || normalized.MIMEMessageID != "" || normalized.OriginalMessageURL != "" || !normalized.SentAt.IsZero() || !normalized.VerifiedAt.IsZero() || !normalized.FailedAt.IsZero() || normalized.Failure.HTTPStatus != 0 || normalized.Failure.ProviderStatusCode != 0 || normalized.Failure.ProviderStatusDescription != "" {
 			return fmt.Errorf("mission runtime campaign zoho email outbound prepared action must not include provider receipt proof")
 		}
 	case CampaignZohoEmailOutboundActionStateSent:
@@ -126,8 +137,11 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 		if normalized.SentAt.Before(normalized.PreparedAt) {
 			return fmt.Errorf("mission runtime campaign zoho email outbound sent action sent_at must be on or after prepared_at")
 		}
-		if !normalized.VerifiedAt.IsZero() {
-			return fmt.Errorf("mission runtime campaign zoho email outbound sent action verified_at must be empty until provider-mailbox verification finalizes it")
+		if !normalized.VerifiedAt.IsZero() || !normalized.FailedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound sent action must not include terminal finalize timestamps beyond sent_at")
+		}
+		if normalized.Failure.HTTPStatus != 0 || normalized.Failure.ProviderStatusCode != 0 || normalized.Failure.ProviderStatusDescription != "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound sent action must not include provider rejection evidence")
 		}
 	case CampaignZohoEmailOutboundActionStateVerified:
 		if normalized.SentAt.IsZero() {
@@ -147,6 +161,31 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 		}
 		if normalized.VerifiedAt.Before(normalized.SentAt) {
 			return fmt.Errorf("mission runtime campaign zoho email outbound verified action verified_at must be on or after sent_at")
+		}
+		if !normalized.FailedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action failed_at must be empty")
+		}
+		if normalized.Failure.HTTPStatus != 0 || normalized.Failure.ProviderStatusCode != 0 || normalized.Failure.ProviderStatusDescription != "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action must not include provider rejection evidence")
+		}
+	case CampaignZohoEmailOutboundActionStateFailed:
+		if !normalized.SentAt.IsZero() || !normalized.VerifiedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action must not include sent or verified timestamps")
+		}
+		if normalized.FailedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action failed_at is required")
+		}
+		if normalized.FailedAt.Before(normalized.PreparedAt) {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action failed_at must be on or after prepared_at")
+		}
+		if normalized.ProviderMessageID != "" || normalized.ProviderMailID != "" || normalized.MIMEMessageID != "" || normalized.OriginalMessageURL != "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action must not include accepted-send proof")
+		}
+		if normalized.Failure.HTTPStatus <= 0 {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action failure.http_status is required")
+		}
+		if normalized.Failure.ProviderStatusCode == 0 {
+			return fmt.Errorf("mission runtime campaign zoho email outbound failed action failure.provider_status_code is required")
 		}
 	}
 	if normalized.ActionID != normalizedCampaignZohoEmailOutboundActionID(normalized) {
@@ -199,6 +238,25 @@ func BuildCampaignZohoEmailOutboundSentAction(prepared CampaignZohoEmailOutbound
 	action.ProviderMailID = normalizedReceipt.ProviderMailID
 	action.MIMEMessageID = normalizedReceipt.MIMEMessageID
 	action.OriginalMessageURL = normalizedReceipt.OriginalMessageURL
+	action.ActionID = normalizedCampaignZohoEmailOutboundActionID(action)
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		return CampaignZohoEmailOutboundAction{}, err
+	}
+	return action, nil
+}
+
+func BuildCampaignZohoEmailOutboundFailedAction(prepared CampaignZohoEmailOutboundAction, failure CampaignZohoEmailOutboundFailure, failedAt time.Time) (CampaignZohoEmailOutboundAction, error) {
+	action := NormalizeCampaignZohoEmailOutboundAction(prepared)
+	if action.State != CampaignZohoEmailOutboundActionStatePrepared {
+		return CampaignZohoEmailOutboundAction{}, fmt.Errorf("mission runtime campaign zoho email outbound failed action requires prepared state")
+	}
+	action.State = CampaignZohoEmailOutboundActionStateFailed
+	action.FailedAt = failedAt.UTC()
+	action.Failure = CampaignZohoEmailOutboundFailure{
+		HTTPStatus:                failure.HTTPStatus,
+		ProviderStatusCode:        failure.ProviderStatusCode,
+		ProviderStatusDescription: strings.TrimSpace(failure.ProviderStatusDescription),
+	}
 	action.ActionID = normalizedCampaignZohoEmailOutboundActionID(action)
 	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
 		return CampaignZohoEmailOutboundAction{}, err

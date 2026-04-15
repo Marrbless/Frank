@@ -94,6 +94,29 @@ type frankZohoSendAPIResponse struct {
 	Data frankZohoSendResponseData `json:"data"`
 }
 
+type frankZohoTerminalSendFailureError struct {
+	httpStatus int
+	failure    missioncontrol.CampaignZohoEmailOutboundFailure
+}
+
+func (e *frankZohoTerminalSendFailureError) Error() string {
+	if e == nil {
+		return frankZohoSendEmailToolName + ": provider-declared terminal send rejection"
+	}
+	return fmt.Sprintf("%s: Zoho Mail rejected send with provider status %d: %s", frankZohoSendEmailToolName, e.failure.ProviderStatusCode, strings.TrimSpace(e.failure.ProviderStatusDescription))
+}
+
+func (e *frankZohoTerminalSendFailureError) Failure() missioncontrol.CampaignZohoEmailOutboundFailure {
+	if e == nil {
+		return missioncontrol.CampaignZohoEmailOutboundFailure{}
+	}
+	failure := e.failure
+	if failure.HTTPStatus == 0 {
+		failure.HTTPStatus = e.httpStatus
+	}
+	return failure
+}
+
 type frankZohoSendResponseData struct {
 	MessageID       frankZohoFlexibleString `json:"messageId"`
 	MailID          frankZohoFlexibleString `json:"mailId"`
@@ -276,18 +299,37 @@ func (t *FrankZohoSendEmailTool) sendViaAPI(ctx context.Context, req frankZohoSe
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail returned HTTP %d", t.Name(), resp.StatusCode)
-	}
-
 	var decoded frankZohoSendAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return frankZohoSendResponseData{}, fmt.Errorf("%s: failed to decode Zoho response: %w", t.Name(), err)
+	}
+	if terminalFailure, ok := frankZohoTerminalFailureFromResponse(resp.StatusCode, decoded); ok {
+		return frankZohoSendResponseData{}, terminalFailure
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail returned HTTP %d", t.Name(), resp.StatusCode)
 	}
 	if decoded.Status.Code != 0 && decoded.Status.Code != 200 {
 		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail status %d: %s", t.Name(), decoded.Status.Code, strings.TrimSpace(decoded.Status.Description))
 	}
 	return decoded.Data, nil
+}
+
+func frankZohoTerminalFailureFromResponse(httpStatus int, decoded frankZohoSendAPIResponse) (*frankZohoTerminalSendFailureError, bool) {
+	if decoded.Status.Code == 0 || decoded.Status.Code == 200 {
+		return nil, false
+	}
+	if strings.TrimSpace(string(decoded.Data.MessageID)) != "" {
+		return nil, false
+	}
+	return &frankZohoTerminalSendFailureError{
+		httpStatus: httpStatus,
+		failure: missioncontrol.CampaignZohoEmailOutboundFailure{
+			HTTPStatus:                httpStatus,
+			ProviderStatusCode:        decoded.Status.Code,
+			ProviderStatusDescription: strings.TrimSpace(decoded.Status.Description),
+		},
+	}, true
 }
 
 func (v *FrankZohoSendProofVerifier) Verify(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]FrankZohoSendProofVerification, error) {

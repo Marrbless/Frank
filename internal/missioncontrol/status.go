@@ -60,27 +60,31 @@ type OperatorArtifactStatus struct {
 }
 
 type OperatorCampaignZohoEmailOutboundActionStatus struct {
-	ActionID           string   `json:"action_id"`
-	StepID             string   `json:"step_id,omitempty"`
-	CampaignID         string   `json:"campaign_id"`
-	State              string   `json:"state"`
-	Provider           string   `json:"provider"`
-	ProviderAccountID  string   `json:"provider_account_id"`
-	FromAddress        string   `json:"from_address"`
-	FromDisplayName    string   `json:"from_display_name,omitempty"`
-	To                 []string `json:"to"`
-	CC                 []string `json:"cc,omitempty"`
-	BCC                []string `json:"bcc,omitempty"`
-	Subject            string   `json:"subject"`
-	BodyFormat         string   `json:"body_format"`
-	BodySHA256         string   `json:"body_sha256"`
-	PreparedAt         *string  `json:"prepared_at,omitempty"`
-	SentAt             *string  `json:"sent_at,omitempty"`
-	VerifiedAt         *string  `json:"verified_at,omitempty"`
-	ProviderMessageID  string   `json:"provider_message_id,omitempty"`
-	ProviderMailID     string   `json:"provider_mail_id,omitempty"`
-	MIMEMessageID      string   `json:"mime_message_id,omitempty"`
-	OriginalMessageURL string   `json:"original_message_url,omitempty"`
+	ActionID                         string   `json:"action_id"`
+	StepID                           string   `json:"step_id,omitempty"`
+	CampaignID                       string   `json:"campaign_id"`
+	State                            string   `json:"state"`
+	Provider                         string   `json:"provider"`
+	ProviderAccountID                string   `json:"provider_account_id"`
+	FromAddress                      string   `json:"from_address"`
+	FromDisplayName                  string   `json:"from_display_name,omitempty"`
+	To                               []string `json:"to"`
+	CC                               []string `json:"cc,omitempty"`
+	BCC                              []string `json:"bcc,omitempty"`
+	Subject                          string   `json:"subject"`
+	BodyFormat                       string   `json:"body_format"`
+	BodySHA256                       string   `json:"body_sha256"`
+	PreparedAt                       *string  `json:"prepared_at,omitempty"`
+	SentAt                           *string  `json:"sent_at,omitempty"`
+	VerifiedAt                       *string  `json:"verified_at,omitempty"`
+	FailedAt                         *string  `json:"failed_at,omitempty"`
+	ProviderMessageID                string   `json:"provider_message_id,omitempty"`
+	ProviderMailID                   string   `json:"provider_mail_id,omitempty"`
+	MIMEMessageID                    string   `json:"mime_message_id,omitempty"`
+	OriginalMessageURL               string   `json:"original_message_url,omitempty"`
+	FailureHTTPStatus                int      `json:"failure_http_status,omitempty"`
+	FailureProviderStatusCode        int      `json:"failure_provider_status_code,omitempty"`
+	FailureProviderStatusDescription string   `json:"failure_provider_status_description,omitempty"`
 }
 
 type OperatorFrankZohoSendProofStatus struct {
@@ -491,27 +495,31 @@ func selectOperatorStatusCampaignZohoEmailOutbounds(runtime JobRuntimeState) []O
 	for _, action := range runtime.CampaignZohoEmailOutboundActions {
 		normalized := NormalizeCampaignZohoEmailOutboundAction(action)
 		actions = append(actions, OperatorCampaignZohoEmailOutboundActionStatus{
-			ActionID:           normalized.ActionID,
-			StepID:             normalized.StepID,
-			CampaignID:         normalized.CampaignID,
-			State:              string(normalized.State),
-			Provider:           normalized.Provider,
-			ProviderAccountID:  normalized.ProviderAccountID,
-			FromAddress:        normalized.FromAddress,
-			FromDisplayName:    normalized.FromDisplayName,
-			To:                 append([]string(nil), normalized.Addressing.To...),
-			CC:                 append([]string(nil), normalized.Addressing.CC...),
-			BCC:                append([]string(nil), normalized.Addressing.BCC...),
-			Subject:            normalized.Subject,
-			BodyFormat:         normalized.BodyFormat,
-			BodySHA256:         normalized.BodySHA256,
-			PreparedAt:         formatOperatorStatusTime(normalized.PreparedAt),
-			SentAt:             formatOperatorStatusTime(normalized.SentAt),
-			VerifiedAt:         formatOperatorStatusTime(normalized.VerifiedAt),
-			ProviderMessageID:  normalized.ProviderMessageID,
-			ProviderMailID:     normalized.ProviderMailID,
-			MIMEMessageID:      normalized.MIMEMessageID,
-			OriginalMessageURL: normalized.OriginalMessageURL,
+			ActionID:                         normalized.ActionID,
+			StepID:                           normalized.StepID,
+			CampaignID:                       normalized.CampaignID,
+			State:                            string(normalized.State),
+			Provider:                         normalized.Provider,
+			ProviderAccountID:                normalized.ProviderAccountID,
+			FromAddress:                      normalized.FromAddress,
+			FromDisplayName:                  normalized.FromDisplayName,
+			To:                               append([]string(nil), normalized.Addressing.To...),
+			CC:                               append([]string(nil), normalized.Addressing.CC...),
+			BCC:                              append([]string(nil), normalized.Addressing.BCC...),
+			Subject:                          normalized.Subject,
+			BodyFormat:                       normalized.BodyFormat,
+			BodySHA256:                       normalized.BodySHA256,
+			PreparedAt:                       formatOperatorStatusTime(normalized.PreparedAt),
+			SentAt:                           formatOperatorStatusTime(normalized.SentAt),
+			VerifiedAt:                       formatOperatorStatusTime(normalized.VerifiedAt),
+			FailedAt:                         formatOperatorStatusTime(normalized.FailedAt),
+			ProviderMessageID:                normalized.ProviderMessageID,
+			ProviderMailID:                   normalized.ProviderMailID,
+			MIMEMessageID:                    normalized.MIMEMessageID,
+			OriginalMessageURL:               normalized.OriginalMessageURL,
+			FailureHTTPStatus:                normalized.Failure.HTTPStatus,
+			FailureProviderStatusCode:        normalized.Failure.ProviderStatusCode,
+			FailureProviderStatusDescription: normalized.Failure.ProviderStatusDescription,
 		})
 	}
 	return actions
