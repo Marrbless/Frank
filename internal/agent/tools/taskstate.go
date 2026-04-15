@@ -567,12 +567,34 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 		nextRuntime = updatedRuntime
 		appended++
 	}
+	if appended > 0 {
+		s.mu.Lock()
+		err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+		s.mu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+		s.notifyRuntimeChanged()
+
+		s.mu.Lock()
+		ec = missioncontrol.CloneExecutionContext(s.executionContext)
+		hasExecutionContext = s.hasExecutionContext
+		s.mu.Unlock()
+		if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+			return appended, nil
+		}
+		nextRuntime = *missioncontrol.CloneJobRuntimeState(ec.Runtime)
+	}
+
 	workItems, err := missioncontrol.LoadMissingCommittedCampaignZohoEmailReplyWorkItems(ec.MissionStoreRoot, preflight.Campaign.CampaignID, time.Now().UTC())
 	if err != nil {
 		return 0, err
 	}
 	workItemChanged := false
 	for _, item := range workItems {
+		if _, exists := missioncontrol.FindCampaignZohoEmailReplyWorkItemByInboundReplyID(nextRuntime, item.InboundReplyID); exists {
+			continue
+		}
 		updatedRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(nextRuntime, item)
 		if err != nil {
 			return 0, err
@@ -613,7 +635,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 	if err != nil {
 		return "", false, err
 	}
-	inboundReplyID, hasInboundReplyID, err := frankZohoOptionalStringArg(args, "inbound_reply_id")
+	_, hasInboundReplyID, err := frankZohoOptionalStringArg(args, "inbound_reply_id")
 	if err != nil {
 		return "", false, err
 	}
@@ -630,13 +652,29 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 		}
 	}
 
-	action, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	now := time.Now().UTC()
+	intent, err := buildFrankZohoCampaignSendIntent(ec, args, now)
 	if err != nil {
 		return "", false, err
 	}
+	action := intent.PreparedAction
 	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, action.ActionID); ok {
 		switch existing.State {
 		case missioncontrol.CampaignZohoEmailOutboundActionStateVerified:
+			nextRuntime, runtimeChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(*ec.Runtime, existing, now)
+			if err != nil {
+				return "", true, err
+			}
+			if runtimeChanged {
+				s.mu.Lock()
+				err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+				s.mu.Unlock()
+				if err != nil {
+					return "", true, err
+				}
+				s.notifyRuntimeChanged()
+				ec.Runtime = &nextRuntime
+			}
 			receipt, err := frankZohoSendReceiptFromCampaignAction(existing)
 			if err != nil {
 				return "", false, err
@@ -650,7 +688,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			if len(verifiedProof) != 1 {
 				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize returns exactly one proof record", frankZohoSendEmailToolName, existing.ActionID)
 			}
-			finalized, err := finalizeFrankZohoCampaignActionFromProof(existing, verifiedProof[0], time.Now().UTC())
+			finalized, err := finalizeFrankZohoCampaignActionFromProof(existing, verifiedProof[0], now)
 			if err != nil {
 				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize reconciles it: %w", frankZohoSendEmailToolName, existing.ActionID, err)
 			}
@@ -658,7 +696,11 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			if err != nil {
 				return "", true, err
 			}
-			if changed {
+			nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(nextRuntime, finalized, now)
+			if err != nil {
+				return "", true, err
+			}
+			if changed || workItemChanged {
 				s.mu.Lock()
 				err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 				s.mu.Unlock()
@@ -681,7 +723,15 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			return "", true, fmt.Errorf("%s: campaign outbound action %q has unsupported state %q", frankZohoSendEmailToolName, existing.ActionID, existing.State)
 		}
 	}
-	if hasInboundReplyID {
+	if action.ReplyToInboundReplyID != "" {
+		nextRuntime, err := claimFrankZohoCampaignReplyWorkItem(ec, *ec.Runtime, action, now)
+		if err != nil {
+			return "", false, err
+		}
+		ec.Runtime = &nextRuntime
+	}
+	if hasInboundReplyID || action.ReplyToInboundReplyID != "" {
+		inboundReplyID := action.ReplyToInboundReplyID
 		followUpActions, err := missioncontrol.ListCommittedCampaignZohoEmailFollowUpActionsByInboundReply(ec.MissionStoreRoot, inboundReplyID)
 		if err != nil {
 			return "", false, err
@@ -800,14 +850,123 @@ func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface
 	if err != nil || !changed {
 		return err
 	}
+	nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemOnFailure(ec, nextRuntime, failed, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 	s.mu.Unlock()
-	if err == nil {
+	if err == nil && (changed || workItemChanged) {
 		s.notifyRuntimeChanged()
 	}
 	return err
+}
+
+func claimFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState, action missioncontrol.CampaignZohoEmailOutboundAction, now time.Time) (missioncontrol.JobRuntimeState, error) {
+	if strings.TrimSpace(action.ReplyToInboundReplyID) == "" {
+		return runtime, nil
+	}
+	item, ok := missioncontrol.FindCampaignZohoEmailReplyWorkItemByInboundReplyID(runtime, action.ReplyToInboundReplyID)
+	if !ok {
+		loaded, found, err := missioncontrol.LoadCommittedCampaignZohoEmailReplyWorkItemByInboundReply(ec.MissionStoreRoot, action.CampaignID, action.ReplyToInboundReplyID)
+		if err != nil {
+			return missioncontrol.JobRuntimeState{}, err
+		}
+		if !found {
+			return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q is missing a committed reply work item", frankZohoSendEmailToolName, action.ReplyToInboundReplyID)
+		}
+		item = loaded
+	}
+	switch item.State {
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateOpen:
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateDeferred:
+		if item.DeferredUntil.After(now.UTC()) {
+			return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q is deferred until %s", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.DeferredUntil.Format(time.RFC3339))
+		}
+		reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, now)
+		if err != nil {
+			return missioncontrol.JobRuntimeState{}, err
+		}
+		item = reopened
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateClaimed:
+		if strings.TrimSpace(item.ClaimedFollowUpActionID) != action.ActionID {
+			return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q already has claimed follow-up action %q", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.ClaimedFollowUpActionID)
+		}
+		return runtime, nil
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateResponded, missioncontrol.CampaignZohoEmailReplyWorkItemStateIgnored:
+		return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q is not eligible for follow-up in state %q", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.State)
+	default:
+		return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q has unsupported reply work item state %q", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.State)
+	}
+	claimed, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemClaimed(item, action.ActionID, now)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, err
+	}
+	nextRuntime, _, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(runtime, claimed)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, err
+	}
+	return nextRuntime, nil
+}
+
+func transitionFrankZohoCampaignReplyWorkItemResponded(runtime missioncontrol.JobRuntimeState, action missioncontrol.CampaignZohoEmailOutboundAction, now time.Time) (missioncontrol.JobRuntimeState, bool, error) {
+	if strings.TrimSpace(action.ReplyToInboundReplyID) == "" {
+		return runtime, false, nil
+	}
+	item, ok := missioncontrol.FindCampaignZohoEmailReplyWorkItemByInboundReplyID(runtime, action.ReplyToInboundReplyID)
+	if !ok {
+		return runtime, false, nil
+	}
+	if item.State == missioncontrol.CampaignZohoEmailReplyWorkItemStateResponded {
+		return runtime, false, nil
+	}
+	if item.State != missioncontrol.CampaignZohoEmailReplyWorkItemStateClaimed || strings.TrimSpace(item.ClaimedFollowUpActionID) != action.ActionID {
+		return runtime, false, nil
+	}
+	responded, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemResponded(item, now)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	nextRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(runtime, responded)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	return nextRuntime, changed, nil
+}
+
+func transitionFrankZohoCampaignReplyWorkItemOnFailure(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState, action missioncontrol.CampaignZohoEmailOutboundAction, now time.Time) (missioncontrol.JobRuntimeState, bool, error) {
+	if strings.TrimSpace(action.ReplyToInboundReplyID) == "" {
+		return runtime, false, nil
+	}
+	item, ok := missioncontrol.FindCampaignZohoEmailReplyWorkItemByInboundReplyID(runtime, action.ReplyToInboundReplyID)
+	if !ok {
+		return runtime, false, nil
+	}
+	if item.State != missioncontrol.CampaignZohoEmailReplyWorkItemStateClaimed || strings.TrimSpace(item.ClaimedFollowUpActionID) != action.ActionID {
+		return runtime, false, nil
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	decision, err := missioncontrol.DeriveCampaignZohoEmailSendGateDecisionFromRuntime(*preflight.Campaign, runtime)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	if !decision.Allowed {
+		return runtime, false, nil
+	}
+	reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, now)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	nextRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(runtime, reopened)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, false, err
+	}
+	return nextRuntime, changed, nil
 }
 
 func (s *TaskState) RecordOwnerFacingMessage() (bool, error) {

@@ -170,6 +170,66 @@ func LoadCommittedCampaignZohoEmailSendGateDecision(root string, campaign Campai
 	return DeriveCampaignZohoEmailSendGateDecision(normalized, outboundRecords, inboundReplyRecords)
 }
 
+func DeriveCampaignZohoEmailSendGateDecisionFromRuntime(campaign CampaignRecord, runtime JobRuntimeState) (CampaignZohoEmailSendGateDecision, error) {
+	outboundRecords := make([]CampaignZohoEmailOutboundActionRecord, 0, len(runtime.CampaignZohoEmailOutboundActions))
+	for _, action := range runtime.CampaignZohoEmailOutboundActions {
+		normalized := NormalizeCampaignZohoEmailOutboundAction(action)
+		outboundRecords = append(outboundRecords, CampaignZohoEmailOutboundActionRecord{
+			RecordVersion:           StoreRecordVersion,
+			LastSeq:                 1,
+			ActionID:                normalized.ActionID,
+			JobID:                   runtime.JobID,
+			StepID:                  normalized.StepID,
+			CampaignID:              normalized.CampaignID,
+			State:                   string(normalized.State),
+			Provider:                normalized.Provider,
+			ProviderAccountID:       normalized.ProviderAccountID,
+			FromAddress:             normalized.FromAddress,
+			FromDisplayName:         normalized.FromDisplayName,
+			Addressing:              normalized.Addressing,
+			Subject:                 normalized.Subject,
+			BodyFormat:              normalized.BodyFormat,
+			BodySHA256:              normalized.BodySHA256,
+			PreparedAt:              normalized.PreparedAt,
+			SentAt:                  normalized.SentAt,
+			VerifiedAt:              normalized.VerifiedAt,
+			FailedAt:                normalized.FailedAt,
+			ReplyToInboundReplyID:   normalized.ReplyToInboundReplyID,
+			ReplyToOutboundActionID: normalized.ReplyToOutboundActionID,
+			ProviderMessageID:       normalized.ProviderMessageID,
+			ProviderMailID:          normalized.ProviderMailID,
+			MIMEMessageID:           normalized.MIMEMessageID,
+			OriginalMessageURL:      normalized.OriginalMessageURL,
+			Failure:                 normalized.Failure,
+		})
+	}
+	inboundReplyRecords := make([]FrankZohoInboundReplyRecord, 0, len(runtime.FrankZohoInboundReplies))
+	for _, reply := range runtime.FrankZohoInboundReplies {
+		normalized := NormalizeFrankZohoInboundReply(reply)
+		inboundReplyRecords = append(inboundReplyRecords, FrankZohoInboundReplyRecord{
+			RecordVersion:      StoreRecordVersion,
+			LastSeq:            1,
+			ReplyID:            normalized.ReplyID,
+			JobID:              runtime.JobID,
+			StepID:             normalized.StepID,
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			InReplyTo:          normalized.InReplyTo,
+			References:         append([]string(nil), normalized.References...),
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			FromAddressCount:   normalized.FromAddressCount,
+			Subject:            normalized.Subject,
+			ReceivedAt:         normalized.ReceivedAt,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	return DeriveCampaignZohoEmailSendGateDecision(normalizeCampaignRecord(campaign), outboundRecords, inboundReplyRecords)
+}
+
 func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRecords []CampaignZohoEmailOutboundActionRecord, inboundReplyRecords []FrankZohoInboundReplyRecord) (CampaignZohoEmailSendGateDecision, error) {
 	normalizedCampaign := normalizeCampaignRecord(campaign)
 	decision := CampaignZohoEmailSendGateDecision{

@@ -164,3 +164,39 @@ func LoadCommittedCampaignZohoEmailReplyWorkSelection(root, campaignID string, n
 	}
 	return DeriveCampaignZohoEmailReplyWorkSelection(campaignID, workItemRecords, inboundReplyRecords, now)
 }
+
+func LoadCommittedCampaignZohoEmailReplyWorkItemByInboundReply(root, campaignID, inboundReplyID string) (CampaignZohoEmailReplyWorkItem, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return CampaignZohoEmailReplyWorkItem{}, false, err
+	}
+	if err := validateCampaignID(campaignID, "campaign zoho email reply triage"); err != nil {
+		return CampaignZohoEmailReplyWorkItem{}, false, err
+	}
+	normalizedInboundReplyID := strings.TrimSpace(inboundReplyID)
+	if normalizedInboundReplyID == "" {
+		return CampaignZohoEmailReplyWorkItem{}, false, fmt.Errorf("campaign zoho email reply triage inbound_reply_id is required")
+	}
+	workItemRecords, err := ListCommittedAllCampaignZohoEmailReplyWorkItemRecords(root)
+	if err != nil {
+		return CampaignZohoEmailReplyWorkItem{}, false, err
+	}
+	for _, record := range workItemRecords {
+		if strings.TrimSpace(record.CampaignID) != strings.TrimSpace(campaignID) {
+			continue
+		}
+		if strings.TrimSpace(record.InboundReplyID) != normalizedInboundReplyID {
+			continue
+		}
+		return NormalizeCampaignZohoEmailReplyWorkItem(CampaignZohoEmailReplyWorkItem{
+			ReplyWorkItemID:         record.ReplyWorkItemID,
+			InboundReplyID:          record.InboundReplyID,
+			CampaignID:              record.CampaignID,
+			State:                   CampaignZohoEmailReplyWorkItemState(record.State),
+			DeferredUntil:           record.DeferredUntil,
+			ClaimedFollowUpActionID: record.ClaimedFollowUpActionID,
+			CreatedAt:               record.CreatedAt,
+			UpdatedAt:               record.UpdatedAt,
+		}), true, nil
+	}
+	return CampaignZohoEmailReplyWorkItem{}, false, nil
+}

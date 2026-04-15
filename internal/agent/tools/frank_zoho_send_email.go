@@ -125,6 +125,7 @@ type frankZohoCampaignSendIntent struct {
 	Request                frankZohoSendRequest
 	PreparedAction         missioncontrol.CampaignZohoEmailOutboundAction
 	FollowUpInboundReplyID string
+	ReplyWorkSelection     *missioncontrol.CampaignZohoEmailReplyWorkSelection
 }
 
 type frankZohoTerminalSendFailureError struct {
@@ -595,6 +596,17 @@ func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args m
 	if err != nil {
 		return frankZohoCampaignSendIntent{}, err
 	}
+	var replyWorkSelection *missioncontrol.CampaignZohoEmailReplyWorkSelection
+	if followUpInboundReplyID == "" {
+		selection, ok, err := missioncontrol.LoadCommittedCampaignZohoEmailReplyWorkSelection(ec.MissionStoreRoot, preflight.Campaign.CampaignID, now)
+		if err != nil {
+			return frankZohoCampaignSendIntent{}, err
+		}
+		if ok {
+			replyWorkSelection = &selection
+			followUpInboundReplyID = selection.InboundReply.ReplyID
+		}
+	}
 	if err := validateFrankZohoMailPreflight(preflight, followUpInboundReplyID == ""); err != nil {
 		return frankZohoCampaignSendIntent{}, err
 	}
@@ -680,6 +692,7 @@ func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args m
 		Request:                req,
 		PreparedAction:         prepared,
 		FollowUpInboundReplyID: followUp.InboundReply.ReplyID,
+		ReplyWorkSelection:     replyWorkSelection,
 	}, nil
 }
 
