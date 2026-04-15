@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -541,10 +542,41 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 	}
 	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, action.ActionID); ok {
 		switch existing.State {
-		case missioncontrol.CampaignZohoEmailOutboundActionStateSent:
+		case missioncontrol.CampaignZohoEmailOutboundActionStateVerified:
 			receipt, err := frankZohoSendReceiptFromCampaignAction(existing)
 			if err != nil {
 				return "", false, err
+			}
+			return receipt, true, nil
+		case missioncontrol.CampaignZohoEmailOutboundActionStateSent:
+			verifiedProof, err := verifyFrankZohoCampaignSendProof(context.Background(), frankZohoCampaignProofFromAction(existing))
+			if err != nil {
+				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize succeeds: %w", frankZohoSendEmailToolName, existing.ActionID, err)
+			}
+			if len(verifiedProof) != 1 {
+				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize returns exactly one proof record", frankZohoSendEmailToolName, existing.ActionID)
+			}
+			finalized, err := finalizeFrankZohoCampaignActionFromProof(existing, verifiedProof[0], time.Now().UTC())
+			if err != nil {
+				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize reconciles it: %w", frankZohoSendEmailToolName, existing.ActionID, err)
+			}
+			nextRuntime, changed, err := missioncontrol.UpsertCampaignZohoEmailOutboundAction(*ec.Runtime, finalized)
+			if err != nil {
+				return "", true, err
+			}
+			if changed {
+				s.mu.Lock()
+				err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+				s.mu.Unlock()
+				if err != nil {
+					return "", true, err
+				}
+				s.notifyRuntimeChanged()
+				ec.Runtime = &nextRuntime
+			}
+			receipt, err := frankZohoSendReceiptFromCampaignAction(finalized)
+			if err != nil {
+				return "", true, err
 			}
 			return receipt, true, nil
 		case missioncontrol.CampaignZohoEmailOutboundActionStatePrepared:

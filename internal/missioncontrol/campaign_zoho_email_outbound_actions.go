@@ -14,6 +14,7 @@ type CampaignZohoEmailOutboundActionState string
 const (
 	CampaignZohoEmailOutboundActionStatePrepared CampaignZohoEmailOutboundActionState = "prepared"
 	CampaignZohoEmailOutboundActionStateSent     CampaignZohoEmailOutboundActionState = "sent"
+	CampaignZohoEmailOutboundActionStateVerified CampaignZohoEmailOutboundActionState = "verified"
 )
 
 type CampaignZohoEmailOutboundAction struct {
@@ -31,6 +32,7 @@ type CampaignZohoEmailOutboundAction struct {
 	BodySHA256         string                               `json:"body_sha256"`
 	PreparedAt         time.Time                            `json:"prepared_at"`
 	SentAt             time.Time                            `json:"sent_at,omitempty"`
+	VerifiedAt         time.Time                            `json:"verified_at,omitempty"`
 	ProviderMessageID  string                               `json:"provider_message_id,omitempty"`
 	ProviderMailID     string                               `json:"provider_mail_id,omitempty"`
 	MIMEMessageID      string                               `json:"mime_message_id,omitempty"`
@@ -56,6 +58,7 @@ func NormalizeCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAc
 	action.BodySHA256 = strings.ToLower(strings.TrimSpace(action.BodySHA256))
 	action.PreparedAt = action.PreparedAt.UTC()
 	action.SentAt = action.SentAt.UTC()
+	action.VerifiedAt = action.VerifiedAt.UTC()
 	action.ProviderMessageID = strings.TrimSpace(action.ProviderMessageID)
 	action.ProviderMailID = strings.TrimSpace(action.ProviderMailID)
 	action.MIMEMessageID = strings.TrimSpace(action.MIMEMessageID)
@@ -75,7 +78,7 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 		return err
 	}
 	switch normalized.State {
-	case CampaignZohoEmailOutboundActionStatePrepared, CampaignZohoEmailOutboundActionStateSent:
+	case CampaignZohoEmailOutboundActionStatePrepared, CampaignZohoEmailOutboundActionStateSent, CampaignZohoEmailOutboundActionStateVerified:
 	default:
 		return fmt.Errorf("mission runtime campaign zoho email outbound action state %q is invalid", strings.TrimSpace(string(normalized.State)))
 	}
@@ -107,7 +110,7 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 	}
 	switch normalized.State {
 	case CampaignZohoEmailOutboundActionStatePrepared:
-		if normalized.ProviderMessageID != "" || normalized.ProviderMailID != "" || normalized.MIMEMessageID != "" || normalized.OriginalMessageURL != "" || !normalized.SentAt.IsZero() {
+		if normalized.ProviderMessageID != "" || normalized.ProviderMailID != "" || normalized.MIMEMessageID != "" || normalized.OriginalMessageURL != "" || !normalized.SentAt.IsZero() || !normalized.VerifiedAt.IsZero() {
 			return fmt.Errorf("mission runtime campaign zoho email outbound prepared action must not include provider receipt proof")
 		}
 	case CampaignZohoEmailOutboundActionStateSent:
@@ -122,6 +125,28 @@ func ValidateCampaignZohoEmailOutboundAction(action CampaignZohoEmailOutboundAct
 		}
 		if normalized.SentAt.Before(normalized.PreparedAt) {
 			return fmt.Errorf("mission runtime campaign zoho email outbound sent action sent_at must be on or after prepared_at")
+		}
+		if !normalized.VerifiedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound sent action verified_at must be empty until provider-mailbox verification finalizes it")
+		}
+	case CampaignZohoEmailOutboundActionStateVerified:
+		if normalized.SentAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action sent_at is required")
+		}
+		if normalized.VerifiedAt.IsZero() {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action verified_at is required")
+		}
+		if strings.TrimSpace(normalized.ProviderMessageID) == "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action provider_message_id is required")
+		}
+		if strings.TrimSpace(normalized.OriginalMessageURL) == "" {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action original_message_url is required")
+		}
+		if normalized.SentAt.Before(normalized.PreparedAt) {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action sent_at must be on or after prepared_at")
+		}
+		if normalized.VerifiedAt.Before(normalized.SentAt) {
+			return fmt.Errorf("mission runtime campaign zoho email outbound verified action verified_at must be on or after sent_at")
 		}
 	}
 	if normalized.ActionID != normalizedCampaignZohoEmailOutboundActionID(normalized) {

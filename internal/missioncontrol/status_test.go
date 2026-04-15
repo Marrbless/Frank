@@ -783,6 +783,11 @@ func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing
 	if err != nil {
 		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
 	}
+	action.State = CampaignZohoEmailOutboundActionStateVerified
+	action.VerifiedAt = sentAt.Add(time.Minute)
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(verified) error = %v", err)
+	}
 
 	summary := BuildOperatorStatusSummary(JobRuntimeState{
 		JobID:                            "job-1",
@@ -797,8 +802,8 @@ func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing
 	if outbound.ActionID != action.ActionID {
 		t.Fatalf("CampaignZohoEmailOutbounds[0].ActionID = %q, want %q", outbound.ActionID, action.ActionID)
 	}
-	if outbound.State != "sent" {
-		t.Fatalf("CampaignZohoEmailOutbounds[0].State = %q, want sent", outbound.State)
+	if outbound.State != "verified" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].State = %q, want verified", outbound.State)
 	}
 	if outbound.CampaignID != "campaign-mail" {
 		t.Fatalf("CampaignZohoEmailOutbounds[0].CampaignID = %q, want campaign-mail", outbound.CampaignID)
@@ -817,6 +822,9 @@ func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing
 	}
 	if outbound.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
 		t.Fatalf("CampaignZohoEmailOutbounds[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", outbound.OriginalMessageURL)
+	}
+	if outbound.VerifiedAt == nil || *outbound.VerifiedAt != sentAt.Add(time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].VerifiedAt = %#v, want verified timestamp", outbound.VerifiedAt)
 	}
 }
 

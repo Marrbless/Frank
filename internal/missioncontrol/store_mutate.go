@@ -566,6 +566,7 @@ func projectCampaignZohoEmailOutboundActionRecords(runtime JobRuntimeState, next
 			BodySHA256:         normalized.BodySHA256,
 			PreparedAt:         normalized.PreparedAt,
 			SentAt:             normalized.SentAt,
+			VerifiedAt:         normalized.VerifiedAt,
 			ProviderMessageID:  normalized.ProviderMessageID,
 			ProviderMailID:     normalized.ProviderMailID,
 			MIMEMessageID:      normalized.MIMEMessageID,

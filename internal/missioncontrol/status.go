@@ -75,6 +75,7 @@ type OperatorCampaignZohoEmailOutboundActionStatus struct {
 	BodySHA256         string   `json:"body_sha256"`
 	PreparedAt         *string  `json:"prepared_at,omitempty"`
 	SentAt             *string  `json:"sent_at,omitempty"`
+	VerifiedAt         *string  `json:"verified_at,omitempty"`
 	ProviderMessageID  string   `json:"provider_message_id,omitempty"`
 	ProviderMailID     string   `json:"provider_mail_id,omitempty"`
 	MIMEMessageID      string   `json:"mime_message_id,omitempty"`
@@ -505,6 +506,7 @@ func selectOperatorStatusCampaignZohoEmailOutbounds(runtime JobRuntimeState) []O
 			BodySHA256:         normalized.BodySHA256,
 			PreparedAt:         formatOperatorStatusTime(normalized.PreparedAt),
 			SentAt:             formatOperatorStatusTime(normalized.SentAt),
+			VerifiedAt:         formatOperatorStatusTime(normalized.VerifiedAt),
 			ProviderMessageID:  normalized.ProviderMessageID,
 			ProviderMailID:     normalized.ProviderMailID,
 			MIMEMessageID:      normalized.MIMEMessageID,

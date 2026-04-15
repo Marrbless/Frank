@@ -355,6 +355,7 @@ func hydrateCommittedCampaignZohoEmailOutboundActions(records []CampaignZohoEmai
 			BodySHA256:         record.BodySHA256,
 			PreparedAt:         record.PreparedAt,
 			SentAt:             record.SentAt,
+			VerifiedAt:         record.VerifiedAt,
 			ProviderMessageID:  record.ProviderMessageID,
 			ProviderMailID:     record.ProviderMailID,
 			MIMEMessageID:      record.MIMEMessageID,

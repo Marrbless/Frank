@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +26,10 @@ const (
 )
 
 const FrankZohoSendEmailToolName = frankZohoSendEmailToolName
+
+var verifyFrankZohoCampaignSendProof = func(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]FrankZohoSendProofVerification, error) {
+	return NewFrankZohoSendProofVerifier().Verify(ctx, proof)
+}
 
 type FrankZohoSendEmailTool struct {
 	client      *http.Client
@@ -440,8 +445,10 @@ func buildFrankZohoPreparedCampaignAction(ec missioncontrol.ExecutionContext, ar
 }
 
 func frankZohoSendReceiptFromCampaignAction(action missioncontrol.CampaignZohoEmailOutboundAction) (string, error) {
-	if action.State != missioncontrol.CampaignZohoEmailOutboundActionStateSent {
-		return "", fmt.Errorf("%s: campaign outbound action %q is not sent", frankZohoSendEmailToolName, action.ActionID)
+	switch action.State {
+	case missioncontrol.CampaignZohoEmailOutboundActionStateSent, missioncontrol.CampaignZohoEmailOutboundActionStateVerified:
+	default:
+		return "", fmt.Errorf("%s: campaign outbound action %q is not send-reconciled", frankZohoSendEmailToolName, action.ActionID)
 	}
 	receipt := FrankZohoSendReceipt{
 		Provider:           action.Provider,
@@ -458,6 +465,103 @@ func frankZohoSendReceiptFromCampaignAction(action missioncontrol.CampaignZohoEm
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+func frankZohoCampaignProofFromAction(action missioncontrol.CampaignZohoEmailOutboundAction) []missioncontrol.OperatorFrankZohoSendProofStatus {
+	return []missioncontrol.OperatorFrankZohoSendProofStatus{
+		{
+			StepID:             action.StepID,
+			ProviderMessageID:  action.ProviderMessageID,
+			ProviderMailID:     action.ProviderMailID,
+			MIMEMessageID:      action.MIMEMessageID,
+			ProviderAccountID:  action.ProviderAccountID,
+			OriginalMessageURL: action.OriginalMessageURL,
+		},
+	}
+}
+
+func finalizeFrankZohoCampaignActionFromProof(action missioncontrol.CampaignZohoEmailOutboundAction, verification FrankZohoSendProofVerification, verifiedAt time.Time) (missioncontrol.CampaignZohoEmailOutboundAction, error) {
+	normalized := missioncontrol.NormalizeCampaignZohoEmailOutboundAction(action)
+	if normalized.State != missioncontrol.CampaignZohoEmailOutboundActionStateSent {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: campaign outbound action %q is not awaiting provider-mailbox verification", frankZohoSendEmailToolName, normalized.ActionID)
+	}
+	if strings.TrimSpace(verification.ProviderMessageID) != normalized.ProviderMessageID {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof provider_message_id %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(verification.ProviderMessageID), normalized.ProviderMessageID)
+	}
+	if strings.TrimSpace(verification.ProviderAccountID) != normalized.ProviderAccountID {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof provider_account_id %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(verification.ProviderAccountID), normalized.ProviderAccountID)
+	}
+	if strings.TrimSpace(verification.OriginalMessageURL) != normalized.OriginalMessageURL {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof original_message_url %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(verification.OriginalMessageURL), normalized.OriginalMessageURL)
+	}
+	if normalized.ProviderMailID != "" && strings.TrimSpace(verification.ProviderMailID) != normalized.ProviderMailID {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof provider_mail_id %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(verification.ProviderMailID), normalized.ProviderMailID)
+	}
+	if normalized.MIMEMessageID != "" && strings.TrimSpace(verification.MIMEMessageID) != normalized.MIMEMessageID {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof mime_message_id %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(verification.MIMEMessageID), normalized.MIMEMessageID)
+	}
+
+	parsed, err := mail.ReadMessage(strings.NewReader(verification.OriginalMessage))
+	if err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: parse original_message: %w", frankZohoSendEmailToolName, err)
+	}
+	from, err := parsed.Header.AddressList("From")
+	if err != nil || len(from) != 1 {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof original_message missing usable From header", frankZohoSendEmailToolName)
+	}
+	if !strings.EqualFold(strings.TrimSpace(from[0].Address), normalized.FromAddress) {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof From header %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(from[0].Address), normalized.FromAddress)
+	}
+	if strings.TrimSpace(parsed.Header.Get("Subject")) != normalized.Subject {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof Subject header %q does not match campaign outbound action %q", frankZohoSendEmailToolName, strings.TrimSpace(parsed.Header.Get("Subject")), normalized.Subject)
+	}
+	if err := frankZohoVerifyHeaderAddressList(parsed.Header, "To", normalized.Addressing.To); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	if err := frankZohoVerifyHeaderAddressList(parsed.Header, "Cc", normalized.Addressing.CC); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+
+	body, err := io.ReadAll(parsed.Body)
+	if err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: read original_message body: %w", frankZohoSendEmailToolName, err)
+	}
+	if got := missioncontrol.CampaignZohoEmailBodySHA256(string(body)); got != normalized.BodySHA256 {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, fmt.Errorf("%s: proof body sha256 %q does not match campaign outbound action %q", frankZohoSendEmailToolName, got, normalized.BodySHA256)
+	}
+
+	normalized.State = missioncontrol.CampaignZohoEmailOutboundActionStateVerified
+	normalized.VerifiedAt = verifiedAt.UTC()
+	if err := missioncontrol.ValidateCampaignZohoEmailOutboundAction(normalized); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	return normalized, nil
+}
+
+func frankZohoVerifyHeaderAddressList(header mail.Header, key string, want []string) error {
+	got := make([]string, 0, len(want))
+	if strings.TrimSpace(header.Get(key)) != "" {
+		addresses, err := header.AddressList(key)
+		if err != nil {
+			return fmt.Errorf("%s: proof %s header is invalid: %w", frankZohoSendEmailToolName, key, err)
+		}
+		for _, address := range addresses {
+			got = append(got, strings.ToLower(strings.TrimSpace(address.Address)))
+		}
+	}
+	normalizedWant := make([]string, 0, len(want))
+	for _, address := range want {
+		normalizedWant = append(normalizedWant, strings.ToLower(strings.TrimSpace(address)))
+	}
+	if len(got) != len(normalizedWant) {
+		return fmt.Errorf("%s: proof %s header recipient count %d does not match campaign outbound action %d", frankZohoSendEmailToolName, key, len(got), len(normalizedWant))
+	}
+	for i := range got {
+		if got[i] != normalizedWant[i] {
+			return fmt.Errorf("%s: proof %s header recipient %q does not match campaign outbound action %q", frankZohoSendEmailToolName, key, got[i], normalizedWant[i])
+		}
+	}
+	return nil
 }
 
 func frankZohoRequiredStringArg(args map[string]interface{}, key string) (string, error) {

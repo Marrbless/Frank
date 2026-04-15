@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -256,6 +257,11 @@ func TestFrankZohoSendEmailToolRejectsCallerOwnedRecipientArgs(t *testing.T) {
 func TestFrankZohoCampaignSendPrepareFinalizeAndReplaySafety(t *testing.T) {
 	t.Parallel()
 
+	originalVerify := verifyFrankZohoCampaignSendProof
+	t.Cleanup(func() {
+		verifyFrankZohoCampaignSendProof = originalVerify
+	})
+
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
 	tool := NewFrankZohoSendEmailTool()
@@ -360,6 +366,27 @@ func TestFrankZohoCampaignSendPrepareFinalizeAndReplaySafety(t *testing.T) {
 		t.Fatalf("sent ProviderMessageID = %q, want canonical Zoho message id", sentRecords[0].ProviderMessageID)
 	}
 
+	verifyFrankZohoCampaignSendProof = func(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]FrankZohoSendProofVerification, error) {
+		if len(proof) != 1 {
+			t.Fatalf("len(proof) = %d, want 1", len(proof))
+		}
+		return []FrankZohoSendProofVerification{
+			{
+				ProviderMessageID:  proof[0].ProviderMessageID,
+				ProviderMailID:     proof[0].ProviderMailID,
+				MIMEMessageID:      proof[0].MIMEMessageID,
+				ProviderAccountID:  proof[0].ProviderAccountID,
+				OriginalMessageURL: proof[0].OriginalMessageURL,
+				OriginalMessage: "From: Frank <frank@omou.online>\r\n" +
+					"To: person@example.com, team@example.com\r\n" +
+					"Cc: copy@example.com\r\n" +
+					"Subject: Frank intro\r\n" +
+					"\r\n" +
+					"Hello from Frank",
+			},
+		}, nil
+	}
+
 	gotReceipt, skip, err := state.PrepareFrankZohoCampaignSend(args)
 	if err != nil {
 		t.Fatalf("PrepareFrankZohoCampaignSend(sent replay) error = %v", err)
@@ -373,6 +400,102 @@ func TestFrankZohoCampaignSendPrepareFinalizeAndReplaySafety(t *testing.T) {
 	}
 	if replayReceipt.ProviderMessageID != "1711540357880100000" {
 		t.Fatalf("replay receipt ProviderMessageID = %q, want canonical Zoho message id", replayReceipt.ProviderMessageID)
+	}
+
+	verifiedRecords, err := missioncontrol.ListCommittedCampaignZohoEmailOutboundActionRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords(verified) error = %v", err)
+	}
+	if len(verifiedRecords) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords(verified) len = %d, want 1", len(verifiedRecords))
+	}
+	if verifiedRecords[0].State != string(missioncontrol.CampaignZohoEmailOutboundActionStateVerified) {
+		t.Fatalf("verified state = %q, want verified", verifiedRecords[0].State)
+	}
+	if verifiedRecords[0].VerifiedAt.IsZero() {
+		t.Fatal("verified VerifiedAt = zero, want provider-mailbox finalize timestamp")
+	}
+}
+
+func TestFrankZohoCampaignSendReplayStaysBlockedWhenProviderMailboxVerificationFails(t *testing.T) {
+	t.Parallel()
+
+	originalVerify := verifyFrankZohoCampaignSendProof
+	t.Cleanup(func() {
+		verifyFrankZohoCampaignSendProof = originalVerify
+	})
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	tool := NewFrankZohoSendEmailTool()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-blocked",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-blocked",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	args := map[string]interface{}{
+		"subject": "Frank intro",
+		"body":    "Hello from Frank",
+	}
+	if _, skip, err := state.PrepareFrankZohoCampaignSend(args); err != nil {
+		t.Fatalf("PrepareFrankZohoCampaignSend(first) error = %v", err)
+	} else if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(first) skip = true, want new prepared action")
+	}
+	receiptJSON := `{
+		"provider": "zoho_mail",
+		"provider_account_id": "3323462000000008002",
+		"from_address": "frank@omou.online",
+		"from_display_name": "Frank",
+		"provider_message_id": "1711540357880100000",
+		"provider_mail_id": "<mail-1@zoho.test>",
+		"mime_message_id": "<mime-1@example.test>",
+		"original_message_url": "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage"
+	}`
+	if err := state.RecordFrankZohoCampaignSend(args, receiptJSON); err != nil {
+		t.Fatalf("RecordFrankZohoCampaignSend() error = %v", err)
+	}
+
+	verifyFrankZohoCampaignSendProof = func(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]FrankZohoSendProofVerification, error) {
+		return nil, fmt.Errorf("zoho originalmessage unavailable")
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(args)
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) error = nil, want verification block")
+	}
+	if !skip {
+		t.Fatal("PrepareFrankZohoCampaignSend(replay) skip = false, want resend blocked")
+	}
+	if !strings.Contains(err.Error(), "remains blocked until provider-mailbox verification/finalize succeeds") {
+		t.Fatalf("PrepareFrankZohoCampaignSend(replay) error = %q, want provider verification block", err)
 	}
 }
 

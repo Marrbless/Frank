@@ -161,6 +161,7 @@ type CampaignZohoEmailOutboundActionRecord struct {
 	BodySHA256         string                      `json:"body_sha256"`
 	PreparedAt         time.Time                   `json:"prepared_at"`
 	SentAt             time.Time                   `json:"sent_at,omitempty"`
+	VerifiedAt         time.Time                   `json:"verified_at,omitempty"`
 	ProviderMessageID  string                      `json:"provider_message_id,omitempty"`
 	ProviderMailID     string                      `json:"provider_mail_id,omitempty"`
 	MIMEMessageID      string                      `json:"mime_message_id,omitempty"`
@@ -425,6 +426,7 @@ func ValidateCampaignZohoEmailOutboundActionRecord(record CampaignZohoEmailOutbo
 		BodySHA256:         record.BodySHA256,
 		PreparedAt:         record.PreparedAt,
 		SentAt:             record.SentAt,
+		VerifiedAt:         record.VerifiedAt,
 		ProviderMessageID:  record.ProviderMessageID,
 		ProviderMailID:     record.ProviderMailID,
 		MIMEMessageID:      record.MIMEMessageID,

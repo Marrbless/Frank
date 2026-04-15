@@ -476,6 +476,11 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	if err != nil {
 		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
 	}
+	action.State = CampaignZohoEmailOutboundActionStateVerified
+	action.VerifiedAt = now.Add(-15 * time.Second)
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(verified) error = %v", err)
+	}
 
 	runtime := JobRuntimeState{
 		JobID:                            job.ID,
@@ -528,6 +533,9 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	}
 	if outbound.ProviderMessageID != "1711540357880100000" {
 		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ProviderMessageID = %q, want canonical provider message id", outbound.ProviderMessageID)
+	}
+	if outbound.VerifiedAt == nil || *outbound.VerifiedAt != now.Add(-15*time.Second).Format(time.RFC3339Nano) {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].VerifiedAt = %#v, want verified timestamp", outbound.VerifiedAt)
 	}
 	if len(snapshot.RuntimeSummary.FrankZohoSendProof) != 1 {
 		t.Fatalf("RuntimeSummary.FrankZohoSendProof len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoSendProof))
