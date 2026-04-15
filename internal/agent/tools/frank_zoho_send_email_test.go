@@ -255,8 +255,6 @@ func TestFrankZohoSendEmailToolRejectsCallerOwnedRecipientArgs(t *testing.T) {
 }
 
 func TestFrankZohoCampaignSendPrepareFinalizeAndReplaySafety(t *testing.T) {
-	t.Parallel()
-
 	originalVerify := verifyFrankZohoCampaignSendProof
 	t.Cleanup(func() {
 		verifyFrankZohoCampaignSendProof = originalVerify
@@ -418,8 +416,6 @@ func TestFrankZohoCampaignSendPrepareFinalizeAndReplaySafety(t *testing.T) {
 }
 
 func TestFrankZohoCampaignSendReplayStaysBlockedWhenProviderMailboxVerificationFails(t *testing.T) {
-	t.Parallel()
-
 	originalVerify := verifyFrankZohoCampaignSendProof
 	t.Cleanup(func() {
 		verifyFrankZohoCampaignSendProof = originalVerify
