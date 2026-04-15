@@ -64,8 +64,13 @@ func TestCampaignRecordRoundTripAndList(t *testing.T) {
 		StopConditions:   []string{" stop after 3 replies "},
 		FailureThreshold: CampaignFailureThreshold{Metric: " bounced_messages ", Limit: 3},
 		ComplianceChecks: []string{" can-spam-reviewed "},
-		CreatedAt:        now.Add(2 * time.Minute),
-		UpdatedAt:        now.Add(3 * time.Minute),
+		ZohoEmailAddressing: &CampaignZohoEmailAddressing{
+			To:  []string{"  Alice Example <alice@example.com>  ", "bob@example.com "},
+			CC:  []string{" Carol Example <carol@example.com> "},
+			BCC: []string{" dave@example.com "},
+		},
+		CreatedAt: now.Add(2 * time.Minute),
+		UpdatedAt: now.Add(3 * time.Minute),
 	}
 	if err := StoreCampaignRecord(root, want); err != nil {
 		t.Fatalf("StoreCampaignRecord(campaign-a) error = %v", err)
@@ -97,6 +102,11 @@ func TestCampaignRecordRoundTripAndList(t *testing.T) {
 	want.StopConditions = []string{"stop after 3 replies"}
 	want.FailureThreshold = CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
 	want.ComplianceChecks = []string{"can-spam-reviewed"}
+	want.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+		To:  []string{"alice@example.com", "bob@example.com"},
+		CC:  []string{"carol@example.com"},
+		BCC: []string{"dave@example.com"},
+	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
 	if !reflect.DeepEqual(got, want) {
@@ -217,6 +227,17 @@ func TestCampaignRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: "mission store campaign compliance_checks are required",
+		},
+		{
+			name: "invalid zoho email recipient address",
+			run: func() error {
+				return StoreCampaignRecord(root, validCampaignRecord(now, func(record *CampaignRecord) {
+					record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+						To: []string{"not-an-email"},
+					}
+				}))
+			},
+			want: `mission store campaign zoho_email_addressing.to contains invalid email address "not-an-email"`,
 		},
 	}
 
@@ -906,6 +927,10 @@ func TestResolveExecutionContextCampaignPreflightResolvesCampaignAndFrankObjects
 			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
 			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
 		}
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To: []string{"target@example.com"},
+			CC: []string{"copy@example.com"},
+		}
 	})
 	if err := StoreCampaignRecord(root, record); err != nil {
 		t.Fatalf("StoreCampaignRecord() error = %v", err)
@@ -1045,6 +1070,9 @@ func writeMalformedCampaignRecordForPreflightTest(t *testing.T, root string, rec
 	}
 	if len(record.ComplianceChecks) > 0 {
 		payload["compliance_checks"] = record.ComplianceChecks
+	}
+	if record.ZohoEmailAddressing != nil {
+		payload["zoho_email_addressing"] = record.ZohoEmailAddressing
 	}
 	if err := WriteStoreJSONAtomic(StoreCampaignPath(root, record.CampaignID), payload); err != nil {
 		t.Fatalf("WriteStoreJSONAtomic() error = %v", err)

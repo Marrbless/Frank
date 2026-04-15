@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,12 @@ type CampaignFailureThreshold struct {
 	Limit  int    `json:"limit"`
 }
 
+type CampaignZohoEmailAddressing struct {
+	To  []string `json:"to"`
+	CC  []string `json:"cc,omitempty"`
+	BCC []string `json:"bcc,omitempty"`
+}
+
 type CampaignRecord struct {
 	RecordVersion           int                            `json:"record_version"`
 	CampaignID              string                         `json:"campaign_id"`
@@ -44,6 +51,7 @@ type CampaignRecord struct {
 	StopConditions          []string                       `json:"stop_conditions"`
 	FailureThreshold        CampaignFailureThreshold       `json:"failure_threshold"`
 	ComplianceChecks        []string                       `json:"compliance_checks"`
+	ZohoEmailAddressing     *CampaignZohoEmailAddressing   `json:"zoho_email_addressing,omitempty"`
 	CreatedAt               time.Time                      `json:"created_at"`
 	UpdatedAt               time.Time                      `json:"updated_at"`
 }
@@ -155,6 +163,9 @@ func ValidateCampaignRecord(record CampaignRecord) error {
 	if err := validateCampaignComplianceChecks(record.ComplianceChecks); err != nil {
 		return err
 	}
+	if err := validateCampaignZohoEmailAddressing(record.ZohoEmailAddressing); err != nil {
+		return err
+	}
 	if record.CreatedAt.IsZero() {
 		return fmt.Errorf("mission store campaign created_at is required")
 	}
@@ -252,6 +263,7 @@ func normalizeCampaignRecord(record CampaignRecord) CampaignRecord {
 	record.StopConditions = normalizeCampaignStringList(record.StopConditions)
 	record.FailureThreshold.Metric = strings.TrimSpace(record.FailureThreshold.Metric)
 	record.ComplianceChecks = normalizeCampaignStringList(record.ComplianceChecks)
+	record.ZohoEmailAddressing = normalizeCampaignZohoEmailAddressing(record.ZohoEmailAddressing)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	return record
@@ -395,6 +407,41 @@ func normalizeCampaignStringList(values []string) []string {
 	return normalized
 }
 
+func normalizeCampaignZohoEmailAddressing(addressing *CampaignZohoEmailAddressing) *CampaignZohoEmailAddressing {
+	if addressing == nil {
+		return nil
+	}
+
+	return &CampaignZohoEmailAddressing{
+		To:  normalizeCampaignEmailAddressList(addressing.To),
+		CC:  normalizeCampaignEmailAddressList(addressing.CC),
+		BCC: normalizeCampaignEmailAddressList(addressing.BCC),
+	}
+}
+
+func normalizeCampaignEmailAddressList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if parsed, err := mail.ParseAddress(trimmed); err == nil {
+			normalized = append(normalized, parsed.Address)
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
 func validateCampaignGovernedExternalTargets(targets []AutonomyEligibilityTargetRef) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("mission store campaign governed_external_targets are required")
@@ -481,6 +528,39 @@ func validateCampaignComplianceChecks(checks []string) error {
 	for _, check := range checks {
 		if strings.TrimSpace(check) == "" {
 			return fmt.Errorf("mission store campaign compliance_checks must not contain blanks")
+		}
+	}
+	return nil
+}
+
+func validateCampaignZohoEmailAddressing(addressing *CampaignZohoEmailAddressing) error {
+	if addressing == nil {
+		return nil
+	}
+	if len(addressing.To) == 0 {
+		return fmt.Errorf("mission store campaign zoho_email_addressing.to are required")
+	}
+
+	seen := make(map[string]string)
+	for field, values := range map[string][]string{
+		"to":  addressing.To,
+		"cc":  addressing.CC,
+		"bcc": addressing.BCC,
+	} {
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				continue
+			}
+			parsed, err := mail.ParseAddress(trimmed)
+			if err != nil {
+				return fmt.Errorf("mission store campaign zoho_email_addressing.%s contains invalid email address %q", field, trimmed)
+			}
+			address := strings.ToLower(strings.TrimSpace(parsed.Address))
+			if priorField, ok := seen[address]; ok {
+				return fmt.Errorf("mission store campaign zoho_email_addressing.%s contains duplicate email address %q already present in %s", field, parsed.Address, priorField)
+			}
+			seen[address] = field
 		}
 	}
 	return nil
