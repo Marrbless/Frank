@@ -69,6 +69,10 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
 	}
+	frankZohoInboundReplyRecords, err := ListCommittedFrankZohoInboundReplyRecords(root, jobID)
+	if err != nil {
+		return hydratedCommittedStoreState{}, err
+	}
 
 	runtime := hydrateCommittedJobRuntimeRecord(jobRuntime)
 	completedSteps, failedSteps := hydrateCommittedRuntimeStepOutcomes(stepRecords)
@@ -79,6 +83,7 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	runtime.AuditHistory = hydrateCommittedAuditHistory(auditRecords)
 	runtime.CampaignZohoEmailOutboundActions = hydrateCommittedCampaignZohoEmailOutboundActions(campaignZohoEmailOutboundActionRecords)
 	runtime.FrankZohoSendReceipts = hydrateCommittedFrankZohoSendReceipts(frankZohoSendReceiptRecords)
+	runtime.FrankZohoInboundReplies = hydrateCommittedFrankZohoInboundReplies(frankZohoInboundReplyRecords)
 	runtime, _ = NormalizeHydratedApprovalRequests(runtime, now)
 
 	control, err := hydrateCommittedRuntimeControl(root, jobRuntime)
@@ -387,6 +392,33 @@ func hydrateCommittedFrankZohoSendReceipts(records []FrankZohoSendReceiptRecord)
 		})
 	}
 	return receipts
+}
+
+func hydrateCommittedFrankZohoInboundReplies(records []FrankZohoInboundReplyRecord) []FrankZohoInboundReply {
+	if len(records) == 0 {
+		return nil
+	}
+
+	replies := make([]FrankZohoInboundReply, len(records))
+	for i, record := range records {
+		replies[i] = NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
+			ReplyID:            record.ReplyID,
+			StepID:             record.StepID,
+			Provider:           record.Provider,
+			ProviderAccountID:  record.ProviderAccountID,
+			ProviderMessageID:  record.ProviderMessageID,
+			ProviderMailID:     record.ProviderMailID,
+			MIMEMessageID:      record.MIMEMessageID,
+			InReplyTo:          record.InReplyTo,
+			References:         append([]string(nil), record.References...),
+			FromAddress:        record.FromAddress,
+			FromDisplayName:    record.FromDisplayName,
+			Subject:            record.Subject,
+			ReceivedAt:         record.ReceivedAt,
+			OriginalMessageURL: record.OriginalMessageURL,
+		})
+	}
+	return replies
 }
 
 func hydrateCommittedRuntimeControl(root string, jobRuntime JobRuntimeRecord) (*RuntimeControlContext, error) {

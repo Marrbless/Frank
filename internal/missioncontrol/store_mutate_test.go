@@ -382,6 +382,100 @@ func TestPersistProjectedRuntimeStateProjectsFrankZohoSendReceiptsAppendOnly(t *
 	}
 }
 
+func TestPersistProjectedRuntimeStateProjectsFrankZohoInboundRepliesAppendOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	replyOne := NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880101000",
+		ProviderMailID:     "<reply-1@zoho.test>",
+		MIMEMessageID:      "<inbound-1@example.test>",
+		InReplyTo:          "<mime-1@example.test>",
+		References:         []string{"<seed@example.test>", "<mime-1@example.test>"},
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         now.Add(-40 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage",
+	})
+	replyOne.ReplyID = normalizedFrankZohoInboundReplyID(replyOne)
+	replyTwo := NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880101001",
+		ProviderMailID:     "<reply-2@zoho.test>",
+		MIMEMessageID:      "<inbound-2@example.test>",
+		InReplyTo:          "<mime-2@example.test>",
+		References:         []string{"<mime-2@example.test>"},
+		FromAddress:        "second@example.com",
+		FromDisplayName:    "Person Two",
+		Subject:            "Re: Another thread",
+		ReceivedAt:         now.Add(-10 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880101001/originalmessage",
+	})
+	replyTwo.ReplyID = normalizedFrankZohoInboundReplyID(replyTwo)
+
+	runtime := JobRuntimeState{
+		JobID:                   job.ID,
+		State:                   JobStateRunning,
+		ActiveStepID:            "build",
+		InspectablePlan:         &inspectablePlan,
+		FrankZohoInboundReplies: []FrankZohoInboundReply{replyOne},
+		CreatedAt:               now.Add(-2 * time.Minute),
+		UpdatedAt:               now,
+		StartedAt:               now.Add(-2 * time.Minute),
+		ActiveStepAt:            now.Add(-time.Minute),
+	}
+
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(first) error = %v", err)
+	}
+
+	runtime.FrankZohoInboundReplies = append(runtime.FrankZohoInboundReplies, replyTwo)
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(second) error = %v", err)
+	}
+
+	records, err := ListCommittedFrankZohoInboundReplyRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoInboundReplyRecords() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("ListCommittedFrankZohoInboundReplyRecords() len = %d, want 2", len(records))
+	}
+	if records[0].ProviderMessageID != replyOne.ProviderMessageID {
+		t.Fatalf("records[0].ProviderMessageID = %q, want %q", records[0].ProviderMessageID, replyOne.ProviderMessageID)
+	}
+	if records[0].InReplyTo != replyOne.InReplyTo {
+		t.Fatalf("records[0].InReplyTo = %q, want %q", records[0].InReplyTo, replyOne.InReplyTo)
+	}
+	if len(records[0].References) != 2 || records[0].References[1] != "<mime-1@example.test>" {
+		t.Fatalf("records[0].References = %#v, want preserved reply-header chain", records[0].References)
+	}
+	if records[1].ProviderMessageID != replyTwo.ProviderMessageID {
+		t.Fatalf("records[1].ProviderMessageID = %q, want %q", records[1].ProviderMessageID, replyTwo.ProviderMessageID)
+	}
+	if records[1].OriginalMessageURL != replyTwo.OriginalMessageURL {
+		t.Fatalf("records[1].OriginalMessageURL = %q, want %q", records[1].OriginalMessageURL, replyTwo.OriginalMessageURL)
+	}
+}
+
 func TestPersistProjectedRuntimeStateProjectsCampaignZohoEmailOutboundActionsLatestState(t *testing.T) {
 	t.Parallel()
 

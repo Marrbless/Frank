@@ -96,6 +96,7 @@ func projectRuntimeStateToStoreBatch(root string, lock WriterLockRecord, job *Jo
 		Artifacts:                        projectArtifactRecords(runtime, plan, nextSeq),
 		CampaignZohoEmailOutboundActions: projectCampaignZohoEmailOutboundActionRecords(runtime, nextSeq),
 		FrankZohoSendReceipts:            projectFrankZohoSendReceiptRecords(runtime, nextSeq),
+		FrankZohoInboundReplies:          projectFrankZohoInboundReplyRecords(runtime, nextSeq),
 		ActiveJob:                        activeJob,
 		RemoveActiveJob:                  removeActiveJob,
 	}, nil
@@ -606,6 +607,42 @@ func projectFrankZohoSendReceiptRecords(runtime JobRuntimeState, nextSeq uint64)
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].ReceiptID < records[j].ReceiptID
+	})
+	return records
+}
+
+func projectFrankZohoInboundReplyRecords(runtime JobRuntimeState, nextSeq uint64) []FrankZohoInboundReplyRecord {
+	if len(runtime.FrankZohoInboundReplies) == 0 {
+		return nil
+	}
+	records := make([]FrankZohoInboundReplyRecord, 0, len(runtime.FrankZohoInboundReplies))
+	for _, reply := range runtime.FrankZohoInboundReplies {
+		normalized := NormalizeFrankZohoInboundReply(reply)
+		records = append(records, FrankZohoInboundReplyRecord{
+			RecordVersion:      StoreRecordVersion,
+			LastSeq:            nextSeq,
+			ReplyID:            normalized.ReplyID,
+			JobID:              runtime.JobID,
+			StepID:             normalized.StepID,
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			InReplyTo:          normalized.InReplyTo,
+			References:         append([]string(nil), normalized.References...),
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			Subject:            normalized.Subject,
+			ReceivedAt:         normalized.ReceivedAt,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if !records[i].ReceivedAt.Equal(records[j].ReceivedAt) {
+			return records[i].ReceivedAt.Before(records[j].ReceivedAt)
+		}
+		return records[i].ReplyID < records[j].ReplyID
 	})
 	return records
 }
