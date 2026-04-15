@@ -445,16 +445,48 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	if err != nil {
 		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
 	}
+	action, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		},
+		"Frank intro",
+		"plaintext",
+		"Hello from Frank",
+		now.Add(-90*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+	action, err = BuildCampaignZohoEmailOutboundSentAction(action, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, now.Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
 
 	runtime := JobRuntimeState{
-		JobID:           job.ID,
-		State:           JobStateRunning,
-		ActiveStepID:    "build",
-		InspectablePlan: &inspectablePlan,
-		CreatedAt:       now.Add(-2 * time.Minute),
-		UpdatedAt:       now,
-		StartedAt:       now.Add(-2 * time.Minute),
-		ActiveStepAt:    now.Add(-time.Minute),
+		JobID:                            job.ID,
+		State:                            JobStateRunning,
+		ActiveStepID:                     "build",
+		InspectablePlan:                  &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{action},
+		CreatedAt:                        now.Add(-2 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-2 * time.Minute),
+		ActiveStepAt:                     now.Add(-time.Minute),
 		FrankZohoSendReceipts: []FrankZohoSendReceipt{
 			{
 				StepID:             "build",
@@ -483,6 +515,19 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	if len(snapshot.RuntimeSummary.CampaignZohoEmailOutbounds) != 1 {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds len = %d, want 1", len(snapshot.RuntimeSummary.CampaignZohoEmailOutbounds))
+	}
+	outbound := snapshot.RuntimeSummary.CampaignZohoEmailOutbounds[0]
+	if outbound.ActionID != action.ActionID {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ActionID = %q, want %q", outbound.ActionID, action.ActionID)
+	}
+	if outbound.CampaignID != "campaign-mail" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].CampaignID = %q, want campaign-mail", outbound.CampaignID)
+	}
+	if outbound.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ProviderMessageID = %q, want canonical provider message id", outbound.ProviderMessageID)
 	}
 	if len(snapshot.RuntimeSummary.FrankZohoSendProof) != 1 {
 		t.Fatalf("RuntimeSummary.FrankZohoSendProof len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoSendProof))

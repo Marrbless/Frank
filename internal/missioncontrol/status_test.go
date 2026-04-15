@@ -745,6 +745,81 @@ func TestBuildOperatorStatusSummaryIncludesFrankZohoSendProof(t *testing.T) {
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing.T) {
+	t.Parallel()
+
+	preparedAt := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	sentAt := preparedAt.Add(time.Minute)
+	action, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{
+			To:  []string{"person@example.com"},
+			CC:  []string{"copy@example.com"},
+			BCC: []string{"blind@example.com"},
+		},
+		"Frank intro",
+		"plaintext",
+		"Hello from Frank",
+		preparedAt,
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+	action, err = BuildCampaignZohoEmailOutboundSentAction(action, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, sentAt)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:                            "job-1",
+		State:                            JobStatePaused,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{action},
+	})
+
+	if len(summary.CampaignZohoEmailOutbounds) != 1 {
+		t.Fatalf("CampaignZohoEmailOutbounds len = %d, want 1", len(summary.CampaignZohoEmailOutbounds))
+	}
+	outbound := summary.CampaignZohoEmailOutbounds[0]
+	if outbound.ActionID != action.ActionID {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].ActionID = %q, want %q", outbound.ActionID, action.ActionID)
+	}
+	if outbound.State != "sent" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].State = %q, want sent", outbound.State)
+	}
+	if outbound.CampaignID != "campaign-mail" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].CampaignID = %q, want campaign-mail", outbound.CampaignID)
+	}
+	if outbound.To[0] != "person@example.com" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].To[0] = %q, want person@example.com", outbound.To[0])
+	}
+	if outbound.Subject != "Frank intro" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].Subject = %q, want Frank intro", outbound.Subject)
+	}
+	if outbound.BodySHA256 != CampaignZohoEmailBodySHA256("Hello from Frank") {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].BodySHA256 = %q, want outbound body digest", outbound.BodySHA256)
+	}
+	if outbound.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].ProviderMessageID = %q, want canonical provider message id", outbound.ProviderMessageID)
+	}
+	if outbound.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("CampaignZohoEmailOutbounds[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", outbound.OriginalMessageURL)
+	}
+}
+
 func TestFormatOperatorStatusSummaryWithAllowedToolsUsesSortedUniqueIntersection(t *testing.T) {
 	t.Parallel()
 

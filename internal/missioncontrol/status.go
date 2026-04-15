@@ -11,28 +11,29 @@ const OperatorStatusApprovalHistoryLimit = 5
 const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
-	JobID                     string                                     `json:"job_id"`
-	State                     JobState                                   `json:"state"`
-	ActiveStepID              string                                     `json:"active_step_id,omitempty"`
-	AllowedTools              []string                                   `json:"allowed_tools,omitempty"`
-	DeferredSchedulerTriggers []OperatorDeferredSchedulerTriggerStatus   `json:"deferred_scheduler_triggers,omitempty"`
-	CampaignPreflight         *ResolvedExecutionContextCampaignPreflight `json:"campaign_preflight,omitempty"`
-	TreasuryPreflight         *ResolvedExecutionContextTreasuryPreflight `json:"treasury_preflight,omitempty"`
-	BudgetBlocker             *OperatorBudgetBlockerStatus               `json:"budget_blocker,omitempty"`
-	WaitingReason             string                                     `json:"waiting_reason,omitempty"`
-	WaitingAt                 *string                                    `json:"waiting_at,omitempty"`
-	PausedReason              string                                     `json:"paused_reason,omitempty"`
-	PausedAt                  *string                                    `json:"paused_at,omitempty"`
-	AbortedReason             string                                     `json:"aborted_reason,omitempty"`
-	FailedStepID              string                                     `json:"failed_step_id,omitempty"`
-	FailureReason             string                                     `json:"failure_reason,omitempty"`
-	FailedAt                  *string                                    `json:"failed_at,omitempty"`
-	ApprovalRequest           *OperatorApprovalRequestStatus             `json:"approval_request,omitempty"`
-	ApprovalHistory           []OperatorApprovalHistoryEntry             `json:"approval_history,omitempty"`
-	RecentAudit               []OperatorRecentAuditStatus                `json:"recent_audit,omitempty"`
-	Artifacts                 []OperatorArtifactStatus                   `json:"artifacts,omitempty"`
-	FrankZohoSendProof        []OperatorFrankZohoSendProofStatus         `json:"frank_zoho_send_proof,omitempty"`
-	Truncation                *OperatorStatusTruncation                  `json:"truncation,omitempty"`
+	JobID                      string                                          `json:"job_id"`
+	State                      JobState                                        `json:"state"`
+	ActiveStepID               string                                          `json:"active_step_id,omitempty"`
+	AllowedTools               []string                                        `json:"allowed_tools,omitempty"`
+	DeferredSchedulerTriggers  []OperatorDeferredSchedulerTriggerStatus        `json:"deferred_scheduler_triggers,omitempty"`
+	CampaignPreflight          *ResolvedExecutionContextCampaignPreflight      `json:"campaign_preflight,omitempty"`
+	TreasuryPreflight          *ResolvedExecutionContextTreasuryPreflight      `json:"treasury_preflight,omitempty"`
+	BudgetBlocker              *OperatorBudgetBlockerStatus                    `json:"budget_blocker,omitempty"`
+	WaitingReason              string                                          `json:"waiting_reason,omitempty"`
+	WaitingAt                  *string                                         `json:"waiting_at,omitempty"`
+	PausedReason               string                                          `json:"paused_reason,omitempty"`
+	PausedAt                   *string                                         `json:"paused_at,omitempty"`
+	AbortedReason              string                                          `json:"aborted_reason,omitempty"`
+	FailedStepID               string                                          `json:"failed_step_id,omitempty"`
+	FailureReason              string                                          `json:"failure_reason,omitempty"`
+	FailedAt                   *string                                         `json:"failed_at,omitempty"`
+	ApprovalRequest            *OperatorApprovalRequestStatus                  `json:"approval_request,omitempty"`
+	ApprovalHistory            []OperatorApprovalHistoryEntry                  `json:"approval_history,omitempty"`
+	RecentAudit                []OperatorRecentAuditStatus                     `json:"recent_audit,omitempty"`
+	Artifacts                  []OperatorArtifactStatus                        `json:"artifacts,omitempty"`
+	CampaignZohoEmailOutbounds []OperatorCampaignZohoEmailOutboundActionStatus `json:"campaign_zoho_email_outbounds,omitempty"`
+	FrankZohoSendProof         []OperatorFrankZohoSendProofStatus              `json:"frank_zoho_send_proof,omitempty"`
+	Truncation                 *OperatorStatusTruncation                       `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
@@ -55,6 +56,29 @@ type OperatorArtifactStatus struct {
 	StepType StepType `json:"step_type"`
 	Path     string   `json:"path"`
 	State    string   `json:"state,omitempty"`
+}
+
+type OperatorCampaignZohoEmailOutboundActionStatus struct {
+	ActionID           string   `json:"action_id"`
+	StepID             string   `json:"step_id,omitempty"`
+	CampaignID         string   `json:"campaign_id"`
+	State              string   `json:"state"`
+	Provider           string   `json:"provider"`
+	ProviderAccountID  string   `json:"provider_account_id"`
+	FromAddress        string   `json:"from_address"`
+	FromDisplayName    string   `json:"from_display_name,omitempty"`
+	To                 []string `json:"to"`
+	CC                 []string `json:"cc,omitempty"`
+	BCC                []string `json:"bcc,omitempty"`
+	Subject            string   `json:"subject"`
+	BodyFormat         string   `json:"body_format"`
+	BodySHA256         string   `json:"body_sha256"`
+	PreparedAt         *string  `json:"prepared_at,omitempty"`
+	SentAt             *string  `json:"sent_at,omitempty"`
+	ProviderMessageID  string   `json:"provider_message_id,omitempty"`
+	ProviderMailID     string   `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string   `json:"mime_message_id,omitempty"`
+	OriginalMessageURL string   `json:"original_message_url,omitempty"`
 }
 
 type OperatorFrankZohoSendProofStatus struct {
@@ -247,6 +271,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	summary.ApprovalHistory = selectOperatorStatusApprovalHistory(runtime)
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 	summary.Artifacts = selectOperatorStatusArtifacts(runtime)
+	summary.CampaignZohoEmailOutbounds = selectOperatorStatusCampaignZohoEmailOutbounds(runtime)
 	summary.FrankZohoSendProof = selectOperatorStatusFrankZohoSendProof(runtime)
 	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit), len(summary.Artifacts))
 
@@ -453,6 +478,40 @@ func selectOperatorStatusFrankZohoSendProof(runtime JobRuntimeState) []OperatorF
 		})
 	}
 	return proof
+}
+
+func selectOperatorStatusCampaignZohoEmailOutbounds(runtime JobRuntimeState) []OperatorCampaignZohoEmailOutboundActionStatus {
+	if len(runtime.CampaignZohoEmailOutboundActions) == 0 {
+		return nil
+	}
+
+	actions := make([]OperatorCampaignZohoEmailOutboundActionStatus, 0, len(runtime.CampaignZohoEmailOutboundActions))
+	for _, action := range runtime.CampaignZohoEmailOutboundActions {
+		normalized := NormalizeCampaignZohoEmailOutboundAction(action)
+		actions = append(actions, OperatorCampaignZohoEmailOutboundActionStatus{
+			ActionID:           normalized.ActionID,
+			StepID:             normalized.StepID,
+			CampaignID:         normalized.CampaignID,
+			State:              string(normalized.State),
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			To:                 append([]string(nil), normalized.Addressing.To...),
+			CC:                 append([]string(nil), normalized.Addressing.CC...),
+			BCC:                append([]string(nil), normalized.Addressing.BCC...),
+			Subject:            normalized.Subject,
+			BodyFormat:         normalized.BodyFormat,
+			BodySHA256:         normalized.BodySHA256,
+			PreparedAt:         formatOperatorStatusTime(normalized.PreparedAt),
+			SentAt:             formatOperatorStatusTime(normalized.SentAt),
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	return actions
 }
 
 type operatorArtifactCandidate struct {
