@@ -110,14 +110,17 @@ type OperatorFrankZohoInboundReplyStatus struct {
 }
 
 type OperatorCampaignZohoEmailReplyWorkItemStatus struct {
-	ReplyWorkItemID         string  `json:"reply_work_item_id"`
-	InboundReplyID          string  `json:"inbound_reply_id"`
-	CampaignID              string  `json:"campaign_id"`
-	State                   string  `json:"state"`
-	DeferredUntil           *string `json:"deferred_until,omitempty"`
-	ClaimedFollowUpActionID string  `json:"claimed_followup_action_id,omitempty"`
-	CreatedAt               *string `json:"created_at,omitempty"`
-	UpdatedAt               *string `json:"updated_at,omitempty"`
+	ReplyWorkItemID           string  `json:"reply_work_item_id"`
+	InboundReplyID            string  `json:"inbound_reply_id"`
+	CampaignID                string  `json:"campaign_id"`
+	State                     string  `json:"state"`
+	DerivedIterationState     string  `json:"derived_iteration_state,omitempty"`
+	LatestFollowUpActionID    string  `json:"latest_follow_up_action_id,omitempty"`
+	LatestFollowUpActionState string  `json:"latest_follow_up_action_state,omitempty"`
+	DeferredUntil             *string `json:"deferred_until,omitempty"`
+	ClaimedFollowUpActionID   string  `json:"claimed_followup_action_id,omitempty"`
+	CreatedAt                 *string `json:"created_at,omitempty"`
+	UpdatedAt                 *string `json:"updated_at,omitempty"`
 }
 
 type OperatorFrankZohoSendProofStatus struct {
@@ -596,21 +599,123 @@ func selectOperatorStatusCampaignZohoEmailReplyWorkItems(runtime JobRuntimeState
 		return nil
 	}
 
+	latestFollowUpByInbound := latestCampaignZohoEmailFollowUpActionsByInboundReply(runtime)
 	items := make([]OperatorCampaignZohoEmailReplyWorkItemStatus, 0, len(runtime.CampaignZohoEmailReplyWorkItems))
 	for _, item := range runtime.CampaignZohoEmailReplyWorkItems {
 		normalized := NormalizeCampaignZohoEmailReplyWorkItem(item)
+		latestFollowUp, hasLatestFollowUp := latestFollowUpByInbound[normalized.InboundReplyID]
+		derivedState := operatorStatusReplyWorkDerivedIterationState(normalized, latestFollowUp, hasLatestFollowUp)
+		latestFollowUpActionID := ""
+		latestFollowUpActionState := ""
+		if hasLatestFollowUp {
+			latestFollowUpActionID = latestFollowUp.ActionID
+			latestFollowUpActionState = string(latestFollowUp.State)
+		}
 		items = append(items, OperatorCampaignZohoEmailReplyWorkItemStatus{
-			ReplyWorkItemID:         normalized.ReplyWorkItemID,
-			InboundReplyID:          normalized.InboundReplyID,
-			CampaignID:              normalized.CampaignID,
-			State:                   string(normalized.State),
-			DeferredUntil:           formatOperatorStatusTime(normalized.DeferredUntil),
-			ClaimedFollowUpActionID: normalized.ClaimedFollowUpActionID,
-			CreatedAt:               formatOperatorStatusTime(normalized.CreatedAt),
-			UpdatedAt:               formatOperatorStatusTime(normalized.UpdatedAt),
+			ReplyWorkItemID:           normalized.ReplyWorkItemID,
+			InboundReplyID:            normalized.InboundReplyID,
+			CampaignID:                normalized.CampaignID,
+			State:                     string(normalized.State),
+			DerivedIterationState:     derivedState,
+			LatestFollowUpActionID:    latestFollowUpActionID,
+			LatestFollowUpActionState: latestFollowUpActionState,
+			DeferredUntil:             formatOperatorStatusTime(normalized.DeferredUntil),
+			ClaimedFollowUpActionID:   normalized.ClaimedFollowUpActionID,
+			CreatedAt:                 formatOperatorStatusTime(normalized.CreatedAt),
+			UpdatedAt:                 formatOperatorStatusTime(normalized.UpdatedAt),
 		})
 	}
 	return items
+}
+
+func latestCampaignZohoEmailFollowUpActionsByInboundReply(runtime JobRuntimeState) map[string]CampaignZohoEmailOutboundAction {
+	if len(runtime.CampaignZohoEmailOutboundActions) == 0 {
+		return nil
+	}
+
+	latest := make(map[string]CampaignZohoEmailOutboundAction, len(runtime.CampaignZohoEmailOutboundActions))
+	for _, action := range runtime.CampaignZohoEmailOutboundActions {
+		normalized := NormalizeCampaignZohoEmailOutboundAction(action)
+		if normalized.ReplyToInboundReplyID == "" {
+			continue
+		}
+		existing, ok := latest[normalized.ReplyToInboundReplyID]
+		if !ok || operatorStatusFollowUpActionSortsAfter(normalized, existing) {
+			latest[normalized.ReplyToInboundReplyID] = normalized
+		}
+	}
+	return latest
+}
+
+func operatorStatusReplyWorkDerivedIterationState(item CampaignZohoEmailReplyWorkItem, latestFollowUp CampaignZohoEmailOutboundAction, hasLatestFollowUp bool) string {
+	switch item.State {
+	case CampaignZohoEmailReplyWorkItemStateOpen:
+		if hasLatestFollowUp && latestFollowUp.State == CampaignZohoEmailOutboundActionStateFailed {
+			return "reopened_after_terminal_failure"
+		}
+		return "open"
+	case CampaignZohoEmailReplyWorkItemStateDeferred:
+		return "deferred"
+	case CampaignZohoEmailReplyWorkItemStateClaimed:
+		if hasLatestFollowUp && latestFollowUp.State == CampaignZohoEmailOutboundActionStateFailed {
+			return "blocked_terminal_failure"
+		}
+		return "claimed_unresolved"
+	case CampaignZohoEmailReplyWorkItemStateResponded:
+		return "responded"
+	case CampaignZohoEmailReplyWorkItemStateIgnored:
+		return "ignored"
+	default:
+		return string(item.State)
+	}
+}
+
+func operatorStatusFollowUpActionSortsAfter(left, right CampaignZohoEmailOutboundAction) bool {
+	leftAt := operatorStatusFollowUpActionTimestamp(left)
+	rightAt := operatorStatusFollowUpActionTimestamp(right)
+	if !leftAt.Equal(rightAt) {
+		return leftAt.After(rightAt)
+	}
+	leftRank := operatorStatusFollowUpActionStateRank(left.State)
+	rightRank := operatorStatusFollowUpActionStateRank(right.State)
+	if leftRank != rightRank {
+		return leftRank > rightRank
+	}
+	return left.ActionID > right.ActionID
+}
+
+func operatorStatusFollowUpActionTimestamp(action CampaignZohoEmailOutboundAction) time.Time {
+	normalized := NormalizeCampaignZohoEmailOutboundAction(action)
+	switch normalized.State {
+	case CampaignZohoEmailOutboundActionStateVerified:
+		if !normalized.VerifiedAt.IsZero() {
+			return normalized.VerifiedAt
+		}
+	case CampaignZohoEmailOutboundActionStateFailed:
+		if !normalized.FailedAt.IsZero() {
+			return normalized.FailedAt
+		}
+	case CampaignZohoEmailOutboundActionStateSent:
+		if !normalized.SentAt.IsZero() {
+			return normalized.SentAt
+		}
+	}
+	return normalized.PreparedAt
+}
+
+func operatorStatusFollowUpActionStateRank(state CampaignZohoEmailOutboundActionState) int {
+	switch state {
+	case CampaignZohoEmailOutboundActionStateVerified:
+		return 4
+	case CampaignZohoEmailOutboundActionStateFailed:
+		return 3
+	case CampaignZohoEmailOutboundActionStateSent:
+		return 2
+	case CampaignZohoEmailOutboundActionStatePrepared:
+		return 1
+	default:
+		return 0
+	}
 }
 
 type operatorArtifactCandidate struct {
