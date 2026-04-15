@@ -593,6 +593,23 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 		return "", false, nil
 	}
 
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return "", false, err
+	}
+	if preflight.Campaign != nil && missioncontrol.CampaignZohoEmailStopConditionsRequireInboundReplies(preflight.Campaign.StopConditions) {
+		if _, err := s.SyncFrankZohoCampaignInboundReplies(); err != nil {
+			return "", false, err
+		}
+		s.mu.Lock()
+		ec = missioncontrol.CloneExecutionContext(s.executionContext)
+		hasExecutionContext = s.hasExecutionContext
+		s.mu.Unlock()
+		if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+			return "", false, nil
+		}
+	}
+
 	action, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
 	if err != nil {
 		return "", false, err

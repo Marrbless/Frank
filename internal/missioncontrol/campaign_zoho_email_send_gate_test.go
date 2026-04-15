@@ -20,7 +20,7 @@ func TestDeriveCampaignZohoEmailSendGateDecisionAllowsBelowVerifiedSendStopLimit
 		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute))),
 	}
 
-	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records)
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, nil)
 	if err != nil {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtVerifiedSendStopLimit(t *
 		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildPreparedCampaignZohoEmailOutboundAction(t, "step-3", "campaign-zoho", "subject-3", now.Add(2*time.Minute))),
 	}
 
-	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records)
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, nil)
 	if err != nil {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtVerifiedSendStopLimit(t *
 	}
 }
 
-func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCondition(t *testing.T) {
+func TestDeriveCampaignZohoEmailSendGateDecisionCountsAttributedReplies(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 15, 19, 0, 0, 0, time.UTC)
@@ -88,12 +88,41 @@ func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCond
 		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 3}
 	})
 
-	_, err := DeriveCampaignZohoEmailSendGateDecision(campaign, nil)
-	if err == nil {
-		t.Fatal("DeriveCampaignZohoEmailSendGateDecision() error = nil, want unsupported stop-condition rejection")
+	records := []CampaignZohoEmailOutboundActionRecord{
+		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now)),
+		testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-other", "subject-2", now.Add(time.Minute))),
 	}
-	if got := err.Error(); got != `campaign zoho email stop_condition "stop after 3 replies" is not evaluable from committed outbound action records` {
-		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported stop-condition rejection", got)
+	inbound := []FrankZohoInboundReplyRecord{
+		testFrankZohoInboundReplyRecord("job-r1", 1, FrankZohoInboundReply{
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880101000",
+			ProviderMailID:     "<reply-1@zoho.test>",
+			InReplyTo:          "<step-1@example.test>",
+			References:         []string{"<step-1@example.test>"},
+			ReceivedAt:         now.Add(2 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage",
+		}),
+		testFrankZohoInboundReplyRecord("job-r2", 1, FrankZohoInboundReply{
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880101001",
+			ProviderMailID:     "<reply-2@zoho.test>",
+			References:         []string{"<step-1@example.test>", "<step-2@example.test>"},
+			ReceivedAt:         now.Add(3 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101001/originalmessage",
+		}),
+	}
+
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, inbound)
+	if err != nil {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
+	}
+	if !decision.Allowed {
+		t.Fatalf("Decision.Allowed = false, want true below reply stop limit")
+	}
+	if decision.AttributedReplyCount != 1 {
+		t.Fatalf("Decision.AttributedReplyCount = %d, want 1 uniquely attributed reply", decision.AttributedReplyCount)
 	}
 }
 
@@ -113,7 +142,7 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtFailureThreshold(t *testi
 		testCampaignZohoEmailOutboundActionRecord("job-3", 1, mustBuildPreparedCampaignZohoEmailOutboundAction(t, "step-3", "campaign-zoho", "subject-3", now.Add(2*time.Minute))),
 	}
 
-	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records)
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, nil)
 	if err != nil {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
 	}
@@ -128,6 +157,76 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtFailureThreshold(t *testi
 	}
 	if decision.AmbiguousOutcomeCount != 1 {
 		t.Fatalf("Decision.AmbiguousOutcomeCount = %d, want 1", decision.AmbiguousOutcomeCount)
+	}
+}
+
+func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtReplyStopLimit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 19, 45, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 2 replies"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 3}
+	})
+
+	records := []CampaignZohoEmailOutboundActionRecord{
+		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now)),
+		testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute))),
+	}
+	inbound := []FrankZohoInboundReplyRecord{
+		testFrankZohoInboundReplyRecord("job-r1", 1, FrankZohoInboundReply{
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880101000",
+			InReplyTo:          "<step-1@example.test>",
+			ReceivedAt:         now.Add(2 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage",
+		}),
+		testFrankZohoInboundReplyRecord("job-r2", 1, FrankZohoInboundReply{
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880101001",
+			InReplyTo:          "<step-1@example.test>",
+			ReceivedAt:         now.Add(3 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101001/originalmessage",
+		}),
+	}
+
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, inbound)
+	if err != nil {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
+	}
+	if decision.Allowed {
+		t.Fatal("Decision.Allowed = true, want false once reply stop limit is reached")
+	}
+	if !decision.Halted {
+		t.Fatal("Decision.Halted = false, want true once reply stop limit is reached")
+	}
+	if decision.TriggeredStopCondition != "stop after 2 replies" {
+		t.Fatalf("Decision.TriggeredStopCondition = %q, want configured reply stop condition", decision.TriggeredStopCondition)
+	}
+	if decision.AttributedReplyCount != 2 {
+		t.Fatalf("Decision.AttributedReplyCount = %d, want 2", decision.AttributedReplyCount)
+	}
+}
+
+func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCondition(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 19, 50, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 3 opens"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 3}
+	})
+
+	_, err := DeriveCampaignZohoEmailSendGateDecision(campaign, nil, nil)
+	if err == nil {
+		t.Fatal("DeriveCampaignZohoEmailSendGateDecision() error = nil, want unsupported stop-condition rejection")
+	}
+	if got := err.Error(); got != `campaign zoho email stop_condition "stop after 3 opens" is not evaluable from committed outbound and inbound reply records` {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported stop-condition rejection", got)
 	}
 }
 
@@ -215,10 +314,10 @@ func mustBuildVerifiedCampaignZohoEmailOutboundAction(t *testing.T, stepID, camp
 		ProviderAccountID:  "3323462000000008002",
 		FromAddress:        "frank@omou.online",
 		FromDisplayName:    "Frank",
-		ProviderMessageID:  "1711540357880100000",
-		ProviderMailID:     "<mail-1@zoho.test>",
-		MIMEMessageID:      "<mime-1@example.test>",
-		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+		ProviderMessageID:  "1711540357880100000-" + stepID,
+		ProviderMailID:     "<mail-" + stepID + "@zoho.test>",
+		MIMEMessageID:      "<" + stepID + "@example.test>",
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000-" + stepID + "/originalmessage",
 	}, preparedAt.Add(10*time.Second))
 	if err != nil {
 		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
@@ -273,5 +372,35 @@ func testCampaignZohoEmailOutboundActionRecord(jobID string, lastSeq uint64, act
 		MIMEMessageID:      normalized.MIMEMessageID,
 		OriginalMessageURL: normalized.OriginalMessageURL,
 		Failure:            normalized.Failure,
+	}
+}
+
+func testFrankZohoInboundReplyRecord(jobID string, lastSeq uint64, reply FrankZohoInboundReply) FrankZohoInboundReplyRecord {
+	normalized := NormalizeFrankZohoInboundReply(reply)
+	if normalized.ReplyID == "" {
+		normalized.ReplyID = normalizedFrankZohoInboundReplyID(normalized)
+	}
+	stepID := normalized.StepID
+	if stepID == "" {
+		stepID = "sync-replies"
+	}
+	return FrankZohoInboundReplyRecord{
+		RecordVersion:      StoreRecordVersion,
+		LastSeq:            lastSeq,
+		ReplyID:            normalized.ReplyID,
+		JobID:              jobID,
+		StepID:             stepID,
+		Provider:           normalized.Provider,
+		ProviderAccountID:  normalized.ProviderAccountID,
+		ProviderMessageID:  normalized.ProviderMessageID,
+		ProviderMailID:     normalized.ProviderMailID,
+		MIMEMessageID:      normalized.MIMEMessageID,
+		InReplyTo:          normalized.InReplyTo,
+		References:         append([]string(nil), normalized.References...),
+		FromAddress:        normalized.FromAddress,
+		FromDisplayName:    normalized.FromDisplayName,
+		Subject:            normalized.Subject,
+		ReceivedAt:         normalized.ReceivedAt,
+		OriginalMessageURL: normalized.OriginalMessageURL,
 	}
 }

@@ -114,7 +114,7 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignStopCondition(t *
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
-	campaign.StopConditions = []string{"stop after 3 replies"}
+	campaign.StopConditions = []string{"stop after 3 opens"}
 	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
 	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
 		t.Fatalf("StoreCampaignRecord() error = %v", err)
@@ -136,7 +136,7 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignStopCondition(t *
 	if err == nil {
 		t.Fatal("Execute() error = nil, want unsupported stop-condition rejection")
 	}
-	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after 3 replies" is not evaluable from committed outbound action records`) {
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after 3 opens" is not evaluable from committed outbound and inbound reply records`) {
 		t.Fatalf("Execute() error = %q, want unsupported stop-condition rejection", err)
 	}
 	if got := sendCalls.Load(); got != 0 {
@@ -910,6 +910,101 @@ func TestFrankZohoCampaignSendStopsAfterVerifiedSendLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after 3 verified sends" triggered after 3 verified sends`) {
 		t.Fatalf("PrepareFrankZohoCampaignSend() error = %q, want stop-condition halt", err)
+	}
+}
+
+func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
+	originalRead := readFrankZohoCampaignInboundReplies
+	t.Cleanup(func() {
+		readFrankZohoCampaignInboundReplies = originalRead
+	})
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	campaign.StopConditions = []string{"stop after first reply"}
+	campaign.UpdatedAt = campaign.UpdatedAt.Add(2 * time.Minute)
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	now := time.Date(2026, 4, 15, 20, 15, 0, 0, time.UTC)
+	if err := missioncontrol.StoreJobRuntimeRecord(root, missioncontrol.JobRuntimeRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		WriterEpoch:   1,
+		AppliedSeq:    1,
+		JobID:         "job-frank-zoho-send-reply-history",
+		State:         missioncontrol.JobStateRunning,
+		ActiveStepID:  "send-outbound-email",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord(history) error = %v", err)
+	}
+	action := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", now)
+	if err := missioncontrol.StoreCampaignZohoEmailOutboundActionRecord(root, testFrankZohoCampaignActionRecord("job-frank-zoho-send-reply-history", 1, action)); err != nil {
+		t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord() error = %v", err)
+	}
+
+	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+		return []missioncontrol.FrankZohoInboundReply{
+			{
+				Provider:           "zoho_mail",
+				ProviderAccountID:  "3323462000000008002",
+				ProviderMessageID:  "1711540357880101000",
+				ProviderMailID:     "<reply-1@zoho.test>",
+				MIMEMessageID:      "<inbound-1@example.test>",
+				InReplyTo:          "<mime-1@example.test>",
+				ReceivedAt:         now.Add(time.Minute),
+				OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage",
+			},
+		}, nil
+	}
+
+	tool := NewFrankZohoSendEmailTool()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-reply-limit",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-reply-limit",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(map[string]interface{}{
+		"subject": "Frank intro 2",
+		"body":    "Hello from Frank",
+	})
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend() error = nil, want reply stop-condition halt")
+	}
+	if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend() skip = true, want hard stop before send preparation")
+	}
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after first reply" triggered after 1 attributed replies`) {
+		t.Fatalf("PrepareFrankZohoCampaignSend() error = %q, want reply stop-condition halt", err)
 	}
 }
 
