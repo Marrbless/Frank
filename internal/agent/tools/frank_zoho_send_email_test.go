@@ -101,6 +101,48 @@ func TestFrankZohoSendEmailToolCampaignGateBlocksSend(t *testing.T) {
 	}
 }
 
+func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignStopCondition(t *testing.T) {
+	t.Parallel()
+
+	var sendCalls atomic.Int32
+	tool := NewFrankZohoSendEmailTool()
+	tool.send = func(ctx context.Context, req frankZohoSendRequest) (frankZohoSendResponseData, error) {
+		sendCalls.Add(1)
+		return frankZohoSendResponseData{}, nil
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	campaign.StopConditions = []string{"stop after 3 replies"}
+	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
+	_, err := reg.Execute(
+		missioncontrol.WithExecutionContext(context.Background(), ec),
+		tool.Name(),
+		map[string]interface{}{
+			"subject": "Frank intro",
+			"body":    "Hello from Frank",
+		},
+	)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported stop-condition rejection")
+	}
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after 3 replies" is not evaluable from committed outbound action records`) {
+		t.Fatalf("Execute() error = %q, want unsupported stop-condition rejection", err)
+	}
+	if got := sendCalls.Load(); got != 0 {
+		t.Fatalf("send calls = %d, want 0", got)
+	}
+}
+
 func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testing.T) {
 	t.Parallel()
 
@@ -495,6 +537,81 @@ func TestFrankZohoCampaignSendReplayStaysBlockedWhenProviderMailboxVerificationF
 	}
 }
 
+func TestFrankZohoCampaignSendStopsAfterVerifiedSendLimit(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+
+	now := time.Date(2026, 4, 15, 20, 0, 0, 0, time.UTC)
+	for i, subject := range []string{"Frank intro 1", "Frank intro 2", "Frank intro 3"} {
+		jobID := fmt.Sprintf("job-frank-zoho-send-history-%d", i+1)
+		if err := missioncontrol.StoreJobRuntimeRecord(root, missioncontrol.JobRuntimeRecord{
+			RecordVersion: missioncontrol.StoreRecordVersion,
+			WriterEpoch:   1,
+			AppliedSeq:    1,
+			JobID:         jobID,
+			State:         missioncontrol.JobStateRunning,
+			ActiveStepID:  "send-outbound-email",
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}); err != nil {
+			t.Fatalf("StoreJobRuntimeRecord(%q) error = %v", jobID, err)
+		}
+		action := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, subject, now.Add(time.Duration(i)*time.Minute))
+		if err := missioncontrol.StoreCampaignZohoEmailOutboundActionRecord(root, testFrankZohoCampaignActionRecord(jobID, 1, action)); err != nil {
+			t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord(%q) error = %v", jobID, err)
+		}
+	}
+
+	tool := NewFrankZohoSendEmailTool()
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-send-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-send-stop-limit",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{tool.Name()},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-send-stop-limit",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{tool.Name()},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	_, skip, err := state.PrepareFrankZohoCampaignSend(map[string]interface{}{
+		"subject": "Frank intro 4",
+		"body":    "Hello from Frank",
+	})
+	if err == nil {
+		t.Fatal("PrepareFrankZohoCampaignSend() error = nil, want stop-condition halt")
+	}
+	if skip {
+		t.Fatal("PrepareFrankZohoCampaignSend() skip = true, want hard stop before send preparation")
+	}
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email stop_condition "stop after 3 verified sends" triggered after 3 verified sends`) {
+		t.Fatalf("PrepareFrankZohoCampaignSend() error = %q, want stop-condition halt", err)
+	}
+}
+
 func TestFrankZohoSendProofVerifierUsesZohoBearerTokenAndFetchesOriginalMessage(t *testing.T) {
 	t.Parallel()
 
@@ -590,6 +707,7 @@ func mustStoreFrankZohoAddressedCampaignFixture(t *testing.T, root string, conta
 	t.Helper()
 
 	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	campaign.StopConditions = []string{"stop after 3 verified sends"}
 	campaign.ZohoEmailAddressing = &missioncontrol.CampaignZohoEmailAddressing{
 		To:  []string{"person@example.com", "team@example.com"},
 		CC:  []string{"copy@example.com"},
@@ -606,4 +724,75 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return fn(r)
+}
+
+func mustBuildVerifiedFrankZohoCampaignAction(t *testing.T, stepID, campaignID, subject string, preparedAt time.Time) missioncontrol.CampaignZohoEmailOutboundAction {
+	t.Helper()
+
+	prepared, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedAction(
+		stepID,
+		campaignID,
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		missioncontrol.CampaignZohoEmailAddressing{
+			To:  []string{"person@example.com"},
+			CC:  []string{"copy@example.com"},
+			BCC: []string{"blind@example.com"},
+		},
+		subject,
+		"plaintext",
+		"Hello from Frank",
+		preparedAt,
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+	sent, err := missioncontrol.BuildCampaignZohoEmailOutboundSentAction(prepared, missioncontrol.FrankZohoSendReceipt{
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, preparedAt.Add(10*time.Second))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
+	sent.State = missioncontrol.CampaignZohoEmailOutboundActionStateVerified
+	sent.VerifiedAt = preparedAt.Add(20 * time.Second)
+	if err := missioncontrol.ValidateCampaignZohoEmailOutboundAction(sent); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(verified) error = %v", err)
+	}
+	return sent
+}
+
+func testFrankZohoCampaignActionRecord(jobID string, lastSeq uint64, action missioncontrol.CampaignZohoEmailOutboundAction) missioncontrol.CampaignZohoEmailOutboundActionRecord {
+	normalized := missioncontrol.NormalizeCampaignZohoEmailOutboundAction(action)
+	return missioncontrol.CampaignZohoEmailOutboundActionRecord{
+		RecordVersion:      missioncontrol.StoreRecordVersion,
+		LastSeq:            lastSeq,
+		ActionID:           normalized.ActionID,
+		JobID:              jobID,
+		StepID:             normalized.StepID,
+		CampaignID:         normalized.CampaignID,
+		State:              string(normalized.State),
+		Provider:           normalized.Provider,
+		ProviderAccountID:  normalized.ProviderAccountID,
+		FromAddress:        normalized.FromAddress,
+		FromDisplayName:    normalized.FromDisplayName,
+		Addressing:         normalized.Addressing,
+		Subject:            normalized.Subject,
+		BodyFormat:         normalized.BodyFormat,
+		BodySHA256:         normalized.BodySHA256,
+		PreparedAt:         normalized.PreparedAt,
+		SentAt:             normalized.SentAt,
+		VerifiedAt:         normalized.VerifiedAt,
+		ProviderMessageID:  normalized.ProviderMessageID,
+		ProviderMailID:     normalized.ProviderMailID,
+		MIMEMessageID:      normalized.MIMEMessageID,
+		OriginalMessageURL: normalized.OriginalMessageURL,
+	}
 }

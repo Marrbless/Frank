@@ -189,6 +189,9 @@ func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]in
 	if err := validateFrankZohoMailPreflight(preflight); err != nil {
 		return "", err
 	}
+	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
+		return "", err
+	}
 
 	req, err := buildFrankZohoSendRequest(preflight, args)
 	if err != nil {
@@ -382,6 +385,24 @@ func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionCo
 	return fmt.Errorf("%s requires a campaign-linked Frank mailbox account", frankZohoSendEmailToolName)
 }
 
+func requireFrankZohoCampaignSendGate(ec missioncontrol.ExecutionContext, campaign missioncontrol.CampaignRecord) error {
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return fmt.Errorf("%s requires mission_store_root to derive campaign send gate", frankZohoSendEmailToolName)
+	}
+	decision, err := missioncontrol.LoadCommittedCampaignZohoEmailSendGateDecision(ec.MissionStoreRoot, campaign)
+	if err != nil {
+		return fmt.Errorf("%s: campaign send gate is closed: %w", frankZohoSendEmailToolName, err)
+	}
+	if !decision.Allowed {
+		reason := strings.TrimSpace(decision.Reason)
+		if reason == "" {
+			reason = "campaign send gate denied further outbound sends"
+		}
+		return fmt.Errorf("%s: campaign send gate is closed: %s", frankZohoSendEmailToolName, reason)
+	}
+	return nil
+}
+
 func buildFrankZohoSendRequest(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, args map[string]interface{}) (frankZohoSendRequest, error) {
 	if err := frankZohoRejectAddressArgs(args); err != nil {
 		return frankZohoSendRequest{}, err
@@ -420,6 +441,9 @@ func buildFrankZohoPreparedCampaignAction(ec missioncontrol.ExecutionContext, ar
 		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
 	}
 	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
+	}
+	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
 		return missioncontrol.CampaignZohoEmailOutboundAction{}, err
 	}
 	req, err := buildFrankZohoSendRequest(preflight, args)
