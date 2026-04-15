@@ -61,6 +61,10 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
 	}
+	campaignZohoEmailOutboundActionRecords, err := ListCommittedCampaignZohoEmailOutboundActionRecords(root, jobID)
+	if err != nil {
+		return hydratedCommittedStoreState{}, err
+	}
 	frankZohoSendReceiptRecords, err := ListCommittedFrankZohoSendReceiptRecords(root, jobID)
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
@@ -73,6 +77,7 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	runtime.ApprovalRequests = hydrateCommittedApprovalRequests(requestRecords)
 	runtime.ApprovalGrants = hydrateCommittedApprovalGrants(grantRecords)
 	runtime.AuditHistory = hydrateCommittedAuditHistory(auditRecords)
+	runtime.CampaignZohoEmailOutboundActions = hydrateCommittedCampaignZohoEmailOutboundActions(campaignZohoEmailOutboundActionRecords)
 	runtime.FrankZohoSendReceipts = hydrateCommittedFrankZohoSendReceipts(frankZohoSendReceiptRecords)
 	runtime, _ = NormalizeHydratedApprovalRequests(runtime, now)
 
@@ -326,6 +331,37 @@ func hydrateCommittedArtifacts(records []ArtifactRecord) []ArtifactRecord {
 		return artifacts[i].SourceStepID < artifacts[j].SourceStepID
 	})
 	return artifacts
+}
+
+func hydrateCommittedCampaignZohoEmailOutboundActions(records []CampaignZohoEmailOutboundActionRecord) []CampaignZohoEmailOutboundAction {
+	if len(records) == 0 {
+		return nil
+	}
+
+	actions := make([]CampaignZohoEmailOutboundAction, len(records))
+	for i, record := range records {
+		actions[i] = NormalizeCampaignZohoEmailOutboundAction(CampaignZohoEmailOutboundAction{
+			ActionID:           record.ActionID,
+			StepID:             record.StepID,
+			CampaignID:         record.CampaignID,
+			State:              CampaignZohoEmailOutboundActionState(record.State),
+			Provider:           record.Provider,
+			ProviderAccountID:  record.ProviderAccountID,
+			FromAddress:        record.FromAddress,
+			FromDisplayName:    record.FromDisplayName,
+			Addressing:         record.Addressing,
+			Subject:            record.Subject,
+			BodyFormat:         record.BodyFormat,
+			BodySHA256:         record.BodySHA256,
+			PreparedAt:         record.PreparedAt,
+			SentAt:             record.SentAt,
+			ProviderMessageID:  record.ProviderMessageID,
+			ProviderMailID:     record.ProviderMailID,
+			MIMEMessageID:      record.MIMEMessageID,
+			OriginalMessageURL: record.OriginalMessageURL,
+		})
+	}
+	return actions
 }
 
 func hydrateCommittedFrankZohoSendReceipts(records []FrankZohoSendReceiptRecord) []FrankZohoSendReceipt {

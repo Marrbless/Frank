@@ -87,16 +87,17 @@ func projectRuntimeStateToStoreBatch(root string, lock WriterLockRecord, job *Jo
 	}
 
 	return StoreBatch{
-		JobRuntime:            jobRuntime,
-		RuntimeControl:        runtimeControl,
-		StepRecords:           stepRecords,
-		ApprovalRequests:      projectApprovalRequestRecords(runtime, nextSeq),
-		ApprovalGrants:        projectApprovalGrantRecords(runtime, nextSeq),
-		AuditEvents:           projectAuditEventRecords(runtime, nextSeq, committedAudits),
-		Artifacts:             projectArtifactRecords(runtime, plan, nextSeq),
-		FrankZohoSendReceipts: projectFrankZohoSendReceiptRecords(runtime, nextSeq),
-		ActiveJob:             activeJob,
-		RemoveActiveJob:       removeActiveJob,
+		JobRuntime:                       jobRuntime,
+		RuntimeControl:                   runtimeControl,
+		StepRecords:                      stepRecords,
+		ApprovalRequests:                 projectApprovalRequestRecords(runtime, nextSeq),
+		ApprovalGrants:                   projectApprovalGrantRecords(runtime, nextSeq),
+		AuditEvents:                      projectAuditEventRecords(runtime, nextSeq, committedAudits),
+		Artifacts:                        projectArtifactRecords(runtime, plan, nextSeq),
+		CampaignZohoEmailOutboundActions: projectCampaignZohoEmailOutboundActionRecords(runtime, nextSeq),
+		FrankZohoSendReceipts:            projectFrankZohoSendReceiptRecords(runtime, nextSeq),
+		ActiveJob:                        activeJob,
+		RemoveActiveJob:                  removeActiveJob,
 	}, nil
 }
 
@@ -536,6 +537,43 @@ func projectArtifactRecords(runtime JobRuntimeState, plan *InspectablePlanContex
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].ArtifactID < records[j].ArtifactID
+	})
+	return records
+}
+
+func projectCampaignZohoEmailOutboundActionRecords(runtime JobRuntimeState, nextSeq uint64) []CampaignZohoEmailOutboundActionRecord {
+	if len(runtime.CampaignZohoEmailOutboundActions) == 0 {
+		return nil
+	}
+	records := make([]CampaignZohoEmailOutboundActionRecord, 0, len(runtime.CampaignZohoEmailOutboundActions))
+	for _, action := range runtime.CampaignZohoEmailOutboundActions {
+		normalized := NormalizeCampaignZohoEmailOutboundAction(action)
+		records = append(records, CampaignZohoEmailOutboundActionRecord{
+			RecordVersion:      StoreRecordVersion,
+			LastSeq:            nextSeq,
+			ActionID:           normalized.ActionID,
+			JobID:              runtime.JobID,
+			StepID:             normalized.StepID,
+			CampaignID:         normalized.CampaignID,
+			State:              string(normalized.State),
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			Addressing:         normalized.Addressing,
+			Subject:            normalized.Subject,
+			BodyFormat:         normalized.BodyFormat,
+			BodySHA256:         normalized.BodySHA256,
+			PreparedAt:         normalized.PreparedAt,
+			SentAt:             normalized.SentAt,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].ActionID < records[j].ActionID
 	})
 	return records
 }

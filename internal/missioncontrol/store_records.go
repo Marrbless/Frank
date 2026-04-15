@@ -142,6 +142,31 @@ type ArtifactRecord struct {
 	VerificationOutput  string    `json:"verification_output,omitempty"`
 }
 
+type CampaignZohoEmailOutboundActionRecord struct {
+	RecordVersion      int                         `json:"record_version"`
+	LastSeq            uint64                      `json:"last_seq"`
+	ActionID           string                      `json:"action_id"`
+	JobID              string                      `json:"job_id"`
+	StepID             string                      `json:"step_id"`
+	AttemptID          string                      `json:"attempt_id,omitempty"`
+	CampaignID         string                      `json:"campaign_id"`
+	State              string                      `json:"state"`
+	Provider           string                      `json:"provider"`
+	ProviderAccountID  string                      `json:"provider_account_id"`
+	FromAddress        string                      `json:"from_address"`
+	FromDisplayName    string                      `json:"from_display_name,omitempty"`
+	Addressing         CampaignZohoEmailAddressing `json:"addressing"`
+	Subject            string                      `json:"subject"`
+	BodyFormat         string                      `json:"body_format"`
+	BodySHA256         string                      `json:"body_sha256"`
+	PreparedAt         time.Time                   `json:"prepared_at"`
+	SentAt             time.Time                   `json:"sent_at,omitempty"`
+	ProviderMessageID  string                      `json:"provider_message_id,omitempty"`
+	ProviderMailID     string                      `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string                      `json:"mime_message_id,omitempty"`
+	OriginalMessageURL string                      `json:"original_message_url,omitempty"`
+}
+
 type FrankZohoSendReceiptRecord struct {
 	RecordVersion      int    `json:"record_version"`
 	LastSeq            uint64 `json:"last_seq"`
@@ -369,6 +394,48 @@ func ValidateArtifactRecord(record ArtifactRecord) error {
 	return nil
 }
 
+func ValidateCampaignZohoEmailOutboundActionRecord(record CampaignZohoEmailOutboundActionRecord) error {
+	if record.RecordVersion <= 0 {
+		return fmt.Errorf("mission store campaign zoho email outbound action record_version must be positive")
+	}
+	if record.LastSeq == 0 {
+		return fmt.Errorf("mission store campaign zoho email outbound action last_seq must be positive")
+	}
+	if strings.TrimSpace(record.ActionID) == "" {
+		return fmt.Errorf("mission store campaign zoho email outbound action action_id is required")
+	}
+	if strings.TrimSpace(record.JobID) == "" {
+		return fmt.Errorf("mission store campaign zoho email outbound action job_id is required")
+	}
+	if strings.TrimSpace(record.StepID) == "" {
+		return fmt.Errorf("mission store campaign zoho email outbound action step_id is required")
+	}
+	action := CampaignZohoEmailOutboundAction{
+		ActionID:           record.ActionID,
+		StepID:             record.StepID,
+		CampaignID:         record.CampaignID,
+		State:              CampaignZohoEmailOutboundActionState(record.State),
+		Provider:           record.Provider,
+		ProviderAccountID:  record.ProviderAccountID,
+		FromAddress:        record.FromAddress,
+		FromDisplayName:    record.FromDisplayName,
+		Addressing:         record.Addressing,
+		Subject:            record.Subject,
+		BodyFormat:         record.BodyFormat,
+		BodySHA256:         record.BodySHA256,
+		PreparedAt:         record.PreparedAt,
+		SentAt:             record.SentAt,
+		ProviderMessageID:  record.ProviderMessageID,
+		ProviderMailID:     record.ProviderMailID,
+		MIMEMessageID:      record.MIMEMessageID,
+		OriginalMessageURL: record.OriginalMessageURL,
+	}
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		return err
+	}
+	return nil
+}
+
 func ValidateFrankZohoSendReceiptRecord(record FrankZohoSendReceiptRecord) error {
 	if record.RecordVersion <= 0 {
 		return fmt.Errorf("mission store frank zoho send receipt record_version must be positive")
@@ -540,6 +607,16 @@ func StoreArtifactRecord(root string, record ArtifactRecord) error {
 		return err
 	}
 	return WriteStoreJSONAtomic(storeArtifactVersionPath(root, record.JobID, record.ArtifactID, record.LastSeq, record.AttemptID), record)
+}
+
+func StoreCampaignZohoEmailOutboundActionRecord(root string, record CampaignZohoEmailOutboundActionRecord) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if err := ValidateCampaignZohoEmailOutboundActionRecord(record); err != nil {
+		return err
+	}
+	return WriteStoreJSONAtomic(storeCampaignZohoEmailOutboundActionVersionPath(root, record.JobID, record.ActionID, record.LastSeq, record.AttemptID), record)
 }
 
 func StoreFrankZohoSendReceiptRecord(root string, record FrankZohoSendReceiptRecord) error {
@@ -792,6 +869,49 @@ func ListCommittedArtifactRecords(root, jobID string) ([]ArtifactRecord, error) 
 	return records, nil
 }
 
+func ListCommittedCampaignZohoEmailOutboundActionRecords(root, jobID string) ([]CampaignZohoEmailOutboundActionRecord, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, err
+	}
+	jobRuntime, err := LoadCommittedJobRuntimeRecord(root, jobID)
+	if err != nil {
+		if errors.Is(err, ErrJobRuntimeRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	resolver := newStoreCommittedAttemptResolver(root, jobID)
+	actionIDs, err := listStoreRecordKeys(StoreCampaignZohoEmailOutboundActionsDir(root, jobID))
+	if err != nil {
+		return nil, err
+	}
+	records := make([]CampaignZohoEmailOutboundActionRecord, 0, len(actionIDs))
+	for _, actionID := range actionIDs {
+		record, err := loadLatestVisibleVersionedJSONRecordAtOrBefore(
+			storeCampaignZohoEmailOutboundActionVersionsDir(root, jobID, actionID),
+			jobRuntime.AppliedSeq,
+			resolver,
+			loadCampaignZohoEmailOutboundActionRecordFile,
+			func(record CampaignZohoEmailOutboundActionRecord) uint64 { return record.LastSeq },
+			func(record CampaignZohoEmailOutboundActionRecord) string { return record.AttemptID },
+		)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].PreparedAt != records[j].PreparedAt {
+			return records[i].PreparedAt.Before(records[j].PreparedAt)
+		}
+		return records[i].ActionID < records[j].ActionID
+	})
+	return records, nil
+}
+
 func ListCommittedFrankZohoSendReceiptRecords(root, jobID string) ([]FrankZohoSendReceiptRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, err
@@ -935,6 +1055,17 @@ func loadArtifactRecordFile(path string) (ArtifactRecord, error) {
 	return record, nil
 }
 
+func loadCampaignZohoEmailOutboundActionRecordFile(path string) (CampaignZohoEmailOutboundActionRecord, error) {
+	var record CampaignZohoEmailOutboundActionRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		return CampaignZohoEmailOutboundActionRecord{}, err
+	}
+	if err := ValidateCampaignZohoEmailOutboundActionRecord(record); err != nil {
+		return CampaignZohoEmailOutboundActionRecord{}, err
+	}
+	return record, nil
+}
+
 func loadFrankZohoSendReceiptRecordFile(path string) (FrankZohoSendReceiptRecord, error) {
 	var record FrankZohoSendReceiptRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
@@ -1034,6 +1165,14 @@ func storeArtifactVersionsDir(root, jobID, artifactID string) string {
 
 func storeArtifactVersionPath(root, jobID, artifactID string, seq uint64, attemptID string) string {
 	return filepath.Join(storeArtifactVersionsDir(root, jobID, artifactID), storeVersionFilename(seq, attemptID))
+}
+
+func storeCampaignZohoEmailOutboundActionVersionsDir(root, jobID, actionID string) string {
+	return filepath.Join(StoreCampaignZohoEmailOutboundActionsDir(root, jobID), actionID)
+}
+
+func storeCampaignZohoEmailOutboundActionVersionPath(root, jobID, actionID string, seq uint64, attemptID string) string {
+	return filepath.Join(storeCampaignZohoEmailOutboundActionVersionsDir(root, jobID, actionID), storeVersionFilename(seq, attemptID))
 }
 
 func storeFrankZohoSendReceiptVersionsDir(root, jobID, receiptID string) string {

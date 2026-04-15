@@ -381,3 +381,102 @@ func TestPersistProjectedRuntimeStateProjectsFrankZohoSendReceiptsAppendOnly(t *
 		t.Fatalf("records[1].OriginalMessageURL = %q, want %q", records[1].OriginalMessageURL, receiptTwo.OriginalMessageURL)
 	}
 }
+
+func TestPersistProjectedRuntimeStateProjectsCampaignZohoEmailOutboundActionsLatestState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	prepared, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{
+			To:  []string{"alice@example.com"},
+			CC:  []string{"carol@example.com"},
+			BCC: []string{"dave@example.com"},
+		},
+		"Frank intro",
+		"plaintext",
+		"Hello from Frank",
+		now.Add(-time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                            job.ID,
+		State:                            JobStateRunning,
+		ActiveStepID:                     "build",
+		InspectablePlan:                  &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{prepared},
+		CreatedAt:                        now.Add(-2 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-2 * time.Minute),
+		ActiveStepAt:                     now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(prepared) error = %v", err)
+	}
+
+	sent, err := BuildCampaignZohoEmailOutboundSentAction(prepared, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, now)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
+
+	runtime.CampaignZohoEmailOutboundActions = []CampaignZohoEmailOutboundAction{sent}
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(sent) error = %v", err)
+	}
+
+	records, err := ListCommittedCampaignZohoEmailOutboundActionRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedCampaignZohoEmailOutboundActionRecords() len = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.ActionID != prepared.ActionID {
+		t.Fatalf("ActionID = %q, want stable prepared action id %q", record.ActionID, prepared.ActionID)
+	}
+	if record.State != string(CampaignZohoEmailOutboundActionStateSent) {
+		t.Fatalf("State = %q, want sent", record.State)
+	}
+	if record.CampaignID != "campaign-mail" {
+		t.Fatalf("CampaignID = %q, want campaign-mail", record.CampaignID)
+	}
+	if record.Addressing.To[0] != "alice@example.com" {
+		t.Fatalf("Addressing.To[0] = %q, want alice@example.com", record.Addressing.To[0])
+	}
+	if record.BodySHA256 != CampaignZohoEmailBodySHA256("Hello from Frank") {
+		t.Fatalf("BodySHA256 = %q, want sha256 of outbound body", record.BodySHA256)
+	}
+	if record.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("ProviderMessageID = %q, want canonical Zoho message id", record.ProviderMessageID)
+	}
+}

@@ -228,6 +228,14 @@ func StoreArtifactPath(root string, jobID string, artifactID string) string {
 	return filepath.Join(StoreArtifactsDir(root, jobID), artifactID+".json")
 }
 
+func StoreCampaignZohoEmailOutboundActionsDir(root string, jobID string) string {
+	return filepath.Join(StoreJobDir(root, jobID), "campaign_zoho_email_outbound_actions")
+}
+
+func StoreCampaignZohoEmailOutboundActionPath(root string, jobID string, actionID string) string {
+	return filepath.Join(StoreCampaignZohoEmailOutboundActionsDir(root, jobID), actionID+".json")
+}
+
 func StoreFrankZohoSendReceiptsDir(root string, jobID string) string {
 	return filepath.Join(StoreJobDir(root, jobID), "frank_zoho_send_receipts")
 }

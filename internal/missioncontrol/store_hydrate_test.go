@@ -555,6 +555,103 @@ func TestHydrateCommittedJobRuntimeStateLoadsFrankZohoSendReceiptsAppendOnly(t *
 	}
 }
 
+func TestHydrateCommittedJobRuntimeStateLoadsCampaignZohoEmailOutboundActionsLatestState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	prepared, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{
+			To: []string{"alice@example.com"},
+		},
+		"Frank intro",
+		"plaintext",
+		"Hello from Frank",
+		now.Add(-time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+	sent, err := BuildCampaignZohoEmailOutboundSentAction(prepared, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, now)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                            job.ID,
+		State:                            JobStateRunning,
+		ActiveStepID:                     "build",
+		InspectablePlan:                  &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{prepared},
+		CreatedAt:                        now.Add(-2 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-2 * time.Minute),
+		ActiveStepAt:                     now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(prepared) error = %v", err)
+	}
+
+	runtime.CampaignZohoEmailOutboundActions = []CampaignZohoEmailOutboundAction{sent}
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(sent) error = %v", err)
+	}
+
+	hydrated, err := HydrateCommittedJobRuntimeState(root, job.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("HydrateCommittedJobRuntimeState() error = %v", err)
+	}
+	if len(hydrated.CampaignZohoEmailOutboundActions) != 1 {
+		t.Fatalf("len(Runtime.CampaignZohoEmailOutboundActions) = %d, want 1", len(hydrated.CampaignZohoEmailOutboundActions))
+	}
+
+	action := hydrated.CampaignZohoEmailOutboundActions[0]
+	if action.ActionID != prepared.ActionID {
+		t.Fatalf("ActionID = %q, want %q", action.ActionID, prepared.ActionID)
+	}
+	if action.State != CampaignZohoEmailOutboundActionStateSent {
+		t.Fatalf("State = %q, want sent", action.State)
+	}
+	if action.CampaignID != "campaign-mail" {
+		t.Fatalf("CampaignID = %q, want campaign-mail", action.CampaignID)
+	}
+	if action.Addressing.To[0] != "alice@example.com" {
+		t.Fatalf("Addressing.To[0] = %q, want alice@example.com", action.Addressing.To[0])
+	}
+	if action.ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("ProviderMessageID = %q, want canonical Zoho message id", action.ProviderMessageID)
+	}
+	if action.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("OriginalMessageURL = %q, want proof-compatible originalmessage URL", action.OriginalMessageURL)
+	}
+}
+
 func TestHydrateCommittedRuntimeControlMatchesActiveStep(t *testing.T) {
 	t.Parallel()
 

@@ -75,29 +75,30 @@ type InspectablePlanContext struct {
 }
 
 type JobRuntimeState struct {
-	JobID                 string                      `json:"job_id"`
-	State                 JobState                    `json:"state"`
-	ActiveStepID          string                      `json:"active_step_id,omitempty"`
-	InspectablePlan       *InspectablePlanContext     `json:"inspectable_plan,omitempty"`
-	CompletedSteps        []RuntimeStepRecord         `json:"completed_steps,omitempty"`
-	FailedSteps           []RuntimeStepRecord         `json:"failed_steps,omitempty"`
-	AuditHistory          []AuditEvent                `json:"audit_history,omitempty"`
-	FrankZohoSendReceipts []FrankZohoSendReceipt      `json:"-"`
-	ApprovalRequests      []ApprovalRequest           `json:"approval_requests,omitempty"`
-	ApprovalGrants        []ApprovalGrant             `json:"approval_grants,omitempty"`
-	BudgetBlocker         *RuntimeBudgetBlockerRecord `json:"budget_blocker,omitempty"`
-	WaitingReason         string                      `json:"waiting_reason,omitempty"`
-	PausedReason          string                      `json:"paused_reason,omitempty"`
-	AbortedReason         string                      `json:"aborted_reason,omitempty"`
-	CreatedAt             time.Time                   `json:"created_at,omitempty"`
-	UpdatedAt             time.Time                   `json:"updated_at,omitempty"`
-	StartedAt             time.Time                   `json:"started_at,omitempty"`
-	ActiveStepAt          time.Time                   `json:"active_step_at,omitempty"`
-	WaitingAt             time.Time                   `json:"waiting_at,omitempty"`
-	PausedAt              time.Time                   `json:"paused_at,omitempty"`
-	AbortedAt             time.Time                   `json:"aborted_at,omitempty"`
-	CompletedAt           time.Time                   `json:"completed_at,omitempty"`
-	FailedAt              time.Time                   `json:"failed_at,omitempty"`
+	JobID                            string                            `json:"job_id"`
+	State                            JobState                          `json:"state"`
+	ActiveStepID                     string                            `json:"active_step_id,omitempty"`
+	InspectablePlan                  *InspectablePlanContext           `json:"inspectable_plan,omitempty"`
+	CompletedSteps                   []RuntimeStepRecord               `json:"completed_steps,omitempty"`
+	FailedSteps                      []RuntimeStepRecord               `json:"failed_steps,omitempty"`
+	AuditHistory                     []AuditEvent                      `json:"audit_history,omitempty"`
+	CampaignZohoEmailOutboundActions []CampaignZohoEmailOutboundAction `json:"-"`
+	FrankZohoSendReceipts            []FrankZohoSendReceipt            `json:"-"`
+	ApprovalRequests                 []ApprovalRequest                 `json:"approval_requests,omitempty"`
+	ApprovalGrants                   []ApprovalGrant                   `json:"approval_grants,omitempty"`
+	BudgetBlocker                    *RuntimeBudgetBlockerRecord       `json:"budget_blocker,omitempty"`
+	WaitingReason                    string                            `json:"waiting_reason,omitempty"`
+	PausedReason                     string                            `json:"paused_reason,omitempty"`
+	AbortedReason                    string                            `json:"aborted_reason,omitempty"`
+	CreatedAt                        time.Time                         `json:"created_at,omitempty"`
+	UpdatedAt                        time.Time                         `json:"updated_at,omitempty"`
+	StartedAt                        time.Time                         `json:"started_at,omitempty"`
+	ActiveStepAt                     time.Time                         `json:"active_step_at,omitempty"`
+	WaitingAt                        time.Time                         `json:"waiting_at,omitempty"`
+	PausedAt                         time.Time                         `json:"paused_at,omitempty"`
+	AbortedAt                        time.Time                         `json:"aborted_at,omitempty"`
+	CompletedAt                      time.Time                         `json:"completed_at,omitempty"`
+	FailedAt                         time.Time                         `json:"failed_at,omitempty"`
 }
 
 type RuntimeControlContext struct {
@@ -140,6 +141,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 		cloned.FailedSteps = nil
 	}
 	cloned.AuditHistory = CloneAuditHistory(runtime.AuditHistory)
+	cloned.CampaignZohoEmailOutboundActions = cloneCampaignZohoEmailOutboundActions(runtime.CampaignZohoEmailOutboundActions)
 	cloned.FrankZohoSendReceipts = cloneFrankZohoSendReceipts(runtime.FrankZohoSendReceipts)
 	if len(runtime.ApprovalRequests) > 0 {
 		cloned.ApprovalRequests = make([]ApprovalRequest, len(runtime.ApprovalRequests))
