@@ -32,6 +32,7 @@ type OperatorStatusSummary struct {
 	RecentAudit                []OperatorRecentAuditStatus                     `json:"recent_audit,omitempty"`
 	Artifacts                  []OperatorArtifactStatus                        `json:"artifacts,omitempty"`
 	CampaignZohoEmailOutbounds []OperatorCampaignZohoEmailOutboundActionStatus `json:"campaign_zoho_email_outbounds,omitempty"`
+	CampaignZohoEmailSendGate  *CampaignZohoEmailSendGateDecision              `json:"campaign_zoho_email_send_gate,omitempty"`
 	FrankZohoSendProof         []OperatorFrankZohoSendProofStatus              `json:"frank_zoho_send_proof,omitempty"`
 	Truncation                 *OperatorStatusTruncation                       `json:"truncation,omitempty"`
 }

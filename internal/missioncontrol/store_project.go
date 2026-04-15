@@ -75,6 +75,11 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	}
 
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
+	campaignGate, err := buildCommittedMissionStatusCampaignZohoEmailSendGate(root, runtimeState, runtimeControl)
+	if err != nil {
+		return MissionStatusSnapshot{}, err
+	}
+	summary.CampaignZohoEmailSendGate = campaignGate
 	deferredSchedulerTriggers, err := LoadDeferredSchedulerTriggerStatuses(root)
 	if err != nil {
 		return MissionStatusSnapshot{}, err
@@ -110,4 +115,52 @@ func buildCommittedMissionStatusStepSummary(runtime JobRuntimeState, control *Ru
 		return InspectStep{}, false, nil
 	}
 	return summary.Steps[0], true, nil
+}
+
+func buildCommittedMissionStatusCampaignZohoEmailSendGate(root string, runtime JobRuntimeState, control *RuntimeControlContext) (*CampaignZohoEmailSendGateDecision, error) {
+	step, ok, err := committedMissionStatusActiveStep(runtime, control)
+	if err != nil || !ok || step.CampaignRef == nil {
+		return nil, err
+	}
+
+	ec := ExecutionContext{
+		Step:             &step,
+		MissionStoreRoot: root,
+	}
+	preflight, err := ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return nil, err
+	}
+	if preflight.Campaign == nil {
+		return nil, nil
+	}
+
+	decision, err := LoadCommittedCampaignZohoEmailSendGateDecision(root, *preflight.Campaign)
+	if err != nil {
+		return &CampaignZohoEmailSendGateDecision{
+			CampaignID: strings.TrimSpace(preflight.Campaign.CampaignID),
+			Allowed:    false,
+			Halted:     false,
+			Reason:     err.Error(),
+		}, nil
+	}
+	return &decision, nil
+}
+
+func committedMissionStatusActiveStep(runtime JobRuntimeState, control *RuntimeControlContext) (Step, bool, error) {
+	if runtime.ActiveStepID == "" {
+		return Step{}, false, nil
+	}
+	if control != nil && strings.TrimSpace(control.Step.ID) == runtime.ActiveStepID {
+		return copyStep(control.Step), true, nil
+	}
+	if runtime.InspectablePlan == nil {
+		return Step{}, false, nil
+	}
+	for _, step := range runtime.InspectablePlan.Steps {
+		if strings.TrimSpace(step.ID) == runtime.ActiveStepID {
+			return copyStep(step), true, nil
+		}
+	}
+	return Step{}, false, nil
 }

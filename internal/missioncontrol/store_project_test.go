@@ -558,6 +558,122 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesCampaignZohoEmailSendGate(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Now().UTC().Truncate(time.Second)
+
+	job := testProjectedRuntimeJob()
+	job.Plan.Steps[1].CampaignRef = &CampaignRef{CampaignID: "campaign-mail"}
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-mail"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+		record.StopConditions = []string{"stop after 3 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 3}
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		}
+	})
+	if err := StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	action, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		},
+		"Frank intro",
+		"plaintext",
+		"Hello from Frank",
+		now.Add(-90*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction() error = %v", err)
+	}
+	action, err = BuildCampaignZohoEmailOutboundSentAction(action, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100000",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+	}, now.Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction() error = %v", err)
+	}
+	action.State = CampaignZohoEmailOutboundActionStateVerified
+	action.VerifiedAt = now.Add(-15 * time.Second)
+	if err := ValidateCampaignZohoEmailOutboundAction(action); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(verified) error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:                            job.ID,
+		State:                            JobStateRunning,
+		ActiveStepID:                     "build",
+		InspectablePlan:                  &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{action},
+		CreatedAt:                        now.Add(-2 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-2 * time.Minute),
+		ActiveStepAt:                     now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	if snapshot.RuntimeSummary.CampaignZohoEmailSendGate == nil {
+		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want provider-specific send gate status")
+	}
+	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
+	if gate.CampaignID != "campaign-mail" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+	}
+	if !gate.Allowed || gate.Halted {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate = %#v, want allowed non-halted gate", gate)
+	}
+	if gate.VerifiedSuccessCount != 1 {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.VerifiedSuccessCount = %d, want 1", gate.VerifiedSuccessCount)
+	}
+	if gate.FailureThresholdMetric != "rejections" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.FailureThresholdMetric = %q, want rejections", gate.FailureThresholdMetric)
+	}
+}
+
 func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSchedulerTriggers(t *testing.T) {
 	t.Parallel()
 
