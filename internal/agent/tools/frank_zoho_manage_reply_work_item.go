@@ -9,10 +9,16 @@ const frankZohoManageReplyWorkItemToolName = "frank_zoho_manage_reply_work_item"
 
 const FrankZohoManageReplyWorkItemToolName = frankZohoManageReplyWorkItemToolName
 
-type FrankZohoManageReplyWorkItemTool struct{}
+type FrankZohoManageReplyWorkItemTool struct {
+	taskState *TaskState
+}
 
 func NewFrankZohoManageReplyWorkItemTool() *FrankZohoManageReplyWorkItemTool {
 	return &FrankZohoManageReplyWorkItemTool{}
+}
+
+func NewFrankZohoManageReplyWorkItemToolWithState(taskState *TaskState) *FrankZohoManageReplyWorkItemTool {
+	return &FrankZohoManageReplyWorkItemTool{taskState: taskState}
 }
 
 func (t *FrankZohoManageReplyWorkItemTool) Name() string {
@@ -46,5 +52,14 @@ func (t *FrankZohoManageReplyWorkItemTool) Parameters() map[string]interface{} {
 }
 
 func (t *FrankZohoManageReplyWorkItemTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+	if t != nil && t.taskState != nil {
+		result, skip, err := t.taskState.ManageFrankZohoCampaignReplyWorkItem(args)
+		if err != nil {
+			return "", err
+		}
+		if skip {
+			return result, nil
+		}
+	}
 	return "", fmt.Errorf("%s requires managed mission task state", t.Name())
 }
