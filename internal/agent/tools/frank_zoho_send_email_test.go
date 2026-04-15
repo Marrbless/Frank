@@ -1009,8 +1009,6 @@ func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
 }
 
 func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
-	t.Parallel()
-
 	originalRead := readFrankZohoCampaignInboundReplies
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
@@ -1112,8 +1110,6 @@ func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
 }
 
 func TestPrepareFrankZohoCampaignFollowUpBlocksDuplicateUnresolvedAction(t *testing.T) {
-	t.Parallel()
-
 	originalRead := readFrankZohoCampaignInboundReplies
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead

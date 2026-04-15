@@ -558,6 +558,86 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoInboundReplies(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	reply := NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102000",
+		ProviderMailID:     "<reply-1@zoho.test>",
+		MIMEMessageID:      "<reply-1@example.test>",
+		InReplyTo:          "<parent@example.test>",
+		References:         []string{"<seed@example.test>", "<parent@example.test>"},
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		FromAddressCount:   1,
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         now.Add(-time.Minute),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102000/originalmessage",
+	})
+
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		CreatedAt:       now.Add(-2 * time.Minute),
+		UpdatedAt:       now,
+		StartedAt:       now.Add(-2 * time.Minute),
+		ActiveStepAt:    now.Add(-time.Minute),
+	}
+	runtime, changed, err := AppendFrankZohoInboundReply(runtime, reply)
+	if err != nil {
+		t.Fatalf("AppendFrankZohoInboundReply() error = %v", err)
+	}
+	if !changed || len(runtime.FrankZohoInboundReplies) != 1 {
+		t.Fatalf("AppendFrankZohoInboundReply() changed = %v len = %d, want one normalized reply", changed, len(runtime.FrankZohoInboundReplies))
+	}
+	reply = runtime.FrankZohoInboundReplies[0]
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	if len(snapshot.RuntimeSummary.FrankZohoInboundReplies) != 1 {
+		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoInboundReplies))
+	}
+	got := snapshot.RuntimeSummary.FrankZohoInboundReplies[0]
+	if got.ReplyID != reply.ReplyID {
+		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].ReplyID = %q, want %q", got.ReplyID, reply.ReplyID)
+	}
+	if got.FromAddressCount != 1 {
+		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].FromAddressCount = %d, want 1", got.FromAddressCount)
+	}
+	if got.OriginalMessageURL != reply.OriginalMessageURL {
+		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].OriginalMessageURL = %q, want %q", got.OriginalMessageURL, reply.OriginalMessageURL)
+	}
+}
+
 func TestBuildCommittedMissionStatusSnapshotIncludesCampaignZohoEmailSendGate(t *testing.T) {
 	t.Parallel()
 

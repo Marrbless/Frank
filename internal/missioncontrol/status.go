@@ -32,6 +32,7 @@ type OperatorStatusSummary struct {
 	RecentAudit                []OperatorRecentAuditStatus                     `json:"recent_audit,omitempty"`
 	Artifacts                  []OperatorArtifactStatus                        `json:"artifacts,omitempty"`
 	CampaignZohoEmailOutbounds []OperatorCampaignZohoEmailOutboundActionStatus `json:"campaign_zoho_email_outbounds,omitempty"`
+	FrankZohoInboundReplies    []OperatorFrankZohoInboundReplyStatus           `json:"frank_zoho_inbound_replies,omitempty"`
 	CampaignZohoEmailSendGate  *CampaignZohoEmailSendGateDecision              `json:"campaign_zoho_email_send_gate,omitempty"`
 	FrankZohoSendProof         []OperatorFrankZohoSendProofStatus              `json:"frank_zoho_send_proof,omitempty"`
 	Truncation                 *OperatorStatusTruncation                       `json:"truncation,omitempty"`
@@ -87,6 +88,24 @@ type OperatorCampaignZohoEmailOutboundActionStatus struct {
 	FailureHTTPStatus                int      `json:"failure_http_status,omitempty"`
 	FailureProviderStatusCode        int      `json:"failure_provider_status_code,omitempty"`
 	FailureProviderStatusDescription string   `json:"failure_provider_status_description,omitempty"`
+}
+
+type OperatorFrankZohoInboundReplyStatus struct {
+	ReplyID            string   `json:"reply_id"`
+	StepID             string   `json:"step_id,omitempty"`
+	Provider           string   `json:"provider"`
+	ProviderAccountID  string   `json:"provider_account_id"`
+	ProviderMessageID  string   `json:"provider_message_id"`
+	ProviderMailID     string   `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string   `json:"mime_message_id,omitempty"`
+	InReplyTo          string   `json:"in_reply_to,omitempty"`
+	References         []string `json:"references,omitempty"`
+	FromAddress        string   `json:"from_address,omitempty"`
+	FromDisplayName    string   `json:"from_display_name,omitempty"`
+	FromAddressCount   int      `json:"from_address_count,omitempty"`
+	Subject            string   `json:"subject,omitempty"`
+	ReceivedAt         *string  `json:"received_at,omitempty"`
+	OriginalMessageURL string   `json:"original_message_url"`
 }
 
 type OperatorFrankZohoSendProofStatus struct {
@@ -280,6 +299,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 	summary.Artifacts = selectOperatorStatusArtifacts(runtime)
 	summary.CampaignZohoEmailOutbounds = selectOperatorStatusCampaignZohoEmailOutbounds(runtime)
+	summary.FrankZohoInboundReplies = selectOperatorStatusFrankZohoInboundReplies(runtime)
 	summary.FrankZohoSendProof = selectOperatorStatusFrankZohoSendProof(runtime)
 	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit), len(summary.Artifacts))
 
@@ -527,6 +547,35 @@ func selectOperatorStatusCampaignZohoEmailOutbounds(runtime JobRuntimeState) []O
 		})
 	}
 	return actions
+}
+
+func selectOperatorStatusFrankZohoInboundReplies(runtime JobRuntimeState) []OperatorFrankZohoInboundReplyStatus {
+	if len(runtime.FrankZohoInboundReplies) == 0 {
+		return nil
+	}
+
+	replies := make([]OperatorFrankZohoInboundReplyStatus, 0, len(runtime.FrankZohoInboundReplies))
+	for _, reply := range runtime.FrankZohoInboundReplies {
+		normalized := NormalizeFrankZohoInboundReply(reply)
+		replies = append(replies, OperatorFrankZohoInboundReplyStatus{
+			ReplyID:            normalized.ReplyID,
+			StepID:             normalized.StepID,
+			Provider:           normalized.Provider,
+			ProviderAccountID:  normalized.ProviderAccountID,
+			ProviderMessageID:  normalized.ProviderMessageID,
+			ProviderMailID:     normalized.ProviderMailID,
+			MIMEMessageID:      normalized.MIMEMessageID,
+			InReplyTo:          normalized.InReplyTo,
+			References:         append([]string(nil), normalized.References...),
+			FromAddress:        normalized.FromAddress,
+			FromDisplayName:    normalized.FromDisplayName,
+			FromAddressCount:   normalized.FromAddressCount,
+			Subject:            normalized.Subject,
+			ReceivedAt:         formatOperatorStatusTime(normalized.ReceivedAt),
+			OriginalMessageURL: normalized.OriginalMessageURL,
+		})
+	}
+	return replies
 }
 
 type operatorArtifactCandidate struct {

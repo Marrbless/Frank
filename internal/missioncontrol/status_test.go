@@ -828,6 +828,55 @@ func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing
 	}
 }
 
+func TestBuildOperatorStatusSummaryIncludesFrankZohoInboundReplies(t *testing.T) {
+	t.Parallel()
+
+	receivedAt := time.Date(2026, 4, 15, 20, 45, 0, 0, time.UTC)
+	reply := NormalizeFrankZohoInboundReply(FrankZohoInboundReply{
+		ReplyID:            "frank_zoho_inbound_reply_123",
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102000",
+		ProviderMailID:     "<reply-1@zoho.test>",
+		MIMEMessageID:      "<reply-1@example.test>",
+		InReplyTo:          "<parent@example.test>",
+		References:         []string{"<seed@example.test>", "<parent@example.test>"},
+		FromAddress:        "person@example.com",
+		FromDisplayName:    "Person One",
+		FromAddressCount:   1,
+		Subject:            "Re: Frank intro",
+		ReceivedAt:         receivedAt,
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102000/originalmessage",
+	})
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:                   "job-1",
+		State:                   JobStatePaused,
+		FrankZohoInboundReplies: []FrankZohoInboundReply{reply},
+	})
+
+	if len(summary.FrankZohoInboundReplies) != 1 {
+		t.Fatalf("FrankZohoInboundReplies len = %d, want 1", len(summary.FrankZohoInboundReplies))
+	}
+	got := summary.FrankZohoInboundReplies[0]
+	if got.ReplyID != reply.ReplyID {
+		t.Fatalf("FrankZohoInboundReplies[0].ReplyID = %q, want %q", got.ReplyID, reply.ReplyID)
+	}
+	if got.FromAddress != "person@example.com" {
+		t.Fatalf("FrankZohoInboundReplies[0].FromAddress = %q, want person@example.com", got.FromAddress)
+	}
+	if got.FromAddressCount != 1 {
+		t.Fatalf("FrankZohoInboundReplies[0].FromAddressCount = %d, want 1", got.FromAddressCount)
+	}
+	if got.InReplyTo != "<parent@example.test>" {
+		t.Fatalf("FrankZohoInboundReplies[0].InReplyTo = %q, want parent linkage", got.InReplyTo)
+	}
+	if got.ReceivedAt == nil || *got.ReceivedAt != receivedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("FrankZohoInboundReplies[0].ReceivedAt = %#v, want received timestamp", got.ReceivedAt)
+	}
+}
+
 func TestFormatOperatorStatusSummaryWithAllowedToolsUsesSortedUniqueIntersection(t *testing.T) {
 	t.Parallel()
 
