@@ -524,6 +524,62 @@ func (s *TaskState) RecordFrankZohoSendReceipt(result string) error {
 	return err
 }
 
+func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
+	if s == nil {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Step.CampaignRef == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return 0, nil
+	}
+
+	if err := missioncontrol.RequireExecutionContextCampaignReadiness(ec); err != nil {
+		return 0, err
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateFrankZohoMailPreflight(preflight); err != nil {
+		return 0, err
+	}
+
+	replies, err := readFrankZohoCampaignInboundReplies(context.Background())
+	if err != nil {
+		return 0, err
+	}
+
+	nextRuntime := *missioncontrol.CloneJobRuntimeState(ec.Runtime)
+	appended := 0
+	for _, reply := range replies {
+		reply.StepID = ec.Step.ID
+		updatedRuntime, changed, err := missioncontrol.AppendFrankZohoInboundReply(nextRuntime, reply)
+		if err != nil {
+			return 0, err
+		}
+		if !changed {
+			continue
+		}
+		nextRuntime = updatedRuntime
+		appended++
+	}
+	if appended == 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err == nil {
+		s.notifyRuntimeChanged()
+	}
+	return appended, err
+}
+
 func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (string, bool, error) {
 	if s == nil {
 		return "", false, nil

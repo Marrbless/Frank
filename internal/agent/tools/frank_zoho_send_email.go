@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,10 @@ var verifyFrankZohoCampaignSendProof = func(ctx context.Context, proof []mission
 	return NewFrankZohoSendProofVerifier().Verify(ctx, proof)
 }
 
+var readFrankZohoCampaignInboundReplies = func(ctx context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	return NewFrankZohoInboundReplyReader().Read(ctx)
+}
+
 type FrankZohoSendEmailTool struct {
 	client      *http.Client
 	apiBase     string
@@ -40,6 +45,12 @@ type FrankZohoSendEmailTool struct {
 
 type FrankZohoSendProofVerifier struct {
 	client      *http.Client
+	accessToken func(context.Context) (string, error)
+}
+
+type FrankZohoInboundReplyReader struct {
+	client      *http.Client
+	apiBase     string
 	accessToken func(context.Context) (string, error)
 }
 
@@ -92,6 +103,20 @@ type frankZohoSendAPIResponse struct {
 		Description string `json:"description"`
 	} `json:"status"`
 	Data frankZohoSendResponseData `json:"data"`
+}
+
+type frankZohoMailboxMessagesResponse struct {
+	Status struct {
+		Code        int    `json:"code"`
+		Description string `json:"description"`
+	} `json:"status"`
+	Data []frankZohoMailboxMessageData `json:"data"`
+}
+
+type frankZohoMailboxMessageData struct {
+	MessageID    frankZohoFlexibleString `json:"messageId"`
+	MailID       frankZohoFlexibleString `json:"mailId"`
+	ReceivedTime frankZohoFlexibleString `json:"receivedTime"`
 }
 
 type frankZohoTerminalSendFailureError struct {
@@ -157,6 +182,14 @@ func NewFrankZohoSendEmailTool() *FrankZohoSendEmailTool {
 func NewFrankZohoSendProofVerifier() *FrankZohoSendProofVerifier {
 	return &FrankZohoSendProofVerifier{
 		client:      &http.Client{Timeout: 30 * time.Second},
+		accessToken: frankZohoMailAccessTokenFromEnv,
+	}
+}
+
+func NewFrankZohoInboundReplyReader() *FrankZohoInboundReplyReader {
+	return &FrankZohoInboundReplyReader{
+		client:      &http.Client{Timeout: 30 * time.Second},
+		apiBase:     frankZohoMailAPIBase,
 		accessToken: frankZohoMailAccessTokenFromEnv,
 	}
 }
@@ -397,6 +430,83 @@ func (v *FrankZohoSendProofVerifier) Verify(ctx context.Context, proof []mission
 	return verified, nil
 }
 
+func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tokenProvider := r.accessToken
+	if tokenProvider == nil {
+		tokenProvider = frankZohoMailAccessTokenFromEnv
+	}
+	token, err := tokenProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	client := r.client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	messagesURL := frankZohoMessagesURL(r.apiBase, frankZohoMailAccountID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, messagesURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%s inbound reply read request failed: %w", frankZohoSendEmailToolName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var decoded frankZohoMailboxMessagesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("%s inbound reply read failed to decode Zoho messages response: %w", frankZohoSendEmailToolName, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s inbound reply read: Zoho Mail returned HTTP %d", frankZohoSendEmailToolName, resp.StatusCode)
+	}
+	if decoded.Status.Code != 0 && decoded.Status.Code != 200 {
+		return nil, fmt.Errorf("%s inbound reply read: Zoho Mail status %d: %s", frankZohoSendEmailToolName, decoded.Status.Code, strings.TrimSpace(decoded.Status.Description))
+	}
+
+	replies := make([]missioncontrol.FrankZohoInboundReply, 0, len(decoded.Data))
+	for _, candidate := range decoded.Data {
+		messageID := strings.TrimSpace(string(candidate.MessageID))
+		if messageID == "" {
+			continue
+		}
+		receivedAt, err := parseFrankZohoMailboxReceivedAt(candidate.ReceivedTime)
+		if err != nil {
+			return nil, fmt.Errorf("%s inbound reply read: parse received time for provider_message_id %q: %w", frankZohoSendEmailToolName, messageID, err)
+		}
+		originalMessageURL := frankZohoOriginalMessageURL(r.apiBase, frankZohoMailAccountID, messageID)
+		originalMessage, err := frankZohoReadOriginalMessage(ctx, client, token, messageID, originalMessageURL)
+		if err != nil {
+			return nil, err
+		}
+		reply, ok, err := frankZohoInboundReplyFromOriginalMessage(
+			messageID,
+			strings.TrimSpace(string(candidate.MailID)),
+			receivedAt,
+			originalMessageURL,
+			originalMessage,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		replies = append(replies, reply)
+	}
+	return replies, nil
+}
+
 func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight) error {
 	if preflight.Campaign == nil {
 		return fmt.Errorf("%s requires a resolved campaign preflight", frankZohoSendEmailToolName)
@@ -604,6 +714,67 @@ func finalizeFrankZohoCampaignActionFromProof(action missioncontrol.CampaignZoho
 	return normalized, nil
 }
 
+func frankZohoReadOriginalMessage(ctx context.Context, client *http.Client, token string, providerMessageID string, originalMessageURL string) (string, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, originalMessageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Accept", "*/*")
+	httpReq.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("%s inbound reply read failed for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return "", fmt.Errorf("%s inbound reply read failed to read original message for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), readErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("%s inbound reply read failed to close original message response for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), closeErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("%s inbound reply read: Zoho Mail returned HTTP %d for provider_message_id %q", frankZohoSendEmailToolName, resp.StatusCode, strings.TrimSpace(providerMessageID))
+	}
+	return string(body), nil
+}
+
+func frankZohoInboundReplyFromOriginalMessage(providerMessageID, providerMailID string, receivedAt time.Time, originalMessageURL string, originalMessage string) (missioncontrol.FrankZohoInboundReply, bool, error) {
+	parsed, err := mail.ReadMessage(strings.NewReader(originalMessage))
+	if err != nil {
+		return missioncontrol.FrankZohoInboundReply{}, false, fmt.Errorf("%s inbound reply read: parse original message for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), err)
+	}
+	inReplyTo := strings.TrimSpace(parsed.Header.Get("In-Reply-To"))
+	references := strings.Fields(strings.TrimSpace(parsed.Header.Get("References")))
+	if inReplyTo == "" && len(references) == 0 {
+		return missioncontrol.FrankZohoInboundReply{}, false, nil
+	}
+
+	var fromAddress string
+	var fromDisplayName string
+	if from, err := parsed.Header.AddressList("From"); err == nil && len(from) > 0 {
+		fromAddress = strings.TrimSpace(from[0].Address)
+		fromDisplayName = strings.TrimSpace(from[0].Name)
+	}
+
+	reply := missioncontrol.NormalizeFrankZohoInboundReply(missioncontrol.FrankZohoInboundReply{
+		Provider:           "zoho_mail",
+		ProviderAccountID:  frankZohoMailAccountID,
+		ProviderMessageID:  strings.TrimSpace(providerMessageID),
+		ProviderMailID:     strings.TrimSpace(providerMailID),
+		MIMEMessageID:      strings.TrimSpace(parsed.Header.Get("Message-ID")),
+		InReplyTo:          inReplyTo,
+		References:         references,
+		FromAddress:        fromAddress,
+		FromDisplayName:    fromDisplayName,
+		Subject:            strings.TrimSpace(parsed.Header.Get("Subject")),
+		ReceivedAt:         receivedAt.UTC(),
+		OriginalMessageURL: strings.TrimSpace(originalMessageURL),
+	})
+	return reply, true, nil
+}
+
 func frankZohoVerifyHeaderAddressList(header mail.Header, key string, want []string) error {
 	got := make([]string, 0, len(want))
 	if strings.TrimSpace(header.Get(key)) != "" {
@@ -628,6 +799,24 @@ func frankZohoVerifyHeaderAddressList(header mail.Header, key string, want []str
 		}
 	}
 	return nil
+}
+
+func parseFrankZohoMailboxReceivedAt(value frankZohoFlexibleString) (time.Time, error) {
+	trimmed := strings.TrimSpace(string(value))
+	if trimmed == "" {
+		return time.Time{}, fmt.Errorf("receivedTime is required")
+	}
+	if millis, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		if len(trimmed) >= 13 {
+			return time.UnixMilli(millis).UTC(), nil
+		}
+		return time.Unix(millis, 0).UTC(), nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unsupported receivedTime %q", trimmed)
+	}
+	return parsed.UTC(), nil
 }
 
 func frankZohoRequiredStringArg(args map[string]interface{}, key string) (string, error) {
