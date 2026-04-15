@@ -24,6 +24,7 @@ import (
 
 	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/agent/memory"
+	agenttools "github.com/local/picobot/internal/agent/tools"
 	"github.com/local/picobot/internal/channels"
 	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/config"
@@ -735,12 +736,18 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			frankZohoSendProofOnly, _ := cmd.Flags().GetBool("frank-zoho-send-proof")
+			frankZohoVerifySendProof, _ := cmd.Flags().GetBool("frank-zoho-verify-send-proof")
+			if frankZohoSendProofOnly && frankZohoVerifySendProof {
+				return fmt.Errorf("--frank-zoho-send-proof and --frank-zoho-verify-send-proof are mutually exclusive")
+			}
 
 			var (
 				data []byte
 				err  error
 			)
-			if frankZohoSendProofOnly {
+			if frankZohoVerifySendProof {
+				data, err = loadMissionStatusFrankZohoVerifiedSendProofFile(cmd.Context(), statusFile)
+			} else if frankZohoSendProofOnly {
 				data, err = loadMissionStatusFrankZohoSendProofFile(statusFile)
 			} else {
 				data, err = loadGatewayStatusObservationFile(statusFile)
@@ -758,6 +765,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	missionStatusCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
 	missionStatusCmd.Flags().Bool("frank-zoho-send-proof", false, "Print Frank Zoho send proof locators from runtime_summary for later originalmessage verification")
+	missionStatusCmd.Flags().Bool("frank-zoho-verify-send-proof", false, "Fetch originalmessage bodies for Frank Zoho send proof locators from runtime_summary")
 
 	missionInspectCmd := &cobra.Command{
 		Use:          "inspect",
@@ -1785,6 +1793,18 @@ type missionStatusFrankZohoSendProofLocator struct {
 	OriginalMessageURL string `json:"original_message_url"`
 }
 
+type missionStatusFrankZohoSendProofVerification = agenttools.FrankZohoSendProofVerification
+
+type missionStatusFrankZohoSendProofVerifier interface {
+	Verify(context.Context, []missioncontrol.OperatorFrankZohoSendProofStatus) ([]missionStatusFrankZohoSendProofVerification, error)
+}
+
+type missionStatusFrankZohoSendProofVerifierFunc func(context.Context, []missioncontrol.OperatorFrankZohoSendProofStatus) ([]missionStatusFrankZohoSendProofVerification, error)
+
+func (fn missionStatusFrankZohoSendProofVerifierFunc) Verify(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]missionStatusFrankZohoSendProofVerification, error) {
+	return fn(ctx, proof)
+}
+
 type missionStepControlFile struct {
 	StepID    string `json:"step_id"`
 	UpdatedAt string `json:"updated_at"`
@@ -1833,6 +1853,9 @@ var loadGatewayStatusObservationFile = missioncontrol.LoadGatewayStatusObservati
 var loadMissionStatusObservation = missioncontrol.LoadMissionStatusObservation
 var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
 var writeMissionStatusSnapshotAtomic = missioncontrol.WriteMissionStatusSnapshotAtomic
+var newFrankZohoSendProofVerifier = func() missionStatusFrankZohoSendProofVerifier {
+	return agenttools.NewFrankZohoSendProofVerifier()
+}
 
 func loadMissionStatusFrankZohoSendProofFile(path string) ([]byte, error) {
 	snapshot, err := loadMissionStatusObservation(path)
@@ -1857,6 +1880,30 @@ func loadMissionStatusFrankZohoSendProofFile(path string) ([]byte, error) {
 	data, err := json.MarshalIndent(proof, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode mission status Frank Zoho send proof for %q: %w", path, err)
+	}
+	data = append(data, '\n')
+	return data, nil
+}
+
+func loadMissionStatusFrankZohoVerifiedSendProofFile(ctx context.Context, path string) ([]byte, error) {
+	snapshot, err := loadMissionStatusObservation(path)
+	if err != nil {
+		return nil, err
+	}
+
+	proof := make([]missioncontrol.OperatorFrankZohoSendProofStatus, 0)
+	if snapshot.RuntimeSummary != nil {
+		proof = append(proof, snapshot.RuntimeSummary.FrankZohoSendProof...)
+	}
+
+	verified, err := newFrankZohoSendProofVerifier().Verify(ctx, proof)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify mission status Frank Zoho send proof for %q: %w", path, err)
+	}
+
+	data, err := json.MarshalIndent(verified, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode mission status Frank Zoho send proof verification for %q: %w", path, err)
 	}
 	data = append(data, '\n')
 	return data, nil

@@ -358,6 +358,77 @@ func TestFrankZohoSendEmailToolPersistsReceiptAppendOnlyForLaterProofReadBack(t 
 	}
 }
 
+func TestFrankZohoSendProofVerifierUsesZohoBearerTokenAndFetchesOriginalMessage(t *testing.T) {
+	t.Parallel()
+
+	var gotMethod string
+	var gotPath string
+	var gotAuth string
+
+	verifier := NewFrankZohoSendProofVerifier()
+	verifier.accessToken = func(context.Context) (string, error) {
+		return "test-zoho-token", nil
+	}
+	verifier.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"message/rfc822"}},
+				Body:       io.NopCloser(strings.NewReader("From: Frank <frank@omou.online>\r\nSubject: Frank intro\r\n\r\nHello from Frank")),
+			}, nil
+		}),
+	}
+
+	proof := []missioncontrol.OperatorFrankZohoSendProofStatus{
+		{
+			ProviderMessageID:  "1711540357880100000",
+			ProviderMailID:     "<mail-1@zoho.test>",
+			MIMEMessageID:      "<mime-1@example.test>",
+			ProviderAccountID:  "3323462000000008002",
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+		},
+	}
+
+	got, err := verifier.Verify(context.Background(), proof)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+
+	if gotMethod != http.MethodGet {
+		t.Fatalf("request method = %q, want %q", gotMethod, http.MethodGet)
+	}
+	if gotPath != "/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("request path = %q, want proof originalmessage path", gotPath)
+	}
+	if gotAuth != "Zoho-oauthtoken test-zoho-token" {
+		t.Fatalf("Authorization = %q, want Zoho OAuth header", gotAuth)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(verification records) = %d, want 1", len(got))
+	}
+	if got[0].ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("ProviderMessageID = %q, want committed proof locator", got[0].ProviderMessageID)
+	}
+	if got[0].ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("ProviderMailID = %q, want committed proof locator", got[0].ProviderMailID)
+	}
+	if got[0].MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("MIMEMessageID = %q, want committed proof locator", got[0].MIMEMessageID)
+	}
+	if got[0].ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("ProviderAccountID = %q, want committed proof locator", got[0].ProviderAccountID)
+	}
+	if got[0].OriginalMessageURL != "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("OriginalMessageURL = %q, want committed proof locator", got[0].OriginalMessageURL)
+	}
+	if got[0].OriginalMessage != "From: Frank <frank@omou.online>\r\nSubject: Frank intro\r\n\r\nHello from Frank" {
+		t.Fatalf("OriginalMessage = %q, want raw original message payload", got[0].OriginalMessage)
+	}
+}
+
 func testFrankZohoSendExecutionContext(root string, campaignID string, toolName string) missioncontrol.ExecutionContext {
 	job := &missioncontrol.Job{
 		ID:           "job-frank-zoho-send",

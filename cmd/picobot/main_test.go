@@ -888,6 +888,128 @@ func TestMissionStatusCommandReturnsFrankZohoSendProofLocatorsFromRuntimeSummary
 	}
 }
 
+func TestMissionStatusCommandVerifiesFrankZohoSendProofFromRuntimeSummary(t *testing.T) {
+	originalGateway := loadGatewayStatusObservationFile
+	originalMission := loadMissionStatusObservation
+	originalVerifier := newFrankZohoSendProofVerifier
+	t.Cleanup(func() {
+		loadGatewayStatusObservationFile = originalGateway
+		loadMissionStatusObservation = originalMission
+		newFrankZohoSendProofVerifier = originalVerifier
+	})
+
+	loadGatewayStatusObservationFile = func(path string) ([]byte, error) {
+		t.Fatalf("loadGatewayStatusObservationFile(%q) called, want committed mission status reader for verification output", path)
+		return nil, nil
+	}
+
+	loadMissionStatusObservation = func(path string) (missioncontrol.MissionStatusSnapshot, error) {
+		if path != "status.json" {
+			t.Fatalf("loadMissionStatusObservation path = %q, want %q", path, "status.json")
+		}
+		return missioncontrol.MissionStatusSnapshot{
+			JobID: "job-1",
+			Runtime: &missioncontrol.JobRuntimeState{
+				JobID: "job-1",
+				FrankZohoSendReceipts: []missioncontrol.FrankZohoSendReceipt{
+					{
+						ProviderMessageID:  "runtime-provider-message",
+						ProviderMailID:     "<runtime-mail@zoho.test>",
+						MIMEMessageID:      "<runtime-mime@example.test>",
+						ProviderAccountID:  "runtime-account",
+						OriginalMessageURL: "https://mail.zoho.com/api/accounts/runtime-account/messages/runtime-provider-message/originalmessage",
+					},
+				},
+			},
+			RuntimeSummary: &missioncontrol.OperatorStatusSummary{
+				FrankZohoSendProof: []missioncontrol.OperatorFrankZohoSendProofStatus{
+					{
+						StepID:             "send",
+						ProviderMessageID:  "1711540357880100000",
+						ProviderMailID:     "<mail-1@zoho.test>",
+						MIMEMessageID:      "<mime-1@example.test>",
+						ProviderAccountID:  "3323462000000008002",
+						OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage",
+					},
+				},
+			},
+		}, nil
+	}
+
+	var gotProof []missioncontrol.OperatorFrankZohoSendProofStatus
+	newFrankZohoSendProofVerifier = func() missionStatusFrankZohoSendProofVerifier {
+		return missionStatusFrankZohoSendProofVerifierFunc(func(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]missionStatusFrankZohoSendProofVerification, error) {
+			gotProof = append([]missioncontrol.OperatorFrankZohoSendProofStatus(nil), proof...)
+			return []missionStatusFrankZohoSendProofVerification{
+				{
+					ProviderMessageID:  proof[0].ProviderMessageID,
+					ProviderMailID:     proof[0].ProviderMailID,
+					MIMEMessageID:      proof[0].MIMEMessageID,
+					ProviderAccountID:  proof[0].ProviderAccountID,
+					OriginalMessageURL: proof[0].OriginalMessageURL,
+					OriginalMessage:    "From: Frank <frank@omou.online>\r\nSubject: Frank intro\r\n\r\nHello from Frank",
+				},
+			}, nil
+		})
+	}
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "status", "--status-file", "status.json", "--frank-zoho-verify-send-proof"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if len(gotProof) != 1 {
+		t.Fatalf("len(verifier proof input) = %d, want 1", len(gotProof))
+	}
+	if gotProof[0].ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("verifier proof ProviderMessageID = %q, want runtime_summary proof and not raw runtime receipt", gotProof[0].ProviderMessageID)
+	}
+	if gotProof[0].ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("verifier proof ProviderAccountID = %q, want committed runtime_summary proof", gotProof[0].ProviderAccountID)
+	}
+	if gotProof[0].OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("verifier proof OriginalMessageURL = %q, want committed runtime_summary proof", gotProof[0].OriginalMessageURL)
+	}
+
+	var got []struct {
+		ProviderMessageID  string `json:"provider_message_id"`
+		ProviderMailID     string `json:"provider_mail_id"`
+		MIMEMessageID      string `json:"mime_message_id"`
+		ProviderAccountID  string `json:"provider_account_id"`
+		OriginalMessageURL string `json:"original_message_url"`
+		OriginalMessage    string `json:"original_message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal(stdout) error = %v\nstdout=%s", err, out.String())
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(verification records) = %d, want 1", len(got))
+	}
+	if got[0].ProviderMessageID != "1711540357880100000" {
+		t.Fatalf("ProviderMessageID = %q, want committed runtime_summary proof locator", got[0].ProviderMessageID)
+	}
+	if got[0].ProviderMailID != "<mail-1@zoho.test>" {
+		t.Fatalf("ProviderMailID = %q, want committed runtime_summary proof locator", got[0].ProviderMailID)
+	}
+	if got[0].MIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("MIMEMessageID = %q, want committed runtime_summary proof locator", got[0].MIMEMessageID)
+	}
+	if got[0].ProviderAccountID != "3323462000000008002" {
+		t.Fatalf("ProviderAccountID = %q, want committed runtime_summary proof locator", got[0].ProviderAccountID)
+	}
+	if got[0].OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+		t.Fatalf("OriginalMessageURL = %q, want committed runtime_summary proof locator", got[0].OriginalMessageURL)
+	}
+	if got[0].OriginalMessage != "From: Frank <frank@omou.online>\r\nSubject: Frank intro\r\n\r\nHello from Frank" {
+		t.Fatalf("OriginalMessage = %q, want verifier-fetched original message body", got[0].OriginalMessage)
+	}
+}
+
 func TestMissionPackageLogsCommandReturnsStableSummary(t *testing.T) {
 	root := t.TempDir()
 	openedAt := time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC)

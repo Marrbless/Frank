@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/mail"
 	"os"
@@ -33,6 +34,11 @@ type FrankZohoSendEmailTool struct {
 	send        func(context.Context, frankZohoSendRequest) (frankZohoSendResponseData, error)
 }
 
+type FrankZohoSendProofVerifier struct {
+	client      *http.Client
+	accessToken func(context.Context) (string, error)
+}
+
 type FrankZohoSendReceipt struct {
 	Provider           string `json:"provider"`
 	ProviderAccountID  string `json:"provider_account_id"`
@@ -42,6 +48,15 @@ type FrankZohoSendReceipt struct {
 	ProviderMailID     string `json:"provider_mail_id,omitempty"`
 	MIMEMessageID      string `json:"mime_message_id,omitempty"`
 	OriginalMessageURL string `json:"original_message_url"`
+}
+
+type FrankZohoSendProofVerification struct {
+	ProviderMessageID  string `json:"provider_message_id"`
+	ProviderMailID     string `json:"provider_mail_id,omitempty"`
+	MIMEMessageID      string `json:"mime_message_id,omitempty"`
+	ProviderAccountID  string `json:"provider_account_id"`
+	OriginalMessageURL string `json:"original_message_url"`
+	OriginalMessage    string `json:"original_message"`
 }
 
 type frankZohoSendRequest struct {
@@ -108,6 +123,13 @@ func NewFrankZohoSendEmailTool() *FrankZohoSendEmailTool {
 	return &FrankZohoSendEmailTool{
 		client:      &http.Client{Timeout: 30 * time.Second},
 		apiBase:     frankZohoMailAPIBase,
+		accessToken: frankZohoMailAccessTokenFromEnv,
+	}
+}
+
+func NewFrankZohoSendProofVerifier() *FrankZohoSendProofVerifier {
+	return &FrankZohoSendProofVerifier{
+		client:      &http.Client{Timeout: 30 * time.Second},
 		accessToken: frankZohoMailAccessTokenFromEnv,
 	}
 }
@@ -280,6 +302,71 @@ func (t *FrankZohoSendEmailTool) sendViaAPI(ctx context.Context, req frankZohoSe
 		return frankZohoSendResponseData{}, fmt.Errorf("%s: Zoho Mail status %d: %s", t.Name(), decoded.Status.Code, strings.TrimSpace(decoded.Status.Description))
 	}
 	return decoded.Data, nil
+}
+
+func (v *FrankZohoSendProofVerifier) Verify(ctx context.Context, proof []missioncontrol.OperatorFrankZohoSendProofStatus) ([]FrankZohoSendProofVerification, error) {
+	if len(proof) == 0 {
+		return []FrankZohoSendProofVerification{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tokenProvider := v.accessToken
+	if tokenProvider == nil {
+		tokenProvider = frankZohoMailAccessTokenFromEnv
+	}
+	token, err := tokenProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	client := v.client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	verified := make([]FrankZohoSendProofVerification, 0, len(proof))
+	for _, candidate := range proof {
+		originalMessageURL := strings.TrimSpace(candidate.OriginalMessageURL)
+		if originalMessageURL == "" {
+			return nil, fmt.Errorf("%s verification requires original_message_url", frankZohoSendEmailToolName)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, originalMessageURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Accept", "*/*")
+		httpReq.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("%s verification request failed for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(candidate.ProviderMessageID), err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		closeErr := resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("%s verification failed to read original message for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(candidate.ProviderMessageID), readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("%s verification failed to close original message response for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(candidate.ProviderMessageID), closeErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("%s verification: Zoho Mail returned HTTP %d for provider_message_id %q", frankZohoSendEmailToolName, resp.StatusCode, strings.TrimSpace(candidate.ProviderMessageID))
+		}
+
+		verified = append(verified, FrankZohoSendProofVerification{
+			ProviderMessageID:  candidate.ProviderMessageID,
+			ProviderMailID:     candidate.ProviderMailID,
+			MIMEMessageID:      candidate.MIMEMessageID,
+			ProviderAccountID:  candidate.ProviderAccountID,
+			OriginalMessageURL: candidate.OriginalMessageURL,
+			OriginalMessage:    string(body),
+		})
+	}
+
+	return verified, nil
 }
 
 func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight) error {
