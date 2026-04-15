@@ -1068,6 +1068,7 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	reg.SetAuditEmitter(taskState)
 	reg.Register(tools.NewMessageTool(b))
 	reg.Register(tools.NewFrankZohoSendEmailTool())
+	reg.Register(tools.NewFrankZohoManageReplyWorkItemTool())
 
 	// Open an os.Root anchored at the workspace for kernel-enforced sandboxing.
 	root, err := os.OpenRoot(workspace)
@@ -1392,6 +1393,8 @@ func (a *AgentLoop) Run(ctx context.Context) {
 						)
 						if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
 							res, skipToolExecute, err = a.taskState.PrepareFrankZohoCampaignSend(tc.Arguments)
+						} else if tc.Name == tools.FrankZohoManageReplyWorkItemToolName && a.taskState != nil {
+							res, skipToolExecute, err = a.taskState.ManageFrankZohoCampaignReplyWorkItem(tc.Arguments)
 						}
 						if err == nil && !skipToolExecute {
 							res, err = a.tools.Execute(execCtx, tc.Name, tc.Arguments)
@@ -1561,6 +1564,8 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 			)
 			if tc.Name == tools.FrankZohoSendEmailToolName && a.taskState != nil {
 				result, skipToolExecute, err = a.taskState.PrepareFrankZohoCampaignSend(tc.Arguments)
+			} else if tc.Name == tools.FrankZohoManageReplyWorkItemToolName && a.taskState != nil {
+				result, skipToolExecute, err = a.taskState.ManageFrankZohoCampaignReplyWorkItem(tc.Arguments)
 			}
 			if err == nil && !skipToolExecute {
 				result, err = a.tools.Execute(execCtx, tc.Name, tc.Arguments)

@@ -864,6 +864,95 @@ func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface
 	return err
 }
 
+func (s *TaskState) ManageFrankZohoCampaignReplyWorkItem(args map[string]interface{}) (string, bool, error) {
+	if s == nil {
+		return "", true, nil
+	}
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	s.mu.Unlock()
+	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Step.CampaignRef == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+		return "", true, nil
+	}
+
+	if _, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec); err != nil {
+		return "", true, err
+	}
+	inboundReplyID, err := frankZohoRequiredStringArg(args, "inbound_reply_id")
+	if err != nil {
+		return "", true, err
+	}
+	action, err := frankZohoRequiredStringArg(args, "action")
+	if err != nil {
+		return "", true, err
+	}
+	now := time.Now().UTC()
+	nextRuntime, item, err := ensureFrankZohoCampaignReplyWorkItem(ec, *ec.Runtime, inboundReplyID, now)
+	if err != nil {
+		return "", true, err
+	}
+
+	switch item.State {
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateClaimed:
+		return "", true, fmt.Errorf("%s: inbound_reply_id %q is currently claimed by follow-up action %q", frankZohoManageReplyWorkItemToolName, inboundReplyID, item.ClaimedFollowUpActionID)
+	case missioncontrol.CampaignZohoEmailReplyWorkItemStateResponded, missioncontrol.CampaignZohoEmailReplyWorkItemStateIgnored:
+		return "", true, fmt.Errorf("%s: inbound_reply_id %q is already terminal in state %q", frankZohoManageReplyWorkItemToolName, inboundReplyID, item.State)
+	}
+
+	var mutated missioncontrol.CampaignZohoEmailReplyWorkItem
+	switch action {
+	case "ignore":
+		mutated, err = missioncontrol.BuildCampaignZohoEmailReplyWorkItemIgnored(item, now)
+	case "defer":
+		deferUntilText, err := frankZohoRequiredStringArg(args, "defer_until")
+		if err != nil {
+			return "", true, err
+		}
+		deferUntil, parseErr := time.Parse(time.RFC3339, deferUntilText)
+		if parseErr != nil {
+			return "", true, fmt.Errorf("%s: defer_until must be RFC3339: %w", frankZohoManageReplyWorkItemToolName, parseErr)
+		}
+		if !deferUntil.UTC().After(now) {
+			return "", true, fmt.Errorf("%s: defer_until must be in the future", frankZohoManageReplyWorkItemToolName)
+		}
+		mutated, err = missioncontrol.BuildCampaignZohoEmailReplyWorkItemDeferred(item, deferUntil.UTC(), now)
+	default:
+		return "", true, fmt.Errorf("%s: action %q is not supported", frankZohoManageReplyWorkItemToolName, action)
+	}
+	if err != nil {
+		return "", true, err
+	}
+
+	nextRuntime, _, err = missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(nextRuntime, mutated)
+	if err != nil {
+		return "", true, err
+	}
+
+	s.mu.Lock()
+	err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+	s.mu.Unlock()
+	if err != nil {
+		return "", true, err
+	}
+	s.notifyRuntimeChanged()
+
+	payload, err := json.Marshal(struct {
+		InboundReplyID string `json:"inbound_reply_id"`
+		State          string `json:"state"`
+		DeferredUntil  string `json:"deferred_until,omitempty"`
+	}{
+		InboundReplyID: mutated.InboundReplyID,
+		State:          string(mutated.State),
+		DeferredUntil:  formatTaskStateRFC3339(mutated.DeferredUntil),
+	})
+	if err != nil {
+		return "", true, err
+	}
+	return string(payload), true, nil
+}
+
 func claimFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState, action missioncontrol.CampaignZohoEmailOutboundAction, now time.Time) (missioncontrol.JobRuntimeState, error) {
 	if strings.TrimSpace(action.ReplyToInboundReplyID) == "" {
 		return runtime, nil
@@ -967,6 +1056,50 @@ func transitionFrankZohoCampaignReplyWorkItemOnFailure(ec missioncontrol.Executi
 		return missioncontrol.JobRuntimeState{}, false, err
 	}
 	return nextRuntime, changed, nil
+}
+
+func ensureFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, runtime missioncontrol.JobRuntimeState, inboundReplyID string, now time.Time) (missioncontrol.JobRuntimeState, missioncontrol.CampaignZohoEmailReplyWorkItem, error) {
+	if item, ok := missioncontrol.FindCampaignZohoEmailReplyWorkItemByInboundReplyID(runtime, inboundReplyID); ok {
+		return runtime, item, nil
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
+	}
+	missingItems, err := missioncontrol.LoadMissingCommittedCampaignZohoEmailReplyWorkItems(ec.MissionStoreRoot, preflight.Campaign.CampaignID, now)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
+	}
+	nextRuntime := runtime
+	for _, item := range missingItems {
+		updatedRuntime, _, err := missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(nextRuntime, item)
+		if err != nil {
+			return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
+		}
+		nextRuntime = updatedRuntime
+		if item.InboundReplyID == inboundReplyID {
+			return nextRuntime, item, nil
+		}
+	}
+	loaded, ok, err := missioncontrol.LoadCommittedCampaignZohoEmailReplyWorkItemByInboundReply(ec.MissionStoreRoot, preflight.Campaign.CampaignID, inboundReplyID)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
+	}
+	if !ok {
+		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, fmt.Errorf("%s: inbound_reply_id %q does not resolve to a committed reply work item", frankZohoManageReplyWorkItemToolName, inboundReplyID)
+	}
+	nextRuntime, _, err = missioncontrol.UpsertCampaignZohoEmailReplyWorkItem(nextRuntime, loaded)
+	if err != nil {
+		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
+	}
+	return nextRuntime, loaded, nil
+}
+
+func formatTaskStateRFC3339(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func (s *TaskState) RecordOwnerFacingMessage() (bool, error) {

@@ -32,6 +32,7 @@ type OperatorStatusSummary struct {
 	RecentAudit                []OperatorRecentAuditStatus                     `json:"recent_audit,omitempty"`
 	Artifacts                  []OperatorArtifactStatus                        `json:"artifacts,omitempty"`
 	CampaignZohoEmailOutbounds []OperatorCampaignZohoEmailOutboundActionStatus `json:"campaign_zoho_email_outbounds,omitempty"`
+	CampaignZohoEmailReplyWork []OperatorCampaignZohoEmailReplyWorkItemStatus  `json:"campaign_zoho_email_reply_work,omitempty"`
 	FrankZohoInboundReplies    []OperatorFrankZohoInboundReplyStatus           `json:"frank_zoho_inbound_replies,omitempty"`
 	CampaignZohoEmailSendGate  *CampaignZohoEmailSendGateDecision              `json:"campaign_zoho_email_send_gate,omitempty"`
 	FrankZohoSendProof         []OperatorFrankZohoSendProofStatus              `json:"frank_zoho_send_proof,omitempty"`
@@ -106,6 +107,17 @@ type OperatorFrankZohoInboundReplyStatus struct {
 	Subject            string   `json:"subject,omitempty"`
 	ReceivedAt         *string  `json:"received_at,omitempty"`
 	OriginalMessageURL string   `json:"original_message_url"`
+}
+
+type OperatorCampaignZohoEmailReplyWorkItemStatus struct {
+	ReplyWorkItemID         string  `json:"reply_work_item_id"`
+	InboundReplyID          string  `json:"inbound_reply_id"`
+	CampaignID              string  `json:"campaign_id"`
+	State                   string  `json:"state"`
+	DeferredUntil           *string `json:"deferred_until,omitempty"`
+	ClaimedFollowUpActionID string  `json:"claimed_followup_action_id,omitempty"`
+	CreatedAt               *string `json:"created_at,omitempty"`
+	UpdatedAt               *string `json:"updated_at,omitempty"`
 }
 
 type OperatorFrankZohoSendProofStatus struct {
@@ -299,6 +311,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	summary.RecentAudit = selectOperatorStatusRecentAudit(runtime)
 	summary.Artifacts = selectOperatorStatusArtifacts(runtime)
 	summary.CampaignZohoEmailOutbounds = selectOperatorStatusCampaignZohoEmailOutbounds(runtime)
+	summary.CampaignZohoEmailReplyWork = selectOperatorStatusCampaignZohoEmailReplyWorkItems(runtime)
 	summary.FrankZohoInboundReplies = selectOperatorStatusFrankZohoInboundReplies(runtime)
 	summary.FrankZohoSendProof = selectOperatorStatusFrankZohoSendProof(runtime)
 	summary.Truncation = buildOperatorStatusTruncation(runtime, len(summary.ApprovalHistory), len(summary.RecentAudit), len(summary.Artifacts))
@@ -576,6 +589,28 @@ func selectOperatorStatusFrankZohoInboundReplies(runtime JobRuntimeState) []Oper
 		})
 	}
 	return replies
+}
+
+func selectOperatorStatusCampaignZohoEmailReplyWorkItems(runtime JobRuntimeState) []OperatorCampaignZohoEmailReplyWorkItemStatus {
+	if len(runtime.CampaignZohoEmailReplyWorkItems) == 0 {
+		return nil
+	}
+
+	items := make([]OperatorCampaignZohoEmailReplyWorkItemStatus, 0, len(runtime.CampaignZohoEmailReplyWorkItems))
+	for _, item := range runtime.CampaignZohoEmailReplyWorkItems {
+		normalized := NormalizeCampaignZohoEmailReplyWorkItem(item)
+		items = append(items, OperatorCampaignZohoEmailReplyWorkItemStatus{
+			ReplyWorkItemID:         normalized.ReplyWorkItemID,
+			InboundReplyID:          normalized.InboundReplyID,
+			CampaignID:              normalized.CampaignID,
+			State:                   string(normalized.State),
+			DeferredUntil:           formatOperatorStatusTime(normalized.DeferredUntil),
+			ClaimedFollowUpActionID: normalized.ClaimedFollowUpActionID,
+			CreatedAt:               formatOperatorStatusTime(normalized.CreatedAt),
+			UpdatedAt:               formatOperatorStatusTime(normalized.UpdatedAt),
+		})
+	}
+	return items
 }
 
 type operatorArtifactCandidate struct {
