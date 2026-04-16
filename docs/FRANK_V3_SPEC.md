@@ -1562,6 +1562,12 @@ Bootstrap succeeds when:
 - the value lands in a valid autonomy-compatible treasury container,
 - the value is recorded in the treasury ledger.
 
+For the approved first-value treasury acquisition lane on this branch line, the
+treasury record itself is the durable bootstrap truth surface. It may carry one
+treasury-owned bootstrap acquisition block with the exact first-value
+acquisition inputs and confirmation evidence needed to record the first landed
+treasury value without inventing a parallel bootstrap registry.
+
 Current branch-line boundary:
 
 - first-value treasury bootstrap remains producer-only,

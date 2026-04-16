@@ -36,6 +36,13 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 				ObjectID: " " + fixtures.container.ContainerID + " ",
 			},
 		},
+		BootstrapAcquisition: &TreasuryBootstrapAcquisition{
+			AssetCode:       " USD ",
+			Amount:          " 10.50 ",
+			SourceRef:       " payout:listing-a ",
+			EvidenceLocator: " https://evidence.example/payout-a ",
+			ConfirmedAt:     now.Add(90 * time.Second),
+		},
 		CreatedAt: now.Add(2 * time.Minute),
 		UpdatedAt: now.Add(3 * time.Minute),
 	}
@@ -58,6 +65,13 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			Kind:     FrankRegistryObjectKindContainer,
 			ObjectID: fixtures.container.ContainerID,
 		},
+	}
+	want.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+		AssetCode:       "USD",
+		Amount:          "10.50",
+		SourceRef:       "payout:listing-a",
+		EvidenceLocator: "https://evidence.example/payout-a",
+		ConfirmedAt:     now.Add(90 * time.Second).UTC(),
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -298,6 +312,63 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury state "active" requires exactly one active_container_id derivable from container_refs`,
+		},
+		{
+			name: "bootstrap acquisition missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "10.00",
+						EvidenceLocator: "https://evidence.example/payout-a",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury bootstrap_acquisition.source_ref is required",
+		},
+		{
+			name: "bootstrap acquisition malformed amount",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "01.0",
+						SourceRef:       "payout:listing-a",
+						EvidenceLocator: "https://evidence.example/payout-a",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: `mission store treasury bootstrap_acquisition.amount "01.0" is invalid`,
+		},
+		{
+			name: "bootstrap acquisition missing evidence locator",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						AssetCode:   "USD",
+						Amount:      "10.00",
+						SourceRef:   "payout:listing-a",
+						ConfirmedAt: now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury bootstrap_acquisition.evidence_locator is required",
+		},
+		{
+			name: "bootstrap acquisition missing confirmed at",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "10.00",
+						SourceRef:       "payout:listing-a",
+						EvidenceLocator: "https://evidence.example/payout-a",
+					}
+				}))
+			},
+			want: "mission store treasury bootstrap_acquisition.confirmed_at is required",
 		},
 	}
 
