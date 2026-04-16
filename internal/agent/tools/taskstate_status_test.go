@@ -175,6 +175,24 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailAddressing(t *testing.T
 		t.Fatalf("OperatorStatus() error = %v", err)
 	}
 
+	envelope := mustTaskStateJSONObject(t, summary)
+	preflight := envelope["campaign_preflight"].(map[string]any)
+	campaignJSON := preflight["campaign"].(map[string]any)
+	addressingJSON, ok := campaignJSON["zoho_email_addressing"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing = %#v, want object", campaignJSON["zoho_email_addressing"])
+	}
+	assertTaskStateJSONObjectKeys(t, campaignJSON, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at", "zoho_email_addressing")
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["to"], "campaign_preflight.campaign.zoho_email_addressing.to"), []any{"person@example.com", "team@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.to = %#v, want [person@example.com team@example.com]", addressingJSON["to"])
+	}
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["cc"], "campaign_preflight.campaign.zoho_email_addressing.cc"), []any{"copy@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.cc = %#v, want [copy@example.com]", addressingJSON["cc"])
+	}
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["bcc"], "campaign_preflight.campaign.zoho_email_addressing.bcc"), []any{"blind@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressingJSON["bcc"])
+	}
+
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	if got.CampaignPreflight == nil || got.CampaignPreflight.Campaign == nil {
 		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", got.CampaignPreflight)

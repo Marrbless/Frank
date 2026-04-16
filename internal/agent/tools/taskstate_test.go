@@ -3818,6 +3818,26 @@ func TestTaskStateOperatorInspectSurfacesCampaignZohoEmailAddressing(t *testing.
 		t.Fatalf("OperatorInspect() error = %v", err)
 	}
 
+	envelope := mustTaskStateJSONObject(t, got)
+	steps := mustTaskStateJSONArray(t, envelope["steps"], "inspect.steps")
+	step := steps[0].(map[string]any)
+	preflight := step["campaign_preflight"].(map[string]any)
+	campaignJSON := preflight["campaign"].(map[string]any)
+	addressingJSON, ok := campaignJSON["zoho_email_addressing"].(map[string]any)
+	if !ok {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing = %#v, want object", campaignJSON["zoho_email_addressing"])
+	}
+	assertTaskStateJSONObjectKeys(t, campaignJSON, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at", "zoho_email_addressing")
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["to"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.to"), []any{"person@example.com", "team@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.to = %#v, want [person@example.com team@example.com]", addressingJSON["to"])
+	}
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["cc"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.cc"), []any{"copy@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.cc = %#v, want [copy@example.com]", addressingJSON["cc"])
+	}
+	if !reflect.DeepEqual(mustTaskStateJSONArray(t, addressingJSON["bcc"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.bcc"), []any{"blind@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressingJSON["bcc"])
+	}
+
 	var summary missioncontrol.InspectSummary
 	if err := json.Unmarshal([]byte(got), &summary); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
