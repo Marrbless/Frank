@@ -61,6 +61,7 @@ type FrankAccountRecord struct {
 
 type FrankZohoMailboxAccount struct {
 	ProviderAccountID string `json:"provider_account_id,omitempty"`
+	ConfirmedCreated  bool   `json:"confirmed_created,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -238,6 +239,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.ZohoMailbox != nil && !strings.EqualFold(strings.TrimSpace(record.AccountKind), "mailbox") {
 		return fmt.Errorf("mission store Frank account zoho_mailbox requires account_kind %q", "mailbox")
+	}
+	if record.ZohoMailbox != nil {
+		if err := validateFrankZohoMailboxAccount(*record.ZohoMailbox); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(record.IdentityID) == "" {
 		return fmt.Errorf("mission store Frank account identity_id is required")
@@ -707,6 +713,18 @@ func normalizeFrankZohoMailboxAccount(config *FrankZohoMailboxAccount) *FrankZoh
 	normalized := *config
 	normalized.ProviderAccountID = strings.TrimSpace(normalized.ProviderAccountID)
 	return &normalized
+}
+
+func validateFrankZohoMailboxAccount(config FrankZohoMailboxAccount) error {
+	providerAccountID := strings.TrimSpace(config.ProviderAccountID)
+	switch {
+	case providerAccountID != "" && !config.ConfirmedCreated:
+		return fmt.Errorf("mission store Frank account zoho_mailbox.provider_account_id requires zoho_mailbox.confirmed_created")
+	case providerAccountID == "" && config.ConfirmedCreated:
+		return fmt.Errorf("mission store Frank account zoho_mailbox.confirmed_created requires zoho_mailbox.provider_account_id")
+	default:
+		return nil
+	}
 }
 
 func validateFrankZohoMailboxIdentity(config FrankZohoMailboxIdentity) error {

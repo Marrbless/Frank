@@ -147,6 +147,7 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		ProviderOrPlatformID: "provider-b",
 		ZohoMailbox: &FrankZohoMailboxAccount{
 			ProviderAccountID: "3323462000000008001",
+			ConfirmedCreated:  true,
 		},
 		IdentityID:           "identity-b",
 		ControlModel:         "agent_managed",
@@ -166,6 +167,7 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		ProviderOrPlatformID: "provider-a",
 		ZohoMailbox: &FrankZohoMailboxAccount{
 			ProviderAccountID: " 3323462000000008002 ",
+			ConfirmedCreated:  true,
 		},
 		IdentityID:           "identity-a",
 		ControlModel:         "agent_managed",
@@ -187,6 +189,7 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 	want.RecordVersion = StoreRecordVersion
 	want.ZohoMailbox = &FrankZohoMailboxAccount{
 		ProviderAccountID: "3323462000000008002",
+		ConfirmedCreated:  true,
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -355,6 +358,7 @@ func TestFrankRegistryMalformedValidationFailsClosed(t *testing.T) {
 					ProviderOrPlatformID: "provider-mail",
 					ZohoMailbox: &FrankZohoMailboxAccount{
 						ProviderAccountID: "3323462000000008002",
+						ConfirmedCreated:  true,
 					},
 					IdentityID:           "identity-1",
 					ControlModel:         "agent_managed",
@@ -366,6 +370,50 @@ func TestFrankRegistryMalformedValidationFailsClosed(t *testing.T) {
 				})
 			},
 			want: `mission store Frank account zoho_mailbox requires account_kind "mailbox"`,
+		},
+		{
+			name: "account zoho mailbox provider account requires confirmed created",
+			run: func() error {
+				return StoreFrankAccountRecord(root, FrankAccountRecord{
+					AccountID:            "account-zoho-provider-id-without-confirmed",
+					AccountKind:          "mailbox",
+					Label:                "Inbox",
+					ProviderOrPlatformID: "provider-mail",
+					ZohoMailbox: &FrankZohoMailboxAccount{
+						ProviderAccountID: "3323462000000008002",
+					},
+					IdentityID:           "identity-1",
+					ControlModel:         "agent_managed",
+					RecoveryModel:        "agent_recoverable",
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: "mission store Frank account zoho_mailbox.provider_account_id requires zoho_mailbox.confirmed_created",
+		},
+		{
+			name: "account zoho mailbox confirmed created requires provider account",
+			run: func() error {
+				return StoreFrankAccountRecord(root, FrankAccountRecord{
+					AccountID:            "account-zoho-confirmed-without-provider-id",
+					AccountKind:          "mailbox",
+					Label:                "Inbox",
+					ProviderOrPlatformID: "provider-mail",
+					ZohoMailbox: &FrankZohoMailboxAccount{
+						ConfirmedCreated: true,
+					},
+					IdentityID:           "identity-1",
+					ControlModel:         "agent_managed",
+					RecoveryModel:        "agent_recoverable",
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: "mission store Frank account zoho_mailbox.confirmed_created requires zoho_mailbox.provider_account_id",
 		},
 		{
 			name: "account missing recovery model",
@@ -1615,6 +1663,7 @@ func writeExecutionContextFrankZohoMailboxFixtures(t *testing.T) executionContex
 
 	fixtures.account.ZohoMailbox = &FrankZohoMailboxAccount{
 		ProviderAccountID: "3323462000000008002",
+		ConfirmedCreated:  true,
 	}
 	if err := StoreFrankAccountRecord(fixtures.root, fixtures.account); err != nil {
 		t.Fatalf("StoreFrankAccountRecord(zoho fixture) error = %v", err)
