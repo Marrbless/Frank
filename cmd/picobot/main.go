@@ -764,8 +764,8 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 	missionStatusCmd.Flags().String("status-file", "", "Path to a mission status snapshot JSON file")
-	missionStatusCmd.Flags().Bool("frank-zoho-send-proof", false, "Print Frank Zoho send proof locators from runtime_summary for later originalmessage verification")
-	missionStatusCmd.Flags().Bool("frank-zoho-verify-send-proof", false, "Fetch originalmessage bodies for Frank Zoho send proof locators from runtime_summary")
+	missionStatusCmd.Flags().Bool("frank-zoho-send-proof", false, "Print provider-specific Frank Zoho send proof locators from committed runtime_summary.frank_zoho_send_proof")
+	missionStatusCmd.Flags().Bool("frank-zoho-verify-send-proof", false, "Fetch originalmessage bodies for provider-specific Frank Zoho send proof locators from committed runtime_summary.frank_zoho_send_proof")
 
 	missionInspectCmd := &cobra.Command{
 		Use:          "inspect",
@@ -1785,6 +1785,8 @@ func configureMissionBootstrapJob(cmd *cobra.Command, ag *agent.AgentLoop) (*mis
 
 type missionStatusSnapshot = missioncontrol.MissionStatusSnapshot
 
+// missionStatusFrankZohoSendProofLocator is the dedicated provider-specific
+// CLI output contract for `mission status --frank-zoho-send-proof`.
 type missionStatusFrankZohoSendProofLocator struct {
 	ProviderMessageID  string `json:"provider_message_id"`
 	ProviderMailID     string `json:"provider_mail_id,omitempty"`
@@ -1793,6 +1795,8 @@ type missionStatusFrankZohoSendProofLocator struct {
 	OriginalMessageURL string `json:"original_message_url"`
 }
 
+// missionStatusFrankZohoSendProofVerification is the dedicated provider-specific
+// CLI output contract for `mission status --frank-zoho-verify-send-proof`.
 type missionStatusFrankZohoSendProofVerification = agenttools.FrankZohoSendProofVerification
 
 type missionStatusFrankZohoSendProofVerifier interface {
@@ -1863,6 +1867,9 @@ func loadMissionStatusFrankZohoSendProofFile(path string) ([]byte, error) {
 		return nil, err
 	}
 
+	// This dedicated helper surface consumes only committed
+	// runtime_summary.frank_zoho_send_proof and does not fall back to raw runtime
+	// receipts.
 	proof := make([]missionStatusFrankZohoSendProofLocator, 0)
 	if snapshot.RuntimeSummary != nil {
 		proof = make([]missionStatusFrankZohoSendProofLocator, 0, len(snapshot.RuntimeSummary.FrankZohoSendProof))
@@ -1891,6 +1898,9 @@ func loadMissionStatusFrankZohoVerifiedSendProofFile(ctx context.Context, path s
 		return nil, err
 	}
 
+	// This dedicated helper surface consumes only committed
+	// runtime_summary.frank_zoho_send_proof and does not fall back to raw runtime
+	// receipts.
 	proof := make([]missioncontrol.OperatorFrankZohoSendProofStatus, 0)
 	if snapshot.RuntimeSummary != nil {
 		proof = append(proof, snapshot.RuntimeSummary.FrankZohoSendProof...)

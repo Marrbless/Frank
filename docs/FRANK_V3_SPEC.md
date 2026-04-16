@@ -1876,6 +1876,13 @@ freeze notification schemas for fields such as
 `campaign_zoho_email_reply_work`, `frank_zoho_inbound_replies`, or
 `frank_zoho_send_proof`.
 
+The dedicated CLI helpers `picobot mission status --frank-zoho-send-proof`
+and `picobot mission status --frank-zoho-verify-send-proof` remain supported
+provider-specific operator read surfaces for the approved Zoho campaign-email
+lane. They are not part of the generic default mission status schema, they do
+not widen direct `OperatorStatus` or direct `OperatorInspect` contract rules,
+and they consume only committed `RuntimeSummary.FrankZohoSendProof`.
+
 ### Default budget ceilings
 
 Frank v3 retains these high-ceiling bounded defaults:

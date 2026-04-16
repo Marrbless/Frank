@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,23 @@ func installScheduledTriggerTestPersistence(root string, ag *agent.AgentLoop) {
 	ag.SetMissionRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
 		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "scheduled-trigger-test"}, job, runtime, control, time.Now().UTC())
 	})
+}
+
+func assertMainJSONObjectKeys(t *testing.T, object map[string]any, want ...string) {
+	t.Helper()
+
+	got := make([]string, 0, len(object))
+	for key := range object {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+
+	wantKeys := append([]string(nil), want...)
+	sort.Strings(wantKeys)
+
+	if !reflect.DeepEqual(got, wantKeys) {
+		t.Fatalf("JSON keys = %#v, want %#v", got, wantKeys)
+	}
 }
 
 func writeMalformedTreasuryRecordForMainTest(t *testing.T, root string, treasury missioncontrol.TreasuryRecord) {
@@ -868,6 +886,14 @@ func TestMissionStatusCommandReturnsFrankZohoSendProofLocatorsFromRuntimeSummary
 	if len(got) != 1 {
 		t.Fatalf("len(proof locators) = %d, want 1", len(got))
 	}
+	var raw []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("json.Unmarshal(raw stdout) error = %v\nstdout=%s", err, out.String())
+	}
+	if len(raw) != 1 {
+		t.Fatalf("len(raw proof locators) = %d, want 1", len(raw))
+	}
+	assertMainJSONObjectKeys(t, raw[0], "mime_message_id", "original_message_url", "provider_account_id", "provider_mail_id", "provider_message_id")
 	if got[0].ProviderMessageID != "1711540357880100000" {
 		t.Fatalf("ProviderMessageID = %q, want canonical provider message id from runtime_summary", got[0].ProviderMessageID)
 	}
@@ -990,6 +1016,14 @@ func TestMissionStatusCommandVerifiesFrankZohoSendProofFromRuntimeSummary(t *tes
 	if len(got) != 1 {
 		t.Fatalf("len(verification records) = %d, want 1", len(got))
 	}
+	var raw []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatalf("json.Unmarshal(raw stdout) error = %v\nstdout=%s", err, out.String())
+	}
+	if len(raw) != 1 {
+		t.Fatalf("len(raw verification records) = %d, want 1", len(raw))
+	}
+	assertMainJSONObjectKeys(t, raw[0], "mime_message_id", "original_message", "original_message_url", "provider_account_id", "provider_mail_id", "provider_message_id")
 	if got[0].ProviderMessageID != "1711540357880100000" {
 		t.Fatalf("ProviderMessageID = %q, want committed runtime_summary proof locator", got[0].ProviderMessageID)
 	}
