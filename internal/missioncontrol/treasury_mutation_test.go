@@ -531,6 +531,223 @@ func TestActivateFundedTreasuryPreservesTreasuryPreflightAndActivePolicyReadMode
 	assertNoTreasuryLedgerEntries(t, root, "treasury-read-model")
 }
 
+func TestRecordPostBootstrapTreasuryAcquisitionAppendsLedgerEntryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 10, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+			AssetCode:       "USD",
+			Amount:          "2.25",
+			SourceRef:       "payout:listing-2",
+			EvidenceLocator: "https://evidence.example/payout-2",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostBootstrapTreasuryAcquisitionInput{
+		TreasuryID: "treasury-post-bootstrap",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-bootstrap")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.State != TreasuryStateActive {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", treasury.State, TreasuryStateActive)
+	}
+	if treasury.PostBootstrapAcquisition == nil {
+		t.Fatal("LoadTreasuryRecord().PostBootstrapAcquisition = nil, want consumed block")
+	}
+	if !treasury.UpdatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryRecord().UpdatedAt = %s, want %s", treasury.UpdatedAt, recordedAt.UTC())
+	}
+	entryID := treasury.PostBootstrapAcquisition.ConsumedEntryID
+	if entryID == "" {
+		t.Fatal("LoadTreasuryRecord().PostBootstrapAcquisition.ConsumedEntryID = empty, want committed linkage")
+	}
+
+	entry, err := LoadTreasuryLedgerEntry(root, "treasury-post-bootstrap", entryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindAcquisition {
+		t.Fatalf("LoadTreasuryLedgerEntry().EntryKind = %q, want %q", entry.EntryKind, TreasuryLedgerEntryKindAcquisition)
+	}
+	if entry.AssetCode != "USD" || entry.Amount != "2.25" || entry.SourceRef != "payout:listing-2" {
+		t.Fatalf("LoadTreasuryLedgerEntry() = %#v, want committed post-bootstrap acquisition payload", entry)
+	}
+	if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryLedgerEntry().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+	}
+}
+
+func TestRecordPostBootstrapTreasuryAcquisitionReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 20, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+			AssetCode:       "USD",
+			Amount:          "3.00",
+			SourceRef:       "payout:listing-3",
+			EvidenceLocator: "https://evidence.example/payout-3",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+	}))
+
+	input := PostBootstrapTreasuryAcquisitionInput{TreasuryID: "treasury-post-bootstrap-replay"}
+	if err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition(first) error = %v", err)
+	}
+
+	err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostBootstrapTreasuryAcquisition(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-bootstrap-replay" post-bootstrap acquisition already consumed by entry "`) {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition(replay) error = %q, want consumed rejection", err.Error())
+	}
+
+	entries, err := ListTreasuryLedgerEntries(root, "treasury-post-bootstrap-replay")
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListTreasuryLedgerEntries() len = %d, want 1", len(entries))
+	}
+}
+
+func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOnDerivedEntryAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 30, 0, 0, time.UTC)
+	block := TreasuryPostBootstrapAcquisition{
+		AssetCode:       "USD",
+		Amount:          "4.00",
+		SourceRef:       "payout:listing-4",
+		EvidenceLocator: "https://evidence.example/payout-4",
+		ConfirmedAt:     now.Add(time.Minute),
+	}
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap-ambiguous"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostBootstrapAcquisition = &block
+	}))
+	derivedEntryID := derivePostBootstrapTreasuryAcquisitionEntryID("treasury-post-bootstrap-ambiguous", block)
+	if err := StoreTreasuryLedgerEntry(root, validTreasuryLedgerEntry(now.Add(2*time.Minute), func(entry *TreasuryLedgerEntry) {
+		entry.EntryID = derivedEntryID
+		entry.TreasuryID = "treasury-post-bootstrap-ambiguous"
+		entry.AssetCode = block.AssetCode
+		entry.Amount = block.Amount
+		entry.SourceRef = block.SourceRef
+	})); err != nil {
+		t.Fatalf("StoreTreasuryLedgerEntry() error = %v", err)
+	}
+
+	err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostBootstrapTreasuryAcquisitionInput{
+		TreasuryID: "treasury-post-bootstrap-ambiguous",
+	}, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostBootstrapTreasuryAcquisition() error = nil, want ambiguous existing-entry rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-bootstrap-ambiguous" post-bootstrap acquisition derived entry "`) ||
+		!strings.Contains(err.Error(), `already exists without committed consumed_entry_id`) {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition() error = %q, want ambiguous derived-entry rejection", err.Error())
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-bootstrap-ambiguous")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostBootstrapAcquisition == nil || treasury.PostBootstrapAcquisition.ConsumedEntryID != "" {
+		t.Fatalf("LoadTreasuryRecord().PostBootstrapAcquisition = %#v, want unconsumed block preserved", treasury.PostBootstrapAcquisition)
+	}
+}
+
+func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedWithoutCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 40, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap-missing-block"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostBootstrapAcquisition = nil
+	}))
+
+	err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostBootstrapTreasuryAcquisitionInput{
+		TreasuryID: "treasury-post-bootstrap-missing-block",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostBootstrapTreasuryAcquisition() error = nil, want missing block rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-bootstrap-missing-block" post-bootstrap acquisition requires committed treasury.post_bootstrap_acquisition`) {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition() error = %q, want missing block rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-missing-block")
+}
+
+func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 50, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap-funded"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostBootstrapAcquisition = nil
+	}))
+
+	err := RecordPostBootstrapTreasuryAcquisition(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostBootstrapTreasuryAcquisitionInput{
+		TreasuryID: "treasury-post-bootstrap-funded",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostBootstrapTreasuryAcquisition() error = nil, want invalid state rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-bootstrap-funded" post-bootstrap acquisition requires state "active", got "funded"`) {
+		t.Fatalf("RecordPostBootstrapTreasuryAcquisition() error = %q, want invalid state rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
+}
+
 func mustStoreTreasuryForMutationTest(t *testing.T, root string, record TreasuryRecord) {
 	t.Helper()
 
