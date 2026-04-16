@@ -28,7 +28,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 	want := TreasuryRecord{
 		TreasuryID:     " treasury-a ",
 		DisplayName:    " Frank Treasury A ",
-		State:          TreasuryState(" funded "),
+		State:          TreasuryState(" active "),
 		ZeroSeedPolicy: TreasuryZeroSeedPolicy(" owner_seed_forbidden "),
 		ContainerRefs: []FrankRegistryObjectRef{
 			{
@@ -43,6 +43,14 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			SourceRef:       " payout:listing-a ",
 			EvidenceLocator: " https://evidence.example/payout-a ",
 			ConfirmedAt:     now.Add(90 * time.Second),
+		},
+		PostBootstrapAcquisition: &TreasuryPostBootstrapAcquisition{
+			AssetCode:       " USD ",
+			Amount:          " 2.25 ",
+			SourceRef:       " payout:listing-b ",
+			EvidenceLocator: " https://evidence.example/payout-b ",
+			ConfirmedAt:     now.Add(2 * time.Minute),
+			ConsumedEntryID: " entry-post-value ",
 		},
 		CreatedAt: now.Add(2 * time.Minute),
 		UpdatedAt: now.Add(3 * time.Minute),
@@ -59,7 +67,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 	want.RecordVersion = StoreRecordVersion
 	want.TreasuryID = "treasury-a"
 	want.DisplayName = "Frank Treasury A"
-	want.State = TreasuryStateFunded
+	want.State = TreasuryStateActive
 	want.ZeroSeedPolicy = TreasuryZeroSeedPolicyOwnerSeedForbidden
 	want.ContainerRefs = []FrankRegistryObjectRef{
 		{
@@ -74,6 +82,14 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		SourceRef:       "payout:listing-a",
 		EvidenceLocator: "https://evidence.example/payout-a",
 		ConfirmedAt:     now.Add(90 * time.Second).UTC(),
+	}
+	want.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+		AssetCode:       "USD",
+		Amount:          "2.25",
+		SourceRef:       "payout:listing-b",
+		EvidenceLocator: "https://evidence.example/payout-b",
+		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
+		ConsumedEntryID: "entry-post-value",
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -390,6 +406,99 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: "mission store treasury bootstrap_acquisition.confirmed_at is required",
+		},
+		{
+			name: "post bootstrap acquisition requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "2.25",
+						SourceRef:       "payout:listing-b",
+						EvidenceLocator: "https://evidence.example/payout-b",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: `mission store treasury post_bootstrap_acquisition requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post bootstrap acquisition missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "2.25",
+						EvidenceLocator: "https://evidence.example/payout-b",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury post_bootstrap_acquisition.source_ref is required",
+		},
+		{
+			name: "post bootstrap acquisition malformed amount",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "02.25",
+						SourceRef:       "payout:listing-b",
+						EvidenceLocator: "https://evidence.example/payout-b",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: `mission store treasury post_bootstrap_acquisition.amount "02.25" is invalid`,
+		},
+		{
+			name: "post bootstrap acquisition missing evidence locator",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:   "USD",
+						Amount:      "2.25",
+						SourceRef:   "payout:listing-b",
+						ConfirmedAt: now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury post_bootstrap_acquisition.evidence_locator is required",
+		},
+		{
+			name: "post bootstrap acquisition missing confirmed at",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "2.25",
+						SourceRef:       "payout:listing-b",
+						EvidenceLocator: "https://evidence.example/payout-b",
+					}
+				}))
+			},
+			want: "mission store treasury post_bootstrap_acquisition.confirmed_at is required",
+		},
+		{
+			name: "post bootstrap acquisition malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "2.25",
+						SourceRef:       "payout:listing-b",
+						EvidenceLocator: "https://evidence.example/payout-b",
+						ConfirmedAt:     now.Add(time.Minute),
+						ConsumedEntryID: "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
 		},
 	}
 
@@ -950,6 +1059,178 @@ func TestResolveExecutionContextTreasuryBootstrapAcquisitionIgnoresNonBootstrapT
 	}
 }
 
+func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.Step.TreasuryRef = nil
+
+	got, err := ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 16, 45, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-bootstrap-acquisition"
+		record.State = TreasuryStateActive
+		record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+			AssetCode:       "USD",
+			Amount:          "2.25",
+			SourceRef:       "payout:listing-b",
+			EvidenceLocator: "https://evidence.example/payout-b",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostBootstrapAcquisition() = nil, want resolved post-bootstrap acquisition")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostBootstrapAcquisition, *record.PostBootstrapAcquisition) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition().PostBootstrapAcquisition = %#v, want %#v", got.PostBootstrapAcquisition, *record.PostBootstrapAcquisition)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionFailsClosedOnMissingCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 16, 50, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-active-missing-post-bootstrap-block"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = nil, want missing block rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-active-missing-post-bootstrap-block" requires committed treasury.post_bootstrap_acquisition for additional acquisition`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = %q, want missing post-bootstrap block rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 16, 55, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-active-consumed-post-bootstrap-block"
+		record.State = TreasuryStateActive
+		record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
+			AssetCode:       "USD",
+			Amount:          "2.25",
+			SourceRef:       "payout:listing-b",
+			EvidenceLocator: "https://evidence.example/payout-b",
+			ConfirmedAt:     now.Add(time.Minute),
+			ConsumedEntryID: "entry-post-value",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = nil, want consumed block rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-active-consumed-post-bootstrap-block" treasury.post_bootstrap_acquisition is already consumed by entry "entry-post-value"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = %q, want consumed block rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionIgnoresNonActiveTreasury(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 0, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-funded-no-post-bootstrap-acquisition"
+		record.State = TreasuryStateFunded
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() error = %v, want non-active ignore", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() = %#v, want nil for non-active treasury", got)
+	}
+}
+
 func TestResolveExecutionContextTreasuryPreflightUsesSingleReadOnlySurface(t *testing.T) {
 	t.Parallel()
 
@@ -1015,13 +1296,14 @@ func TestResolveExecutionContextTreasuryPreflightResolvesTreasuryAndContainers(t
 	now := time.Date(2026, 4, 8, 17, 0, 0, 0, time.UTC)
 	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-preflight"
-		record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
-			EntryID:         "entry-first-value",
+		record.State = TreasuryStateActive
+		record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
 			AssetCode:       "USD",
-			Amount:          "10.00",
-			SourceRef:       "payout:listing-a",
-			EvidenceLocator: "https://evidence.example/payout-a",
+			Amount:          "2.25",
+			SourceRef:       "payout:listing-b",
+			EvidenceLocator: "https://evidence.example/payout-b",
 			ConfirmedAt:     now.Add(time.Minute),
+			ConsumedEntryID: "entry-post-value",
 		}
 		record.ContainerRefs = []FrankRegistryObjectRef{
 			{
@@ -1040,13 +1322,13 @@ func TestResolveExecutionContextTreasuryPreflightResolvesTreasuryAndContainers(t
 			ObjectID: fixtures.container.ContainerID,
 		},
 	}
-	record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
-		EntryID:         "entry-first-value",
+	record.PostBootstrapAcquisition = &TreasuryPostBootstrapAcquisition{
 		AssetCode:       "USD",
-		Amount:          "10.00",
-		SourceRef:       "payout:listing-a",
-		EvidenceLocator: "https://evidence.example/payout-a",
+		Amount:          "2.25",
+		SourceRef:       "payout:listing-b",
+		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(time.Minute).UTC(),
+		ConsumedEntryID: "entry-post-value",
 	}
 
 	job := testExecutionJob()

@@ -1571,6 +1571,13 @@ block now includes the durable `entry_id`, `asset_code`, `amount`,
 `source_ref`, one evidence locator, and a confirmation timestamp on the same
 treasury record.
 
+For the approved first post-bootstrap additional acquisition lane on this
+branch line, that same treasury record may also carry one treasury-owned
+`post_bootstrap_acquisition` block for already-active treasuries. It holds only
+the additional acquisition inputs plus confirmation evidence and optional
+same-record consumed linkage, without inventing a second treasury execution
+registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

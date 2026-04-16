@@ -51,15 +51,16 @@ const (
 )
 
 type TreasuryRecord struct {
-	RecordVersion        int                           `json:"record_version"`
-	TreasuryID           string                        `json:"treasury_id"`
-	DisplayName          string                        `json:"display_name"`
-	State                TreasuryState                 `json:"state"`
-	ZeroSeedPolicy       TreasuryZeroSeedPolicy        `json:"zero_seed_policy"`
-	ContainerRefs        []FrankRegistryObjectRef      `json:"container_refs,omitempty"`
-	BootstrapAcquisition *TreasuryBootstrapAcquisition `json:"bootstrap_acquisition,omitempty"`
-	CreatedAt            time.Time                     `json:"created_at"`
-	UpdatedAt            time.Time                     `json:"updated_at"`
+	RecordVersion            int                               `json:"record_version"`
+	TreasuryID               string                            `json:"treasury_id"`
+	DisplayName              string                            `json:"display_name"`
+	State                    TreasuryState                     `json:"state"`
+	ZeroSeedPolicy           TreasuryZeroSeedPolicy            `json:"zero_seed_policy"`
+	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
+	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
+	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	CreatedAt                time.Time                         `json:"created_at"`
+	UpdatedAt                time.Time                         `json:"updated_at"`
 }
 
 type TreasuryBootstrapAcquisition struct {
@@ -69,6 +70,15 @@ type TreasuryBootstrapAcquisition struct {
 	SourceRef       string    `json:"source_ref"`
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
+}
+
+type TreasuryPostBootstrapAcquisition struct {
+	AssetCode       string    `json:"asset_code"`
+	Amount          string    `json:"amount"`
+	SourceRef       string    `json:"source_ref"`
+	EvidenceLocator string    `json:"evidence_locator"`
+	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
+	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
 }
 
 // TreasuryObjectView is an adapter-only surface that exposes the
@@ -147,6 +157,11 @@ type ResolvedExecutionContextTreasuryBootstrapAcquisition struct {
 	BootstrapAcquisition TreasuryBootstrapAcquisition `json:"bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
+	Treasury                 TreasuryRecord                   `json:"treasury"`
+	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
+}
+
 var (
 	ErrTreasuryLedgerEntryNotFound = errors.New("mission store treasury ledger entry not found")
 	ErrTreasuryRecordNotFound      = errors.New("mission store treasury record not found")
@@ -208,6 +223,14 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 	if record.BootstrapAcquisition != nil {
 		if err := validateTreasuryBootstrapAcquisition(*record.BootstrapAcquisition); err != nil {
 			return err
+		}
+	}
+	if record.PostBootstrapAcquisition != nil {
+		if err := validateTreasuryPostBootstrapAcquisition(*record.PostBootstrapAcquisition); err != nil {
+			return err
+		}
+		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if err := validateTreasuryActiveContainerContract(record); err != nil {
@@ -354,6 +377,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ZeroSeedPolicy = NormalizeTreasuryZeroSeedPolicy(record.ZeroSeedPolicy)
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
+	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	return record
@@ -466,6 +490,36 @@ func ResolveExecutionContextTreasuryBootstrapAcquisition(ec ExecutionContext) (*
 	}, nil
 }
 
+func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostBootstrapAcquisition, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostBootstrapAcquisition == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q requires committed treasury.post_bootstrap_acquisition for additional acquisition",
+			treasury.TreasuryID,
+		)
+	}
+	if strings.TrimSpace(treasury.PostBootstrapAcquisition.ConsumedEntryID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_bootstrap_acquisition is already consumed by entry %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(treasury.PostBootstrapAcquisition.ConsumedEntryID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostBootstrapAcquisition{
+		Treasury:                 *treasury,
+		PostBootstrapAcquisition: *treasury.PostBootstrapAcquisition,
+	}, nil
+}
+
 func ResolveExecutionContextTreasuryPreflight(ec ExecutionContext) (ResolvedExecutionContextTreasuryPreflight, error) {
 	treasury, err := ResolveExecutionContextTreasuryRef(ec)
 	if err != nil {
@@ -572,6 +626,20 @@ func normalizeTreasuryBootstrapAcquisition(block *TreasuryBootstrapAcquisition) 
 	return &normalized
 }
 
+func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcquisition) *TreasuryPostBootstrapAcquisition {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.AssetCode = strings.TrimSpace(normalized.AssetCode)
+	normalized.Amount = strings.TrimSpace(normalized.Amount)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.EvidenceLocator = strings.TrimSpace(normalized.EvidenceLocator)
+	normalized.ConsumedEntryID = strings.TrimSpace(normalized.ConsumedEntryID)
+	normalized.ConfirmedAt = normalized.ConfirmedAt.UTC()
+	return &normalized
+}
+
 func validateTreasuryBootstrapAcquisition(block TreasuryBootstrapAcquisition) error {
 	if err := validateTreasuryEntryID(block.EntryID, "mission store treasury bootstrap_acquisition"); err != nil {
 		return err
@@ -590,6 +658,30 @@ func validateTreasuryBootstrapAcquisition(block TreasuryBootstrapAcquisition) er
 	}
 	if block.ConfirmedAt.IsZero() {
 		return fmt.Errorf("mission store treasury bootstrap_acquisition.confirmed_at is required")
+	}
+	return nil
+}
+
+func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisition) error {
+	if err := validateTreasuryAssetCode(block.AssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_bootstrap_acquisition.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.Amount); err != nil {
+		return fmt.Errorf("mission store treasury post_bootstrap_acquisition.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_bootstrap_acquisition.source_ref is required")
+	}
+	if strings.TrimSpace(block.EvidenceLocator) == "" {
+		return fmt.Errorf("mission store treasury post_bootstrap_acquisition.evidence_locator is required")
+	}
+	if block.ConfirmedAt.IsZero() {
+		return fmt.Errorf("mission store treasury post_bootstrap_acquisition.confirmed_at is required")
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
