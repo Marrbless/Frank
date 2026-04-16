@@ -141,6 +141,11 @@ type ResolvedExecutionContextTreasuryPreflight struct {
 	Containers []FrankContainerRecord `json:"containers,omitempty"`
 }
 
+type ResolvedExecutionContextTreasuryBootstrapAcquisition struct {
+	Treasury             TreasuryRecord               `json:"treasury"`
+	BootstrapAcquisition TreasuryBootstrapAcquisition `json:"bootstrap_acquisition"`
+}
+
 var (
 	ErrTreasuryLedgerEntryNotFound = errors.New("mission store treasury ledger entry not found")
 	ErrTreasuryRecordNotFound      = errors.New("mission store treasury record not found")
@@ -435,6 +440,29 @@ func ResolveExecutionContextTreasuryRef(ec ExecutionContext) (*TreasuryRecord, e
 		return nil, err
 	}
 	return &record, nil
+}
+
+func ResolveExecutionContextTreasuryBootstrapAcquisition(ec ExecutionContext) (*ResolvedExecutionContextTreasuryBootstrapAcquisition, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateBootstrap {
+		return nil, nil
+	}
+	if treasury.BootstrapAcquisition == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q requires committed treasury.bootstrap_acquisition for first-value acquisition",
+			treasury.TreasuryID,
+		)
+	}
+	return &ResolvedExecutionContextTreasuryBootstrapAcquisition{
+		Treasury:             *treasury,
+		BootstrapAcquisition: *treasury.BootstrapAcquisition,
+	}, nil
 }
 
 func ResolveExecutionContextTreasuryPreflight(ec ExecutionContext) (ResolvedExecutionContextTreasuryPreflight, error) {
