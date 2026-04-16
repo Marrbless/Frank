@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,11 +16,17 @@ type FrankIdentityRecord struct {
 	IdentityKind         string                       `json:"identity_kind"`
 	DisplayName          string                       `json:"display_name"`
 	ProviderOrPlatformID string                       `json:"provider_or_platform_id"`
+	ZohoMailbox          *FrankZohoMailboxIdentity    `json:"zoho_mailbox,omitempty"`
 	IdentityMode         IdentityMode                 `json:"identity_mode"`
 	State                string                       `json:"state"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
 	CreatedAt            time.Time                    `json:"created_at"`
 	UpdatedAt            time.Time                    `json:"updated_at"`
+}
+
+type FrankZohoMailboxIdentity struct {
+	FromAddress     string `json:"from_address"`
+	FromDisplayName string `json:"from_display_name"`
 }
 
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
@@ -42,6 +49,7 @@ type FrankAccountRecord struct {
 	AccountKind          string                       `json:"account_kind"`
 	Label                string                       `json:"label"`
 	ProviderOrPlatformID string                       `json:"provider_or_platform_id"`
+	ZohoMailbox          *FrankZohoMailboxAccount     `json:"zoho_mailbox,omitempty"`
 	IdentityID           string                       `json:"identity_id"`
 	ControlModel         string                       `json:"control_model"`
 	RecoveryModel        string                       `json:"recovery_model"`
@@ -49,6 +57,10 @@ type FrankAccountRecord struct {
 	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
 	CreatedAt            time.Time                    `json:"created_at"`
 	UpdatedAt            time.Time                    `json:"updated_at"`
+}
+
+type FrankZohoMailboxAccount struct {
+	ProviderAccountID string `json:"provider_account_id,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -177,6 +189,14 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 	if strings.TrimSpace(record.ProviderOrPlatformID) == "" {
 		return fmt.Errorf("mission store Frank identity provider_or_platform_id is required")
 	}
+	if record.ZohoMailbox != nil {
+		if !strings.EqualFold(strings.TrimSpace(record.IdentityKind), "email") {
+			return fmt.Errorf("mission store Frank identity zoho_mailbox requires identity_kind %q", "email")
+		}
+		if err := validateFrankZohoMailboxIdentity(*record.ZohoMailbox); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -210,6 +230,9 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if strings.TrimSpace(record.ProviderOrPlatformID) == "" {
 		return fmt.Errorf("mission store Frank account provider_or_platform_id is required")
+	}
+	if record.ZohoMailbox != nil && !strings.EqualFold(strings.TrimSpace(record.AccountKind), "mailbox") {
+		return fmt.Errorf("mission store Frank account zoho_mailbox requires account_kind %q", "mailbox")
 	}
 	if strings.TrimSpace(record.IdentityID) == "" {
 		return fmt.Errorf("mission store Frank account identity_id is required")
@@ -426,6 +449,7 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 		return err
 	}
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -469,6 +493,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 		return err
 	}
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -556,6 +581,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	if err := LoadStoreJSON(path, &record); err != nil {
 		return FrankIdentityRecord{}, err
 	}
+	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -573,6 +599,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	if err := LoadStoreJSON(path, &record); err != nil {
 		return FrankAccountRecord{}, err
 	}
+	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -601,4 +628,38 @@ func loadFrankContainerRecordFile(root, path string) (FrankContainerRecord, erro
 		return FrankContainerRecord{}, err
 	}
 	return record, nil
+}
+
+func normalizeFrankZohoMailboxIdentity(config *FrankZohoMailboxIdentity) *FrankZohoMailboxIdentity {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.FromAddress = strings.TrimSpace(normalized.FromAddress)
+	normalized.FromDisplayName = strings.TrimSpace(normalized.FromDisplayName)
+	return &normalized
+}
+
+func normalizeFrankZohoMailboxAccount(config *FrankZohoMailboxAccount) *FrankZohoMailboxAccount {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.ProviderAccountID = strings.TrimSpace(normalized.ProviderAccountID)
+	return &normalized
+}
+
+func validateFrankZohoMailboxIdentity(config FrankZohoMailboxIdentity) error {
+	fromAddress := strings.TrimSpace(config.FromAddress)
+	if fromAddress == "" {
+		return fmt.Errorf("mission store Frank identity zoho_mailbox.from_address is required")
+	}
+	parsed, err := mail.ParseAddress(fromAddress)
+	if err != nil || parsed == nil || parsed.Name != "" || parsed.Address != fromAddress {
+		return fmt.Errorf("mission store Frank identity zoho_mailbox.from_address must be a bare email address")
+	}
+	if strings.TrimSpace(config.FromDisplayName) == "" {
+		return fmt.Errorf("mission store Frank identity zoho_mailbox.from_display_name is required")
+	}
+	return nil
 }

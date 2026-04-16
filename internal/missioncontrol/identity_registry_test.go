@@ -29,6 +29,10 @@ func TestFrankIdentityRecordRoundTripAndList(t *testing.T) {
 		IdentityKind:         "email",
 		DisplayName:          "Frank Mail B",
 		ProviderOrPlatformID: "provider-b",
+		ZohoMailbox: &FrankZohoMailboxIdentity{
+			FromAddress:     "frank-b@example.com",
+			FromDisplayName: "Frank B",
+		},
 		IdentityMode:         IdentityModeAgentAlias,
 		State:                "candidate",
 		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-b"},
@@ -43,6 +47,10 @@ func TestFrankIdentityRecordRoundTripAndList(t *testing.T) {
 		IdentityKind:         "email",
 		DisplayName:          "Frank Mail A",
 		ProviderOrPlatformID: "provider-a",
+		ZohoMailbox: &FrankZohoMailboxIdentity{
+			FromAddress:     " frank-a@example.com ",
+			FromDisplayName: " Frank A ",
+		},
 		IdentityMode:         IdentityMode(" "),
 		State:                "active",
 		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-a"},
@@ -59,6 +67,10 @@ func TestFrankIdentityRecordRoundTripAndList(t *testing.T) {
 	}
 
 	want.RecordVersion = StoreRecordVersion
+	want.ZohoMailbox = &FrankZohoMailboxIdentity{
+		FromAddress:     "frank-a@example.com",
+		FromDisplayName: "Frank A",
+	}
 	want.IdentityMode = IdentityModeAgentAlias
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -133,6 +145,9 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		AccountKind:          "mailbox",
 		Label:                "Inbox B",
 		ProviderOrPlatformID: "provider-b",
+		ZohoMailbox: &FrankZohoMailboxAccount{
+			ProviderAccountID: "3323462000000008001",
+		},
 		IdentityID:           "identity-b",
 		ControlModel:         "agent_managed",
 		RecoveryModel:        "agent_recoverable",
@@ -149,6 +164,9 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		AccountKind:          "mailbox",
 		Label:                "Inbox A",
 		ProviderOrPlatformID: "provider-a",
+		ZohoMailbox: &FrankZohoMailboxAccount{
+			ProviderAccountID: " 3323462000000008002 ",
+		},
 		IdentityID:           "identity-a",
 		ControlModel:         "agent_managed",
 		RecoveryModel:        "agent_recoverable",
@@ -167,6 +185,9 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 	}
 
 	want.RecordVersion = StoreRecordVersion
+	want.ZohoMailbox = &FrankZohoMailboxAccount{
+		ProviderAccountID: "3323462000000008002",
+	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
 	if !reflect.DeepEqual(got, want) {
@@ -282,6 +303,69 @@ func TestFrankRegistryMalformedValidationFailsClosed(t *testing.T) {
 				})
 			},
 			want: `identity_mode "owner-ish" is invalid`,
+		},
+		{
+			name: "identity zoho mailbox missing from address",
+			run: func() error {
+				return StoreFrankIdentityRecord(root, FrankIdentityRecord{
+					IdentityID:           "identity-zoho-missing-address",
+					IdentityKind:         "email",
+					DisplayName:          "Frank Mail",
+					ProviderOrPlatformID: "provider-mail",
+					ZohoMailbox: &FrankZohoMailboxIdentity{
+						FromDisplayName: "Frank",
+					},
+					IdentityMode:         IdentityModeAgentAlias,
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: "mission store Frank identity zoho_mailbox.from_address is required",
+		},
+		{
+			name: "identity zoho mailbox malformed from address",
+			run: func() error {
+				return StoreFrankIdentityRecord(root, FrankIdentityRecord{
+					IdentityID:           "identity-zoho-bad-address",
+					IdentityKind:         "email",
+					DisplayName:          "Frank Mail",
+					ProviderOrPlatformID: "provider-mail",
+					ZohoMailbox: &FrankZohoMailboxIdentity{
+						FromAddress:     "Frank <frank@example.com>",
+						FromDisplayName: "Frank",
+					},
+					IdentityMode:         IdentityModeAgentAlias,
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: "mission store Frank identity zoho_mailbox.from_address must be a bare email address",
+		},
+		{
+			name: "account zoho mailbox requires mailbox kind",
+			run: func() error {
+				return StoreFrankAccountRecord(root, FrankAccountRecord{
+					AccountID:            "account-zoho-not-mailbox",
+					AccountKind:          "handle",
+					Label:                "Inbox",
+					ProviderOrPlatformID: "provider-mail",
+					ZohoMailbox: &FrankZohoMailboxAccount{
+						ProviderAccountID: "3323462000000008002",
+					},
+					IdentityID:           "identity-1",
+					ControlModel:         "agent_managed",
+					RecoveryModel:        "agent_recoverable",
+					State:                "active",
+					EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+					CreatedAt:            now,
+					UpdatedAt:            now.Add(time.Minute),
+				})
+			},
+			want: `mission store Frank account zoho_mailbox requires account_kind "mailbox"`,
 		},
 		{
 			name: "account missing recovery model",
