@@ -16,34 +16,34 @@ import (
 // The main use right now is enforcing that a new deliverable task must
 // initialize projects/current via frank_new_project before writing there.
 type TaskState struct {
-	mu                           sync.Mutex
-	currentTaskID                string
-	projectInitialized           bool
-	missionStoreRoot             string
-	executionContext             missioncontrol.ExecutionContext
-	hasExecutionContext          bool
-	missionJob                   missioncontrol.Job
-	hasMissionJob                bool
-	runtimeControl               missioncontrol.RuntimeControlContext
-	hasRuntimeControl            bool
-	runtimeState                 missioncontrol.JobRuntimeState
-	hasRuntimeState              bool
-	operatorChannel              string
-	operatorChatID               string
-	auditEvents                  []missioncontrol.AuditEvent
-	runtimePersistHook           func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeProjectionHook        func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeChangeHook            func()
-	campaignReadinessGuardHook   func(missioncontrol.ExecutionContext) error
-	treasuryActivationPolicyHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
+	mu                             sync.Mutex
+	currentTaskID                  string
+	projectInitialized             bool
+	missionStoreRoot               string
+	executionContext               missioncontrol.ExecutionContext
+	hasExecutionContext            bool
+	missionJob                     missioncontrol.Job
+	hasMissionJob                  bool
+	runtimeControl                 missioncontrol.RuntimeControlContext
+	hasRuntimeControl              bool
+	runtimeState                   missioncontrol.JobRuntimeState
+	hasRuntimeState                bool
+	operatorChannel                string
+	operatorChatID                 string
+	auditEvents                    []missioncontrol.AuditEvent
+	runtimePersistHook             func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeProjectionHook          func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeChangeHook              func()
+	campaignReadinessGuardHook     func(missioncontrol.ExecutionContext) error
+	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
 const taskStateTreasuryActivationLeaseHolderID = "taskstate-activate-step-treasury"
 
 func NewTaskState() *TaskState {
 	return &TaskState{
-		campaignReadinessGuardHook:   missioncontrol.RequireExecutionContextCampaignReadiness,
-		treasuryActivationPolicyHook: missioncontrol.ApplyDefaultTreasuryActivationPolicy,
+		campaignReadinessGuardHook:     missioncontrol.RequireExecutionContextCampaignReadiness,
+		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
 	}
 }
 
@@ -295,7 +295,7 @@ func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job,
 
 	s.mu.Lock()
 	root := strings.TrimSpace(s.missionStoreRoot)
-	hook := s.treasuryActivationPolicyHook
+	hook := s.treasuryActivationProducerHook
 	s.mu.Unlock()
 	if hook == nil {
 		return nil

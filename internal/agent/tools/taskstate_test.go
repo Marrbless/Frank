@@ -603,7 +603,7 @@ func TestTaskStateActivateStepRejectsDifferentJobWhileAnotherRuntimeRunning(t *t
 	}
 }
 
-func TestTaskStateActivateStepTreasuryPathCallsActivationPolicyOnce(t *testing.T) {
+func TestTaskStateActivateStepTreasuryPathCallsActivationProducerOnce(t *testing.T) {
 	t.Parallel()
 
 	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
@@ -618,7 +618,7 @@ func TestTaskStateActivateStepTreasuryPathCallsActivationPolicyOnce(t *testing.T
 	var gotLease missioncontrol.WriterLockLease
 	var gotInput missioncontrol.DefaultTreasuryActivationPolicyInput
 	var gotAt time.Time
-	state.treasuryActivationPolicyHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.DefaultTreasuryActivationPolicyInput, now time.Time) error {
+	state.treasuryActivationProducerHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.DefaultTreasuryActivationPolicyInput, now time.Time) error {
 		calls++
 		gotRoot = root
 		gotLease = lease
@@ -632,21 +632,21 @@ func TestTaskStateActivateStepTreasuryPathCallsActivationPolicyOnce(t *testing.T
 	}
 
 	if calls != 1 {
-		t.Fatalf("treasuryActivationPolicyHook calls = %d, want 1", calls)
+		t.Fatalf("treasuryActivationProducerHook calls = %d, want 1", calls)
 	}
 	if gotRoot != root {
-		t.Fatalf("treasuryActivationPolicyHook root = %q, want %q", gotRoot, root)
+		t.Fatalf("treasuryActivationProducerHook root = %q, want %q", gotRoot, root)
 	}
 	if gotLease.LeaseHolderID != taskStateTreasuryActivationLeaseHolderID {
-		t.Fatalf("treasuryActivationPolicyHook lease = %#v, want %q", gotLease, taskStateTreasuryActivationLeaseHolderID)
+		t.Fatalf("treasuryActivationProducerHook lease = %#v, want %q", gotLease, taskStateTreasuryActivationLeaseHolderID)
 	}
 	if !reflect.DeepEqual(gotInput, missioncontrol.DefaultTreasuryActivationPolicyInput{
 		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
 	}) {
-		t.Fatalf("treasuryActivationPolicyHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
+		t.Fatalf("treasuryActivationProducerHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
 	}
 	if gotAt.IsZero() {
-		t.Fatal("treasuryActivationPolicyHook now = zero, want activation timestamp")
+		t.Fatal("treasuryActivationProducerHook now = zero, want activation timestamp")
 	}
 
 	runtime, ok := state.MissionRuntimeState()
