@@ -1556,6 +1556,16 @@ Bootstrap succeeds when:
 - the value lands in a valid autonomy-compatible treasury container,
 - the value is recorded in the treasury ledger.
 
+Current branch-line boundary:
+
+- first-value treasury bootstrap remains producer-only,
+- no committed runtime or control-plane caller may infer or synthesize bootstrap
+  inputs such as ledger entry identity, asset, amount, or source from partial
+  runtime evidence,
+- treasury activation may use its dedicated producer path after funding, but
+  first-value treasury bootstrap does not receive an equivalent runtime caller
+  in this pass.
+
 ### Financial execution rule
 
 Actual financial execution requires Frank treasury state that permits it.
