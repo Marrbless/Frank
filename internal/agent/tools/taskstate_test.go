@@ -889,6 +889,45 @@ func TestTaskStateActivateStepZohoMailboxBootstrapPathCallsProducerOnce(t *testi
 	}
 }
 
+func TestTaskStateActivateStepZohoMailboxBootstrapPathInvokesRealProducer(t *testing.T) {
+	t.Parallel()
+
+	root, identity, account := writeTaskStateZohoMailboxBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{
+		{Kind: missioncontrol.EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: missioncontrol.EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	calls := 0
+	state.zohoMailboxBootstrapHook = func(root string, pair missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, now time.Time) error {
+		calls++
+		return missioncontrol.ProduceFrankZohoMailboxBootstrap(root, pair, now)
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("zohoMailboxBootstrapHook calls = %d, want 1 real-producer invocation", calls)
+	}
+
+	storedAccount, err := missioncontrol.LoadFrankAccountRecord(root, account.AccountID)
+	if err != nil {
+		t.Fatalf("LoadFrankAccountRecord() error = %v", err)
+	}
+	if !reflect.DeepEqual(storedAccount, account) {
+		t.Fatalf("LoadFrankAccountRecord() = %#v, want replay-safe unchanged committed account %#v", storedAccount, account)
+	}
+}
+
 func TestTaskStateActivateStepZohoMailboxBootstrapInvalidPairFailsClosed(t *testing.T) {
 	t.Parallel()
 
