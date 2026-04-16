@@ -36,15 +36,19 @@ type TaskState struct {
 	runtimeChangeHook              func()
 	campaignReadinessGuardHook     func(missioncontrol.ExecutionContext) error
 	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
+	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
+	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
-const taskStateTreasuryActivationLeaseHolderID = "taskstate-activate-step-treasury"
+const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
 
 func NewTaskState() *TaskState {
 	return &TaskState{
 		campaignReadinessGuardHook:     missioncontrol.RequireExecutionContextCampaignReadiness,
 		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
+		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
+		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
 	}
 }
@@ -272,7 +276,7 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if err := s.applyZohoMailboxBootstrapForStep(job, stepID, now); err != nil {
 		return err
 	}
-	if err := s.applyTreasuryActivationPolicyForStep(job, stepID, now); err != nil {
+	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -285,7 +289,7 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	return err
 }
 
-func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID string, now time.Time) error {
 	if s == nil {
 		return nil
 	}
@@ -300,15 +304,54 @@ func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job,
 
 	s.mu.Lock()
 	root := strings.TrimSpace(s.missionStoreRoot)
+	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
+	bootstrapHook := s.treasuryBootstrapProducerHook
 	hook := s.treasuryActivationProducerHook
 	s.mu.Unlock()
+	ec.MissionStoreRoot = root
+
+	treasury, err := missioncontrol.ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return err
+	}
+	if treasury == nil {
+		return nil
+	}
+
+	lease := missioncontrol.WriterLockLease{
+		LeaseHolderID: taskStateTreasuryExecutionLeaseHolderID,
+	}
+	if treasury.State == missioncontrol.TreasuryStateBootstrap {
+		if firstAcquisitionHook == nil || bootstrapHook == nil {
+			return nil
+		}
+		resolved, err := missioncontrol.ResolveExecutionContextTreasuryBootstrapAcquisition(ec)
+		if err != nil {
+			return err
+		}
+		if resolved == nil {
+			return nil
+		}
+
+		if err := firstAcquisitionHook(root, lease, missioncontrol.FirstTreasuryAcquisitionInput{
+			TreasuryID: resolved.Treasury.TreasuryID,
+			EntryID:    resolved.BootstrapAcquisition.EntryID,
+			AssetCode:  resolved.BootstrapAcquisition.AssetCode,
+			Amount:     resolved.BootstrapAcquisition.Amount,
+			SourceRef:  resolved.BootstrapAcquisition.SourceRef,
+		}, now); err != nil {
+			return err
+		}
+		return bootstrapHook(root, lease, missioncontrol.FirstValueTreasuryBootstrapInput{
+			TreasuryRef: *ec.Step.TreasuryRef,
+			EntryID:     resolved.BootstrapAcquisition.EntryID,
+		}, now)
+	}
 	if hook == nil {
 		return nil
 	}
 
-	return hook(root, missioncontrol.WriterLockLease{
-		LeaseHolderID: taskStateTreasuryActivationLeaseHolderID,
-	}, missioncontrol.DefaultTreasuryActivationPolicyInput{
+	return hook(root, lease, missioncontrol.DefaultTreasuryActivationPolicyInput{
 		TreasuryRef: *ec.Step.TreasuryRef,
 	}, now)
 }

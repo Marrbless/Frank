@@ -712,6 +712,7 @@ func TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath(t *te
 
 	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
 	treasury.State = missioncontrol.TreasuryStateBootstrap
+	treasury.BootstrapAcquisition = nil
 	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
@@ -723,10 +724,10 @@ func TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath(t *te
 	state.SetMissionStoreRoot(root)
 	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("ActivateStep() error = nil, want fail-closed treasury activation rejection")
+		t.Fatal("ActivateStep() error = nil, want fail-closed missing bootstrap acquisition rejection")
 	}
-	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "bootstrap"`) {
-		t.Fatalf("ActivateStep() error = %q, want invalid treasury state rejection", err)
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" requires committed treasury.bootstrap_acquisition for first-value acquisition`) {
+		t.Fatalf("ActivateStep() error = %q, want missing bootstrap acquisition rejection", err)
 	}
 }
 

@@ -1566,17 +1566,24 @@ For the approved first-value treasury acquisition lane on this branch line, the
 treasury record itself is the durable bootstrap truth surface. It may carry one
 treasury-owned bootstrap acquisition block with the exact first-value
 acquisition inputs and confirmation evidence needed to record the first landed
-treasury value without inventing a parallel bootstrap registry.
+treasury value without inventing a parallel bootstrap registry. That committed
+block now includes the durable `entry_id`, `asset_code`, `amount`,
+`source_ref`, one evidence locator, and a confirmation timestamp on the same
+treasury record.
 
 Current branch-line boundary:
 
-- first-value treasury bootstrap remains producer-only,
-- no committed runtime or control-plane caller may infer or synthesize bootstrap
-  inputs such as ledger entry identity, asset, amount, or source from partial
-  runtime evidence,
-- treasury activation may use its dedicated producer path after funding, but
-  first-value treasury bootstrap does not receive an equivalent runtime caller
-  in this pass.
+- `TaskState.ActivateStep` is the single committed runtime/control-plane owner
+  for first-value treasury acquisition on this lane,
+- it must resolve exactly one treasury from `Step.TreasuryRef` and fail closed
+  unless that treasury is in `bootstrap` state with one committed
+  `bootstrap_acquisition` block,
+- on that bootstrap path it records first acquisition using only the committed
+  treasury-owned block inputs, then calls the first-value bootstrap producer
+  using the resulting committed `entry_id` truth,
+- funded-to-active treasury activation continues on its dedicated producer path,
+  and no other runtime caller may infer or synthesize treasury bootstrap inputs
+  from partial runtime evidence.
 
 ### Financial execution rule
 

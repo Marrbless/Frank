@@ -63,6 +63,7 @@ type TreasuryRecord struct {
 }
 
 type TreasuryBootstrapAcquisition struct {
+	EntryID         string    `json:"entry_id,omitempty"`
 	AssetCode       string    `json:"asset_code"`
 	Amount          string    `json:"amount"`
 	SourceRef       string    `json:"source_ref"`
@@ -562,6 +563,7 @@ func normalizeTreasuryBootstrapAcquisition(block *TreasuryBootstrapAcquisition) 
 		return nil
 	}
 	normalized := *block
+	normalized.EntryID = strings.TrimSpace(normalized.EntryID)
 	normalized.AssetCode = strings.TrimSpace(normalized.AssetCode)
 	normalized.Amount = strings.TrimSpace(normalized.Amount)
 	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
@@ -571,6 +573,9 @@ func normalizeTreasuryBootstrapAcquisition(block *TreasuryBootstrapAcquisition) 
 }
 
 func validateTreasuryBootstrapAcquisition(block TreasuryBootstrapAcquisition) error {
+	if err := validateTreasuryEntryID(block.EntryID, "mission store treasury bootstrap_acquisition"); err != nil {
+		return err
+	}
 	if err := validateTreasuryAssetCode(block.AssetCode); err != nil {
 		return fmt.Errorf("mission store treasury bootstrap_acquisition.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
 	}

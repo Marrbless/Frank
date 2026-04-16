@@ -37,6 +37,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			},
 		},
 		BootstrapAcquisition: &TreasuryBootstrapAcquisition{
+			EntryID:         " entry-first-value ",
 			AssetCode:       " USD ",
 			Amount:          " 10.50 ",
 			SourceRef:       " payout:listing-a ",
@@ -67,6 +68,7 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		},
 	}
 	want.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+		EntryID:         "entry-first-value",
 		AssetCode:       "USD",
 		Amount:          "10.50",
 		SourceRef:       "payout:listing-a",
@@ -314,10 +316,26 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 			want: `mission store treasury state "active" requires exactly one active_container_id derivable from container_refs`,
 		},
 		{
+			name: "bootstrap acquisition missing entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						AssetCode:       "USD",
+						Amount:          "10.00",
+						SourceRef:       "payout:listing-a",
+						EvidenceLocator: "https://evidence.example/payout-a",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury bootstrap_acquisition entry_id is required",
+		},
+		{
 			name: "bootstrap acquisition missing source ref",
 			run: func() error {
 				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						EntryID:         "entry-first-value",
 						AssetCode:       "USD",
 						Amount:          "10.00",
 						EvidenceLocator: "https://evidence.example/payout-a",
@@ -332,6 +350,7 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 			run: func() error {
 				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						EntryID:         "entry-first-value",
 						AssetCode:       "USD",
 						Amount:          "01.0",
 						SourceRef:       "payout:listing-a",
@@ -347,6 +366,7 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 			run: func() error {
 				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						EntryID:     "entry-first-value",
 						AssetCode:   "USD",
 						Amount:      "10.00",
 						SourceRef:   "payout:listing-a",
@@ -361,6 +381,7 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 			run: func() error {
 				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
 					record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+						EntryID:         "entry-first-value",
 						AssetCode:       "USD",
 						Amount:          "10.00",
 						SourceRef:       "payout:listing-a",
@@ -825,6 +846,7 @@ func TestResolveExecutionContextTreasuryBootstrapAcquisitionResolvesCommittedBoo
 	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-bootstrap-acquisition"
 		record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+			EntryID:         "entry-first-value",
 			AssetCode:       "USD",
 			Amount:          "10.00",
 			SourceRef:       "payout:listing-a",
@@ -994,6 +1016,7 @@ func TestResolveExecutionContextTreasuryPreflightResolvesTreasuryAndContainers(t
 	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-preflight"
 		record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+			EntryID:         "entry-first-value",
 			AssetCode:       "USD",
 			Amount:          "10.00",
 			SourceRef:       "payout:listing-a",
@@ -1018,6 +1041,7 @@ func TestResolveExecutionContextTreasuryPreflightResolvesTreasuryAndContainers(t
 		},
 	}
 	record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+		EntryID:         "entry-first-value",
 		AssetCode:       "USD",
 		Amount:          "10.00",
 		SourceRef:       "payout:listing-a",

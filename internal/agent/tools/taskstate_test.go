@@ -637,8 +637,8 @@ func TestTaskStateActivateStepTreasuryPathCallsActivationProducerOnce(t *testing
 	if gotRoot != root {
 		t.Fatalf("treasuryActivationProducerHook root = %q, want %q", gotRoot, root)
 	}
-	if gotLease.LeaseHolderID != taskStateTreasuryActivationLeaseHolderID {
-		t.Fatalf("treasuryActivationProducerHook lease = %#v, want %q", gotLease, taskStateTreasuryActivationLeaseHolderID)
+	if gotLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryActivationProducerHook lease = %#v, want %q", gotLease, taskStateTreasuryExecutionLeaseHolderID)
 	}
 	if !reflect.DeepEqual(gotInput, missioncontrol.DefaultTreasuryActivationPolicyInput{
 		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
@@ -655,6 +655,155 @@ func TestTaskStateActivateStepTreasuryPathCallsActivationProducerOnce(t *testing
 	}
 	if runtime.State != missioncontrol.JobStateRunning || runtime.ActiveStepID != "build" {
 		t.Fatalf("MissionRuntimeState() = %#v, want running build runtime", runtime)
+	}
+}
+
+func TestTaskStateActivateStepTreasuryBootstrapPathCallsMutationThenProducerOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateTreasuryBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	acquisitionCalls := 0
+	bootstrapCalls := 0
+	activationCalls := 0
+
+	var gotAcquisitionRoot string
+	var gotAcquisitionLease missioncontrol.WriterLockLease
+	var gotAcquisitionInput missioncontrol.FirstTreasuryAcquisitionInput
+	var gotBootstrapRoot string
+	var gotBootstrapLease missioncontrol.WriterLockLease
+	var gotBootstrapInput missioncontrol.FirstValueTreasuryBootstrapInput
+
+	state.treasuryFirstAcquisitionHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.FirstTreasuryAcquisitionInput, now time.Time) error {
+		acquisitionCalls++
+		gotAcquisitionRoot = root
+		gotAcquisitionLease = lease
+		gotAcquisitionInput = input
+		return nil
+	}
+	state.treasuryBootstrapProducerHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.FirstValueTreasuryBootstrapInput, now time.Time) error {
+		bootstrapCalls++
+		gotBootstrapRoot = root
+		gotBootstrapLease = lease
+		gotBootstrapInput = input
+		return nil
+	}
+	state.treasuryActivationProducerHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.DefaultTreasuryActivationPolicyInput, now time.Time) error {
+		activationCalls++
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if acquisitionCalls != 1 {
+		t.Fatalf("treasuryFirstAcquisitionHook calls = %d, want 1", acquisitionCalls)
+	}
+	if bootstrapCalls != 1 {
+		t.Fatalf("treasuryBootstrapProducerHook calls = %d, want 1", bootstrapCalls)
+	}
+	if activationCalls != 0 {
+		t.Fatalf("treasuryActivationProducerHook calls = %d, want 0 on bootstrap path", activationCalls)
+	}
+	if gotAcquisitionRoot != root {
+		t.Fatalf("treasuryFirstAcquisitionHook root = %q, want %q", gotAcquisitionRoot, root)
+	}
+	if gotAcquisitionLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryFirstAcquisitionHook lease = %#v, want %q", gotAcquisitionLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotAcquisitionInput, missioncontrol.FirstTreasuryAcquisitionInput{
+		TreasuryID: treasury.TreasuryID,
+		EntryID:    treasury.BootstrapAcquisition.EntryID,
+		AssetCode:  treasury.BootstrapAcquisition.AssetCode,
+		Amount:     treasury.BootstrapAcquisition.Amount,
+		SourceRef:  treasury.BootstrapAcquisition.SourceRef,
+	}) {
+		t.Fatalf("treasuryFirstAcquisitionHook input = %#v, want committed bootstrap acquisition payload", gotAcquisitionInput)
+	}
+	if gotBootstrapRoot != root {
+		t.Fatalf("treasuryBootstrapProducerHook root = %q, want %q", gotBootstrapRoot, root)
+	}
+	if gotBootstrapLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryBootstrapProducerHook lease = %#v, want %q", gotBootstrapLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotBootstrapInput, missioncontrol.FirstValueTreasuryBootstrapInput{
+		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
+		EntryID:     treasury.BootstrapAcquisition.EntryID,
+	}) {
+		t.Fatalf("treasuryBootstrapProducerHook input = %#v, want committed first-entry bootstrap input", gotBootstrapInput)
+	}
+}
+
+func TestTaskStateActivateStepTreasuryBootstrapPathInvokesRealMutationAndProducer(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateTreasuryBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want stored runtime after bootstrap activation")
+	}
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+	if firstTreasury.State != missioncontrol.TreasuryStateActive {
+		t.Fatalf("LoadTreasuryRecord(first).State = %q, want %q", firstTreasury.State, missioncontrol.TreasuryStateActive)
+	}
+	entries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(first) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListTreasuryLedgerEntries(first) len = %d, want 1", len(entries))
+	}
+	if entries[0].EntryID != treasury.BootstrapAcquisition.EntryID || entries[0].EntryKind != missioncontrol.TreasuryLedgerEntryKindAcquisition {
+		t.Fatalf("ListTreasuryLedgerEntries(first) = %#v, want one committed acquisition entry", entries)
+	}
+
+	err = state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(replay) error = nil, want deterministic treasury bootstrap rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "active"`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want duplicate bootstrap activation rejection", err.Error())
+	}
+
+	secondRuntime, ok := state.MissionRuntimeState()
+	if !ok {
+		t.Fatal("MissionRuntimeState() ok = false, want unchanged runtime after replay rejection")
+	}
+	if !reflect.DeepEqual(secondRuntime, firstRuntime) {
+		t.Fatalf("MissionRuntimeState() = %#v, want unchanged %#v", secondRuntime, firstRuntime)
+	}
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord(second) = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+	secondEntries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondEntries, entries) {
+		t.Fatalf("ListTreasuryLedgerEntries(second) = %#v, want unchanged %#v", secondEntries, entries)
 	}
 }
 
@@ -4143,11 +4292,12 @@ func TestTaskStateActivateStepMissingCampaignFailsClosed(t *testing.T) {
 	}
 }
 
-func TestTaskStateActivateStepInvalidTreasuryStateFailsClosed(t *testing.T) {
+func TestTaskStateActivateStepBootstrapTreasuryWithoutCommittedAcquisitionFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
 	treasury.State = missioncontrol.TreasuryStateBootstrap
+	treasury.BootstrapAcquisition = nil
 	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
@@ -4159,10 +4309,10 @@ func TestTaskStateActivateStepInvalidTreasuryStateFailsClosed(t *testing.T) {
 	state.SetMissionStoreRoot(root)
 	err := state.ActivateStep(job, "build")
 	if err == nil {
-		t.Fatal("ActivateStep() error = nil, want fail-closed treasury activation rejection")
+		t.Fatal("ActivateStep() error = nil, want fail-closed missing bootstrap acquisition rejection")
 	}
-	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "bootstrap"`) {
-		t.Fatalf("ActivateStep() error = %q, want invalid treasury state rejection", err)
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" requires committed treasury.bootstrap_acquisition for first-value acquisition`) {
+		t.Fatalf("ActivateStep() error = %q, want missing bootstrap acquisition rejection", err)
 	}
 }
 
@@ -4475,6 +4625,26 @@ func writeTaskStateTreasuryFixtures(t *testing.T) (string, missioncontrol.Treasu
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
 
+	return root, treasury, container
+}
+
+func writeTaskStateTreasuryBootstrapFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	treasury.State = missioncontrol.TreasuryStateBootstrap
+	treasury.BootstrapAcquisition = &missioncontrol.TreasuryBootstrapAcquisition{
+		EntryID:         "entry-first-value",
+		AssetCode:       "USD",
+		Amount:          "10.00",
+		SourceRef:       "payout:listing-1",
+		EvidenceLocator: "https://evidence.example/payout-1",
+		ConfirmedAt:     treasury.UpdatedAt.Add(time.Minute),
+	}
+	treasury.UpdatedAt = treasury.UpdatedAt.Add(2 * time.Minute)
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
 	return root, treasury, container
 }
 
