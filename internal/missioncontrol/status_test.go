@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -825,6 +826,105 @@ func TestBuildOperatorStatusSummaryIncludesCampaignZohoEmailOutbounds(t *testing
 	}
 	if outbound.VerifiedAt == nil || *outbound.VerifiedAt != sentAt.Add(time.Minute).Format(time.RFC3339Nano) {
 		t.Fatalf("CampaignZohoEmailOutbounds[0].VerifiedAt = %#v, want verified timestamp", outbound.VerifiedAt)
+	}
+}
+
+func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailAddressingInCampaignPreflight(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	campaignPreflight := ResolvedExecutionContextCampaignPreflight{
+		Campaign: &CampaignRecord{
+			RecordVersion:           StoreRecordVersion,
+			CampaignID:              "campaign-mail",
+			CampaignKind:            CampaignKindOutreach,
+			DisplayName:             "Frank Outreach",
+			State:                   CampaignStateDraft,
+			Objective:               "Reach aligned operators",
+			GovernedExternalTargets: []AutonomyEligibilityTargetRef{{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"}},
+			FrankObjectRefs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-mail"},
+				{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail"},
+				{Kind: FrankRegistryObjectKindContainer, ObjectID: "container-wallet"},
+			},
+			IdentityMode:     IdentityModeAgentAlias,
+			StopConditions:   []string{"stop after 3 replies"},
+			FailureThreshold: CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+			ComplianceChecks: []string{"can-spam-reviewed"},
+			ZohoEmailAddressing: &CampaignZohoEmailAddressing{
+				To:  []string{"person@example.com", "team@example.com"},
+				CC:  []string{"copy@example.com"},
+				BCC: []string{"blind@example.com"},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 20, 55, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 20, 56, 0, 0, time.UTC),
+		},
+		Identities: []FrankIdentityRecord{{
+			RecordVersion:        StoreRecordVersion,
+			IdentityID:           "identity-mail",
+			IdentityKind:         "email",
+			DisplayName:          "Frank Mail",
+			ProviderOrPlatformID: "provider-mail",
+			IdentityMode:         IdentityModeAgentAlias,
+			State:                "active",
+			EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+			CreatedAt:            time.Date(2026, 4, 8, 20, 50, 0, 0, time.UTC),
+			UpdatedAt:            time.Date(2026, 4, 8, 20, 51, 0, 0, time.UTC),
+		}},
+		Accounts: []FrankAccountRecord{{
+			RecordVersion:        StoreRecordVersion,
+			AccountID:            "account-mail",
+			AccountKind:          "mailbox",
+			Label:                "Inbox",
+			ProviderOrPlatformID: "provider-mail",
+			IdentityID:           "identity-mail",
+			ControlModel:         "agent_managed",
+			RecoveryModel:        "agent_recoverable",
+			State:                "active",
+			EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+			CreatedAt:            time.Date(2026, 4, 8, 20, 52, 0, 0, time.UTC),
+			UpdatedAt:            time.Date(2026, 4, 8, 20, 53, 0, 0, time.UTC),
+		}},
+		Containers: []FrankContainerRecord{{
+			RecordVersion:        StoreRecordVersion,
+			ContainerID:          "container-wallet",
+			ContainerKind:        "wallet",
+			Label:                "Primary Wallet",
+			ContainerClassID:     "container-class-wallet",
+			State:                "active",
+			EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindTreasuryContainerClass, RegistryID: "container-class-wallet"},
+			CreatedAt:            time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+			UpdatedAt:            time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+		}},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, []string{"read"}, &campaignPreflight, nil)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	preflight := got["campaign_preflight"].(map[string]any)
+	campaign := preflight["campaign"].(map[string]any)
+	addressing, ok := campaign["zoho_email_addressing"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing = %#v, want object", campaign["zoho_email_addressing"])
+	}
+	assertJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at", "zoho_email_addressing")
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["to"], "campaign_preflight.campaign.zoho_email_addressing.to"), []any{"person@example.com", "team@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.to = %#v, want [person@example.com team@example.com]", addressing["to"])
+	}
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["cc"], "campaign_preflight.campaign.zoho_email_addressing.cc"), []any{"copy@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.cc = %#v, want [copy@example.com]", addressing["cc"])
+	}
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["bcc"], "campaign_preflight.campaign.zoho_email_addressing.bcc"), []any{"blind@example.com"}) {
+		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressing["bcc"])
 	}
 }
 

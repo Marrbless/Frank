@@ -254,3 +254,77 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 		})
 	}
 }
+
+func TestFormatInspectSummarySurfacesCampaignZohoEmailAddressingInCampaignPreflight(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"produce code"},
+					CampaignRef:       &CampaignRef{CampaignID: "campaign-mail"},
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	campaign := validCampaignRecord(time.Date(2026, 4, 8, 20, 55, 0, 0, time.UTC), func(record *CampaignRecord) {
+		record.CampaignID = "campaign-mail"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To:  []string{"person@example.com", "team@example.com"},
+			CC:  []string{"copy@example.com"},
+			BCC: []string{"blind@example.com"},
+		}
+	})
+	if err := StoreCampaignRecord(fixtures.root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryWithCampaignAndTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithCampaignAndTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	step := steps[0].(map[string]any)
+	preflight := step["campaign_preflight"].(map[string]any)
+	campaignJSON := preflight["campaign"].(map[string]any)
+	addressing, ok := campaignJSON["zoho_email_addressing"].(map[string]any)
+	if !ok {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing = %#v, want object", campaignJSON["zoho_email_addressing"])
+	}
+	assertJSONObjectKeys(t, campaignJSON, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at", "zoho_email_addressing")
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["to"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.to"), []any{"person@example.com", "team@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.to = %#v, want [person@example.com team@example.com]", addressing["to"])
+	}
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["cc"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.cc"), []any{"copy@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.cc = %#v, want [copy@example.com]", addressing["cc"])
+	}
+	if !reflect.DeepEqual(mustJSONArray(t, addressing["bcc"], "steps[0].campaign_preflight.campaign.zoho_email_addressing.bcc"), []any{"blind@example.com"}) {
+		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressing["bcc"])
+	}
+}
