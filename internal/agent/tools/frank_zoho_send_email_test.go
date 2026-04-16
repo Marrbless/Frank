@@ -186,7 +186,7 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdM
 	}
 }
 
-func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testing.T) {
+func TestFrankZohoSendEmailToolUsesCommittedFrankZohoMailboxAndMapsReceipt(t *testing.T) {
 	t.Parallel()
 
 	var gotAuth string
@@ -223,6 +223,7 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank.custom@example.com", "Frank Custom", "9988776655443322110", true)
 
 	reg := NewRegistry()
 	reg.Register(tool)
@@ -246,14 +247,14 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 	if gotMethod != http.MethodPost {
 		t.Fatalf("request method = %q, want %q", gotMethod, http.MethodPost)
 	}
-	if gotPath != "/api/accounts/3323462000000008002/messages" {
-		t.Fatalf("request path = %q, want fixed Zoho account path", gotPath)
+	if gotPath != "/api/accounts/9988776655443322110/messages" {
+		t.Fatalf("request path = %q, want committed Zoho account path", gotPath)
 	}
 	if gotAuth != "Zoho-oauthtoken test-zoho-token" {
 		t.Fatalf("Authorization = %q, want Zoho OAuth header", gotAuth)
 	}
-	if gotBody["fromAddress"] != "frank@omou.online" {
-		t.Fatalf("fromAddress = %#v, want fixed Frank mailbox", gotBody["fromAddress"])
+	if gotBody["fromAddress"] != "frank.custom@example.com" {
+		t.Fatalf("fromAddress = %#v, want committed Frank mailbox", gotBody["fromAddress"])
 	}
 	if gotBody["toAddress"] != "person@example.com,team@example.com" {
 		t.Fatalf("toAddress = %#v, want campaign-owned joined recipients", gotBody["toAddress"])
@@ -285,14 +286,14 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 	if receipt.Provider != "zoho_mail" {
 		t.Fatalf("Provider = %q, want %q", receipt.Provider, "zoho_mail")
 	}
-	if receipt.ProviderAccountID != "3323462000000008002" {
-		t.Fatalf("ProviderAccountID = %q, want fixed Zoho account ID", receipt.ProviderAccountID)
+	if receipt.ProviderAccountID != "9988776655443322110" {
+		t.Fatalf("ProviderAccountID = %q, want committed Zoho account ID", receipt.ProviderAccountID)
 	}
-	if receipt.FromAddress != "frank@omou.online" {
-		t.Fatalf("FromAddress = %q, want fixed Frank mailbox", receipt.FromAddress)
+	if receipt.FromAddress != "frank.custom@example.com" {
+		t.Fatalf("FromAddress = %q, want committed Frank mailbox", receipt.FromAddress)
 	}
-	if receipt.FromDisplayName != "Frank" {
-		t.Fatalf("FromDisplayName = %q, want %q", receipt.FromDisplayName, "Frank")
+	if receipt.FromDisplayName != "Frank Custom" {
+		t.Fatalf("FromDisplayName = %q, want %q", receipt.FromDisplayName, "Frank Custom")
 	}
 	if receipt.ProviderMessageID != "1711540357880100000" {
 		t.Fatalf("ProviderMessageID = %q, want canonical Zoho messageId", receipt.ProviderMessageID)
@@ -303,9 +304,47 @@ func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testin
 	if receipt.MIMEMessageID != "" {
 		t.Fatalf("MIMEMessageID = %q, want empty when send response omits it", receipt.MIMEMessageID)
 	}
-	wantOriginalMessageURL := "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage"
+	wantOriginalMessageURL := "https://mail.zoho.test/api/accounts/9988776655443322110/messages/1711540357880100000/originalmessage"
 	if receipt.OriginalMessageURL != wantOriginalMessageURL {
 		t.Fatalf("OriginalMessageURL = %q, want %q", receipt.OriginalMessageURL, wantOriginalMessageURL)
+	}
+}
+
+func TestFrankZohoSendEmailToolFailsClosedWithoutCommittedZohoMailboxSenderPair(t *testing.T) {
+	t.Parallel()
+
+	var sendCalls atomic.Int32
+	tool := NewFrankZohoSendEmailTool()
+	tool.send = func(ctx context.Context, req frankZohoSendRequest) (frankZohoSendResponseData, error) {
+		sendCalls.Add(1)
+		return frankZohoSendResponseData{}, nil
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank@omou.online", "Frank", "", false)
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
+	_, err := reg.Execute(
+		missioncontrol.WithExecutionContext(context.Background(), ec),
+		tool.Name(),
+		map[string]interface{}{
+			"subject": "Frank intro",
+			"body":    "Hello from Frank",
+		},
+	)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want committed sender-pair rejection")
+	}
+	if !strings.Contains(err.Error(), `requires campaign-linked Frank mailbox account "account-mail" to declare committed zoho_mailbox.provider_account_id plus confirmed_created`) {
+		t.Fatalf("Execute() error = %q, want committed sender-pair rejection", err)
+	}
+	if got := sendCalls.Load(); got != 0 {
+		t.Fatalf("send calls = %d, want 0", got)
 	}
 }
 
@@ -2007,6 +2046,7 @@ func mustStoreFrankZohoAddressedCampaignFixture(t *testing.T, root string, conta
 	t.Helper()
 
 	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank@omou.online", "Frank", "3323462000000008002", true)
 	campaign.StopConditions = []string{"stop after 3 verified sends"}
 	campaign.ZohoEmailAddressing = &missioncontrol.CampaignZohoEmailAddressing{
 		To:  []string{"person@example.com", "team@example.com"},
@@ -2018,6 +2058,54 @@ func mustStoreFrankZohoAddressedCampaignFixture(t *testing.T, root string, conta
 		t.Fatalf("StoreCampaignRecord(addressed) error = %v", err)
 	}
 	return campaign
+}
+
+func mustStoreCampaignLinkedZohoMailboxSender(t *testing.T, root string, campaign missioncontrol.CampaignRecord, fromAddress string, fromDisplayName string, providerAccountID string, confirmedCreated bool) {
+	t.Helper()
+
+	identityID := ""
+	accountID := ""
+	for _, ref := range campaign.FrankObjectRefs {
+		switch ref.Kind {
+		case missioncontrol.FrankRegistryObjectKindIdentity:
+			if identityID == "" {
+				identityID = ref.ObjectID
+			}
+		case missioncontrol.FrankRegistryObjectKindAccount:
+			if accountID == "" {
+				accountID = ref.ObjectID
+			}
+		}
+	}
+	if identityID == "" || accountID == "" {
+		t.Fatalf("campaign FrankObjectRefs missing linked identity/account pair: %#v", campaign.FrankObjectRefs)
+	}
+
+	identity, err := missioncontrol.LoadFrankIdentityRecord(root, identityID)
+	if err != nil {
+		t.Fatalf("LoadFrankIdentityRecord() error = %v", err)
+	}
+	identity.ZohoMailbox = &missioncontrol.FrankZohoMailboxIdentity{
+		FromAddress:     fromAddress,
+		FromDisplayName: fromDisplayName,
+	}
+	identity.UpdatedAt = identity.UpdatedAt.Add(time.Minute)
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account, err := missioncontrol.LoadFrankAccountRecord(root, accountID)
+	if err != nil {
+		t.Fatalf("LoadFrankAccountRecord() error = %v", err)
+	}
+	account.ZohoMailbox = &missioncontrol.FrankZohoMailboxAccount{
+		ProviderAccountID: providerAccountID,
+		ConfirmedCreated:  confirmedCreated,
+	}
+	account.UpdatedAt = account.UpdatedAt.Add(time.Minute)
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

@@ -20,8 +20,6 @@ const (
 	frankZohoSendEmailToolName     = "frank_zoho_send_email"
 	frankZohoMailAPIBase           = "https://mail.zoho.com/api"
 	frankZohoMailAccountID         = "3323462000000008002"
-	frankZohoMailFromAddress       = "frank@omou.online"
-	frankZohoMailFromDisplayName   = "Frank"
 	frankZohoMailDefaultBodyFormat = "plaintext"
 	frankZohoMailDefaultEncoding   = "UTF-8"
 )
@@ -128,6 +126,12 @@ type frankZohoCampaignSendIntent struct {
 	ReplyWorkSelection     *missioncontrol.CampaignZohoEmailReplyWorkSelection
 }
 
+type frankZohoCampaignSender struct {
+	ProviderAccountID string
+	FromAddress       string
+	FromDisplayName   string
+}
+
 type frankZohoTerminalSendFailureError struct {
 	httpStatus int
 	failure    missioncontrol.CampaignZohoEmailOutboundFailure
@@ -208,7 +212,7 @@ func (t *FrankZohoSendEmailTool) Name() string {
 }
 
 func (t *FrankZohoSendEmailTool) Description() string {
-	return "Send one email from Frank <frank@omou.online> using the fixed Zoho Mail account"
+	return "Send one email from the campaign-linked Frank Zoho mailbox using committed Frank registry records"
 }
 
 func (t *FrankZohoSendEmailTool) Parameters() map[string]interface{} {
@@ -271,9 +275,8 @@ func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]in
 		return "", err
 	}
 	req := intent.Request
-
-	req.AccountID = frankZohoMailAccountID
-	req.From = frankZohoMailFromAddress
+	req.AccountID = intent.PreparedAction.ProviderAccountID
+	req.From = intent.PreparedAction.FromAddress
 
 	send := t.send
 	if send == nil {
@@ -290,13 +293,13 @@ func (t *FrankZohoSendEmailTool) Execute(ctx context.Context, args map[string]in
 
 	receipt := FrankZohoSendReceipt{
 		Provider:           "zoho_mail",
-		ProviderAccountID:  frankZohoMailAccountID,
-		FromAddress:        frankZohoMailFromAddress,
-		FromDisplayName:    frankZohoMailFromDisplayName,
+		ProviderAccountID:  intent.PreparedAction.ProviderAccountID,
+		FromAddress:        intent.PreparedAction.FromAddress,
+		FromDisplayName:    intent.PreparedAction.FromDisplayName,
 		ProviderMessageID:  string(data.MessageID),
 		ProviderMailID:     string(data.MailID),
 		MIMEMessageID:      firstNonEmpty(string(data.MIMEMessageID), string(data.MessageIDHeader), string(data.InternetMessage)),
-		OriginalMessageURL: frankZohoOriginalMessageURL(t.apiBase, frankZohoMailAccountID, string(data.MessageID)),
+		OriginalMessageURL: frankZohoOriginalMessageURL(t.apiBase, intent.PreparedAction.ProviderAccountID, string(data.MessageID)),
 	}
 
 	encoded, err := json.Marshal(receipt)
@@ -534,33 +537,58 @@ func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontro
 }
 
 func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, requireCampaignAddressing bool) error {
-	if preflight.Campaign == nil {
-		return fmt.Errorf("%s requires a resolved campaign preflight", frankZohoSendEmailToolName)
-	}
+	_, err := resolveFrankZohoCampaignSender(preflight, requireCampaignAddressing)
+	return err
+}
 
-	emailIdentityIDs := make(map[string]struct{})
-	for _, identity := range preflight.Identities {
-		if strings.EqualFold(strings.TrimSpace(identity.IdentityKind), "email") {
-			emailIdentityIDs[strings.TrimSpace(identity.IdentityID)] = struct{}{}
-		}
-	}
-	if len(emailIdentityIDs) == 0 {
-		return fmt.Errorf("%s requires a campaign-linked Frank email identity", frankZohoSendEmailToolName)
+func resolveFrankZohoCampaignSender(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, requireCampaignAddressing bool) (frankZohoCampaignSender, error) {
+	if preflight.Campaign == nil {
+		return frankZohoCampaignSender{}, fmt.Errorf("%s requires a resolved campaign preflight", frankZohoSendEmailToolName)
 	}
 	if requireCampaignAddressing && preflight.Campaign.ZohoEmailAddressing == nil {
-		return fmt.Errorf("%s requires campaign zoho_email_addressing", frankZohoSendEmailToolName)
+		return frankZohoCampaignSender{}, fmt.Errorf("%s requires campaign zoho_email_addressing", frankZohoSendEmailToolName)
 	}
 
+	emailIdentities := make(map[string]missioncontrol.FrankIdentityRecord)
+	for _, identity := range preflight.Identities {
+		if strings.EqualFold(strings.TrimSpace(identity.IdentityKind), "email") {
+			emailIdentities[strings.TrimSpace(identity.IdentityID)] = identity
+		}
+	}
+	if len(emailIdentities) == 0 {
+		return frankZohoCampaignSender{}, fmt.Errorf("%s requires a campaign-linked Frank email identity", frankZohoSendEmailToolName)
+	}
+
+	candidates := make([]frankZohoCampaignSender, 0, 1)
 	for _, account := range preflight.Accounts {
 		if !strings.EqualFold(strings.TrimSpace(account.AccountKind), "mailbox") {
 			continue
 		}
-		if _, ok := emailIdentityIDs[strings.TrimSpace(account.IdentityID)]; ok {
-			return nil
+		identity, ok := emailIdentities[strings.TrimSpace(account.IdentityID)]
+		if !ok {
+			continue
 		}
+		if identity.ZohoMailbox == nil {
+			return frankZohoCampaignSender{}, fmt.Errorf("%s requires campaign-linked Frank identity %q to declare zoho_mailbox sender fields", frankZohoSendEmailToolName, strings.TrimSpace(identity.IdentityID))
+		}
+		if account.ZohoMailbox == nil || !account.ZohoMailbox.ConfirmedCreated || strings.TrimSpace(account.ZohoMailbox.ProviderAccountID) == "" {
+			return frankZohoCampaignSender{}, fmt.Errorf("%s requires campaign-linked Frank mailbox account %q to declare committed zoho_mailbox.provider_account_id plus confirmed_created", frankZohoSendEmailToolName, strings.TrimSpace(account.AccountID))
+		}
+		candidates = append(candidates, frankZohoCampaignSender{
+			ProviderAccountID: strings.TrimSpace(account.ZohoMailbox.ProviderAccountID),
+			FromAddress:       strings.TrimSpace(identity.ZohoMailbox.FromAddress),
+			FromDisplayName:   strings.TrimSpace(identity.ZohoMailbox.FromDisplayName),
+		})
 	}
 
-	return fmt.Errorf("%s requires a campaign-linked Frank mailbox account", frankZohoSendEmailToolName)
+	if len(candidates) == 0 {
+		return frankZohoCampaignSender{}, fmt.Errorf("%s requires exactly one campaign-linked Frank Zoho mailbox sender pair", frankZohoSendEmailToolName)
+	}
+	if len(candidates) != 1 {
+		return frankZohoCampaignSender{}, fmt.Errorf("%s requires exactly one campaign-linked Frank Zoho mailbox sender pair; found %d", frankZohoSendEmailToolName, len(candidates))
+	}
+
+	return candidates[0], nil
 }
 
 func requireFrankZohoCampaignSendGate(ec missioncontrol.ExecutionContext, campaign missioncontrol.CampaignRecord) error {
@@ -610,6 +638,10 @@ func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args m
 	if err := validateFrankZohoMailPreflight(preflight, followUpInboundReplyID == ""); err != nil {
 		return frankZohoCampaignSendIntent{}, err
 	}
+	sender, err := resolveFrankZohoCampaignSender(preflight, followUpInboundReplyID == "")
+	if err != nil {
+		return frankZohoCampaignSendIntent{}, err
+	}
 	if err := requireFrankZohoCampaignSendGate(ec, *preflight.Campaign); err != nil {
 		return frankZohoCampaignSendIntent{}, err
 	}
@@ -639,9 +671,9 @@ func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args m
 		prepared, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedAction(
 			ec.Step.ID,
 			preflight.Campaign.CampaignID,
-			frankZohoMailAccountID,
-			frankZohoMailFromAddress,
-			frankZohoMailFromDisplayName,
+			sender.ProviderAccountID,
+			sender.FromAddress,
+			sender.FromDisplayName,
 			missioncontrol.CampaignZohoEmailAddressing{
 				To:  append([]string(nil), req.To...),
 				CC:  append([]string(nil), req.CC...),
@@ -674,9 +706,9 @@ func buildFrankZohoCampaignSendIntent(ec missioncontrol.ExecutionContext, args m
 	prepared, err := missioncontrol.BuildCampaignZohoEmailOutboundPreparedReplyAction(
 		ec.Step.ID,
 		preflight.Campaign.CampaignID,
-		frankZohoMailAccountID,
-		frankZohoMailFromAddress,
-		frankZohoMailFromDisplayName,
+		sender.ProviderAccountID,
+		sender.FromAddress,
+		sender.FromDisplayName,
 		missioncontrol.CampaignZohoEmailAddressing{To: append([]string(nil), req.To...)},
 		req.Subject,
 		req.BodyFormat,
