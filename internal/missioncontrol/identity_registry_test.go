@@ -1594,6 +1594,23 @@ func TestResolveExecutionContextFrankZohoMailboxBootstrapPairFailsClosedOnMissin
 			},
 			want: "execution context Frank object refs must resolve exactly one zoho mailbox identity, got 2",
 		},
+		{
+			name: "unconfirmed account missing bootstrap refs",
+			refs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+				{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail-unconfirmed"},
+			},
+			want: `execution context zoho mailbox account "account-mail-unconfirmed" requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref before mailbox creation can be attempted`,
+		},
+	}
+
+	accountUnconfirmed := fixtures.account
+	accountUnconfirmed.AccountID = "account-mail-unconfirmed"
+	accountUnconfirmed.ZohoMailbox = &FrankZohoMailboxAccount{}
+	accountUnconfirmed.CreatedAt = accountUnconfirmed.CreatedAt.Add(30 * time.Minute)
+	accountUnconfirmed.UpdatedAt = accountUnconfirmed.UpdatedAt.Add(30 * time.Minute)
+	if err := StoreFrankAccountRecord(fixtures.root, accountUnconfirmed); err != nil {
+		t.Fatalf("StoreFrankAccountRecord(accountUnconfirmed) error = %v", err)
 	}
 
 	for _, tc := range tests {

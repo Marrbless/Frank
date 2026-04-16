@@ -538,6 +538,9 @@ func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (
 			identity.ProviderOrPlatformID,
 		)
 	}
+	if err := validateFrankZohoMailboxBootstrapProviderInputs(account); err != nil {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, err
+	}
 
 	return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{
 		Identity: identity,
@@ -793,6 +796,22 @@ func validateFrankZohoMailboxAccount(config FrankZohoMailboxAccount) error {
 	default:
 		return nil
 	}
+}
+
+func validateFrankZohoMailboxBootstrapProviderInputs(account FrankAccountRecord) error {
+	if account.ZohoMailbox == nil {
+		return fmt.Errorf("execution context zoho mailbox account %q requires zoho_mailbox provider inputs", account.AccountID)
+	}
+	if account.ZohoMailbox.ConfirmedCreated {
+		return nil
+	}
+	if strings.TrimSpace(account.ZohoMailbox.OrganizationID) == "" || strings.TrimSpace(account.ZohoMailbox.AdminOAuthTokenEnvVarRef) == "" {
+		return fmt.Errorf(
+			`execution context zoho mailbox account %q requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref before mailbox creation can be attempted`,
+			account.AccountID,
+		)
+	}
+	return nil
 }
 
 func validateFrankZohoMailboxIdentity(config FrankZohoMailboxIdentity) error {
