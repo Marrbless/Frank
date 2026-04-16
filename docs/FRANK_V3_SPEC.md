@@ -968,6 +968,13 @@ A bounded outreach or community-operation container.
 
 Execution progress for campaigns is tracked through jobs, steps, and audit events. A richer separate campaign state machine is optional.
 
+For the approved provider-specific Zoho campaign-email lane, `CampaignRecord`
+may also carry `zoho_email_addressing` as a frozen provider-specific contract
+extension. This field is durable, validated, runtime-consumed, and may appear
+on active-path campaign preflight/operator read surfaces. It is not a generic
+campaign addressing contract, not a multi-channel recipient model, and does not
+change the persisted-path omission rule for task-state operator readouts.
+
 ### `Treasury`
 
 The durable description of Frank treasury state.

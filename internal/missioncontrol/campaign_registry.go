@@ -32,6 +32,10 @@ type CampaignFailureThreshold struct {
 	Limit  int    `json:"limit"`
 }
 
+// CampaignZohoEmailAddressing is a frozen provider-specific extension for the
+// approved Zoho campaign-email lane. It is not a generic campaign addressing
+// contract, not a multi-channel recipient model, and not a precedent for other
+// provider extensions.
 type CampaignZohoEmailAddressing struct {
 	To  []string `json:"to"`
 	CC  []string `json:"cc,omitempty"`
@@ -51,9 +55,12 @@ type CampaignRecord struct {
 	StopConditions          []string                       `json:"stop_conditions"`
 	FailureThreshold        CampaignFailureThreshold       `json:"failure_threshold"`
 	ComplianceChecks        []string                       `json:"compliance_checks"`
-	ZohoEmailAddressing     *CampaignZohoEmailAddressing   `json:"zoho_email_addressing,omitempty"`
-	CreatedAt               time.Time                      `json:"created_at"`
-	UpdatedAt               time.Time                      `json:"updated_at"`
+	// ZohoEmailAddressing is durable provider-specific campaign truth for the
+	// approved Zoho campaign-email lane. It remains specific to that lane and is
+	// surfaced on active-path campaign preflight/operator reads only.
+	ZohoEmailAddressing *CampaignZohoEmailAddressing `json:"zoho_email_addressing,omitempty"`
+	CreatedAt           time.Time                    `json:"created_at"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
 }
 
 // CampaignObjectView is an adapter-only surface that exposes the
@@ -71,6 +78,10 @@ type CampaignRecord struct {
 //
 // Those fields must remain zero-valued until storage has a justified durable
 // source owned by a real control-plane producer/consumer.
+//
+// Provider-specific frozen extensions such as zoho_email_addressing remain on
+// CampaignRecord and campaign preflight/operator surfaces; they are
+// intentionally not projected into this generic campaign object view.
 type CampaignObjectView struct {
 	CampaignID        string       `json:"campaign_id"`
 	CampaignKind      CampaignKind `json:"campaign_kind"`
