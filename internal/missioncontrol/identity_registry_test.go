@@ -1565,6 +1565,80 @@ func TestResolveExecutionContextFrankZohoMailboxBootstrapPairFailsClosedOnMissin
 	}
 }
 
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPreflightUsesDeclaredLaneOnly(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	got, err := ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight() = %#v, want zero value for undeclared lane", got)
+	}
+}
+
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPreflightResolvesCommittedPair(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankZohoMailboxFixtures(t)
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []FrankRegistryObjectRef{
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+		{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight() error = %v", err)
+	}
+	if got.Identity == nil || !reflect.DeepEqual(*got.Identity, fixtures.identity) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight().Identity = %#v, want %#v", got.Identity, fixtures.identity)
+	}
+	if got.Account == nil || !reflect.DeepEqual(*got.Account, fixtures.account) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight().Account = %#v, want %#v", got.Account, fixtures.account)
+	}
+}
+
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPreflightFailsClosedWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
+		{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []FrankRegistryObjectRef{
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-mail"},
+		{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail"},
+	}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	_, err = ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight() error = nil, want missing mission store root rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store root is required to resolve Frank object refs") {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPreflight() error = %q, want missing mission store root rejection", err.Error())
+	}
+}
+
 type executionContextFrankRegistryFixtures struct {
 	root      string
 	identity  FrankIdentityRecord

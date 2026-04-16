@@ -328,3 +328,86 @@ func TestFormatInspectSummarySurfacesCampaignZohoEmailAddressingInCampaignPrefli
 		t.Fatalf("steps[0].campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressing["bcc"])
 	}
 }
+
+func TestFormatInspectSummarySurfacesZohoMailboxBootstrapPreflight(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankZohoMailboxFixtures(t)
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"bootstrap mailbox"},
+					GovernedExternalTargets: []AutonomyEligibilityTargetRef{
+						{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+						{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+					},
+					FrankObjectRefs: []FrankRegistryObjectRef{
+						{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+						{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+					},
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	summary, err := NewInspectSummaryWithCampaignAndTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithCampaignAndTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	step := steps[0].(map[string]any)
+	preflight, ok := step["frank_zoho_mailbox_bootstrap_preflight"].(map[string]any)
+	if !ok {
+		t.Fatalf("steps[0].frank_zoho_mailbox_bootstrap_preflight = %#v, want object", step["frank_zoho_mailbox_bootstrap_preflight"])
+	}
+	assertJSONObjectKeys(t, preflight, "account", "identity")
+
+	identity, ok := preflight["identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap preflight identity = %#v, want object", preflight["identity"])
+	}
+	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at", "zoho_mailbox")
+	identityZoho, ok := identity["zoho_mailbox"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap preflight identity zoho_mailbox = %#v, want object", identity["zoho_mailbox"])
+	}
+	assertJSONObjectKeys(t, identityZoho, "from_address", "from_display_name")
+
+	account, ok := preflight["account"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap preflight account = %#v, want object", preflight["account"])
+	}
+	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at", "zoho_mailbox")
+	accountZoho, ok := account["zoho_mailbox"].(map[string]any)
+	if !ok {
+		t.Fatalf("bootstrap preflight account zoho_mailbox = %#v, want object", account["zoho_mailbox"])
+	}
+	assertJSONObjectKeys(t, accountZoho, "confirmed_created", "provider_account_id")
+
+	if _, ok := step["campaign_preflight"]; ok {
+		t.Fatalf("campaign_preflight = %#v, want omitted on bootstrap-only inspect path", step["campaign_preflight"])
+	}
+	if _, ok := step["treasury_preflight"]; ok {
+		t.Fatalf("treasury_preflight = %#v, want omitted on bootstrap-only inspect path", step["treasury_preflight"])
+	}
+}

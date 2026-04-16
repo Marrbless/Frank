@@ -322,7 +322,7 @@ func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, ste
 	if err != nil {
 		return err
 	}
-	if ec.Step == nil || !stepDeclaresZohoMailboxBootstrap(*ec.Step) {
+	if ec.Step == nil || !missioncontrol.DeclaresFrankZohoMailboxBootstrap(*ec.Step) {
 		return nil
 	}
 
@@ -343,34 +343,6 @@ func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, ste
 	}
 
 	return hook(ec.MissionStoreRoot, pair, now)
-}
-
-func stepDeclaresZohoMailboxBootstrap(step missioncontrol.Step) bool {
-	hasIdentityRef := false
-	hasAccountRef := false
-	for _, ref := range step.FrankObjectRefs {
-		switch missioncontrol.NormalizeFrankRegistryObjectKind(ref.Kind) {
-		case missioncontrol.FrankRegistryObjectKindIdentity:
-			hasIdentityRef = true
-		case missioncontrol.FrankRegistryObjectKindAccount:
-			hasAccountRef = true
-		}
-	}
-	if !hasIdentityRef || !hasAccountRef {
-		return false
-	}
-
-	hasProviderTarget := false
-	hasAccountClassTarget := false
-	for _, target := range step.GovernedExternalTargets {
-		switch target.Kind {
-		case missioncontrol.EligibilityTargetKindProvider:
-			hasProviderTarget = true
-		case missioncontrol.EligibilityTargetKindAccountClass:
-			hasAccountClassTarget = true
-		}
-	}
-	return hasProviderTarget && hasAccountClassTarget
 }
 
 func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, stepID string) error {

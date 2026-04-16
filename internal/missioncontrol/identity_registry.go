@@ -130,6 +130,11 @@ type ResolvedExecutionContextFrankZohoMailboxBootstrapPair struct {
 	Account  FrankAccountRecord  `json:"account"`
 }
 
+type ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight struct {
+	Identity *FrankIdentityRecord `json:"identity,omitempty"`
+	Account  *FrankAccountRecord  `json:"account,omitempty"`
+}
+
 func StoreFrankRegistryDir(root string) string {
 	return filepath.Join(root, "frank_registry")
 }
@@ -455,6 +460,34 @@ func ResolveExecutionContextFrankRegistryObjectRefs(ec ExecutionContext) (Resolv
 	return resolved, nil
 }
 
+func DeclaresFrankZohoMailboxBootstrap(step Step) bool {
+	hasIdentityRef := false
+	hasAccountRef := false
+	for _, ref := range step.FrankObjectRefs {
+		switch NormalizeFrankRegistryObjectKind(ref.Kind) {
+		case FrankRegistryObjectKindIdentity:
+			hasIdentityRef = true
+		case FrankRegistryObjectKindAccount:
+			hasAccountRef = true
+		}
+	}
+	if !hasIdentityRef || !hasAccountRef {
+		return false
+	}
+
+	hasProviderTarget := false
+	hasAccountClassTarget := false
+	for _, target := range step.GovernedExternalTargets {
+		switch target.Kind {
+		case EligibilityTargetKindProvider:
+			hasProviderTarget = true
+		case EligibilityTargetKindAccountClass:
+			hasAccountClassTarget = true
+		}
+	}
+	return hasProviderTarget && hasAccountClassTarget
+}
+
 func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (ResolvedExecutionContextFrankZohoMailboxBootstrapPair, bool, error) {
 	resolved, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
 	if err != nil {
@@ -508,6 +541,31 @@ func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (
 		Identity: identity,
 		Account:  account,
 	}, true, nil
+}
+
+func ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec ExecutionContext) (ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight, error) {
+	if ec.Step == nil {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, fmt.Errorf("execution context step is required")
+	}
+	if !DeclaresFrankZohoMailboxBootstrap(*ec.Step) {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, nil
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, fmt.Errorf("mission store root is required to resolve Frank object refs")
+	}
+
+	pair, ok, err := ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
+	if err != nil {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, err
+	}
+	if !ok {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, fmt.Errorf("execution context declared zoho mailbox bootstrap but did not resolve a committed zoho mailbox identity/account pair")
+	}
+
+	return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{
+		Identity: &pair.Identity,
+		Account:  &pair.Account,
+	}, nil
 }
 
 func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
