@@ -9,6 +9,14 @@ import (
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
+var loopCheckInOptionalZohoWrapperFields = map[string]struct{}{
+	"campaign_zoho_email_outbounds":  {},
+	"campaign_zoho_email_reply_work": {},
+	"frank_zoho_inbound_replies":     {},
+	"campaign_zoho_email_send_gate":  {},
+	"frank_zoho_send_proof":          {},
+}
+
 func assertLoopCheckInJSONObjectKeys(t *testing.T, value any, want ...string) {
 	t.Helper()
 
@@ -97,8 +105,19 @@ func assertLoopCheckInResolvedCampaignPreflightJSONEnvelope(t *testing.T, value 
 	if !ok {
 		t.Fatalf("campaign_preflight.campaign = %#v, want object", preflight["campaign"])
 	}
-	assertLoopCheckInJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at")
+	wantCampaignKeys := []string{"campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at"}
+	if _, ok := campaign["zoho_email_addressing"]; ok {
+		wantCampaignKeys = append(wantCampaignKeys, "zoho_email_addressing")
+	}
+	assertLoopCheckInJSONObjectKeys(t, campaign, wantCampaignKeys...)
 	assertLoopCheckInJSONObjectKeys(t, campaign["failure_threshold"], "limit", "metric")
+	if value, ok := campaign["zoho_email_addressing"]; ok {
+		addressing, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("campaign_preflight.campaign.zoho_email_addressing = %#v, want object", value)
+		}
+		assertLoopCheckInJSONObjectKeys(t, addressing, "to", "cc", "bcc")
+	}
 }
 
 func mustLoopCheckInNotificationPayload(t *testing.T, content, prefix string) string {
@@ -177,7 +196,14 @@ func assertLoopCheckInOperatorStatusEnvelope(t *testing.T, content, prefix strin
 	if !ok {
 		t.Fatalf("summary payload = %#v, want object", decoded)
 	}
-	assertLoopCheckInJSONObjectKeys(t, object, wantKeys...)
+	filtered := make(map[string]any, len(object))
+	for key, value := range object {
+		if _, ok := loopCheckInOptionalZohoWrapperFields[key]; ok {
+			continue
+		}
+		filtered[key] = value
+	}
+	assertLoopCheckInJSONObjectKeys(t, filtered, wantKeys...)
 
 	if allowCampaignPreflight {
 		assertLoopCheckInResolvedCampaignPreflightJSONEnvelope(t, object["campaign_preflight"])

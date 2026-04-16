@@ -1866,6 +1866,16 @@ Periodic notifications:
 - check-ins every 30 minutes on long jobs,
 - daily summary every 24 hours.
 
+On this branch line, provider-specific Zoho campaign-email read fields are
+frozen only on direct `OperatorStatus` and direct `OperatorInspect` surfaces.
+Owner-facing wrappers such as mission check-ins, daily summaries, and
+waiting/approval/paused notifications may incidentally inherit provider-specific
+Zoho fields from direct status JSON, but they do not independently widen or
+freeze notification schemas for fields such as
+`campaign_zoho_email_send_gate`, `campaign_zoho_email_outbounds`,
+`campaign_zoho_email_reply_work`, `frank_zoho_inbound_replies`, or
+`frank_zoho_send_proof`.
+
 ### Default budget ceilings
 
 Frank v3 retains these high-ceiling bounded defaults:
