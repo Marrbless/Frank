@@ -35,6 +35,7 @@ type TaskState struct {
 	runtimeProjectionHook          func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
 	runtimeChangeHook              func()
 	campaignReadinessGuardHook     func(missioncontrol.ExecutionContext) error
+	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
@@ -43,6 +44,7 @@ const taskStateTreasuryActivationLeaseHolderID = "taskstate-activate-step-treasu
 func NewTaskState() *TaskState {
 	return &TaskState{
 		campaignReadinessGuardHook:     missioncontrol.RequireExecutionContextCampaignReadiness,
+		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
 	}
 }
@@ -267,6 +269,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if err := s.applyCampaignReadinessGuardForStep(job, stepID); err != nil {
 		return err
 	}
+	if err := s.applyZohoMailboxBootstrapForStep(job, stepID, now); err != nil {
+		return err
+	}
 	if err := s.applyTreasuryActivationPolicyForStep(job, stepID, now); err != nil {
 		return err
 	}
@@ -306,6 +311,66 @@ func (s *TaskState) applyTreasuryActivationPolicyForStep(job missioncontrol.Job,
 	}, missioncontrol.DefaultTreasuryActivationPolicyInput{
 		TreasuryRef: *ec.Step.TreasuryRef,
 	}, now)
+}
+
+func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !stepDeclaresZohoMailboxBootstrap(*ec.Step) {
+		return nil
+	}
+
+	s.mu.Lock()
+	ec.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
+	hook := s.zohoMailboxBootstrapHook
+	s.mu.Unlock()
+
+	pair, ok, err := missioncontrol.ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if hook == nil {
+		return nil
+	}
+
+	return hook(ec.MissionStoreRoot, pair, now)
+}
+
+func stepDeclaresZohoMailboxBootstrap(step missioncontrol.Step) bool {
+	hasIdentityRef := false
+	hasAccountRef := false
+	for _, ref := range step.FrankObjectRefs {
+		switch missioncontrol.NormalizeFrankRegistryObjectKind(ref.Kind) {
+		case missioncontrol.FrankRegistryObjectKindIdentity:
+			hasIdentityRef = true
+		case missioncontrol.FrankRegistryObjectKindAccount:
+			hasAccountRef = true
+		}
+	}
+	if !hasIdentityRef || !hasAccountRef {
+		return false
+	}
+
+	hasProviderTarget := false
+	hasAccountClassTarget := false
+	for _, target := range step.GovernedExternalTargets {
+		switch target.Kind {
+		case missioncontrol.EligibilityTargetKindProvider:
+			hasProviderTarget = true
+		case missioncontrol.EligibilityTargetKindAccountClass:
+			hasAccountClassTarget = true
+		}
+	}
+	return hasProviderTarget && hasAccountClassTarget
 }
 
 func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, stepID string) error {

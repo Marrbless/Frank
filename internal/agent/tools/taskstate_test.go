@@ -820,6 +820,116 @@ func TestTaskStateActivateStepCampaignZeroRefPathUnchanged(t *testing.T) {
 	}
 }
 
+func TestTaskStateActivateStepZohoMailboxBootstrapZeroRefPathUnchanged(t *testing.T) {
+	t.Parallel()
+
+	state := NewTaskState()
+	calls := 0
+	state.zohoMailboxBootstrapHook = func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error {
+		calls++
+		return nil
+	}
+
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("zohoMailboxBootstrapHook calls = %d, want 0 for zero-frank-object-ref path", calls)
+	}
+}
+
+func TestTaskStateActivateStepZohoMailboxBootstrapPathCallsProducerOnce(t *testing.T) {
+	t.Parallel()
+
+	root, identity, account := writeTaskStateZohoMailboxBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{
+		{Kind: missioncontrol.EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: missioncontrol.EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	calls := 0
+	var gotRoot string
+	var gotPair missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair
+	var gotAt time.Time
+	state.zohoMailboxBootstrapHook = func(root string, pair missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, now time.Time) error {
+		calls++
+		gotRoot = root
+		gotPair = pair
+		gotAt = now
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("zohoMailboxBootstrapHook calls = %d, want 1", calls)
+	}
+	if gotRoot != root {
+		t.Fatalf("zohoMailboxBootstrapHook root = %q, want %q", gotRoot, root)
+	}
+	wantPair := missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair{
+		Identity: identity,
+		Account:  account,
+	}
+	if !reflect.DeepEqual(gotPair, wantPair) {
+		t.Fatalf("zohoMailboxBootstrapHook pair = %#v, want %#v", gotPair, wantPair)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("zohoMailboxBootstrapHook now = zero, want activation timestamp")
+	}
+}
+
+func TestTaskStateActivateStepZohoMailboxBootstrapInvalidPairFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root, identity, _ := writeTaskStateZohoMailboxBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{
+		{Kind: missioncontrol.EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: missioncontrol.EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: "account-missing"},
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	calls := 0
+	state.zohoMailboxBootstrapHook = func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error {
+		calls++
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want invalid zoho mailbox pair rejection")
+	}
+	if !strings.Contains(err.Error(), `resolve Frank object ref kind "account" object_id "account-missing": mission store Frank account record not found`) {
+		t.Fatalf("ActivateStep() error = %q, want invalid zoho mailbox pair rejection", err.Error())
+	}
+	if calls != 0 {
+		t.Fatalf("zohoMailboxBootstrapHook calls = %d, want 0 when pair resolution fails", calls)
+	}
+	if _, ok := state.ExecutionContext(); ok {
+		t.Fatal("ExecutionContext() ok = true, want no active context after zoho mailbox pair rejection")
+	}
+	if _, ok := state.MissionRuntimeState(); ok {
+		t.Fatal("MissionRuntimeState() ok = true, want no stored runtime after zoho mailbox pair rejection")
+	}
+}
+
 func TestTaskStateActivateStepCampaignPathCallsReadinessGuardOnce(t *testing.T) {
 	t.Parallel()
 
@@ -4327,6 +4437,108 @@ func writeTaskStateTreasuryFixtures(t *testing.T) (string, missioncontrol.Treasu
 	}
 
 	return root, treasury, container
+}
+
+func writeTaskStateZohoMailboxBootstrapFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 16, 15, 0, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-mail",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-mailbox",
+	}
+
+	writeTaskStateAutonomyEligibilityFixture(t, root, providerTarget, missioncontrol.PlatformRecord{
+		PlatformID:       providerTarget.RegistryID,
+		PlatformName:     "provider-mail.example",
+		TargetClass:      providerTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-provider-mail",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-provider-mail",
+		TargetKind:             providerTarget.Kind,
+		TargetName:             "provider-mail.example",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now,
+	})
+	writeTaskStateAutonomyEligibilityFixture(t, root, accountTarget, missioncontrol.PlatformRecord{
+		PlatformID:       accountTarget.RegistryID,
+		PlatformName:     "account-class-mailbox",
+		TargetClass:      accountTarget.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-account-class-mailbox",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now.Add(time.Minute),
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-account-class-mailbox",
+		TargetKind:             accountTarget.Kind,
+		TargetName:             "account-class-mailbox",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now.Add(time.Minute),
+	})
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		ZohoMailbox: &missioncontrol.FrankZohoMailboxIdentity{
+			FromAddress:     "frank@example.com",
+			FromDisplayName: "Frank",
+		},
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "candidate",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		ZohoMailbox: &missioncontrol.FrankZohoMailboxAccount{
+			ProviderAccountID: "3323462000000008002",
+			ConfirmedCreated:  true,
+		},
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "candidate",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	return root, identity, account
 }
 
 func mustStoreTaskStateCampaignFixture(t *testing.T, root string, container missioncontrol.FrankContainerRecord) missioncontrol.CampaignRecord {
