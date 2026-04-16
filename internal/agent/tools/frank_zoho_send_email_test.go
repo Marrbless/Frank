@@ -144,6 +144,48 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignStopCondition(t *
 	}
 }
 
+func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdMetric(t *testing.T) {
+	t.Parallel()
+
+	var sendCalls atomic.Int32
+	tool := NewFrankZohoSendEmailTool()
+	tool.send = func(ctx context.Context, req frankZohoSendRequest) (frankZohoSendResponseData, error) {
+		sendCalls.Add(1)
+		return frankZohoSendResponseData{}, nil
+	}
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	reg := NewRegistry()
+	reg.Register(tool)
+	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
+
+	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
+	_, err := reg.Execute(
+		missioncontrol.WithExecutionContext(context.Background(), ec),
+		tool.Name(),
+		map[string]interface{}{
+			"subject": "Frank intro",
+			"body":    "Hello from Frank",
+		},
+	)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported failure-threshold rejection")
+	}
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records`) {
+		t.Fatalf("Execute() error = %q, want unsupported failure-threshold rejection", err)
+	}
+	if got := sendCalls.Load(); got != 0 {
+		t.Fatalf("send calls = %d, want 0", got)
+	}
+}
+
 func TestFrankZohoSendEmailToolUsesFixedFrankZohoAccountAndMapsReceipt(t *testing.T) {
 	t.Parallel()
 

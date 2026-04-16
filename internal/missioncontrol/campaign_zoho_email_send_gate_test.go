@@ -230,6 +230,25 @@ func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCond
 	}
 }
 
+func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedFailureThresholdMetric(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 19, 55, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 3 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+	})
+
+	_, err := DeriveCampaignZohoEmailSendGateDecision(campaign, nil, nil)
+	if err == nil {
+		t.Fatal("DeriveCampaignZohoEmailSendGateDecision() error = nil, want unsupported failure-threshold rejection")
+	}
+	if got := err.Error(); got != `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records` {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported failure-threshold rejection", got)
+	}
+}
+
 func TestListCommittedCampaignZohoEmailOutboundActionRecordsByCampaignFiltersAndPrefersMostTerminalState(t *testing.T) {
 	t.Parallel()
 
