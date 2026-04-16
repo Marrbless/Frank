@@ -415,6 +415,97 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailStopConditio
 	})
 }
 
+func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThresholdMetricAsClosedGate(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	campaign.StopConditions = []string{"stop after 3 verified sends"}
+	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
+	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+	}
+	wantReason := `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records`
+
+	t.Run("active", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewTaskState()
+		state.SetMissionStoreRoot(root)
+		state.SetExecutionContext(missioncontrol.ExecutionContext{
+			Job:     &job,
+			Step:    &job.Plan.Steps[0],
+			Runtime: missioncontrol.CloneJobRuntimeState(&runtime),
+		})
+
+		summary, err := state.OperatorStatus("job-1")
+		if err != nil {
+			t.Fatalf("OperatorStatus() error = %v", err)
+		}
+
+		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+		if got.CampaignZohoEmailSendGate == nil {
+			t.Fatal("CampaignZohoEmailSendGate = nil, want closed gate")
+		}
+		if got.CampaignZohoEmailSendGate.Allowed {
+			t.Fatalf("CampaignZohoEmailSendGate.Allowed = true, want closed gate: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.Halted {
+			t.Fatalf("CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.Reason != wantReason {
+			t.Fatalf("CampaignZohoEmailSendGate.Reason = %q, want %q", got.CampaignZohoEmailSendGate.Reason, wantReason)
+		}
+	})
+
+	t.Run("persisted", func(t *testing.T) {
+		t.Parallel()
+
+		control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+		if err != nil {
+			t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+		}
+
+		state := NewTaskState()
+		state.SetMissionStoreRoot(root)
+		if err := state.HydrateRuntimeControl(job, runtime, &control); err != nil {
+			t.Fatalf("HydrateRuntimeControl() error = %v", err)
+		}
+		state.ClearExecutionContext()
+
+		summary, err := state.OperatorStatus("job-1")
+		if err != nil {
+			t.Fatalf("OperatorStatus() error = %v", err)
+		}
+
+		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+		if got.CampaignPreflight != nil {
+			t.Fatalf("CampaignPreflight = %#v, want nil on persisted path", got.CampaignPreflight)
+		}
+		if got.CampaignZohoEmailSendGate == nil {
+			t.Fatal("CampaignZohoEmailSendGate = nil, want closed gate")
+		}
+		if got.CampaignZohoEmailSendGate.Allowed {
+			t.Fatalf("CampaignZohoEmailSendGate.Allowed = true, want closed gate: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.Halted {
+			t.Fatalf("CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.Reason != wantReason {
+			t.Fatalf("CampaignZohoEmailSendGate.Reason = %q, want %q", got.CampaignZohoEmailSendGate.Reason, wantReason)
+		}
+	})
+}
+
 func TestTaskStateOperatorStatusShowsDeferredSchedulerTriggersOnChosenReadoutPath(t *testing.T) {
 	t.Parallel()
 
