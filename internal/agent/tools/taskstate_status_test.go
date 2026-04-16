@@ -156,6 +156,44 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedCampaignPr
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailAddressing(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.CampaignPreflight == nil || got.CampaignPreflight.Campaign == nil {
+		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", got.CampaignPreflight)
+	}
+	addressing := got.CampaignPreflight.Campaign.ZohoEmailAddressing
+	if addressing == nil {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing = nil, want campaign-owned Zoho addressing")
+	}
+	if !reflect.DeepEqual(addressing.To, []string{"person@example.com", "team@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.To = %#v, want [person@example.com team@example.com]", addressing.To)
+	}
+	if !reflect.DeepEqual(addressing.CC, []string{"copy@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.CC = %#v, want [copy@example.com]", addressing.CC)
+	}
+	if !reflect.DeepEqual(addressing.BCC, []string{"blind@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.BCC = %#v, want [blind@example.com]", addressing.BCC)
+	}
+}
+
 func TestTaskStateOperatorStatusShowsDeferredSchedulerTriggersOnChosenReadoutPath(t *testing.T) {
 	t.Parallel()
 
