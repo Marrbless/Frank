@@ -30,8 +30,8 @@ var verifyFrankZohoCampaignSendProof = func(ctx context.Context, proof []mission
 	return NewFrankZohoSendProofVerifier().Verify(ctx, proof)
 }
 
-var readFrankZohoCampaignInboundReplies = func(ctx context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
-	return NewFrankZohoInboundReplyReader().Read(ctx)
+var readFrankZohoCampaignInboundReplies = func(ctx context.Context, providerAccountID string) ([]missioncontrol.FrankZohoInboundReply, error) {
+	return NewFrankZohoInboundReplyReader().Read(ctx, providerAccountID)
 }
 
 type FrankZohoSendEmailTool struct {
@@ -459,9 +459,13 @@ func (v *FrankZohoSendProofVerifier) Verify(ctx context.Context, proof []mission
 	return verified, nil
 }
 
-func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+func (r *FrankZohoInboundReplyReader) Read(ctx context.Context, providerAccountID string) ([]missioncontrol.FrankZohoInboundReply, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	providerAccountID = strings.TrimSpace(providerAccountID)
+	if providerAccountID == "" {
+		return nil, fmt.Errorf("%s inbound reply read requires provider_account_id", frankZohoSendEmailToolName)
 	}
 
 	tokenProvider := r.accessToken
@@ -478,7 +482,7 @@ func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontro
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	messagesURL := frankZohoMessagesURL(r.apiBase, frankZohoMailAccountID)
+	messagesURL := frankZohoMessagesURL(r.apiBase, providerAccountID)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, messagesURL, nil)
 	if err != nil {
 		return nil, err
@@ -513,12 +517,13 @@ func (r *FrankZohoInboundReplyReader) Read(ctx context.Context) ([]missioncontro
 		if err != nil {
 			return nil, fmt.Errorf("%s inbound reply read: parse received time for provider_message_id %q: %w", frankZohoSendEmailToolName, messageID, err)
 		}
-		originalMessageURL := frankZohoOriginalMessageURL(r.apiBase, frankZohoMailAccountID, messageID)
+		originalMessageURL := frankZohoOriginalMessageURL(r.apiBase, providerAccountID, messageID)
 		originalMessage, err := frankZohoReadOriginalMessage(ctx, client, token, messageID, originalMessageURL)
 		if err != nil {
 			return nil, err
 		}
 		reply, ok, err := frankZohoInboundReplyFromOriginalMessage(
+			providerAccountID,
 			messageID,
 			strings.TrimSpace(string(candidate.MailID)),
 			receivedAt,
@@ -856,7 +861,7 @@ func frankZohoReadOriginalMessage(ctx context.Context, client *http.Client, toke
 	return string(body), nil
 }
 
-func frankZohoInboundReplyFromOriginalMessage(providerMessageID, providerMailID string, receivedAt time.Time, originalMessageURL string, originalMessage string) (missioncontrol.FrankZohoInboundReply, bool, error) {
+func frankZohoInboundReplyFromOriginalMessage(providerAccountID string, providerMessageID string, providerMailID string, receivedAt time.Time, originalMessageURL string, originalMessage string) (missioncontrol.FrankZohoInboundReply, bool, error) {
 	parsed, err := mail.ReadMessage(strings.NewReader(originalMessage))
 	if err != nil {
 		return missioncontrol.FrankZohoInboundReply{}, false, fmt.Errorf("%s inbound reply read: parse original message for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), err)
@@ -880,7 +885,7 @@ func frankZohoInboundReplyFromOriginalMessage(providerMessageID, providerMailID 
 
 	reply := missioncontrol.NormalizeFrankZohoInboundReply(missioncontrol.FrankZohoInboundReply{
 		Provider:           "zoho_mail",
-		ProviderAccountID:  frankZohoMailAccountID,
+		ProviderAccountID:  strings.TrimSpace(providerAccountID),
 		ProviderMessageID:  strings.TrimSpace(providerMessageID),
 		ProviderMailID:     strings.TrimSpace(providerMailID),
 		MIMEMessageID:      strings.TrimSpace(parsed.Header.Get("Message-ID")),

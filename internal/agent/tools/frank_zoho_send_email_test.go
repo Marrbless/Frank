@@ -834,6 +834,7 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank@omou.online", "Frank", "9988776655443322110", true)
 	state := NewTaskState()
 	state.SetMissionStoreRoot(root)
 	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
@@ -883,11 +884,13 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 		t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord(seed) error = %v", err)
 	}
 
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	gotProviderAccountID := ""
+	readFrankZohoCampaignInboundReplies = func(_ context.Context, providerAccountID string) ([]missioncontrol.FrankZohoInboundReply, error) {
+		gotProviderAccountID = providerAccountID
 		return []missioncontrol.FrankZohoInboundReply{
 			{
 				Provider:           "zoho_mail",
-				ProviderAccountID:  "3323462000000008002",
+				ProviderAccountID:  providerAccountID,
 				ProviderMessageID:  "1711540357880101000",
 				ProviderMailID:     "<reply-1@zoho.test>",
 				MIMEMessageID:      "<inbound-1@example.test>",
@@ -897,7 +900,7 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 				FromDisplayName:    "Person One",
 				Subject:            "Re: Frank intro",
 				ReceivedAt:         time.Date(2026, 4, 15, 16, 20, 0, 0, time.UTC),
-				OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage",
+				OriginalMessageURL: "https://mail.zoho.test/api/accounts/" + providerAccountID + "/messages/1711540357880101000/originalmessage",
 			},
 		}, nil
 	}
@@ -908,6 +911,9 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 	}
 	if appended != 1 {
 		t.Fatalf("SyncFrankZohoCampaignInboundReplies(first) appended = %d, want 1", appended)
+	}
+	if gotProviderAccountID != "9988776655443322110" {
+		t.Fatalf("read providerAccountID = %q, want committed campaign-linked sender account", gotProviderAccountID)
 	}
 
 	appended, err = state.SyncFrankZohoCampaignInboundReplies()
@@ -1060,7 +1066,7 @@ func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
 		t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord() error = %v", err)
 	}
 
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return []missioncontrol.FrankZohoInboundReply{
 			{
 				Provider:           "zoho_mail",
@@ -1128,7 +1134,7 @@ func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1243,7 +1249,7 @@ func TestPrepareFrankZohoCampaignSendAutoSelectsOldestReplyWorkItem(t *testing.T
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1347,7 +1353,7 @@ func TestPrepareFrankZohoCampaignFollowUpVerifiedReplayRespondsWorkItem(t *testi
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1488,7 +1494,7 @@ func TestRecordFrankZohoCampaignSendFailureReopensFollowUpWorkItemWhenGateAllows
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1587,7 +1593,7 @@ func TestRecordFrankZohoCampaignSendFailureKeepsFollowUpWorkItemClaimedWhenFailu
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1691,7 +1697,7 @@ func TestPrepareFrankZohoCampaignFollowUpBlocksDuplicateUnresolvedAction(t *test
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
-	readFrankZohoCampaignInboundReplies = func(context.Context) ([]missioncontrol.FrankZohoInboundReply, error) {
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
 		return nil, nil
 	}
 
@@ -1945,6 +1951,7 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 
 	var gotAuth []string
 	var gotPaths []string
+	const providerAccountID = "9988776655443322110"
 
 	reader := NewFrankZohoInboundReplyReader()
 	reader.apiBase = "https://mail.zoho.test/api"
@@ -1956,7 +1963,7 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 			gotPaths = append(gotPaths, r.URL.Path)
 			gotAuth = append(gotAuth, r.Header.Get("Authorization"))
 			switch r.URL.Path {
-			case "/api/accounts/3323462000000008002/messages":
+			case "/api/accounts/9988776655443322110/messages":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1968,13 +1975,13 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 						]
 					}`)),
 				}, nil
-			case "/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage":
+			case "/api/accounts/9988776655443322110/messages/1711540357880101000/originalmessage":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"message/rfc822"}},
 					Body:       io.NopCloser(strings.NewReader("From: Person One <person@example.com>\r\nSubject: Re: Frank intro\r\nMessage-ID: <inbound-1@example.test>\r\nIn-Reply-To: <mime-1@example.test>\r\nReferences: <seed@example.test> <mime-1@example.test>\r\n\r\nReply body")),
 				}, nil
-			case "/api/accounts/3323462000000008002/messages/1711540357880101999/originalmessage":
+			case "/api/accounts/9988776655443322110/messages/1711540357880101999/originalmessage":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"message/rfc822"}},
@@ -1987,7 +1994,7 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 		}),
 	}
 
-	got, err := reader.Read(context.Background())
+	got, err := reader.Read(context.Background(), providerAccountID)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -2014,7 +2021,10 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 	if got[0].FromAddress != "person@example.com" {
 		t.Fatalf("FromAddress = %q, want provider-fetched sender", got[0].FromAddress)
 	}
-	if got[0].OriginalMessageURL != "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880101000/originalmessage" {
+	if got[0].ProviderAccountID != providerAccountID {
+		t.Fatalf("ProviderAccountID = %q, want %q", got[0].ProviderAccountID, providerAccountID)
+	}
+	if got[0].OriginalMessageURL != "https://mail.zoho.test/api/accounts/9988776655443322110/messages/1711540357880101000/originalmessage" {
 		t.Fatalf("OriginalMessageURL = %q, want originalmessage locator", got[0].OriginalMessageURL)
 	}
 	if got[0].ReceivedAt.IsZero() {

@@ -581,11 +581,12 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := validateFrankZohoMailPreflight(preflight, false); err != nil {
+	sender, err := resolveFrankZohoCampaignSender(preflight, false)
+	if err != nil {
 		return 0, err
 	}
 
-	replies, err := readFrankZohoCampaignInboundReplies(context.Background())
+	replies, err := readFrankZohoCampaignInboundReplies(context.Background(), sender.ProviderAccountID)
 	if err != nil {
 		return 0, err
 	}
