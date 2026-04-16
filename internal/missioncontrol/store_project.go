@@ -7,19 +7,23 @@ import (
 )
 
 type MissionStatusSnapshot struct {
-	MissionRequired   bool                   `json:"mission_required"`
-	Active            bool                   `json:"active"`
-	MissionFile       string                 `json:"mission_file"`
-	JobID             string                 `json:"job_id"`
-	StepID            string                 `json:"step_id"`
-	StepType          string                 `json:"step_type"`
-	RequiredAuthority AuthorityTier          `json:"required_authority"`
-	RequiresApproval  bool                   `json:"requires_approval"`
-	AllowedTools      []string               `json:"allowed_tools"`
-	Runtime           *JobRuntimeState       `json:"runtime,omitempty"`
-	RuntimeSummary    *OperatorStatusSummary `json:"runtime_summary,omitempty"`
-	RuntimeControl    *RuntimeControlContext `json:"runtime_control,omitempty"`
-	UpdatedAt         string                 `json:"updated_at"`
+	MissionRequired   bool             `json:"mission_required"`
+	Active            bool             `json:"active"`
+	MissionFile       string           `json:"mission_file"`
+	JobID             string           `json:"job_id"`
+	StepID            string           `json:"step_id"`
+	StepType          string           `json:"step_type"`
+	RequiredAuthority AuthorityTier    `json:"required_authority"`
+	RequiresApproval  bool             `json:"requires_approval"`
+	AllowedTools      []string         `json:"allowed_tools"`
+	Runtime           *JobRuntimeState `json:"runtime,omitempty"`
+	// RuntimeSummary is a convenience projection of direct OperatorStatus JSON.
+	// Provider-specific Zoho fields may be carried through incidentally here, but
+	// only direct OperatorStatus and direct OperatorInspect remain frozen
+	// operator-read contract surfaces for those fields on this branch line.
+	RuntimeSummary *OperatorStatusSummary `json:"runtime_summary,omitempty"`
+	RuntimeControl *RuntimeControlContext `json:"runtime_control,omitempty"`
+	UpdatedAt      string                 `json:"updated_at"`
 }
 
 type MissionStatusSnapshotOptions struct {

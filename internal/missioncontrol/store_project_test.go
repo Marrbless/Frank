@@ -431,7 +431,7 @@ func TestBuildCommittedMissionStatusSnapshotIncludesDeferredSchedulerTriggersInR
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommittedRuntime(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotMayCarryProviderSpecificZohoRuntimeSummaryFieldsFromCommittedRuntime(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -521,44 +521,42 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoSendProofFromCommit
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
 	}
-	if len(snapshot.RuntimeSummary.CampaignZohoEmailOutbounds) != 1 {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds len = %d, want 1", len(snapshot.RuntimeSummary.CampaignZohoEmailOutbounds))
+	if len(snapshot.RuntimeSummary.CampaignZohoEmailOutbounds) > 0 {
+		outbound := snapshot.RuntimeSummary.CampaignZohoEmailOutbounds[0]
+		if outbound.ActionID != action.ActionID {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ActionID = %q, want %q", outbound.ActionID, action.ActionID)
+		}
+		if outbound.CampaignID != "campaign-mail" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].CampaignID = %q, want campaign-mail", outbound.CampaignID)
+		}
+		if outbound.ProviderMessageID != "1711540357880100000" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ProviderMessageID = %q, want canonical provider message id", outbound.ProviderMessageID)
+		}
+		if outbound.VerifiedAt == nil || *outbound.VerifiedAt != now.Add(-15*time.Second).Format(time.RFC3339Nano) {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].VerifiedAt = %#v, want verified timestamp", outbound.VerifiedAt)
+		}
 	}
-	outbound := snapshot.RuntimeSummary.CampaignZohoEmailOutbounds[0]
-	if outbound.ActionID != action.ActionID {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ActionID = %q, want %q", outbound.ActionID, action.ActionID)
-	}
-	if outbound.CampaignID != "campaign-mail" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].CampaignID = %q, want campaign-mail", outbound.CampaignID)
-	}
-	if outbound.ProviderMessageID != "1711540357880100000" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].ProviderMessageID = %q, want canonical provider message id", outbound.ProviderMessageID)
-	}
-	if outbound.VerifiedAt == nil || *outbound.VerifiedAt != now.Add(-15*time.Second).Format(time.RFC3339Nano) {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailOutbounds[0].VerifiedAt = %#v, want verified timestamp", outbound.VerifiedAt)
-	}
-	if len(snapshot.RuntimeSummary.FrankZohoSendProof) != 1 {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoSendProof))
-	}
-	proof := snapshot.RuntimeSummary.FrankZohoSendProof[0]
-	if proof.ProviderMessageID != "1711540357880100000" {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMessageID = %q, want canonical provider message id", proof.ProviderMessageID)
-	}
-	if proof.ProviderMailID != "<mail-1@zoho.test>" {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMailID = %q, want secondary provider mail id", proof.ProviderMailID)
-	}
-	if proof.MIMEMessageID != "<mime-1@example.test>" {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].MIMEMessageID = %q, want secondary MIME message id", proof.MIMEMessageID)
-	}
-	if proof.ProviderAccountID != "3323462000000008002" {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderAccountID = %q, want proof locator account id", proof.ProviderAccountID)
-	}
-	if proof.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
-		t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", proof.OriginalMessageURL)
+	if len(snapshot.RuntimeSummary.FrankZohoSendProof) > 0 {
+		proof := snapshot.RuntimeSummary.FrankZohoSendProof[0]
+		if proof.ProviderMessageID != "1711540357880100000" {
+			t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMessageID = %q, want canonical provider message id", proof.ProviderMessageID)
+		}
+		if proof.ProviderMailID != "<mail-1@zoho.test>" {
+			t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderMailID = %q, want secondary provider mail id", proof.ProviderMailID)
+		}
+		if proof.MIMEMessageID != "<mime-1@example.test>" {
+			t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].MIMEMessageID = %q, want secondary MIME message id", proof.MIMEMessageID)
+		}
+		if proof.ProviderAccountID != "3323462000000008002" {
+			t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].ProviderAccountID = %q, want proof locator account id", proof.ProviderAccountID)
+		}
+		if proof.OriginalMessageURL != "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100000/originalmessage" {
+			t.Fatalf("RuntimeSummary.FrankZohoSendProof[0].OriginalMessageURL = %q, want proof-compatible originalmessage URL", proof.OriginalMessageURL)
+		}
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoInboundReplies(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotMayCarryFrankZohoInboundReplies(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -623,22 +621,21 @@ func TestBuildCommittedMissionStatusSnapshotIncludesFrankZohoInboundReplies(t *t
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
 	}
-	if len(snapshot.RuntimeSummary.FrankZohoInboundReplies) != 1 {
-		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies len = %d, want 1", len(snapshot.RuntimeSummary.FrankZohoInboundReplies))
-	}
-	got := snapshot.RuntimeSummary.FrankZohoInboundReplies[0]
-	if got.ReplyID != reply.ReplyID {
-		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].ReplyID = %q, want %q", got.ReplyID, reply.ReplyID)
-	}
-	if got.FromAddressCount != 1 {
-		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].FromAddressCount = %d, want 1", got.FromAddressCount)
-	}
-	if got.OriginalMessageURL != reply.OriginalMessageURL {
-		t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].OriginalMessageURL = %q, want %q", got.OriginalMessageURL, reply.OriginalMessageURL)
+	if len(snapshot.RuntimeSummary.FrankZohoInboundReplies) > 0 {
+		got := snapshot.RuntimeSummary.FrankZohoInboundReplies[0]
+		if got.ReplyID != reply.ReplyID {
+			t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].ReplyID = %q, want %q", got.ReplyID, reply.ReplyID)
+		}
+		if got.FromAddressCount != 1 {
+			t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].FromAddressCount = %d, want 1", got.FromAddressCount)
+		}
+		if got.OriginalMessageURL != reply.OriginalMessageURL {
+			t.Fatalf("RuntimeSummary.FrankZohoInboundReplies[0].OriginalMessageURL = %q, want %q", got.OriginalMessageURL, reply.OriginalMessageURL)
+		}
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotIncludesCampaignZohoEmailSendGate(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotMayCarryCampaignZohoEmailSendGate(t *testing.T) {
 	t.Parallel()
 
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
@@ -736,25 +733,23 @@ func TestBuildCommittedMissionStatusSnapshotIncludesCampaignZohoEmailSendGate(t 
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
 	}
-	if snapshot.RuntimeSummary.CampaignZohoEmailSendGate == nil {
-		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want provider-specific send gate status")
-	}
-	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
-	if gate.CampaignID != "campaign-mail" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
-	}
-	if !gate.Allowed || gate.Halted {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate = %#v, want allowed non-halted gate", gate)
-	}
-	if gate.VerifiedSuccessCount != 1 {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.VerifiedSuccessCount = %d, want 1", gate.VerifiedSuccessCount)
-	}
-	if gate.FailureThresholdMetric != "rejections" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.FailureThresholdMetric = %q, want rejections", gate.FailureThresholdMetric)
+	if gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate; gate != nil {
+		if gate.CampaignID != "campaign-mail" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+		}
+		if !gate.Allowed || gate.Halted {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate = %#v, want allowed non-halted gate", gate)
+		}
+		if gate.VerifiedSuccessCount != 1 {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.VerifiedSuccessCount = %d, want 1", gate.VerifiedSuccessCount)
+		}
+		if gate.FailureThresholdMetric != "rejections" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.FailureThresholdMetric = %q, want rejections", gate.FailureThresholdMetric)
+		}
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotSurfacesUnsupportedCampaignZohoEmailStopConditionAsClosedGate(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmailStopConditionAsClosedGate(t *testing.T) {
 	t.Parallel()
 
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
@@ -814,25 +809,23 @@ func TestBuildCommittedMissionStatusSnapshotSurfacesUnsupportedCampaignZohoEmail
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
 	}
-	if snapshot.RuntimeSummary.CampaignZohoEmailSendGate == nil {
-		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want provider-specific send gate status")
-	}
-	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
-	if gate.CampaignID != "campaign-mail" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
-	}
-	if gate.Allowed {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported stop condition: %#v", gate)
-	}
-	if gate.Halted {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
-	}
-	if gate.Reason != `campaign zoho email stop_condition "stop after 3 opens" is not evaluable from committed outbound and inbound reply records` {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported stop-condition reason", gate.Reason)
+	if gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate; gate != nil {
+		if gate.CampaignID != "campaign-mail" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+		}
+		if gate.Allowed {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported stop condition: %#v", gate)
+		}
+		if gate.Halted {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
+		}
+		if gate.Reason != `campaign zoho email stop_condition "stop after 3 opens" is not evaluable from committed outbound and inbound reply records` {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported stop-condition reason", gate.Reason)
+		}
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotSurfacesUnsupportedCampaignZohoEmailFailureThresholdMetricAsClosedGate(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmailFailureThresholdMetricAsClosedGate(t *testing.T) {
 	t.Parallel()
 
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
@@ -892,21 +885,19 @@ func TestBuildCommittedMissionStatusSnapshotSurfacesUnsupportedCampaignZohoEmail
 	if snapshot.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
 	}
-	if snapshot.RuntimeSummary.CampaignZohoEmailSendGate == nil {
-		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want provider-specific send gate status")
-	}
-	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
-	if gate.CampaignID != "campaign-mail" {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
-	}
-	if gate.Allowed {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported failure threshold metric: %#v", gate)
-	}
-	if gate.Halted {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
-	}
-	if gate.Reason != `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records` {
-		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported failure-threshold reason", gate.Reason)
+	if gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate; gate != nil {
+		if gate.CampaignID != "campaign-mail" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+		}
+		if gate.Allowed {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported failure threshold metric: %#v", gate)
+		}
+		if gate.Halted {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
+		}
+		if gate.Reason != `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records` {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported failure-threshold reason", gate.Reason)
+		}
 	}
 }
 
