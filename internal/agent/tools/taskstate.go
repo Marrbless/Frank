@@ -38,6 +38,7 @@ type TaskState struct {
 	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
 	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
+	treasuryPostAcquisitionHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 }
 
@@ -49,6 +50,7 @@ func NewTaskState() *TaskState {
 		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
 		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
+		treasuryPostAcquisitionHook:    missioncontrol.RecordPostBootstrapTreasuryAcquisition,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
 	}
 }
@@ -306,6 +308,7 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 	root := strings.TrimSpace(s.missionStoreRoot)
 	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
 	bootstrapHook := s.treasuryBootstrapProducerHook
+	postAcquisitionHook := s.treasuryPostAcquisitionHook
 	hook := s.treasuryActivationProducerHook
 	s.mu.Unlock()
 	ec.MissionStoreRoot = root
@@ -345,6 +348,21 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 		return bootstrapHook(root, lease, missioncontrol.FirstValueTreasuryBootstrapInput{
 			TreasuryRef: *ec.Step.TreasuryRef,
 			EntryID:     resolved.BootstrapAcquisition.EntryID,
+		}, now)
+	}
+	if treasury.State == missioncontrol.TreasuryStateActive {
+		if postAcquisitionHook == nil {
+			return nil
+		}
+		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec)
+		if err != nil {
+			return err
+		}
+		if resolved == nil {
+			return nil
+		}
+		return postAcquisitionHook(root, lease, missioncontrol.PostBootstrapTreasuryAcquisitionInput{
+			TreasuryID: resolved.Treasury.TreasuryID,
 		}, now)
 	}
 	if hook == nil {

@@ -780,8 +780,8 @@ func TestTaskStateActivateStepTreasuryBootstrapPathInvokesRealMutationAndProduce
 	if err == nil {
 		t.Fatal("ActivateStep(replay) error = nil, want deterministic treasury bootstrap rejection")
 	}
-	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "active"`) {
-		t.Fatalf("ActivateStep(replay) error = %q, want duplicate bootstrap activation rejection", err.Error())
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" requires committed treasury.post_bootstrap_acquisition for additional acquisition`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want missing post-bootstrap acquisition rejection", err.Error())
 	}
 
 	secondRuntime, ok := state.MissionRuntimeState()
@@ -791,6 +791,117 @@ func TestTaskStateActivateStepTreasuryBootstrapPathInvokesRealMutationAndProduce
 	if !reflect.DeepEqual(secondRuntime, firstRuntime) {
 		t.Fatalf("MissionRuntimeState() = %#v, want unchanged %#v", secondRuntime, firstRuntime)
 	}
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord(second) = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+	secondEntries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondEntries, entries) {
+		t.Fatalf("ListTreasuryLedgerEntries(second) = %#v, want unchanged %#v", secondEntries, entries)
+	}
+}
+
+func TestTaskStateActivateStepActiveTreasuryPathCallsPostAcquisitionHookOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateActiveTreasuryAcquisitionFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	postCalls := 0
+	activationCalls := 0
+	var gotRoot string
+	var gotLease missioncontrol.WriterLockLease
+	var gotInput missioncontrol.PostBootstrapTreasuryAcquisitionInput
+	var gotAt time.Time
+	state.treasuryPostAcquisitionHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostBootstrapTreasuryAcquisitionInput, now time.Time) error {
+		postCalls++
+		gotRoot = root
+		gotLease = lease
+		gotInput = input
+		gotAt = now
+		return nil
+	}
+	state.treasuryActivationProducerHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.DefaultTreasuryActivationPolicyInput, now time.Time) error {
+		activationCalls++
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if postCalls != 1 {
+		t.Fatalf("treasuryPostAcquisitionHook calls = %d, want 1", postCalls)
+	}
+	if activationCalls != 0 {
+		t.Fatalf("treasuryActivationProducerHook calls = %d, want 0 on active acquisition path", activationCalls)
+	}
+	if gotRoot != root {
+		t.Fatalf("treasuryPostAcquisitionHook root = %q, want %q", gotRoot, root)
+	}
+	if gotLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryPostAcquisitionHook lease = %#v, want %q", gotLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotInput, missioncontrol.PostBootstrapTreasuryAcquisitionInput{
+		TreasuryID: treasury.TreasuryID,
+	}) {
+		t.Fatalf("treasuryPostAcquisitionHook input = %#v, want treasury id %q", gotInput, treasury.TreasuryID)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("treasuryPostAcquisitionHook now = zero, want activation timestamp")
+	}
+}
+
+func TestTaskStateActivateStepActiveTreasuryPathInvokesRealMutation(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _ := writeTaskStateActiveTreasuryAcquisitionFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+	if firstTreasury.PostBootstrapAcquisition == nil || firstTreasury.PostBootstrapAcquisition.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord(first).PostBootstrapAcquisition = %#v, want consumed entry linkage", firstTreasury.PostBootstrapAcquisition)
+	}
+	entries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(first) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListTreasuryLedgerEntries(first) len = %d, want 1", len(entries))
+	}
+	if entries[0].EntryID != firstTreasury.PostBootstrapAcquisition.ConsumedEntryID || entries[0].EntryKind != missioncontrol.TreasuryLedgerEntryKindAcquisition {
+		t.Fatalf("ListTreasuryLedgerEntries(first) = %#v, want one committed post-bootstrap acquisition entry", entries)
+	}
+
+	err = state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(replay) error = nil, want deterministic consumed post-bootstrap rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" treasury.post_bootstrap_acquisition is already consumed by entry "`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want consumed post-bootstrap rejection", err.Error())
+	}
+
 	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
 	if err != nil {
 		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
@@ -931,8 +1042,8 @@ func TestTaskStateActivateStepTreasuryReplayStaysDeterministic(t *testing.T) {
 	if err == nil {
 		t.Fatal("ActivateStep(replay) error = nil, want deterministic treasury activation rejection")
 	}
-	if !strings.Contains(err.Error(), `mission store treasury "treasury-wallet" default activation policy requires state "funded", got "active"`) {
-		t.Fatalf("ActivateStep(replay) error = %q, want duplicate activation rejection", err.Error())
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" requires committed treasury.post_bootstrap_acquisition for additional acquisition`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want missing post-bootstrap acquisition rejection", err.Error())
 	}
 
 	secondRuntime, ok := state.MissionRuntimeState()
@@ -4639,6 +4750,25 @@ func writeTaskStateTreasuryBootstrapFixtures(t *testing.T) (string, missioncontr
 		Amount:          "10.00",
 		SourceRef:       "payout:listing-1",
 		EvidenceLocator: "https://evidence.example/payout-1",
+		ConfirmedAt:     treasury.UpdatedAt.Add(time.Minute),
+	}
+	treasury.UpdatedAt = treasury.UpdatedAt.Add(2 * time.Minute)
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	return root, treasury, container
+}
+
+func writeTaskStateActiveTreasuryAcquisitionFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	treasury.State = missioncontrol.TreasuryStateActive
+	treasury.PostBootstrapAcquisition = &missioncontrol.TreasuryPostBootstrapAcquisition{
+		AssetCode:       "USD",
+		Amount:          "2.25",
+		SourceRef:       "payout:listing-2",
+		EvidenceLocator: "https://evidence.example/payout-2",
 		ConfirmedAt:     treasury.UpdatedAt.Add(time.Minute),
 	}
 	treasury.UpdatedAt = treasury.UpdatedAt.Add(2 * time.Minute)
