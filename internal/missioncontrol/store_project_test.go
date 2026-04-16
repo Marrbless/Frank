@@ -754,6 +754,84 @@ func TestBuildCommittedMissionStatusSnapshotIncludesCampaignZohoEmailSendGate(t 
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotSurfacesUnsupportedCampaignZohoEmailStopConditionAsClosedGate(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Now().UTC().Truncate(time.Second)
+
+	job := testProjectedRuntimeJob()
+	job.Plan.Steps[1].CampaignRef = &CampaignRef{CampaignID: "campaign-mail"}
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-mail"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+		record.StopConditions = []string{"stop after 3 opens"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "rejections", Limit: 3}
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		}
+	})
+	if err := StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		CreatedAt:       now.Add(-2 * time.Minute),
+		UpdatedAt:       now,
+		StartedAt:       now.Add(-2 * time.Minute),
+		ActiveStepAt:    now.Add(-time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	if snapshot.RuntimeSummary.CampaignZohoEmailSendGate == nil {
+		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want provider-specific send gate status")
+	}
+	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
+	if gate.CampaignID != "campaign-mail" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+	}
+	if gate.Allowed {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported stop condition: %#v", gate)
+	}
+	if gate.Halted {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
+	}
+	if gate.Reason != `campaign zoho email stop_condition "stop after 3 opens" is not evaluable from committed outbound and inbound reply records` {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported stop-condition reason", gate.Reason)
+	}
+}
+
 func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSchedulerTriggers(t *testing.T) {
 	t.Parallel()
 
