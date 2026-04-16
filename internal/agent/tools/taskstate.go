@@ -1913,11 +1913,56 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 	if hasRuntimeControl && control != nil {
 		allowedTools = missioncontrol.EffectiveAllowedTools(&missioncontrol.Job{AllowedTools: append([]string(nil), control.AllowedTools...)}, &control.Step)
 	}
-	summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
+	summary := missioncontrol.BuildOperatorStatusSummaryWithAllowedTools(*runtimeState, allowedTools)
+	if gate := persistedTaskStateCampaignZohoEmailSendGate(missionStoreRoot, runtimeState, control); gate != nil {
+		summary.CampaignZohoEmailSendGate = gate
+	}
+	data, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	return formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary, missionStoreRoot)
+	return formatOperatorStatusReadoutWithDeferredSchedulerTriggers(string(append(data, '\n')), missionStoreRoot)
+}
+
+func persistedTaskStateCampaignZohoEmailSendGate(missionStoreRoot string, runtime *missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) *missioncontrol.CampaignZohoEmailSendGateDecision {
+	missionStoreRoot = strings.TrimSpace(missionStoreRoot)
+	if missionStoreRoot == "" || runtime == nil || control == nil {
+		return nil
+	}
+	if strings.TrimSpace(runtime.ActiveStepID) == "" || strings.TrimSpace(control.Step.ID) != strings.TrimSpace(runtime.ActiveStepID) {
+		return nil
+	}
+	if control.Step.CampaignRef == nil {
+		return nil
+	}
+
+	ec := missioncontrol.ExecutionContext{
+		Step:             &control.Step,
+		MissionStoreRoot: missionStoreRoot,
+	}
+	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
+	if err != nil {
+		return &missioncontrol.CampaignZohoEmailSendGateDecision{
+			CampaignID: strings.TrimSpace(control.Step.CampaignRef.CampaignID),
+			Allowed:    false,
+			Halted:     false,
+			Reason:     err.Error(),
+		}
+	}
+	if preflight.Campaign == nil {
+		return nil
+	}
+
+	decision, err := missioncontrol.LoadCommittedCampaignZohoEmailSendGateDecision(missionStoreRoot, *preflight.Campaign)
+	if err != nil {
+		return &missioncontrol.CampaignZohoEmailSendGateDecision{
+			CampaignID: strings.TrimSpace(preflight.Campaign.CampaignID),
+			Allowed:    false,
+			Halted:     false,
+			Reason:     err.Error(),
+		}
+	}
+	return &decision
 }
 
 func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, missionStoreRoot string) (string, error) {
