@@ -176,7 +176,18 @@ func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
 	if !ok {
 		t.Fatalf("treasury_preflight.treasury = %#v, want object", preflight["treasury"])
 	}
-	assertJSONObjectKeys(t, treasury, "container_refs", "created_at", "display_name", "record_version", "state", "treasury_id", "updated_at", "zero_seed_policy")
+	treasuryKeys := []string{"container_refs", "created_at", "display_name", "record_version", "state", "treasury_id", "updated_at", "zero_seed_policy"}
+	if _, ok := treasury["bootstrap_acquisition"]; ok {
+		treasuryKeys = append(treasuryKeys, "bootstrap_acquisition")
+	}
+	assertJSONObjectKeys(t, treasury, treasuryKeys...)
+	if bootstrap, ok := treasury["bootstrap_acquisition"]; ok {
+		bootstrapObject, ok := bootstrap.(map[string]any)
+		if !ok {
+			t.Fatalf("treasury_preflight.treasury.bootstrap_acquisition = %#v, want object", bootstrap)
+		}
+		assertJSONObjectKeys(t, bootstrapObject, "amount", "asset_code", "confirmed_at", "entry_id", "evidence_locator", "source_ref")
+	}
 
 	containerRefs := mustJSONArray(t, treasury["container_refs"], "treasury_preflight.treasury.container_refs")
 	if len(containerRefs) != 1 {

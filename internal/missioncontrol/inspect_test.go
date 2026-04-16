@@ -170,6 +170,14 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 	}
 	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
 		record.TreasuryID = "treasury-wallet"
+		record.BootstrapAcquisition = &TreasuryBootstrapAcquisition{
+			EntryID:         "entry-first-value",
+			AssetCode:       "USD",
+			Amount:          "10.00",
+			SourceRef:       "payout:listing-a",
+			EvidenceLocator: "https://evidence.example/payout-a",
+			ConfirmedAt:     time.Date(2026, 4, 8, 21, 2, 30, 0, time.UTC),
+		}
 	})
 	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
@@ -241,6 +249,12 @@ func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFiel
 				wantStepKeys = append(wantStepKeys, "campaign_preflight", "treasury_preflight")
 				assertResolvedCampaignPreflightJSONEnvelope(t, step["campaign_preflight"])
 				assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+				treasuryPreflight := step["treasury_preflight"].(map[string]any)
+				treasury := treasuryPreflight["treasury"].(map[string]any)
+				bootstrap := treasury["bootstrap_acquisition"].(map[string]any)
+				if bootstrap["entry_id"] != "entry-first-value" {
+					t.Fatalf("steps[0].treasury_preflight.treasury.bootstrap_acquisition.entry_id = %#v, want %q", bootstrap["entry_id"], "entry-first-value")
+				}
 			} else {
 				if _, ok := step["campaign_preflight"]; ok {
 					t.Fatalf("campaign_preflight = %#v, want omitted on %s path", step["campaign_preflight"], tc.name)

@@ -448,6 +448,14 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 				DisplayName:    "Frank Treasury",
 				State:          TreasuryStateBootstrap,
 				ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+				BootstrapAcquisition: &TreasuryBootstrapAcquisition{
+					EntryID:         "entry-first-value",
+					AssetCode:       "USD",
+					Amount:          "10.00",
+					SourceRef:       "payout:listing-a",
+					EvidenceLocator: "https://evidence.example/payout-a",
+					ConfirmedAt:     time.Date(2026, 4, 8, 21, 2, 30, 0, time.UTC),
+				},
 				ContainerRefs: []FrankRegistryObjectRef{
 					{
 						Kind:     FrankRegistryObjectKindContainer,
@@ -487,6 +495,12 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", got["campaign_zoho_email_send_gate"])
 		}
 		assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+		treasuryPreflight := got["treasury_preflight"].(map[string]any)
+		treasury := treasuryPreflight["treasury"].(map[string]any)
+		bootstrap := treasury["bootstrap_acquisition"].(map[string]any)
+		if bootstrap["entry_id"] != "entry-first-value" {
+			t.Fatalf("treasury_preflight.treasury.bootstrap_acquisition.entry_id = %#v, want %q", bootstrap["entry_id"], "entry-first-value")
+		}
 		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", true, true)
 	})
 }
