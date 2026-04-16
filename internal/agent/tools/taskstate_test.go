@@ -3799,6 +3799,50 @@ func TestTaskStateOperatorInspectActiveExecutionContextSurfacesResolvedCampaignP
 	}
 }
 
+func TestTaskStateOperatorInspectSurfacesCampaignZohoEmailAddressing(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	got, err := state.OperatorInspect("job-1", "build")
+	if err != nil {
+		t.Fatalf("OperatorInspect() error = %v", err)
+	}
+
+	var summary missioncontrol.InspectSummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(summary.Steps) != 1 {
+		t.Fatalf("Steps len = %d, want 1", len(summary.Steps))
+	}
+	if summary.Steps[0].CampaignPreflight == nil || summary.Steps[0].CampaignPreflight.Campaign == nil {
+		t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", summary.Steps[0].CampaignPreflight)
+	}
+	addressing := summary.Steps[0].CampaignPreflight.Campaign.ZohoEmailAddressing
+	if addressing == nil {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing = nil, want campaign-owned Zoho addressing")
+	}
+	if !reflect.DeepEqual(addressing.To, []string{"person@example.com", "team@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.To = %#v, want [person@example.com team@example.com]", addressing.To)
+	}
+	if !reflect.DeepEqual(addressing.CC, []string{"copy@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.CC = %#v, want [copy@example.com]", addressing.CC)
+	}
+	if !reflect.DeepEqual(addressing.BCC, []string{"blind@example.com"}) {
+		t.Fatalf("CampaignPreflight.Campaign.ZohoEmailAddressing.BCC = %#v, want [blind@example.com]", addressing.BCC)
+	}
+}
+
 func TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryContract(t *testing.T) {
 	t.Parallel()
 
