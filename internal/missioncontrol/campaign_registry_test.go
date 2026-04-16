@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -587,6 +588,31 @@ func TestCampaignObjectViewKeepsUnresolvedEnvelopeFieldsNonDurableAfterLoad(t *t
 	}
 	if view.Budget != "" {
 		t.Fatalf("loaded CampaignRecord.AsObjectView().Budget = %q, want empty string until a justified durable source exists", view.Budget)
+	}
+}
+
+func TestCampaignObjectViewOmitsProviderSpecificZohoAddressing(t *testing.T) {
+	t.Parallel()
+
+	record := validCampaignRecord(time.Date(2026, 4, 8, 2, 40, 0, 0, time.UTC), func(record *CampaignRecord) {
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To:  []string{"person@example.com", "team@example.com"},
+			CC:  []string{"copy@example.com"},
+			BCC: []string{"blind@example.com"},
+		}
+	})
+
+	view := record.AsObjectView()
+	if view.PlatformOrChannel != "provider-mail" {
+		t.Fatalf("CampaignRecord.AsObjectView().PlatformOrChannel = %q, want %q", view.PlatformOrChannel, "provider-mail")
+	}
+
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatalf("json.Marshal(CampaignObjectView) error = %v", err)
+	}
+	if strings.Contains(string(payload), "zoho_email_addressing") {
+		t.Fatalf("CampaignObjectView JSON = %s, want provider-specific zoho_email_addressing omitted from generic campaign view", payload)
 	}
 }
 
