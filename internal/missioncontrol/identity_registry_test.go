@@ -1108,6 +1108,26 @@ func TestResolveExecutionContextFrankRegistryObjectRefsZeroRefPathPreservesPrior
 	}
 }
 
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPairZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec, err := ResolveExecutionContext(testExecutionJob(), "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+
+	got, ok, err := ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() error = %v", err)
+	}
+	if ok {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() ok = true, want false for zero-ref path: %#v", got)
+	}
+	if !reflect.DeepEqual(got, ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() = %#v, want zero value for zero-ref path", got)
+	}
+}
+
 func TestResolveExecutionContextFrankRegistryObjectRefsResolvesActiveIdentityRef(t *testing.T) {
 	t.Parallel()
 
@@ -1410,6 +1430,93 @@ func TestResolveExecutionContextFrankRegistryObjectRefsDoesNotIntroduceEligibili
 	}
 }
 
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPairResolvesExactLinkedPair(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankZohoMailboxFixtures(t)
+	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+		{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+		{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+	})
+	ec.MissionStoreRoot = fixtures.root
+
+	got, ok, err := ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("ResolveExecutionContextFrankZohoMailboxBootstrapPair() ok = false, want true")
+	}
+	if !reflect.DeepEqual(got.Identity, fixtures.identity) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair().Identity = %#v, want %#v", got.Identity, fixtures.identity)
+	}
+	if !reflect.DeepEqual(got.Account, fixtures.account) {
+		t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair().Account = %#v, want %#v", got.Account, fixtures.account)
+	}
+}
+
+func TestResolveExecutionContextFrankZohoMailboxBootstrapPairFailsClosedOnMissingOrAmbiguousPair(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankZohoMailboxFixtures(t)
+	tests := []struct {
+		name string
+		refs []FrankRegistryObjectRef
+		want string
+	}{
+		{
+			name: "missing account",
+			refs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			},
+			want: "execution context Frank object refs must resolve exactly one zoho mailbox account, got 0",
+		},
+		{
+			name: "missing identity",
+			refs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			},
+			want: "execution context Frank object refs must resolve exactly one zoho mailbox identity, got 0",
+		},
+		{
+			name: "mismatched link",
+			refs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+				{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail-mismatch"},
+			},
+			want: `execution context zoho mailbox account "account-mail-mismatch" must link identity_id "identity-mail", got "identity-other"`,
+		},
+		{
+			name: "ambiguous identity",
+			refs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-mail-2"},
+				{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			},
+			want: "execution context Frank object refs must resolve exactly one zoho mailbox identity, got 2",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ec := testExecutionContextWithFrankObjectRefs(t, tc.refs)
+			ec.MissionStoreRoot = fixtures.root
+
+			got, ok, err := ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
+			if err == nil {
+				t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() error = nil, want substring %q (got %#v, ok=%v)", tc.want, got, ok)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ResolveExecutionContextFrankZohoMailboxBootstrapPair() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 type executionContextFrankRegistryFixtures struct {
 	root      string
 	identity  FrankIdentityRecord
@@ -1491,6 +1598,65 @@ func writeExecutionContextFrankRegistryFixtures(t *testing.T) executionContextFr
 		account:   account,
 		container: container,
 	}
+}
+
+func writeExecutionContextFrankZohoMailboxFixtures(t *testing.T) executionContextFrankRegistryFixtures {
+	t.Helper()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+
+	fixtures.identity.ZohoMailbox = &FrankZohoMailboxIdentity{
+		FromAddress:     "frank@example.com",
+		FromDisplayName: "Frank",
+	}
+	if err := StoreFrankIdentityRecord(fixtures.root, fixtures.identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord(zoho fixture) error = %v", err)
+	}
+
+	fixtures.account.ZohoMailbox = &FrankZohoMailboxAccount{
+		ProviderAccountID: "3323462000000008002",
+	}
+	if err := StoreFrankAccountRecord(fixtures.root, fixtures.account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord(zoho fixture) error = %v", err)
+	}
+
+	identityOther := fixtures.identity
+	identityOther.IdentityID = "identity-mail-2"
+	identityOther.DisplayName = "Frank Mail Two"
+	identityOther.ZohoMailbox = &FrankZohoMailboxIdentity{
+		FromAddress:     "frank-two@example.com",
+		FromDisplayName: "Frank Two",
+	}
+	identityOther.CreatedAt = identityOther.CreatedAt.Add(10 * time.Minute)
+	identityOther.UpdatedAt = identityOther.UpdatedAt.Add(10 * time.Minute)
+	if err := StoreFrankIdentityRecord(fixtures.root, identityOther); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord(zoho fixture other identity) error = %v", err)
+	}
+
+	linkedOther := fixtures.identity
+	linkedOther.IdentityID = "identity-other"
+	linkedOther.DisplayName = "Frank Mail Other"
+	linkedOther.ZohoMailbox = &FrankZohoMailboxIdentity{
+		FromAddress:     "frank-other@example.com",
+		FromDisplayName: "Frank Other",
+	}
+	linkedOther.CreatedAt = linkedOther.CreatedAt.Add(20 * time.Minute)
+	linkedOther.UpdatedAt = linkedOther.UpdatedAt.Add(20 * time.Minute)
+	if err := StoreFrankIdentityRecord(fixtures.root, linkedOther); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord(zoho fixture linked other identity) error = %v", err)
+	}
+
+	accountMismatch := fixtures.account
+	accountMismatch.AccountID = "account-mail-mismatch"
+	accountMismatch.IdentityID = "identity-other"
+	accountMismatch.Label = "Inbox Mismatch"
+	accountMismatch.CreatedAt = accountMismatch.CreatedAt.Add(10 * time.Minute)
+	accountMismatch.UpdatedAt = accountMismatch.UpdatedAt.Add(10 * time.Minute)
+	if err := StoreFrankAccountRecord(fixtures.root, accountMismatch); err != nil {
+		t.Fatalf("StoreFrankAccountRecord(mismatch account) error = %v", err)
+	}
+
+	return fixtures
 }
 
 func testExecutionContextWithFrankObjectRefs(t *testing.T, refs []FrankRegistryObjectRef) ExecutionContext {

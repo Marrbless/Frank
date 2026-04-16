@@ -124,6 +124,11 @@ type ResolvedExecutionContextFrankRegistryObjects struct {
 	Containers   []FrankContainerRecord           `json:"containers,omitempty"`
 }
 
+type ResolvedExecutionContextFrankZohoMailboxBootstrapPair struct {
+	Identity FrankIdentityRecord `json:"identity"`
+	Account  FrankAccountRecord  `json:"account"`
+}
+
 func StoreFrankRegistryDir(root string) string {
 	return filepath.Join(root, "frank_registry")
 }
@@ -442,6 +447,61 @@ func ResolveExecutionContextFrankRegistryObjectRefs(ec ExecutionContext) (Resolv
 	}
 
 	return resolved, nil
+}
+
+func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (ResolvedExecutionContextFrankZohoMailboxBootstrapPair, bool, error) {
+	resolved, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, err
+	}
+
+	identities := make([]FrankIdentityRecord, 0, len(resolved.Identities))
+	for _, identity := range resolved.Identities {
+		if identity.ZohoMailbox != nil {
+			identities = append(identities, identity)
+		}
+	}
+	accounts := make([]FrankAccountRecord, 0, len(resolved.Accounts))
+	for _, account := range resolved.Accounts {
+		if account.ZohoMailbox != nil {
+			accounts = append(accounts, account)
+		}
+	}
+
+	if len(identities) == 0 && len(accounts) == 0 {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, nil
+	}
+	if len(identities) != 1 {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, fmt.Errorf("execution context Frank object refs must resolve exactly one zoho mailbox identity, got %d", len(identities))
+	}
+	if len(accounts) != 1 {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, fmt.Errorf("execution context Frank object refs must resolve exactly one zoho mailbox account, got %d", len(accounts))
+	}
+
+	identity := identities[0]
+	account := accounts[0]
+	if strings.TrimSpace(account.IdentityID) != strings.TrimSpace(identity.IdentityID) {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, fmt.Errorf(
+			"execution context zoho mailbox account %q must link identity_id %q, got %q",
+			account.AccountID,
+			identity.IdentityID,
+			account.IdentityID,
+		)
+	}
+	if strings.TrimSpace(account.ProviderOrPlatformID) != strings.TrimSpace(identity.ProviderOrPlatformID) {
+		return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{}, false, fmt.Errorf(
+			"execution context zoho mailbox account %q provider_or_platform_id %q does not match identity %q provider_or_platform_id %q",
+			account.AccountID,
+			account.ProviderOrPlatformID,
+			identity.IdentityID,
+			identity.ProviderOrPlatformID,
+		)
+	}
+
+	return ResolvedExecutionContextFrankZohoMailboxBootstrapPair{
+		Identity: identity,
+		Account:  account,
+	}, true, nil
 }
 
 func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
