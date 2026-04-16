@@ -60,8 +60,10 @@ type FrankAccountRecord struct {
 }
 
 type FrankZohoMailboxAccount struct {
-	ProviderAccountID string `json:"provider_account_id,omitempty"`
-	ConfirmedCreated  bool   `json:"confirmed_created,omitempty"`
+	OrganizationID           string `json:"organization_id,omitempty"`
+	AdminOAuthTokenEnvVarRef string `json:"admin_oauth_token_env_var_ref,omitempty"`
+	ProviderAccountID        string `json:"provider_account_id,omitempty"`
+	ConfirmedCreated         bool   `json:"confirmed_created,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -769,13 +771,21 @@ func normalizeFrankZohoMailboxAccount(config *FrankZohoMailboxAccount) *FrankZoh
 		return nil
 	}
 	normalized := *config
+	normalized.OrganizationID = strings.TrimSpace(normalized.OrganizationID)
+	normalized.AdminOAuthTokenEnvVarRef = strings.TrimSpace(normalized.AdminOAuthTokenEnvVarRef)
 	normalized.ProviderAccountID = strings.TrimSpace(normalized.ProviderAccountID)
 	return &normalized
 }
 
 func validateFrankZohoMailboxAccount(config FrankZohoMailboxAccount) error {
+	organizationID := strings.TrimSpace(config.OrganizationID)
+	adminOAuthTokenEnvVarRef := strings.TrimSpace(config.AdminOAuthTokenEnvVarRef)
 	providerAccountID := strings.TrimSpace(config.ProviderAccountID)
 	switch {
+	case organizationID != "" && adminOAuthTokenEnvVarRef == "":
+		return fmt.Errorf("mission store Frank account zoho_mailbox.organization_id requires zoho_mailbox.admin_oauth_token_env_var_ref")
+	case organizationID == "" && adminOAuthTokenEnvVarRef != "":
+		return fmt.Errorf("mission store Frank account zoho_mailbox.admin_oauth_token_env_var_ref requires zoho_mailbox.organization_id")
 	case providerAccountID != "" && !config.ConfirmedCreated:
 		return fmt.Errorf("mission store Frank account zoho_mailbox.provider_account_id requires zoho_mailbox.confirmed_created")
 	case providerAccountID == "" && config.ConfirmedCreated:

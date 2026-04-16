@@ -402,7 +402,7 @@ func TestFormatInspectSummarySurfacesZohoMailboxBootstrapPreflight(t *testing.T)
 	if !ok {
 		t.Fatalf("bootstrap preflight account zoho_mailbox = %#v, want object", account["zoho_mailbox"])
 	}
-	assertJSONObjectKeys(t, accountZoho, "confirmed_created", "provider_account_id")
+	assertJSONObjectKeys(t, accountZoho, "admin_oauth_token_env_var_ref", "confirmed_created", "organization_id", "provider_account_id")
 
 	if _, ok := step["campaign_preflight"]; ok {
 		t.Fatalf("campaign_preflight = %#v, want omitted on bootstrap-only inspect path", step["campaign_preflight"])

@@ -1358,6 +1358,12 @@ Possible outputs include:
 
 Frank may autonomously attempt to obtain an email identity.
 
+For the provider-specific Zoho mailbox bootstrap lane, the committed Frank mailbox
+account record is the durable bootstrap truth surface. It may carry only
+reference-grade provider bootstrap inputs such as the Zoho organization
+identifier and an env/secret token reference; it must never carry plaintext
+provider secrets.
+
 When evaluating an email provider, Frank must check for:
 
 - CAPTCHA or challenge requirements,
