@@ -168,10 +168,11 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 		Label:                "Inbox A",
 		ProviderOrPlatformID: "provider-a",
 		ZohoMailbox: &FrankZohoMailboxAccount{
-			OrganizationID:           " zoid-a ",
-			AdminOAuthTokenEnvVarRef: " PICOBOT_ZOHO_MAIL_ADMIN_TOKEN_A ",
-			ProviderAccountID:        " 3323462000000008002 ",
-			ConfirmedCreated:         true,
+			OrganizationID:             " zoid-a ",
+			AdminOAuthTokenEnvVarRef:   " PICOBOT_ZOHO_MAIL_ADMIN_TOKEN_A ",
+			BootstrapPasswordEnvVarRef: " PICOBOT_ZOHO_MAIL_BOOTSTRAP_PASSWORD_A ",
+			ProviderAccountID:          " 3323462000000008002 ",
+			ConfirmedCreated:           true,
 		},
 		IdentityID:           "identity-a",
 		ControlModel:         "agent_managed",
@@ -192,10 +193,11 @@ func TestFrankAccountRecordRoundTripAndList(t *testing.T) {
 
 	want.RecordVersion = StoreRecordVersion
 	want.ZohoMailbox = &FrankZohoMailboxAccount{
-		OrganizationID:           "zoid-a",
-		AdminOAuthTokenEnvVarRef: "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN_A",
-		ProviderAccountID:        "3323462000000008002",
-		ConfirmedCreated:         true,
+		OrganizationID:             "zoid-a",
+		AdminOAuthTokenEnvVarRef:   "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN_A",
+		BootstrapPasswordEnvVarRef: "PICOBOT_ZOHO_MAIL_BOOTSTRAP_PASSWORD_A",
+		ProviderAccountID:          "3323462000000008002",
+		ConfirmedCreated:           true,
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -1600,7 +1602,7 @@ func TestResolveExecutionContextFrankZohoMailboxBootstrapPairFailsClosedOnMissin
 				{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
 				{Kind: FrankRegistryObjectKindAccount, ObjectID: "account-mail-unconfirmed"},
 			},
-			want: `execution context zoho mailbox account "account-mail-unconfirmed" requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref before mailbox creation can be attempted`,
+			want: `execution context zoho mailbox account "account-mail-unconfirmed" requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref plus zoho_mailbox.bootstrap_password_env_var_ref before mailbox creation can be attempted`,
 		},
 	}
 
@@ -1803,10 +1805,11 @@ func writeExecutionContextFrankZohoMailboxFixtures(t *testing.T) executionContex
 	}
 
 	fixtures.account.ZohoMailbox = &FrankZohoMailboxAccount{
-		OrganizationID:           "zoid-123",
-		AdminOAuthTokenEnvVarRef: "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN",
-		ProviderAccountID:        "3323462000000008002",
-		ConfirmedCreated:         true,
+		OrganizationID:             "zoid-123",
+		AdminOAuthTokenEnvVarRef:   "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN",
+		BootstrapPasswordEnvVarRef: "PICOBOT_ZOHO_MAIL_BOOTSTRAP_PASSWORD",
+		ProviderAccountID:          "3323462000000008002",
+		ConfirmedCreated:           true,
 	}
 	if err := StoreFrankAccountRecord(fixtures.root, fixtures.account); err != nil {
 		t.Fatalf("StoreFrankAccountRecord(zoho fixture) error = %v", err)

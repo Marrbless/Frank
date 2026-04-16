@@ -9552,8 +9552,11 @@ func writeMissionInspectZohoMailboxBootstrapFixtures(t *testing.T) (string, miss
 		Label:                "Inbox",
 		ProviderOrPlatformID: providerTarget.RegistryID,
 		ZohoMailbox: &missioncontrol.FrankZohoMailboxAccount{
-			ProviderAccountID: "3323462000000008002",
-			ConfirmedCreated:  true,
+			OrganizationID:             "zoid-123",
+			AdminOAuthTokenEnvVarRef:   "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN",
+			BootstrapPasswordEnvVarRef: "PICOBOT_ZOHO_MAIL_BOOTSTRAP_PASSWORD",
+			ProviderAccountID:          "3323462000000008002",
+			ConfirmedCreated:           true,
 		},
 		IdentityID:           identity.IdentityID,
 		ControlModel:         "agent_managed",

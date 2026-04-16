@@ -60,10 +60,11 @@ type FrankAccountRecord struct {
 }
 
 type FrankZohoMailboxAccount struct {
-	OrganizationID           string `json:"organization_id,omitempty"`
-	AdminOAuthTokenEnvVarRef string `json:"admin_oauth_token_env_var_ref,omitempty"`
-	ProviderAccountID        string `json:"provider_account_id,omitempty"`
-	ConfirmedCreated         bool   `json:"confirmed_created,omitempty"`
+	OrganizationID             string `json:"organization_id,omitempty"`
+	AdminOAuthTokenEnvVarRef   string `json:"admin_oauth_token_env_var_ref,omitempty"`
+	BootstrapPasswordEnvVarRef string `json:"bootstrap_password_env_var_ref,omitempty"`
+	ProviderAccountID          string `json:"provider_account_id,omitempty"`
+	ConfirmedCreated           bool   `json:"confirmed_created,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -776,6 +777,7 @@ func normalizeFrankZohoMailboxAccount(config *FrankZohoMailboxAccount) *FrankZoh
 	normalized := *config
 	normalized.OrganizationID = strings.TrimSpace(normalized.OrganizationID)
 	normalized.AdminOAuthTokenEnvVarRef = strings.TrimSpace(normalized.AdminOAuthTokenEnvVarRef)
+	normalized.BootstrapPasswordEnvVarRef = strings.TrimSpace(normalized.BootstrapPasswordEnvVarRef)
 	normalized.ProviderAccountID = strings.TrimSpace(normalized.ProviderAccountID)
 	return &normalized
 }
@@ -805,9 +807,9 @@ func validateFrankZohoMailboxBootstrapProviderInputs(account FrankAccountRecord)
 	if account.ZohoMailbox.ConfirmedCreated {
 		return nil
 	}
-	if strings.TrimSpace(account.ZohoMailbox.OrganizationID) == "" || strings.TrimSpace(account.ZohoMailbox.AdminOAuthTokenEnvVarRef) == "" {
+	if strings.TrimSpace(account.ZohoMailbox.OrganizationID) == "" || strings.TrimSpace(account.ZohoMailbox.AdminOAuthTokenEnvVarRef) == "" || strings.TrimSpace(account.ZohoMailbox.BootstrapPasswordEnvVarRef) == "" {
 		return fmt.Errorf(
-			`execution context zoho mailbox account %q requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref before mailbox creation can be attempted`,
+			`execution context zoho mailbox account %q requires committed zoho_mailbox.organization_id plus zoho_mailbox.admin_oauth_token_env_var_ref plus zoho_mailbox.bootstrap_password_env_var_ref before mailbox creation can be attempted`,
 			account.AccountID,
 		)
 	}
