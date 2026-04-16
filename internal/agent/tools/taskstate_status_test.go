@@ -212,6 +212,60 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailAddressing(t *testing.T
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnActivePath(t *testing.T) {
+	t.Parallel()
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:        "job-1",
+		State:        missioncontrol.JobStateRunning,
+		ActiveStepID: "build",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetExecutionContext(missioncontrol.ExecutionContext{
+		Job:     &job,
+		Step:    &job.Plan.Steps[0],
+		Runtime: missioncontrol.CloneJobRuntimeState(&runtime),
+	})
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	envelope := mustTaskStateJSONObject(t, summary)
+	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
+	}
+	assertTaskStateJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
+	if gateJSON["campaign_id"] != campaign.CampaignID {
+		t.Fatalf("campaign_zoho_email_send_gate.campaign_id = %#v, want %q", gateJSON["campaign_id"], campaign.CampaignID)
+	}
+	if gateJSON["allowed"] != true || gateJSON["halted"] != false {
+		t.Fatalf("campaign_zoho_email_send_gate = %#v, want allowed non-halted gate", gateJSON)
+	}
+	if gateJSON["failure_threshold_metric"] != "rejections" {
+		t.Fatalf("campaign_zoho_email_send_gate.failure_threshold_metric = %#v, want rejections", gateJSON["failure_threshold_metric"])
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.CampaignZohoEmailSendGate == nil {
+		t.Fatal("CampaignZohoEmailSendGate = nil, want active-path derived send gate")
+	}
+	if got.CampaignZohoEmailSendGate.CampaignID != campaign.CampaignID {
+		t.Fatalf("CampaignZohoEmailSendGate.CampaignID = %q, want %q", got.CampaignZohoEmailSendGate.CampaignID, campaign.CampaignID)
+	}
+	if !got.CampaignZohoEmailSendGate.Allowed || got.CampaignZohoEmailSendGate.Halted {
+		t.Fatalf("CampaignZohoEmailSendGate = %#v, want allowed non-halted gate", got.CampaignZohoEmailSendGate)
+	}
+}
+
 func TestTaskStateOperatorStatusShowsDeferredSchedulerTriggersOnChosenReadoutPath(t *testing.T) {
 	t.Parallel()
 
@@ -334,8 +388,11 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
+		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
+			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
+		}
 		assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t, envelope["treasury_preflight"])
 		if got.CampaignPreflight == nil || got.CampaignPreflight.Campaign == nil {
 			t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight on active path", got.CampaignPreflight)

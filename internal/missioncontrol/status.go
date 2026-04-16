@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -208,6 +209,17 @@ func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
 	summary := buildOperatorStatusSummary(runtime, allowedTools)
 	if campaignPreflight != nil && campaignPreflight.Campaign != nil {
 		summary.CampaignPreflight = cloneResolvedExecutionContextCampaignPreflight(campaignPreflight)
+		decision, err := DeriveCampaignZohoEmailSendGateDecisionFromRuntime(*campaignPreflight.Campaign, runtime)
+		if err != nil {
+			summary.CampaignZohoEmailSendGate = &CampaignZohoEmailSendGateDecision{
+				CampaignID: strings.TrimSpace(campaignPreflight.Campaign.CampaignID),
+				Allowed:    false,
+				Halted:     false,
+				Reason:     err.Error(),
+			}
+		} else {
+			summary.CampaignZohoEmailSendGate = &decision
+		}
 	}
 	if treasuryPreflight != nil && treasuryPreflight.Treasury != nil {
 		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(treasuryPreflight)

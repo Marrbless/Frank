@@ -199,7 +199,7 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedCampaignPreflight(t *testing.T) 
 	select {
 	case out := <-hub.Out:
 		summary := decodeLoopCheckInOperatorStatusSummary(t, out.Content, "Mission check-in:\n")
-		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, false, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "recent_audit", "state")
+		assertLoopCheckInOperatorStatusEnvelope(t, out.Content, "Mission check-in:\n", true, false, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "recent_audit", "state")
 		if summary.CampaignPreflight == nil || summary.CampaignPreflight.Campaign == nil {
 			t.Fatalf("CampaignPreflight = %#v, want resolved campaign preflight", summary.CampaignPreflight)
 		}
@@ -211,6 +211,12 @@ func TestMaybeEmitMissionCheckInSurfacesResolvedCampaignPreflight(t *testing.T) 
 		}
 		if summary.TreasuryPreflight != nil {
 			t.Fatalf("TreasuryPreflight = %#v, want nil on campaign-only path", summary.TreasuryPreflight)
+		}
+		if summary.CampaignZohoEmailSendGate == nil {
+			t.Fatal("CampaignZohoEmailSendGate = nil, want active-path derived send gate")
+		}
+		if summary.CampaignZohoEmailSendGate.CampaignID != campaign.CampaignID {
+			t.Fatalf("CampaignZohoEmailSendGate.CampaignID = %q, want %q", summary.CampaignZohoEmailSendGate.CampaignID, campaign.CampaignID)
 		}
 	default:
 		t.Fatal("expected a mission check-in outbound notification")

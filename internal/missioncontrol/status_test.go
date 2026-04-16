@@ -481,8 +481,11 @@ func TestBuildOperatorStatusSummaryDoesNotImplicitlySurfaceAdapterOnlyCampaignOr
 		}
 
 		got := mustOperatorReadoutJSONObject(t, formatted)
-		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "campaign_preflight", "job_id", "state", "treasury_preflight")
+		assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "state", "treasury_preflight")
 		assertResolvedCampaignPreflightJSONEnvelope(t, got["campaign_preflight"])
+		if _, ok := got["campaign_zoho_email_send_gate"].(map[string]any); !ok {
+			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", got["campaign_zoho_email_send_gate"])
+		}
 		assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
 		assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", true, true)
 	})
@@ -925,6 +928,60 @@ func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailAddressingInCampaig
 	}
 	if !reflect.DeepEqual(mustJSONArray(t, addressing["bcc"], "campaign_preflight.campaign.zoho_email_addressing.bcc"), []any{"blind@example.com"}) {
 		t.Fatalf("campaign_preflight.campaign.zoho_email_addressing.bcc = %#v, want [blind@example.com]", addressing["bcc"])
+	}
+}
+
+func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailSendGate(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+	campaignPreflight := ResolvedExecutionContextCampaignPreflight{
+		Campaign: &CampaignRecord{
+			RecordVersion:           StoreRecordVersion,
+			CampaignID:              "campaign-mail",
+			CampaignKind:            CampaignKindOutreach,
+			DisplayName:             "Frank Outreach",
+			State:                   CampaignStateActive,
+			Objective:               "Reach aligned operators",
+			GovernedExternalTargets: []AutonomyEligibilityTargetRef{{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"}},
+			FrankObjectRefs: []FrankRegistryObjectRef{
+				{Kind: FrankRegistryObjectKindIdentity, ObjectID: "identity-mail"},
+			},
+			IdentityMode:     IdentityModeAgentAlias,
+			StopConditions:   []string{"stop after 3 replies"},
+			FailureThreshold: CampaignFailureThreshold{Metric: "rejections", Limit: 3},
+			ComplianceChecks: []string{"can-spam-reviewed"},
+			CreatedAt:        time.Date(2026, 4, 8, 20, 55, 0, 0, time.UTC),
+			UpdatedAt:        time.Date(2026, 4, 8, 20, 56, 0, 0, time.UTC),
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime, []string{"read"}, &campaignPreflight, nil)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	gateJSON, ok := got["campaign_zoho_email_send_gate"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", got["campaign_zoho_email_send_gate"])
+	}
+	assertJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
+	if gateJSON["campaign_id"] != "campaign-mail" {
+		t.Fatalf("campaign_zoho_email_send_gate.campaign_id = %#v, want campaign-mail", gateJSON["campaign_id"])
+	}
+	if gateJSON["allowed"] != true || gateJSON["halted"] != false {
+		t.Fatalf("campaign_zoho_email_send_gate = %#v, want allowed non-halted gate", gateJSON)
+	}
+	if gateJSON["failure_threshold_metric"] != "rejections" {
+		t.Fatalf("campaign_zoho_email_send_gate.failure_threshold_metric = %#v, want rejections", gateJSON["failure_threshold_metric"])
+	}
+	if gateJSON["failure_threshold_limit"] != float64(3) {
+		t.Fatalf("campaign_zoho_email_send_gate.failure_threshold_limit = %#v, want 3", gateJSON["failure_threshold_limit"])
 	}
 }
 
