@@ -73,8 +73,19 @@ func assertTaskStateResolvedCampaignPreflightJSONEnvelope(t *testing.T, value an
 	if !ok {
 		t.Fatalf("campaign_preflight.campaign = %#v, want object", preflight["campaign"])
 	}
-	assertTaskStateJSONObjectKeys(t, campaign, "campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at")
+	wantCampaignKeys := []string{"campaign_id", "campaign_kind", "compliance_checks", "created_at", "display_name", "failure_threshold", "frank_object_refs", "governed_external_targets", "identity_mode", "objective", "record_version", "state", "stop_conditions", "updated_at"}
+	if _, ok := campaign["zoho_email_addressing"]; ok {
+		wantCampaignKeys = append(wantCampaignKeys, "zoho_email_addressing")
+	}
+	assertTaskStateJSONObjectKeys(t, campaign, wantCampaignKeys...)
 	assertTaskStateJSONObjectKeys(t, campaign["failure_threshold"], "limit", "metric")
+	if value, ok := campaign["zoho_email_addressing"]; ok {
+		addressing, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("campaign_preflight.campaign.zoho_email_addressing = %#v, want object", value)
+		}
+		assertTaskStateJSONObjectKeys(t, addressing, "to", "cc", "bcc")
+	}
 
 	governedTargets := mustTaskStateJSONArray(t, campaign["governed_external_targets"], "campaign_preflight.campaign.governed_external_targets")
 	if len(governedTargets) != 1 {
