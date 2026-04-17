@@ -28,6 +28,10 @@ type PostBootstrapTreasuryAcquisitionInput struct {
 	TreasuryID string
 }
 
+type PostActiveTreasuryAllocateRecordInput struct {
+	TreasuryID string
+}
+
 type PostActiveTreasuryReinvestRecordInput struct {
 	TreasuryID string
 }
@@ -246,6 +250,109 @@ func RecordPostBootstrapTreasuryAcquisition(root string, lease WriterLockLease, 
 		}
 
 		return commitPostBootstrapTreasuryAcquisitionBatch(root, updatedTreasury, entry)
+	})
+}
+
+// RecordPostActiveTreasuryAllocate records exactly one post-active treasury
+// allocation by consuming the committed treasury.post_active_allocate block on
+// the same TreasuryRecord. The internal movement entry is written before the
+// treasury update so retries fail closed if a partial write leaves ambiguous
+// state.
+func RecordPostActiveTreasuryAllocate(root string, lease WriterLockLease, input PostActiveTreasuryAllocateRecordInput, now time.Time) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	input = normalizePostActiveTreasuryAllocateRecordInput(input)
+	lock, err := acquireTreasuryMutationWriterLock(root, lease, now)
+	if err != nil {
+		return err
+	}
+
+	return withLockedTreasuryMutation(root, lock, now, func() error {
+		treasury, err := LoadTreasuryRecord(root, input.TreasuryID)
+		if err != nil {
+			return err
+		}
+		if treasury.State != TreasuryStateActive {
+			return fmt.Errorf(
+				"mission store treasury %q post-active allocate requires state %q, got %q",
+				treasury.TreasuryID,
+				TreasuryStateActive,
+				treasury.State,
+			)
+		}
+		activeContainerID, err := resolveTreasuryActiveContainerID(treasury)
+		if err != nil {
+			return err
+		}
+		if treasury.PostActiveAllocate == nil {
+			return fmt.Errorf(
+				"mission store treasury %q post-active allocate requires committed treasury.post_active_allocate",
+				treasury.TreasuryID,
+			)
+		}
+		if strings.TrimSpace(treasury.PostActiveAllocate.ConsumedEntryID) != "" {
+			return fmt.Errorf(
+				"mission store treasury %q post-active allocate already consumed by entry %q",
+				treasury.TreasuryID,
+				strings.TrimSpace(treasury.PostActiveAllocate.ConsumedEntryID),
+			)
+		}
+
+		block := *treasury.PostActiveAllocate
+		sourceRef := NormalizeFrankRegistryObjectRef(block.SourceContainerRef)
+		if sourceRef.ObjectID != activeContainerID {
+			return fmt.Errorf(
+				"mission store treasury %q post-active allocate source_container_ref object_id %q must match active treasury container %q",
+				treasury.TreasuryID,
+				sourceRef.ObjectID,
+				activeContainerID,
+			)
+		}
+		if _, err := ResolveFrankRegistryObjectRef(root, sourceRef); err != nil {
+			return fmt.Errorf(
+				"mission store treasury %q post-active allocate source_container_ref: %w",
+				treasury.TreasuryID,
+				err,
+			)
+		}
+
+		entryID := derivePostActiveTreasuryAllocateEntryID(treasury.TreasuryID, block)
+		if err := ensurePostActiveTreasuryAllocateEntryAvailable(root, treasury.TreasuryID, entryID); err != nil {
+			return err
+		}
+
+		entry := normalizeTreasuryLedgerEntry(TreasuryLedgerEntry{
+			RecordVersion: StoreRecordVersion,
+			EntryID:       entryID,
+			TreasuryID:    treasury.TreasuryID,
+			EntryKind:     TreasuryLedgerEntryKindMovement,
+			AssetCode:     block.AssetCode,
+			Amount:        block.Amount,
+			CreatedAt:     now,
+			SourceRef:     block.SourceRef,
+		})
+		if err := ValidateTreasuryLedgerEntry(entry); err != nil {
+			return err
+		}
+
+		updatedTreasury := normalizeTreasuryRecord(treasury)
+		updatedTreasury.PostActiveAllocate.ConsumedEntryID = entryID
+		updatedTreasury.UpdatedAt = now
+		if err := ValidateTreasuryRecord(updatedTreasury); err != nil {
+			return err
+		}
+		if err := ValidateTreasuryContainerLinks(root, updatedTreasury.ContainerRefs); err != nil {
+			return err
+		}
+
+		return commitPostActiveTreasuryAllocateBatch(root, updatedTreasury, entry)
 	})
 }
 
@@ -715,6 +822,11 @@ func normalizePostBootstrapTreasuryAcquisitionInput(input PostBootstrapTreasuryA
 	return input
 }
 
+func normalizePostActiveTreasuryAllocateRecordInput(input PostActiveTreasuryAllocateRecordInput) PostActiveTreasuryAllocateRecordInput {
+	input.TreasuryID = strings.TrimSpace(input.TreasuryID)
+	return input
+}
+
 func normalizePostActiveTreasuryReinvestRecordInput(input PostActiveTreasuryReinvestRecordInput) PostActiveTreasuryReinvestRecordInput {
 	input.TreasuryID = strings.TrimSpace(input.TreasuryID)
 	return input
@@ -786,6 +898,19 @@ func ensurePostBootstrapTreasuryAcquisitionEntryAvailable(root, treasuryID, entr
 	if _, err := os.Stat(StoreTreasuryLedgerEntryPath(root, treasuryID, entryID)); err == nil {
 		return fmt.Errorf(
 			"mission store treasury %q post-bootstrap acquisition derived entry %q already exists without committed consumed_entry_id",
+			treasuryID,
+			entryID,
+		)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func ensurePostActiveTreasuryAllocateEntryAvailable(root, treasuryID, entryID string) error {
+	if _, err := os.Stat(StoreTreasuryLedgerEntryPath(root, treasuryID, entryID)); err == nil {
+		return fmt.Errorf(
+			"mission store treasury %q post-active allocate derived entry %q already exists without committed consumed_entry_id",
 			treasuryID,
 			entryID,
 		)
@@ -916,6 +1041,39 @@ func commitPostBootstrapTreasuryAcquisitionBatch(root string, treasury TreasuryR
 	if entry.EntryKind != TreasuryLedgerEntryKindAcquisition {
 		return fmt.Errorf(
 			"mission store treasury post-bootstrap acquisition entry_kind %q is invalid",
+			entry.EntryKind,
+		)
+	}
+
+	if err := storeBatchWriteRecord(StoreTreasuryLedgerEntryPath(root, entry.TreasuryID, entry.EntryID), entry); err != nil {
+		return err
+	}
+	return storeBatchWriteRecord(StoreTreasuryPath(root, treasury.TreasuryID), treasury)
+}
+
+func commitPostActiveTreasuryAllocateBatch(root string, treasury TreasuryRecord, entry TreasuryLedgerEntry) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryRecord(treasury); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryContainerLinks(root, treasury.ContainerRefs); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryLedgerEntry(entry); err != nil {
+		return err
+	}
+	if entry.TreasuryID != treasury.TreasuryID {
+		return fmt.Errorf(
+			"mission store treasury post-active allocate entry treasury_id %q does not match treasury %q",
+			entry.TreasuryID,
+			treasury.TreasuryID,
+		)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindMovement {
+		return fmt.Errorf(
+			"mission store treasury post-active allocate entry_kind %q is invalid",
 			entry.EntryKind,
 		)
 	}
@@ -1106,6 +1264,18 @@ func derivePostBootstrapTreasuryAcquisitionEntryID(treasuryID string, block Trea
 		block.ConfirmedAt.UTC().Format(time.RFC3339Nano),
 	}, "\x1f")))
 	return "entry-post-" + hex.EncodeToString(sum[:16])
+}
+
+func derivePostActiveTreasuryAllocateEntryID(treasuryID string, block TreasuryPostActiveAllocate) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strings.TrimSpace(treasuryID),
+		normalizedFrankRegistryObjectRefKey(NormalizeFrankRegistryObjectRef(block.SourceContainerRef)),
+		strings.TrimSpace(block.AllocationTargetRef),
+		strings.TrimSpace(block.AssetCode),
+		strings.TrimSpace(block.Amount),
+		strings.TrimSpace(block.SourceRef),
+	}, "\x1f")))
+	return "entry-allocate-" + hex.EncodeToString(sum[:16])
 }
 
 func derivePostActiveTreasurySaveEntryID(treasuryID string, block TreasuryPostActiveSave) string {

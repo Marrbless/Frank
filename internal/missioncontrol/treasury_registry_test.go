@@ -52,6 +52,17 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			ConfirmedAt:     now.Add(2 * time.Minute),
 			ConsumedEntryID: " entry-post-value ",
 		},
+		PostActiveAllocate: &TreasuryPostActiveAllocate{
+			AssetCode: " USD ",
+			Amount:    " 1.10 ",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " " + fixtures.container.ContainerID + " ",
+			},
+			AllocationTargetRef: " allocation:ops-reserve ",
+			SourceRef:           " allocate:ops-reserve-a ",
+			ConsumedEntryID:     " entry-allocate-value ",
+		},
 		PostActiveReinvest: &TreasuryPostActiveReinvest{
 			SourceAssetCode: " USD ",
 			SourceAmount:    " 0.75 ",
@@ -143,6 +154,17 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
 		ConsumedEntryID: "entry-post-value",
+	}
+	want.PostActiveAllocate = &TreasuryPostActiveAllocate{
+		AssetCode: "USD",
+		Amount:    "1.10",
+		SourceContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		},
+		AllocationTargetRef: "allocation:ops-reserve",
+		SourceRef:           "allocate:ops-reserve-a",
+		ConsumedEntryID:     "entry-allocate-value",
 	}
 	want.PostActiveReinvest = &TreasuryPostActiveReinvest{
 		SourceAssetCode: "USD",
@@ -605,6 +627,80 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
+		},
+		{
+			name: "post active allocate requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+						AssetCode: "USD",
+						Amount:    "1.10",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						AllocationTargetRef: "allocation:ops-reserve",
+						SourceRef:           "allocate:ops-reserve-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_allocate requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post active allocate missing allocation target ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+						AssetCode: "USD",
+						Amount:    "1.10",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						SourceRef: "allocate:ops-reserve-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_allocate.allocation_target_ref is required",
+		},
+		{
+			name: "post active allocate missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+						AssetCode: "USD",
+						Amount:    "1.10",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						AllocationTargetRef: "allocation:ops-reserve",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_allocate.source_ref is required",
+		},
+		{
+			name: "post active allocate malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+						AssetCode: "USD",
+						Amount:    "1.10",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						AllocationTargetRef: "allocation:ops-reserve",
+						SourceRef:           "allocate:ops-reserve-a",
+						ConsumedEntryID:     "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_allocate entry_id "bad/id" is invalid`,
 		},
 		{
 			name: "post active reinvest requires active treasury state",
@@ -2271,6 +2367,103 @@ func TestResolveExecutionContextTreasuryPostActiveSaveFailsClosedOnConsumedBlock
 	}
 	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-save-consumed" treasury.post_active_save is already consumed by entry "entry-save-value"`) {
 		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() error = %q, want consumed save rejection", err.Error())
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveAllocateResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 6, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-allocate"
+		record.State = TreasuryStateActive
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.10",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-a",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostActiveAllocate(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveAllocate() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveAllocate() = nil, want resolved post-active allocate")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveAllocate().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostActiveAllocate, *record.PostActiveAllocate) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveAllocate().PostActiveAllocate = %#v, want %#v", got.PostActiveAllocate, *record.PostActiveAllocate)
+	}
+	if !reflect.DeepEqual(got.SourceContainer, fixtures.container) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveAllocate().SourceContainer = %#v, want %#v", got.SourceContainer, fixtures.container)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveAllocateFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 7, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-allocate-consumed"
+		record.State = TreasuryStateActive
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.10",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-a",
+			ConsumedEntryID:     "entry-allocate-value",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostActiveAllocate(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveAllocate() error = nil, want consumed allocate rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-allocate-consumed" treasury.post_active_allocate is already consumed by entry "entry-allocate-value"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveAllocate() error = %q, want consumed allocate rejection", err.Error())
 	}
 }
 

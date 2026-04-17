@@ -1610,6 +1610,14 @@ refs, source reference, one evidence locator, one confirmation timestamp, and
 optional same-record consumed linkage needed to record one committed reinvest
 transaction, without inventing a second treasury execution registry.
 
+For the approved first post-active treasury allocate lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_active_allocate` block for already-active treasuries. It holds only the
+internal allocation inputs needed to record one committed allocation movement
+from the active treasury container to one exact treasury-owned
+`allocation_target_ref`, plus optional same-record consumed linkage, without
+inventing a second treasury execution registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

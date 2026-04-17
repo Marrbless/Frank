@@ -409,6 +409,83 @@ func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSaveWhenPresent(t 
 	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
 }
 
+func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveAllocateWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"produce code"},
+					TreasuryRef:       &TreasuryRef{TreasuryID: "treasury-wallet"},
+				},
+				{
+					ID:   "final",
+					Type: StepTypeFinalResponse,
+				},
+			},
+		},
+	}
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-wallet"
+		record.State = TreasuryStateActive
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.10",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-a",
+			ConsumedEntryID:     "entry-allocate-value",
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	if len(steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(steps))
+	}
+	step := steps[0].(map[string]any)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+	treasury := step["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveAllocate := treasury["post_active_allocate"].(map[string]any)
+	sourceRef := postActiveAllocate["source_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_allocate.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if postActiveAllocate["allocation_target_ref"] != "allocation:ops-reserve" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_allocate.allocation_target_ref = %#v, want %q", postActiveAllocate["allocation_target_ref"], "allocation:ops-reserve")
+	}
+	if postActiveAllocate["consumed_entry_id"] != "entry-allocate-value" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_allocate.consumed_entry_id = %#v, want %q", postActiveAllocate["consumed_entry_id"], "entry-allocate-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
+}
+
 func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveReinvestWhenPresent(t *testing.T) {
 	t.Parallel()
 

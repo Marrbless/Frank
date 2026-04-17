@@ -918,6 +918,123 @@ func TestTaskStateActivateStepActiveTreasuryPathInvokesRealMutation(t *testing.T
 	}
 }
 
+func TestTaskStateActivateStepActiveTreasuryAllocatePathCallsAllocateProducerOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, sourceContainer := writeTaskStateActiveTreasuryAllocateFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	allocateCalls := 0
+	reinvestCalls := 0
+	var gotRoot string
+	var gotLease missioncontrol.WriterLockLease
+	var gotInput missioncontrol.PostActiveTreasuryAllocateInput
+	var gotAt time.Time
+	state.treasuryPostActiveAllocateHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostActiveTreasuryAllocateInput, now time.Time) error {
+		allocateCalls++
+		gotRoot = root
+		gotLease = lease
+		gotInput = input
+		gotAt = now
+		return nil
+	}
+	state.treasuryPostActiveReinvestHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostActiveTreasuryReinvestInput, now time.Time) error {
+		reinvestCalls++
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if allocateCalls != 1 {
+		t.Fatalf("treasuryPostActiveAllocateHook calls = %d, want 1", allocateCalls)
+	}
+	if reinvestCalls != 0 {
+		t.Fatalf("treasuryPostActiveReinvestHook calls = %d, want 0 on active allocate path", reinvestCalls)
+	}
+	if gotRoot != root {
+		t.Fatalf("treasuryPostActiveAllocateHook root = %q, want %q", gotRoot, root)
+	}
+	if gotLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryPostActiveAllocateHook lease = %#v, want %q", gotLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotInput, missioncontrol.PostActiveTreasuryAllocateInput{
+		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
+	}) {
+		t.Fatalf("treasuryPostActiveAllocateHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("treasuryPostActiveAllocateHook now = zero, want activation timestamp")
+	}
+	if gotInput.TreasuryRef.TreasuryID == sourceContainer.ContainerID {
+		t.Fatalf("treasuryPostActiveAllocateHook input treasury ref = %#v, want step treasury ref only", gotInput)
+	}
+}
+
+func TestTaskStateActivateStepActiveTreasuryAllocatePathInvokesRealProducer(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, sourceContainer := writeTaskStateActiveTreasuryAllocateFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+	if firstTreasury.PostActiveAllocate == nil || firstTreasury.PostActiveAllocate.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord(first).PostActiveAllocate = %#v, want consumed entry linkage", firstTreasury.PostActiveAllocate)
+	}
+	if firstTreasury.PostActiveAllocate.SourceContainerRef.ObjectID != sourceContainer.ContainerID {
+		t.Fatalf("LoadTreasuryRecord(first).PostActiveAllocate.SourceContainerRef = %#v, want %q", firstTreasury.PostActiveAllocate.SourceContainerRef, sourceContainer.ContainerID)
+	}
+	entries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(first) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListTreasuryLedgerEntries(first) len = %d, want 1", len(entries))
+	}
+	if entries[0].EntryID != firstTreasury.PostActiveAllocate.ConsumedEntryID || entries[0].EntryKind != missioncontrol.TreasuryLedgerEntryKindMovement {
+		t.Fatalf("ListTreasuryLedgerEntries(first) = %#v, want one committed post-active allocate movement entry", entries)
+	}
+
+	err = state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(replay) error = nil, want deterministic consumed post-active allocate rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" treasury.post_active_allocate is already consumed by entry "`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want consumed post-active allocate rejection", err.Error())
+	}
+
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord(second) = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+	secondEntries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondEntries, entries) {
+		t.Fatalf("ListTreasuryLedgerEntries(second) = %#v, want unchanged %#v", secondEntries, entries)
+	}
+}
+
 func TestTaskStateActivateStepActiveTreasuryReinvestPathCallsReinvestProducerOnce(t *testing.T) {
 	t.Parallel()
 
@@ -5255,6 +5372,29 @@ func writeTaskStateActiveTreasuryAcquisitionFixtures(t *testing.T) (string, miss
 		ConfirmedAt:     treasury.UpdatedAt.Add(time.Minute),
 	}
 	treasury.UpdatedAt = treasury.UpdatedAt.Add(2 * time.Minute)
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	return root, treasury, container
+}
+
+func writeTaskStateActiveTreasuryAllocateFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+
+	treasury.State = missioncontrol.TreasuryStateActive
+	treasury.PostActiveAllocate = &missioncontrol.TreasuryPostActiveAllocate{
+		AssetCode: "USD",
+		Amount:    "1.10",
+		SourceContainerRef: missioncontrol.FrankRegistryObjectRef{
+			Kind:     missioncontrol.FrankRegistryObjectKindContainer,
+			ObjectID: container.ContainerID,
+		},
+		AllocationTargetRef: "allocation:ops-reserve",
+		SourceRef:           "allocate:ops-reserve-a",
+	}
+	treasury.UpdatedAt = treasury.UpdatedAt.Add(3 * time.Minute)
 	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}

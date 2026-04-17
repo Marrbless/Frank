@@ -748,6 +748,154 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasuryAllocateAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 16, 0, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-allocate"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.10",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasuryAllocate(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryAllocateRecordInput{
+		TreasuryID: "treasury-post-active-allocate",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryAllocate() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-allocate")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostActiveAllocate == nil || treasury.PostActiveAllocate.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveAllocate = %#v, want consumed linkage", treasury.PostActiveAllocate)
+	}
+	entry, err := LoadTreasuryLedgerEntry(root, "treasury-post-active-allocate", treasury.PostActiveAllocate.ConsumedEntryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindMovement {
+		t.Fatalf("LoadTreasuryLedgerEntry().EntryKind = %q, want %q", entry.EntryKind, TreasuryLedgerEntryKindMovement)
+	}
+	if entry.AssetCode != "USD" || entry.Amount != "1.10" || entry.SourceRef != "allocate:ops-reserve-a" {
+		t.Fatalf("LoadTreasuryLedgerEntry() = %#v, want committed post-active allocate payload", entry)
+	}
+	if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryLedgerEntry().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+	}
+}
+
+func TestRecordPostActiveTreasuryAllocateReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 16, 10, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-allocate-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.20",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-b",
+		}
+	}))
+
+	input := PostActiveTreasuryAllocateRecordInput{TreasuryID: "treasury-post-active-allocate-replay"}
+	if err := RecordPostActiveTreasuryAllocate(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryAllocate(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasuryAllocate(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryAllocate(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-allocate-replay" post-active allocate already consumed by entry "`) {
+		t.Fatalf("RecordPostActiveTreasuryAllocate(replay) error = %q, want consumed rejection", err.Error())
+	}
+}
+
+func TestRecordPostActiveTreasuryAllocateFailsClosedWhenSourceDoesNotMatchActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 16, 20, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-vault-mismatch",
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelAutonomyCompatible, "container-class-vault-mismatch", "check-container-class-vault-mismatch", now)
+	mismatchContainer := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-vault-mismatch",
+		ContainerKind:        "wallet",
+		Label:                "Vault Mismatch",
+		ContainerClassID:     "container-class-vault-mismatch",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, mismatchContainer); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-allocate-mismatch"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveAllocate = &TreasuryPostActiveAllocate{
+			AssetCode: "USD",
+			Amount:    "1.30",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: mismatchContainer.ContainerID,
+			},
+			AllocationTargetRef: "allocation:ops-reserve",
+			SourceRef:           "allocate:ops-reserve-c",
+		}
+	}))
+
+	err := RecordPostActiveTreasuryAllocate(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryAllocateRecordInput{
+		TreasuryID: "treasury-post-active-allocate-mismatch",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryAllocate() error = nil, want source-container mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-allocate-mismatch" post-active allocate source_container_ref object_id "container-vault-mismatch" must match active treasury container "container-wallet"`) {
+		t.Fatalf("RecordPostActiveTreasuryAllocate() error = %q, want source-container mismatch rejection", err.Error())
+	}
+}
+
 func TestRecordPostActiveTreasuryReinvestAppendsPairedEntriesAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

@@ -59,6 +59,7 @@ type TreasuryRecord struct {
 	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	PostActiveAllocate       *TreasuryPostActiveAllocate       `json:"post_active_allocate,omitempty"`
 	PostActiveReinvest       *TreasuryPostActiveReinvest       `json:"post_active_reinvest,omitempty"`
 	PostActiveSpend          *TreasuryPostActiveSpend          `json:"post_active_spend,omitempty"`
 	PostActiveTransfer       *TreasuryPostActiveTransfer       `json:"post_active_transfer,omitempty"`
@@ -83,6 +84,15 @@ type TreasuryPostBootstrapAcquisition struct {
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
 	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
+}
+
+type TreasuryPostActiveAllocate struct {
+	AssetCode           string                 `json:"asset_code"`
+	Amount              string                 `json:"amount"`
+	SourceContainerRef  FrankRegistryObjectRef `json:"source_container_ref"`
+	AllocationTargetRef string                 `json:"allocation_target_ref"`
+	SourceRef           string                 `json:"source_ref"`
+	ConsumedEntryID     string                 `json:"consumed_entry_id,omitempty"`
 }
 
 type TreasuryPostActiveReinvest struct {
@@ -208,6 +218,12 @@ type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
 	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostActiveAllocate struct {
+	Treasury           TreasuryRecord             `json:"treasury"`
+	PostActiveAllocate TreasuryPostActiveAllocate `json:"post_active_allocate"`
+	SourceContainer    FrankContainerRecord       `json:"source_container"`
+}
+
 type ResolvedExecutionContextTreasuryPostActiveReinvest struct {
 	Treasury           TreasuryRecord             `json:"treasury"`
 	PostActiveReinvest TreasuryPostActiveReinvest `json:"post_active_reinvest"`
@@ -303,6 +319,14 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		}
 		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
 			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
+		}
+	}
+	if record.PostActiveAllocate != nil {
+		if err := validateTreasuryPostActiveAllocate(*record.PostActiveAllocate); err != nil {
+			return err
+		}
+		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_active_allocate requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if record.PostActiveReinvest != nil {
@@ -482,6 +506,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
+	record.PostActiveAllocate = normalizeTreasuryPostActiveAllocate(record.PostActiveAllocate)
 	record.PostActiveReinvest = normalizeTreasuryPostActiveReinvest(record.PostActiveReinvest)
 	record.PostActiveSpend = normalizeTreasuryPostActiveSpend(record.PostActiveSpend)
 	record.PostActiveTransfer = normalizeTreasuryPostActiveTransfer(record.PostActiveTransfer)
@@ -625,6 +650,63 @@ func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext
 	return &ResolvedExecutionContextTreasuryPostBootstrapAcquisition{
 		Treasury:                 *treasury,
 		PostBootstrapAcquisition: *treasury.PostBootstrapAcquisition,
+	}, nil
+}
+
+func ResolveExecutionContextTreasuryPostActiveAllocate(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostActiveAllocate, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostActiveAllocate == nil {
+		return nil, nil
+	}
+	block := *treasury.PostActiveAllocate
+	activeContainerID, err := resolveTreasuryActiveContainerID(*treasury)
+	if err != nil {
+		return nil, err
+	}
+	sourceResolved, err := ResolveFrankRegistryObjectRef(ec.MissionStoreRoot, block.SourceContainerRef)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_allocate.source_container_ref: %w",
+			treasury.TreasuryID,
+			err,
+		)
+	}
+	if sourceResolved.Container == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_allocate.source_container_ref kind %q object_id %q: expected Frank container record",
+			treasury.TreasuryID,
+			sourceResolved.Ref.Kind,
+			sourceResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(sourceResolved.Ref.ObjectID) != activeContainerID {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_allocate.source_container_ref object_id %q must match active treasury container %q",
+			treasury.TreasuryID,
+			sourceResolved.Ref.ObjectID,
+			activeContainerID,
+		)
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_allocate is already consumed by entry %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(block.ConsumedEntryID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostActiveAllocate{
+		Treasury:           *treasury,
+		PostActiveAllocate: block,
+		SourceContainer:    *sourceResolved.Container,
 	}, nil
 }
 
@@ -1016,6 +1098,20 @@ func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcqui
 	return &normalized
 }
 
+func normalizeTreasuryPostActiveAllocate(block *TreasuryPostActiveAllocate) *TreasuryPostActiveAllocate {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.AssetCode = strings.TrimSpace(normalized.AssetCode)
+	normalized.Amount = strings.TrimSpace(normalized.Amount)
+	normalized.SourceContainerRef = NormalizeFrankRegistryObjectRef(normalized.SourceContainerRef)
+	normalized.AllocationTargetRef = strings.TrimSpace(normalized.AllocationTargetRef)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.ConsumedEntryID = strings.TrimSpace(normalized.ConsumedEntryID)
+	return &normalized
+}
+
 func normalizeTreasuryPostActiveReinvest(block *TreasuryPostActiveReinvest) *TreasuryPostActiveReinvest {
 	if block == nil {
 		return nil
@@ -1118,6 +1214,33 @@ func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisi
 	}
 	if strings.TrimSpace(block.ConsumedEntryID) != "" {
 		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostActiveAllocate(block TreasuryPostActiveAllocate) error {
+	if err := validateTreasuryAssetCode(block.AssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_active_allocate.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.Amount); err != nil {
+		return fmt.Errorf("mission store treasury post_active_allocate.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateFrankRegistryObjectRef(block.SourceContainerRef); err != nil {
+		return fmt.Errorf("mission store treasury post_active_allocate.source_container_ref: %w", err)
+	}
+	if NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind != FrankRegistryObjectKindContainer {
+		return fmt.Errorf("mission store treasury post_active_allocate.source_container_ref kind %q is invalid", NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind)
+	}
+	if strings.TrimSpace(block.AllocationTargetRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_allocate.allocation_target_ref is required")
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_allocate.source_ref is required")
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_active_allocate"); err != nil {
 			return err
 		}
 	}
