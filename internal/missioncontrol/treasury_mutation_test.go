@@ -748,6 +748,153 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasurySaveAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 16, 0, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-savings", "container-class-savings", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-save"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.25",
+			TargetContainerID: targetContainer.ContainerID,
+			SourceRef:         "transfer:reserve-a",
+			EvidenceLocator:   "https://evidence.example/save-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasurySave(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasurySaveRecordInput{
+		TreasuryID: "treasury-post-active-save",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySave() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-save")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostActiveSave == nil || treasury.PostActiveSave.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveSave = %#v, want consumed block", treasury.PostActiveSave)
+	}
+	entry, err := LoadTreasuryLedgerEntry(root, "treasury-post-active-save", treasury.PostActiveSave.ConsumedEntryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindMovement {
+		t.Fatalf("LoadTreasuryLedgerEntry().EntryKind = %q, want %q", entry.EntryKind, TreasuryLedgerEntryKindMovement)
+	}
+	if entry.AssetCode != "USD" || entry.Amount != "1.25" || entry.SourceRef != "transfer:reserve-a" {
+		t.Fatalf("LoadTreasuryLedgerEntry() = %#v, want committed post-active save payload", entry)
+	}
+	if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryLedgerEntry().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+	}
+}
+
+func TestRecordPostActiveTreasurySaveReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 16, 10, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-savings-replay", "container-class-savings-replay", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-save-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.50",
+			TargetContainerID: targetContainer.ContainerID,
+			SourceRef:         "transfer:reserve-b",
+		}
+	}))
+
+	input := PostActiveTreasurySaveRecordInput{TreasuryID: "treasury-post-active-save-replay"}
+	if err := RecordPostActiveTreasurySave(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySave(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasurySave(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasurySave(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-save-replay" post-active save already consumed by entry "`) {
+		t.Fatalf("RecordPostActiveTreasurySave(replay) error = %q, want consumed rejection", err.Error())
+	}
+}
+
+func TestRecordPostActiveTreasurySaveFailsClosedWhenTargetMatchesActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 16, 20, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-save-same-container"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.75",
+			TargetContainerID: fixtures.container.ContainerID,
+			SourceRef:         "transfer:reserve-c",
+		}
+	}))
+
+	err := RecordPostActiveTreasurySave(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasurySaveRecordInput{
+		TreasuryID: "treasury-post-active-save-same-container",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasurySave() error = nil, want same-container rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-save-same-container" post-active save target_container_id "container-wallet" must differ from active container "container-wallet"`) {
+		t.Fatalf("RecordPostActiveTreasurySave() error = %q, want same-container rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-save-same-container")
+}
+
+func storeTreasurySaveTargetContainerForTest(t *testing.T, root, containerID, containerClassID string, now time.Time) FrankContainerRecord {
+	t.Helper()
+
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: containerClassID,
+	}
+	writeFrankRegistryEligibilityFixture(t, root, target, EligibilityLabelAutonomyCompatible, containerClassID, "check-"+containerClassID, now)
+	container := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          containerID,
+		ContainerKind:        "wallet",
+		Label:                "Savings Wallet",
+		ContainerClassID:     containerClassID,
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(root, container); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+	return container
+}
+
 func mustStoreTreasuryForMutationTest(t *testing.T, root string, record TreasuryRecord) {
 	t.Helper()
 

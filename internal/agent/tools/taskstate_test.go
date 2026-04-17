@@ -918,6 +918,123 @@ func TestTaskStateActivateStepActiveTreasuryPathInvokesRealMutation(t *testing.T
 	}
 }
 
+func TestTaskStateActivateStepActiveTreasurySavePathCallsSaveProducerOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _, targetContainer := writeTaskStateActiveTreasurySaveFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	saveCalls := 0
+	acquisitionCalls := 0
+	var gotRoot string
+	var gotLease missioncontrol.WriterLockLease
+	var gotInput missioncontrol.PostActiveTreasurySaveInput
+	var gotAt time.Time
+	state.treasuryPostActiveSaveHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostActiveTreasurySaveInput, now time.Time) error {
+		saveCalls++
+		gotRoot = root
+		gotLease = lease
+		gotInput = input
+		gotAt = now
+		return nil
+	}
+	state.treasuryPostAcquisitionHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostBootstrapTreasuryAcquisitionInput, now time.Time) error {
+		acquisitionCalls++
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if saveCalls != 1 {
+		t.Fatalf("treasuryPostActiveSaveHook calls = %d, want 1", saveCalls)
+	}
+	if acquisitionCalls != 0 {
+		t.Fatalf("treasuryPostAcquisitionHook calls = %d, want 0 on active save path", acquisitionCalls)
+	}
+	if gotRoot != root {
+		t.Fatalf("treasuryPostActiveSaveHook root = %q, want %q", gotRoot, root)
+	}
+	if gotLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryPostActiveSaveHook lease = %#v, want %q", gotLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotInput, missioncontrol.PostActiveTreasurySaveInput{
+		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
+	}) {
+		t.Fatalf("treasuryPostActiveSaveHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("treasuryPostActiveSaveHook now = zero, want activation timestamp")
+	}
+	if gotInput.TreasuryRef.TreasuryID == targetContainer.ContainerID {
+		t.Fatalf("treasuryPostActiveSaveHook input treasury ref = %#v, want step treasury ref only", gotInput)
+	}
+}
+
+func TestTaskStateActivateStepActiveTreasurySavePathInvokesRealProducer(t *testing.T) {
+	t.Parallel()
+
+	root, treasury, _, targetContainer := writeTaskStateActiveTreasurySaveFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+	if firstTreasury.PostActiveSave == nil || firstTreasury.PostActiveSave.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord(first).PostActiveSave = %#v, want consumed entry linkage", firstTreasury.PostActiveSave)
+	}
+	if firstTreasury.PostActiveSave.TargetContainerID != targetContainer.ContainerID {
+		t.Fatalf("LoadTreasuryRecord(first).PostActiveSave.TargetContainerID = %q, want %q", firstTreasury.PostActiveSave.TargetContainerID, targetContainer.ContainerID)
+	}
+	entries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(first) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListTreasuryLedgerEntries(first) len = %d, want 1", len(entries))
+	}
+	if entries[0].EntryID != firstTreasury.PostActiveSave.ConsumedEntryID || entries[0].EntryKind != missioncontrol.TreasuryLedgerEntryKindMovement {
+		t.Fatalf("ListTreasuryLedgerEntries(first) = %#v, want one committed post-active save movement entry", entries)
+	}
+
+	err = state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep(replay) error = nil, want deterministic consumed post-active save rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-wallet" treasury.post_active_save is already consumed by entry "`) {
+		t.Fatalf("ActivateStep(replay) error = %q, want consumed post-active save rejection", err.Error())
+	}
+
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord(second) = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+	secondEntries, err := missioncontrol.ListTreasuryLedgerEntries(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondEntries, entries) {
+		t.Fatalf("ListTreasuryLedgerEntries(second) = %#v, want unchanged %#v", secondEntries, entries)
+	}
+}
+
 func TestTaskStateActivateStepTreasuryPolicyDisallowedFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -4776,6 +4893,66 @@ func writeTaskStateActiveTreasuryAcquisitionFixtures(t *testing.T) (string, miss
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
 	return root, treasury, container
+}
+
+func writeTaskStateActiveTreasurySaveFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord, missioncontrol.FrankContainerRecord) {
+	t.Helper()
+
+	root, treasury, container := writeTaskStateTreasuryFixtures(t)
+	now := treasury.UpdatedAt
+	target := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-savings",
+	}
+	writeTaskStateAutonomyEligibilityFixture(t, root, target, missioncontrol.PlatformRecord{
+		PlatformID:       target.RegistryID,
+		PlatformName:     "container-class-savings",
+		TargetClass:      target.Kind,
+		EligibilityLabel: missioncontrol.EligibilityLabelAutonomyCompatible,
+		LastCheckID:      "check-container-class-savings",
+		Notes:            []string{"registry note"},
+		UpdatedAt:        now,
+	}, missioncontrol.EligibilityCheckRecord{
+		CheckID:                "check-container-class-savings",
+		TargetKind:             target.Kind,
+		TargetName:             "container-class-savings",
+		CanCreateWithoutOwner:  true,
+		CanOnboardWithoutOwner: true,
+		CanControlAsAgent:      true,
+		CanRecoverAsAgent:      true,
+		RulesAsObservedOK:      true,
+		Label:                  missioncontrol.EligibilityLabelAutonomyCompatible,
+		Reasons:                []string{"autonomy_compatible"},
+		CheckedAt:              now,
+	})
+	targetContainer := missioncontrol.FrankContainerRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		ContainerID:          "container-savings",
+		ContainerKind:        "wallet",
+		Label:                "Savings Wallet",
+		ContainerClassID:     target.RegistryID,
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.Add(time.Minute).UTC(),
+		UpdatedAt:            now.Add(2 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankContainerRecord(root, targetContainer); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	treasury.State = missioncontrol.TreasuryStateActive
+	treasury.PostActiveSave = &missioncontrol.TreasuryPostActiveSave{
+		AssetCode:         "USD",
+		Amount:            "1.25",
+		TargetContainerID: targetContainer.ContainerID,
+		SourceRef:         "transfer:reserve-a",
+		EvidenceLocator:   "https://evidence.example/save-a",
+	}
+	treasury.UpdatedAt = treasury.UpdatedAt.Add(3 * time.Minute)
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	return root, treasury, container, targetContainer
 }
 
 func writeTaskStateZohoMailboxBootstrapFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {

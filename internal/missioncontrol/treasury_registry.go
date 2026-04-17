@@ -59,6 +59,7 @@ type TreasuryRecord struct {
 	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	PostActiveSave           *TreasuryPostActiveSave           `json:"post_active_save,omitempty"`
 	CreatedAt                time.Time                         `json:"created_at"`
 	UpdatedAt                time.Time                         `json:"updated_at"`
 }
@@ -79,6 +80,15 @@ type TreasuryPostBootstrapAcquisition struct {
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
 	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
+}
+
+type TreasuryPostActiveSave struct {
+	AssetCode         string `json:"asset_code"`
+	Amount            string `json:"amount"`
+	TargetContainerID string `json:"target_container_id"`
+	SourceRef         string `json:"source_ref"`
+	EvidenceLocator   string `json:"evidence_locator,omitempty"`
+	ConsumedEntryID   string `json:"consumed_entry_id,omitempty"`
 }
 
 // TreasuryObjectView is an adapter-only surface that exposes the
@@ -162,6 +172,12 @@ type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
 	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostActiveSave struct {
+	Treasury        TreasuryRecord         `json:"treasury"`
+	PostActiveSave  TreasuryPostActiveSave `json:"post_active_save"`
+	TargetContainer FrankContainerRecord   `json:"target_container"`
+}
+
 var (
 	ErrTreasuryLedgerEntryNotFound = errors.New("mission store treasury ledger entry not found")
 	ErrTreasuryRecordNotFound      = errors.New("mission store treasury record not found")
@@ -231,6 +247,14 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		}
 		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
 			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
+		}
+	}
+	if record.PostActiveSave != nil {
+		if err := validateTreasuryPostActiveSave(*record.PostActiveSave); err != nil {
+			return err
+		}
+		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_active_save requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if err := validateTreasuryActiveContainerContract(record); err != nil {
@@ -378,6 +402,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
+	record.PostActiveSave = normalizeTreasuryPostActiveSave(record.PostActiveSave)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	return record
@@ -520,6 +545,62 @@ func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext
 	}, nil
 }
 
+func ResolveExecutionContextTreasuryPostActiveSave(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostActiveSave, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostActiveSave == nil {
+		return nil, nil
+	}
+	targetContainerID := strings.TrimSpace(treasury.PostActiveSave.TargetContainerID)
+	if targetContainerID == "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_save.target_container_id is required",
+			treasury.TreasuryID,
+		)
+	}
+	activeContainerID, err := resolveTreasuryActiveContainerID(*treasury)
+	if err != nil {
+		return nil, err
+	}
+	if targetContainerID == activeContainerID {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_save.target_container_id %q must differ from active container %q",
+			treasury.TreasuryID,
+			targetContainerID,
+			activeContainerID,
+		)
+	}
+	targetContainer, err := LoadFrankContainerRecord(ec.MissionStoreRoot, targetContainerID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_save.target_container_id %q: %w",
+			treasury.TreasuryID,
+			targetContainerID,
+			err,
+		)
+	}
+	if strings.TrimSpace(treasury.PostActiveSave.ConsumedEntryID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_save is already consumed by entry %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(treasury.PostActiveSave.ConsumedEntryID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostActiveSave{
+		Treasury:        *treasury,
+		PostActiveSave:  *treasury.PostActiveSave,
+		TargetContainer: targetContainer,
+	}, nil
+}
+
 func ResolveExecutionContextTreasuryPreflight(ec ExecutionContext) (ResolvedExecutionContextTreasuryPreflight, error) {
 	treasury, err := ResolveExecutionContextTreasuryRef(ec)
 	if err != nil {
@@ -640,6 +721,20 @@ func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcqui
 	return &normalized
 }
 
+func normalizeTreasuryPostActiveSave(block *TreasuryPostActiveSave) *TreasuryPostActiveSave {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.AssetCode = strings.TrimSpace(normalized.AssetCode)
+	normalized.Amount = strings.TrimSpace(normalized.Amount)
+	normalized.TargetContainerID = strings.TrimSpace(normalized.TargetContainerID)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.EvidenceLocator = strings.TrimSpace(normalized.EvidenceLocator)
+	normalized.ConsumedEntryID = strings.TrimSpace(normalized.ConsumedEntryID)
+	return &normalized
+}
+
 func validateTreasuryBootstrapAcquisition(block TreasuryBootstrapAcquisition) error {
 	if err := validateTreasuryEntryID(block.EntryID, "mission store treasury bootstrap_acquisition"); err != nil {
 		return err
@@ -680,6 +775,27 @@ func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisi
 	}
 	if strings.TrimSpace(block.ConsumedEntryID) != "" {
 		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostActiveSave(block TreasuryPostActiveSave) error {
+	if err := validateTreasuryAssetCode(block.AssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_active_save.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.Amount); err != nil {
+		return fmt.Errorf("mission store treasury post_active_save.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if strings.TrimSpace(block.TargetContainerID) == "" {
+		return fmt.Errorf("mission store treasury post_active_save.target_container_id is required")
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_save.source_ref is required")
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_active_save"); err != nil {
 			return err
 		}
 	}

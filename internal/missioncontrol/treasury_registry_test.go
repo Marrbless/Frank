@@ -52,6 +52,14 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			ConfirmedAt:     now.Add(2 * time.Minute),
 			ConsumedEntryID: " entry-post-value ",
 		},
+		PostActiveSave: &TreasuryPostActiveSave{
+			AssetCode:         " USD ",
+			Amount:            " 1.10 ",
+			TargetContainerID: " container-savings ",
+			SourceRef:         " transfer:reserve-a ",
+			EvidenceLocator:   " https://evidence.example/save-a ",
+			ConsumedEntryID:   " entry-save-value ",
+		},
 		CreatedAt: now.Add(2 * time.Minute),
 		UpdatedAt: now.Add(3 * time.Minute),
 	}
@@ -90,6 +98,14 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
 		ConsumedEntryID: "entry-post-value",
+	}
+	want.PostActiveSave = &TreasuryPostActiveSave{
+		AssetCode:         "USD",
+		Amount:            "1.10",
+		TargetContainerID: "container-savings",
+		SourceRef:         "transfer:reserve-a",
+		EvidenceLocator:   "https://evidence.example/save-a",
+		ConsumedEntryID:   "entry-save-value",
 	}
 	want.CreatedAt = want.CreatedAt.UTC()
 	want.UpdatedAt = want.UpdatedAt.UTC()
@@ -499,6 +515,79 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
+		},
+		{
+			name: "post active save requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostActiveSave = &TreasuryPostActiveSave{
+						AssetCode:         "USD",
+						Amount:            "1.25",
+						TargetContainerID: "container-savings",
+						SourceRef:         "transfer:reserve-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_save requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post active save missing target container id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSave = &TreasuryPostActiveSave{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						SourceRef: "transfer:reserve-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_save.target_container_id is required",
+		},
+		{
+			name: "post active save malformed amount",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSave = &TreasuryPostActiveSave{
+						AssetCode:         "USD",
+						Amount:            "01.25",
+						TargetContainerID: "container-savings",
+						SourceRef:         "transfer:reserve-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_save.amount "01.25" is invalid`,
+		},
+		{
+			name: "post active save missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSave = &TreasuryPostActiveSave{
+						AssetCode:         "USD",
+						Amount:            "1.25",
+						TargetContainerID: "container-savings",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_save.source_ref is required",
+		},
+		{
+			name: "post active save malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSave = &TreasuryPostActiveSave{
+						AssetCode:         "USD",
+						Amount:            "1.25",
+						TargetContainerID: "container-savings",
+						SourceRef:         "transfer:reserve-a",
+						ConsumedEntryID:   "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_save entry_id "bad/id" is invalid`,
 		},
 	}
 
@@ -1228,6 +1317,153 @@ func TestResolveExecutionContextTreasuryPostBootstrapAcquisitionIgnoresNonActive
 	}
 	if got != nil {
 		t.Fatalf("ResolveExecutionContextTreasuryPostBootstrapAcquisition() = %#v, want nil for non-active treasury", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveSaveZeroRefPathPreservesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	ec := ExecutionContext{
+		MissionStoreRoot: t.TempDir(),
+		Step:             &Step{ID: "build"},
+	}
+
+	got, err := ResolveExecutionContextTreasuryPostActiveSave(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveSaveResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 5, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-savings",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-savings", "check-container-class-savings", now)
+	savings := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-savings",
+		ContainerKind:        "wallet",
+		Label:                "Savings Wallet",
+		ContainerClassID:     "container-class-savings",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, savings); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-save"
+		record.State = TreasuryStateActive
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.25",
+			TargetContainerID: savings.ContainerID,
+			SourceRef:         "transfer:reserve-a",
+			EvidenceLocator:   "https://evidence.example/save-a",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostActiveSave(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveSave() = nil, want resolved post-active save")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostActiveSave, *record.PostActiveSave) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave().PostActiveSave = %#v, want %#v", got.PostActiveSave, *record.PostActiveSave)
+	}
+	if !reflect.DeepEqual(got.TargetContainer, savings) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave().TargetContainer = %#v, want %#v", got.TargetContainer, savings)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveSaveFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 10, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-savings-consumed",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-savings-consumed", "check-container-class-savings-consumed", now)
+	savings := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-savings-consumed",
+		ContainerKind:        "wallet",
+		Label:                "Savings Wallet",
+		ContainerClassID:     "container-class-savings-consumed",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, savings); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-save-consumed"
+		record.State = TreasuryStateActive
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.25",
+			TargetContainerID: savings.ContainerID,
+			SourceRef:         "transfer:reserve-a",
+			ConsumedEntryID:   "entry-save-value",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostActiveSave(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveSave() error = nil, want consumed save rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-save-consumed" treasury.post_active_save is already consumed by entry "entry-save-value"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() error = %q, want consumed save rejection", err.Error())
 	}
 }
 

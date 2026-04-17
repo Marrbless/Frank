@@ -1578,6 +1578,14 @@ the additional acquisition inputs plus confirmation evidence and optional
 same-record consumed linkage, without inventing a second treasury execution
 registry.
 
+For the approved first post-active treasury save lane on this branch line, that
+same treasury record may also carry one treasury-owned `post_active_save`
+block for already-active treasuries. It holds only the save transaction inputs
+needed to record one committed save movement from the active treasury
+container to one committed target container, plus optional evidence and
+same-record consumed linkage, without inventing a second treasury execution
+registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

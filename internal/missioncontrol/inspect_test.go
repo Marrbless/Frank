@@ -339,6 +339,76 @@ func TestInspectSummaryWithTreasuryPreflightIncludesPostBootstrapAcquisitionWhen
 	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
 }
 
+func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSaveWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"produce code"},
+					TreasuryRef:       &TreasuryRef{TreasuryID: "treasury-wallet"},
+				},
+				{
+					ID:   "final",
+					Type: StepTypeFinalResponse,
+				},
+			},
+		},
+	}
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-wallet"
+		record.State = TreasuryStateActive
+		record.PostActiveSave = &TreasuryPostActiveSave{
+			AssetCode:         "USD",
+			Amount:            "1.25",
+			TargetContainerID: "container-savings",
+			SourceRef:         "transfer:reserve-a",
+			EvidenceLocator:   "https://evidence.example/save-a",
+			ConsumedEntryID:   "entry-save-value",
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	if len(steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(steps))
+	}
+	step := steps[0].(map[string]any)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+	treasury := step["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveSave := treasury["post_active_save"].(map[string]any)
+	if postActiveSave["target_container_id"] != "container-savings" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_save.target_container_id = %#v, want %q", postActiveSave["target_container_id"], "container-savings")
+	}
+	if postActiveSave["consumed_entry_id"] != "entry-save-value" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_save.consumed_entry_id = %#v, want %q", postActiveSave["consumed_entry_id"], "entry-save-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
+}
+
 func TestFormatInspectSummarySurfacesCampaignZohoEmailAddressingInCampaignPreflight(t *testing.T) {
 	t.Parallel()
 

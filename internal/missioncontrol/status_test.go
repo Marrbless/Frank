@@ -575,6 +575,76 @@ func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostBootstrapAc
 	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
 }
 
+func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSaveWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: &TreasuryRecord{
+			RecordVersion:  StoreRecordVersion,
+			TreasuryID:     "treasury-wallet",
+			DisplayName:    "Frank Treasury",
+			State:          TreasuryStateActive,
+			ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+			PostActiveSave: &TreasuryPostActiveSave{
+				AssetCode:         "USD",
+				Amount:            "1.25",
+				TargetContainerID: "container-savings",
+				SourceRef:         "transfer:reserve-a",
+				EvidenceLocator:   "https://evidence.example/save-a",
+				ConsumedEntryID:   "entry-save-value",
+			},
+			ContainerRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 21, 5, 0, 0, time.UTC),
+		},
+		Containers: []FrankContainerRecord{
+			{
+				RecordVersion:    StoreRecordVersion,
+				ContainerID:      "container-wallet",
+				ContainerKind:    "wallet",
+				Label:            "Primary Wallet",
+				ContainerClassID: "container-class-wallet",
+				State:            "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindTreasuryContainerClass,
+					RegistryID: "container-class-wallet",
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+	treasury := got["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveSave := treasury["post_active_save"].(map[string]any)
+	if postActiveSave["target_container_id"] != "container-savings" {
+		t.Fatalf("treasury_preflight.treasury.post_active_save.target_container_id = %#v, want %q", postActiveSave["target_container_id"], "container-savings")
+	}
+	if postActiveSave["consumed_entry_id"] != "entry-save-value" {
+		t.Fatalf("treasury_preflight.treasury.post_active_save.consumed_entry_id = %#v, want %q", postActiveSave["consumed_entry_id"], "entry-save-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
+}
+
 func TestBuildOperatorStatusSummaryIncludesBoundedDeterministicApprovalHistory(t *testing.T) {
 	t.Parallel()
 
