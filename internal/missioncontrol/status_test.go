@@ -645,6 +645,88 @@ func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSaveW
 	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
 }
 
+func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveTransferWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: &TreasuryRecord{
+			RecordVersion:  StoreRecordVersion,
+			TreasuryID:     "treasury-wallet",
+			DisplayName:    "Frank Treasury",
+			State:          TreasuryStateActive,
+			ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+			PostActiveTransfer: &TreasuryPostActiveTransfer{
+				AssetCode: "USD",
+				Amount:    "1.25",
+				SourceContainerRef: FrankRegistryObjectRef{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+				TargetContainerRef: FrankRegistryObjectRef{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-vault",
+				},
+				SourceRef:       "transfer:rebalance-a",
+				EvidenceLocator: "https://evidence.example/transfer-a",
+				ConsumedEntryID: "entry-transfer-value",
+			},
+			ContainerRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 21, 5, 0, 0, time.UTC),
+		},
+		Containers: []FrankContainerRecord{
+			{
+				RecordVersion:    StoreRecordVersion,
+				ContainerID:      "container-wallet",
+				ContainerKind:    "wallet",
+				Label:            "Primary Wallet",
+				ContainerClassID: "container-class-wallet",
+				State:            "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindTreasuryContainerClass,
+					RegistryID: "container-class-wallet",
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+	treasury := got["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveTransfer := treasury["post_active_transfer"].(map[string]any)
+	sourceRef := postActiveTransfer["source_container_ref"].(map[string]any)
+	targetRef := postActiveTransfer["target_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("treasury_preflight.treasury.post_active_transfer.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if targetRef["object_id"] != "container-vault" {
+		t.Fatalf("treasury_preflight.treasury.post_active_transfer.target_container_ref.object_id = %#v, want %q", targetRef["object_id"], "container-vault")
+	}
+	if postActiveTransfer["consumed_entry_id"] != "entry-transfer-value" {
+		t.Fatalf("treasury_preflight.treasury.post_active_transfer.consumed_entry_id = %#v, want %q", postActiveTransfer["consumed_entry_id"], "entry-transfer-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
+}
+
 func TestBuildOperatorStatusSummaryIncludesBoundedDeterministicApprovalHistory(t *testing.T) {
 	t.Parallel()
 

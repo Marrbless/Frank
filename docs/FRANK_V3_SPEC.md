@@ -1586,6 +1586,14 @@ container to one committed target container, plus optional evidence and
 same-record consumed linkage, without inventing a second treasury execution
 registry.
 
+For the approved first post-active treasury transfer lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_active_transfer` block for already-active treasuries. It holds only the
+transfer inputs needed to record one committed transfer movement from one
+committed source container ref to one committed target container ref, plus
+optional evidence and same-record consumed linkage, without inventing a second
+treasury execution registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

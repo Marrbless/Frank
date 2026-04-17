@@ -748,6 +748,150 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasuryTransferAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 55, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-vault", "container-class-vault", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-transfer"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+			AssetCode: "USD",
+			Amount:    "1.15",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			SourceRef:       "transfer:rebalance-a",
+			EvidenceLocator: "https://evidence.example/transfer-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasuryTransfer(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryTransferRecordInput{
+		TreasuryID: "treasury-post-active-transfer",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryTransfer() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-transfer")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostActiveTransfer == nil || treasury.PostActiveTransfer.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveTransfer = %#v, want consumed block", treasury.PostActiveTransfer)
+	}
+	entry, err := LoadTreasuryLedgerEntry(root, "treasury-post-active-transfer", treasury.PostActiveTransfer.ConsumedEntryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindMovement {
+		t.Fatalf("LoadTreasuryLedgerEntry().EntryKind = %q, want %q", entry.EntryKind, TreasuryLedgerEntryKindMovement)
+	}
+	if entry.AssetCode != "USD" || entry.Amount != "1.15" || entry.SourceRef != "transfer:rebalance-a" {
+		t.Fatalf("LoadTreasuryLedgerEntry() = %#v, want committed post-active transfer payload", entry)
+	}
+	if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryLedgerEntry().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+	}
+}
+
+func TestRecordPostActiveTreasuryTransferReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 57, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-vault-replay", "container-class-vault-replay", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-transfer-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+			AssetCode: "USD",
+			Amount:    "1.35",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			SourceRef: "transfer:rebalance-b",
+		}
+	}))
+
+	input := PostActiveTreasuryTransferRecordInput{TreasuryID: "treasury-post-active-transfer-replay"}
+	if err := RecordPostActiveTreasuryTransfer(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryTransfer(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasuryTransfer(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryTransfer(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-transfer-replay" post-active transfer already consumed by entry "`) {
+		t.Fatalf("RecordPostActiveTreasuryTransfer(replay) error = %q, want consumed rejection", err.Error())
+	}
+}
+
+func TestRecordPostActiveTreasuryTransferFailsClosedWhenSourceDoesNotMatchActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 59, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-vault-mismatch", "container-class-vault-mismatch", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-transfer-mismatch"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+			AssetCode: "USD",
+			Amount:    "1.45",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			SourceRef: "transfer:rebalance-c",
+		}
+	}))
+
+	err := RecordPostActiveTreasuryTransfer(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryTransferRecordInput{
+		TreasuryID: "treasury-post-active-transfer-mismatch",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryTransfer() error = nil, want source-container mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-transfer-mismatch" post-active transfer source_container_ref object_id "container-vault-mismatch" must match active treasury container "container-wallet"`) {
+		t.Fatalf("RecordPostActiveTreasuryTransfer() error = %q, want source-container mismatch rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-transfer-mismatch")
+}
+
 func TestRecordPostActiveTreasurySaveAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

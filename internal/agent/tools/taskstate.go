@@ -38,6 +38,7 @@ type TaskState struct {
 	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
 	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
+	treasuryPostActiveTransferHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryTransferInput, time.Time) error
 	treasuryPostActiveSaveHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySaveInput, time.Time) error
 	treasuryPostAcquisitionHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
@@ -51,6 +52,7 @@ func NewTaskState() *TaskState {
 		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
 		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
+		treasuryPostActiveTransferHook: missioncontrol.ProducePostActiveTreasuryTransfer,
 		treasuryPostActiveSaveHook:     missioncontrol.ProducePostActiveTreasurySave,
 		treasuryPostAcquisitionHook:    missioncontrol.RecordPostBootstrapTreasuryAcquisition,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
@@ -310,6 +312,7 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 	root := strings.TrimSpace(s.missionStoreRoot)
 	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
 	bootstrapHook := s.treasuryBootstrapProducerHook
+	postActiveTransferHook := s.treasuryPostActiveTransferHook
 	postActiveSaveHook := s.treasuryPostActiveSaveHook
 	postAcquisitionHook := s.treasuryPostAcquisitionHook
 	hook := s.treasuryActivationProducerHook
@@ -354,6 +357,17 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 		}, now)
 	}
 	if treasury.State == missioncontrol.TreasuryStateActive {
+		if postActiveTransferHook != nil {
+			resolvedTransfer, err := missioncontrol.ResolveExecutionContextTreasuryPostActiveTransfer(ec)
+			if err != nil {
+				return err
+			}
+			if resolvedTransfer != nil {
+				return postActiveTransferHook(root, lease, missioncontrol.PostActiveTreasuryTransferInput{
+					TreasuryRef: *ec.Step.TreasuryRef,
+				}, now)
+			}
+		}
 		if postActiveSaveHook != nil {
 			resolvedSave, err := missioncontrol.ResolveExecutionContextTreasuryPostActiveSave(ec)
 			if err != nil {

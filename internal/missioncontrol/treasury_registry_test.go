@@ -52,6 +52,21 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			ConfirmedAt:     now.Add(2 * time.Minute),
 			ConsumedEntryID: " entry-post-value ",
 		},
+		PostActiveTransfer: &TreasuryPostActiveTransfer{
+			AssetCode: " USD ",
+			Amount:    " 1.05 ",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " " + fixtures.container.ContainerID + " ",
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " container-vault ",
+			},
+			SourceRef:       " transfer:rebalance-a ",
+			EvidenceLocator: " https://evidence.example/transfer-a ",
+			ConsumedEntryID: " entry-transfer-value ",
+		},
 		PostActiveSave: &TreasuryPostActiveSave{
 			AssetCode:         " USD ",
 			Amount:            " 1.10 ",
@@ -98,6 +113,21 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
 		ConsumedEntryID: "entry-post-value",
+	}
+	want.PostActiveTransfer = &TreasuryPostActiveTransfer{
+		AssetCode: "USD",
+		Amount:    "1.05",
+		SourceContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		},
+		TargetContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: "container-vault",
+		},
+		SourceRef:       "transfer:rebalance-a",
+		EvidenceLocator: "https://evidence.example/transfer-a",
+		ConsumedEntryID: "entry-transfer-value",
 	}
 	want.PostActiveSave = &TreasuryPostActiveSave{
 		AssetCode:         "USD",
@@ -515,6 +545,111 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
+		},
+		{
+			name: "post active transfer requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-vault",
+						},
+						SourceRef: "transfer:rebalance-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_transfer requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post active transfer missing source container ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-vault",
+						},
+						SourceRef: "transfer:rebalance-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_transfer.source_container_ref: Frank object ref kind "" is invalid`,
+		},
+		{
+			name: "post active transfer requires distinct source and target",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						SourceRef: "transfer:rebalance-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_transfer requires distinct source and target containers",
+		},
+		{
+			name: "post active transfer missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-vault",
+						},
+					}
+				}))
+			},
+			want: "mission store treasury post_active_transfer.source_ref is required",
+		},
+		{
+			name: "post active transfer malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+						AssetCode: "USD",
+						Amount:    "1.25",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-vault",
+						},
+						SourceRef:       "transfer:rebalance-a",
+						ConsumedEntryID: "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_transfer entry_id "bad/id" is invalid`,
 		},
 		{
 			name: "post active save requires active treasury state",
@@ -1334,6 +1469,153 @@ func TestResolveExecutionContextTreasuryPostActiveSaveZeroRefPathPreservesPriorB
 	}
 	if got != nil {
 		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveTransferResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 2, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-vault",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-vault", "check-container-class-vault", now)
+	vault := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-vault",
+		ContainerKind:        "wallet",
+		Label:                "Vault Wallet",
+		ContainerClassID:     "container-class-vault",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, vault); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-transfer"
+		record.State = TreasuryStateActive
+		record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+			AssetCode: "USD",
+			Amount:    "1.25",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: vault.ContainerID,
+			},
+			SourceRef:       "transfer:rebalance-a",
+			EvidenceLocator: "https://evidence.example/transfer-a",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostActiveTransfer(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveTransfer() = nil, want resolved post-active transfer")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostActiveTransfer, *record.PostActiveTransfer) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer().PostActiveTransfer = %#v, want %#v", got.PostActiveTransfer, *record.PostActiveTransfer)
+	}
+	if !reflect.DeepEqual(got.SourceContainer, fixtures.container) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer().SourceContainer = %#v, want %#v", got.SourceContainer, fixtures.container)
+	}
+	if !reflect.DeepEqual(got.TargetContainer, vault) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer().TargetContainer = %#v, want %#v", got.TargetContainer, vault)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveTransferFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 3, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-vault-consumed",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-vault-consumed", "check-container-class-vault-consumed", now)
+	vault := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-vault-consumed",
+		ContainerKind:        "wallet",
+		Label:                "Vault Wallet",
+		ContainerClassID:     "container-class-vault-consumed",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, vault); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-transfer-consumed"
+		record.State = TreasuryStateActive
+		record.PostActiveTransfer = &TreasuryPostActiveTransfer{
+			AssetCode: "USD",
+			Amount:    "1.25",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: vault.ContainerID,
+			},
+			SourceRef:       "transfer:rebalance-a",
+			ConsumedEntryID: "entry-transfer-value",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostActiveTransfer(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveTransfer() error = nil, want consumed transfer rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-transfer-consumed" treasury.post_active_transfer is already consumed by entry "entry-transfer-value"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveTransfer() error = %q, want consumed transfer rejection", err.Error())
 	}
 }
 

@@ -59,6 +59,7 @@ type TreasuryRecord struct {
 	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	PostActiveTransfer       *TreasuryPostActiveTransfer       `json:"post_active_transfer,omitempty"`
 	PostActiveSave           *TreasuryPostActiveSave           `json:"post_active_save,omitempty"`
 	CreatedAt                time.Time                         `json:"created_at"`
 	UpdatedAt                time.Time                         `json:"updated_at"`
@@ -80,6 +81,16 @@ type TreasuryPostBootstrapAcquisition struct {
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
 	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
+}
+
+type TreasuryPostActiveTransfer struct {
+	AssetCode          string                 `json:"asset_code"`
+	Amount             string                 `json:"amount"`
+	SourceContainerRef FrankRegistryObjectRef `json:"source_container_ref"`
+	TargetContainerRef FrankRegistryObjectRef `json:"target_container_ref"`
+	SourceRef          string                 `json:"source_ref"`
+	EvidenceLocator    string                 `json:"evidence_locator,omitempty"`
+	ConsumedEntryID    string                 `json:"consumed_entry_id,omitempty"`
 }
 
 type TreasuryPostActiveSave struct {
@@ -172,6 +183,13 @@ type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
 	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostActiveTransfer struct {
+	Treasury           TreasuryRecord             `json:"treasury"`
+	PostActiveTransfer TreasuryPostActiveTransfer `json:"post_active_transfer"`
+	SourceContainer    FrankContainerRecord       `json:"source_container"`
+	TargetContainer    FrankContainerRecord       `json:"target_container"`
+}
+
 type ResolvedExecutionContextTreasuryPostActiveSave struct {
 	Treasury        TreasuryRecord         `json:"treasury"`
 	PostActiveSave  TreasuryPostActiveSave `json:"post_active_save"`
@@ -247,6 +265,14 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		}
 		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
 			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
+		}
+	}
+	if record.PostActiveTransfer != nil {
+		if err := validateTreasuryPostActiveTransfer(*record.PostActiveTransfer); err != nil {
+			return err
+		}
+		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_active_transfer requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if record.PostActiveSave != nil {
@@ -402,6 +428,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
+	record.PostActiveTransfer = normalizeTreasuryPostActiveTransfer(record.PostActiveTransfer)
 	record.PostActiveSave = normalizeTreasuryPostActiveSave(record.PostActiveSave)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -542,6 +569,87 @@ func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext
 	return &ResolvedExecutionContextTreasuryPostBootstrapAcquisition{
 		Treasury:                 *treasury,
 		PostBootstrapAcquisition: *treasury.PostBootstrapAcquisition,
+	}, nil
+}
+
+func ResolveExecutionContextTreasuryPostActiveTransfer(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostActiveTransfer, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostActiveTransfer == nil {
+		return nil, nil
+	}
+	block := *treasury.PostActiveTransfer
+	activeContainerID, err := resolveTreasuryActiveContainerID(*treasury)
+	if err != nil {
+		return nil, err
+	}
+	sourceResolved, err := ResolveFrankRegistryObjectRef(ec.MissionStoreRoot, block.SourceContainerRef)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer.source_container_ref: %w",
+			treasury.TreasuryID,
+			err,
+		)
+	}
+	if sourceResolved.Container == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer.source_container_ref kind %q object_id %q: expected Frank container record",
+			treasury.TreasuryID,
+			sourceResolved.Ref.Kind,
+			sourceResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(sourceResolved.Ref.ObjectID) != activeContainerID {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer.source_container_ref object_id %q must match active treasury container %q",
+			treasury.TreasuryID,
+			sourceResolved.Ref.ObjectID,
+			activeContainerID,
+		)
+	}
+	targetResolved, err := ResolveFrankRegistryObjectRef(ec.MissionStoreRoot, block.TargetContainerRef)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer.target_container_ref: %w",
+			treasury.TreasuryID,
+			err,
+		)
+	}
+	if targetResolved.Container == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer.target_container_ref kind %q object_id %q: expected Frank container record",
+			treasury.TreasuryID,
+			targetResolved.Ref.Kind,
+			targetResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(sourceResolved.Ref.ObjectID) == strings.TrimSpace(targetResolved.Ref.ObjectID) {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer requires distinct source and target containers %q",
+			treasury.TreasuryID,
+			sourceResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_transfer is already consumed by entry %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(block.ConsumedEntryID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostActiveTransfer{
+		Treasury:           *treasury,
+		PostActiveTransfer: block,
+		SourceContainer:    *sourceResolved.Container,
+		TargetContainer:    *targetResolved.Container,
 	}, nil
 }
 
@@ -721,6 +829,21 @@ func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcqui
 	return &normalized
 }
 
+func normalizeTreasuryPostActiveTransfer(block *TreasuryPostActiveTransfer) *TreasuryPostActiveTransfer {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.AssetCode = strings.TrimSpace(normalized.AssetCode)
+	normalized.Amount = strings.TrimSpace(normalized.Amount)
+	normalized.SourceContainerRef = NormalizeFrankRegistryObjectRef(normalized.SourceContainerRef)
+	normalized.TargetContainerRef = NormalizeFrankRegistryObjectRef(normalized.TargetContainerRef)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.EvidenceLocator = strings.TrimSpace(normalized.EvidenceLocator)
+	normalized.ConsumedEntryID = strings.TrimSpace(normalized.ConsumedEntryID)
+	return &normalized
+}
+
 func normalizeTreasuryPostActiveSave(block *TreasuryPostActiveSave) *TreasuryPostActiveSave {
 	if block == nil {
 		return nil
@@ -775,6 +898,39 @@ func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisi
 	}
 	if strings.TrimSpace(block.ConsumedEntryID) != "" {
 		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostActiveTransfer(block TreasuryPostActiveTransfer) error {
+	if err := validateTreasuryAssetCode(block.AssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_active_transfer.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.Amount); err != nil {
+		return fmt.Errorf("mission store treasury post_active_transfer.%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateFrankRegistryObjectRef(block.SourceContainerRef); err != nil {
+		return fmt.Errorf("mission store treasury post_active_transfer.source_container_ref: %w", err)
+	}
+	if NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind != FrankRegistryObjectKindContainer {
+		return fmt.Errorf("mission store treasury post_active_transfer.source_container_ref kind %q is invalid", NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind)
+	}
+	if err := validateFrankRegistryObjectRef(block.TargetContainerRef); err != nil {
+		return fmt.Errorf("mission store treasury post_active_transfer.target_container_ref: %w", err)
+	}
+	if NormalizeFrankRegistryObjectRef(block.TargetContainerRef).Kind != FrankRegistryObjectKindContainer {
+		return fmt.Errorf("mission store treasury post_active_transfer.target_container_ref kind %q is invalid", NormalizeFrankRegistryObjectRef(block.TargetContainerRef).Kind)
+	}
+	if normalizedFrankRegistryObjectRefKey(NormalizeFrankRegistryObjectRef(block.SourceContainerRef)) == normalizedFrankRegistryObjectRefKey(NormalizeFrankRegistryObjectRef(block.TargetContainerRef)) {
+		return fmt.Errorf("mission store treasury post_active_transfer requires distinct source and target containers")
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_transfer.source_ref is required")
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_active_transfer"); err != nil {
 			return err
 		}
 	}

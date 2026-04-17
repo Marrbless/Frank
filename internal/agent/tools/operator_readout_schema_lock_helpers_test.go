@@ -140,6 +140,9 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 	if _, ok := treasury["post_bootstrap_acquisition"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_bootstrap_acquisition")
 	}
+	if _, ok := treasury["post_active_transfer"]; ok {
+		treasuryKeys = append(treasuryKeys, "post_active_transfer")
+	}
 	if _, ok := treasury["post_active_save"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_active_save")
 	}
@@ -161,6 +164,22 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 			postBootstrapKeys = append(postBootstrapKeys, "consumed_entry_id")
 		}
 		assertTaskStateJSONObjectKeys(t, postBootstrapObject, postBootstrapKeys...)
+	}
+	if postActiveTransfer, ok := treasury["post_active_transfer"]; ok {
+		postActiveTransferObject, ok := postActiveTransfer.(map[string]any)
+		if !ok {
+			t.Fatalf("treasury_preflight.treasury.post_active_transfer = %#v, want object", postActiveTransfer)
+		}
+		postActiveTransferKeys := []string{"amount", "asset_code", "source_container_ref", "source_ref", "target_container_ref"}
+		if _, ok := postActiveTransferObject["evidence_locator"]; ok {
+			postActiveTransferKeys = append(postActiveTransferKeys, "evidence_locator")
+		}
+		if _, ok := postActiveTransferObject["consumed_entry_id"]; ok {
+			postActiveTransferKeys = append(postActiveTransferKeys, "consumed_entry_id")
+		}
+		assertTaskStateJSONObjectKeys(t, postActiveTransferObject, postActiveTransferKeys...)
+		assertTaskStateJSONObjectKeys(t, postActiveTransferObject["source_container_ref"], "kind", "object_id")
+		assertTaskStateJSONObjectKeys(t, postActiveTransferObject["target_container_ref"], "kind", "object_id")
 	}
 	if postActiveSave, ok := treasury["post_active_save"]; ok {
 		postActiveSaveObject, ok := postActiveSave.(map[string]any)
