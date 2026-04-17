@@ -701,6 +701,71 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 			want: `mission store treasury post_active_suspend consumed transition requires state "suspended", got "active"`,
 		},
 		{
+			name: "post suspend resume requires suspended treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostSuspendResume = &TreasuryPostSuspendResume{
+						Reason:    "ops:manual-clear",
+						SourceRef: "resume:manual-clear-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_suspend_resume requires state "suspended", got "active"`,
+		},
+		{
+			name: "post suspend resume missing reason",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateSuspended
+					record.PostSuspendResume = &TreasuryPostSuspendResume{
+						SourceRef: "resume:manual-clear-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_suspend_resume.reason is required",
+		},
+		{
+			name: "post suspend resume missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateSuspended
+					record.PostSuspendResume = &TreasuryPostSuspendResume{
+						Reason: "ops:manual-clear",
+					}
+				}))
+			},
+			want: "mission store treasury post_suspend_resume.source_ref is required",
+		},
+		{
+			name: "post suspend resume malformed consumed transition id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostSuspendResume = &TreasuryPostSuspendResume{
+						Reason:               "ops:manual-clear",
+						SourceRef:            "resume:manual-clear-a",
+						ConsumedTransitionID: "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_suspend_resume transition_id "bad/id" is invalid`,
+		},
+		{
+			name: "post suspend resume consumed transition requires active state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateSuspended
+					record.PostSuspendResume = &TreasuryPostSuspendResume{
+						Reason:               "ops:manual-clear",
+						SourceRef:            "resume:manual-clear-a",
+						ConsumedTransitionID: "transition-resume-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_suspend_resume consumed transition requires state "active", got "suspended"`,
+		},
+		{
 			name: "post active allocate requires active treasury state",
 			run: func() error {
 				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
@@ -2483,6 +2548,55 @@ func TestResolveExecutionContextTreasuryPostActiveSuspendResolvesCommittedActive
 	}
 	if !reflect.DeepEqual(got.PostActiveSuspend, *record.PostActiveSuspend) {
 		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSuspend().PostActiveSuspend = %#v, want %#v", got.PostActiveSuspend, *record.PostActiveSuspend)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostSuspendResumeResolvesCommittedSuspendedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 5, 45, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-suspend-resume"
+		record.State = TreasuryStateSuspended
+		record.PostActiveSuspend = &TreasuryPostActiveSuspend{
+			Reason:               "risk:manual-review-required",
+			SourceRef:            "suspend:risk-review-a",
+			ConsumedTransitionID: "transition-suspend-a",
+		}
+		record.PostSuspendResume = &TreasuryPostSuspendResume{
+			Reason:    "ops:manual-clear",
+			SourceRef: "resume:manual-clear-a",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostSuspendResume(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostSuspendResume() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostSuspendResume() = nil, want resolved post-suspend resume")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostSuspendResume().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostSuspendResume, *record.PostSuspendResume) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostSuspendResume().PostSuspendResume = %#v, want %#v", got.PostSuspendResume, *record.PostSuspendResume)
 	}
 }
 

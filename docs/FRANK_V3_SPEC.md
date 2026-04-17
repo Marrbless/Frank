@@ -1625,6 +1625,13 @@ exact suspend reason, source reference, and optional same-record consumed
 transition linkage needed to record one committed active-to-suspended treasury
 state transition, without inventing a second treasury lifecycle registry.
 
+For the approved first post-suspend treasury resume lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_suspend_resume` block for already-suspended treasuries. It holds only the
+exact resume reason, source reference, and optional same-record consumed
+transition linkage needed to record one committed suspended-to-active treasury
+state transition, without inventing a second treasury lifecycle registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

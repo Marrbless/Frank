@@ -824,6 +824,95 @@ func TestRecordPostActiveTreasurySuspendReplayFailsClosedAfterCommittedConsumpti
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-suspend-replay")
 }
 
+func TestRecordPostSuspendTreasuryResumeTransitionsTreasuryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 15, 50, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-suspend-resume"
+		record.State = TreasuryStateSuspended
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSuspend = &TreasuryPostActiveSuspend{
+			Reason:               "risk:manual-review-required",
+			SourceRef:            "suspend:risk-review-a",
+			ConsumedTransitionID: "transition-suspend-a",
+		}
+		record.PostSuspendResume = &TreasuryPostSuspendResume{
+			Reason:    "ops:manual-clear",
+			SourceRef: "resume:manual-clear-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostSuspendTreasuryResume(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostSuspendTreasuryResumeRecordInput{
+		TreasuryID: "treasury-post-suspend-resume",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostSuspendTreasuryResume() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-suspend-resume")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.State != TreasuryStateActive {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", treasury.State, TreasuryStateActive)
+	}
+	if treasury.PostSuspendResume == nil || treasury.PostSuspendResume.ConsumedTransitionID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostSuspendResume = %#v, want consumed transition linkage", treasury.PostSuspendResume)
+	}
+	if treasury.PostActiveSuspend != nil {
+		t.Fatalf("LoadTreasuryRecord().PostActiveSuspend = %#v, want cleared consumed suspend block after resume", treasury.PostActiveSuspend)
+	}
+	if !treasury.UpdatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryRecord().UpdatedAt = %s, want %s", treasury.UpdatedAt, recordedAt.UTC())
+	}
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-suspend-resume")
+}
+
+func TestRecordPostSuspendTreasuryResumeReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 15, 55, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-suspend-resume-replay"
+		record.State = TreasuryStateSuspended
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSuspend = &TreasuryPostActiveSuspend{
+			Reason:               "risk:manual-review-required",
+			SourceRef:            "suspend:risk-review-b",
+			ConsumedTransitionID: "transition-suspend-b",
+		}
+		record.PostSuspendResume = &TreasuryPostSuspendResume{
+			Reason:    "ops:manual-clear",
+			SourceRef: "resume:manual-clear-b",
+		}
+	}))
+
+	input := PostSuspendTreasuryResumeRecordInput{TreasuryID: "treasury-post-suspend-resume-replay"}
+	if err := RecordPostSuspendTreasuryResume(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostSuspendTreasuryResume(first) error = %v", err)
+	}
+
+	err := RecordPostSuspendTreasuryResume(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostSuspendTreasuryResume(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-suspend-resume-replay" post-suspend resume already consumed by transition "`) {
+		t.Fatalf("RecordPostSuspendTreasuryResume(replay) error = %q, want consumed rejection", err.Error())
+	}
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-suspend-resume-replay")
+}
+
 func TestRecordPostActiveTreasuryAllocateAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

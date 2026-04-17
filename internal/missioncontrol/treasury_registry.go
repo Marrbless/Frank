@@ -60,6 +60,7 @@ type TreasuryRecord struct {
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
 	PostActiveSuspend        *TreasuryPostActiveSuspend        `json:"post_active_suspend,omitempty"`
+	PostSuspendResume        *TreasuryPostSuspendResume        `json:"post_suspend_resume,omitempty"`
 	PostActiveAllocate       *TreasuryPostActiveAllocate       `json:"post_active_allocate,omitempty"`
 	PostActiveReinvest       *TreasuryPostActiveReinvest       `json:"post_active_reinvest,omitempty"`
 	PostActiveSpend          *TreasuryPostActiveSpend          `json:"post_active_spend,omitempty"`
@@ -88,6 +89,12 @@ type TreasuryPostBootstrapAcquisition struct {
 }
 
 type TreasuryPostActiveSuspend struct {
+	Reason               string `json:"reason"`
+	SourceRef            string `json:"source_ref"`
+	ConsumedTransitionID string `json:"consumed_transition_id,omitempty"`
+}
+
+type TreasuryPostSuspendResume struct {
 	Reason               string `json:"reason"`
 	SourceRef            string `json:"source_ref"`
 	ConsumedTransitionID string `json:"consumed_transition_id,omitempty"`
@@ -230,6 +237,11 @@ type ResolvedExecutionContextTreasuryPostActiveSuspend struct {
 	PostActiveSuspend TreasuryPostActiveSuspend `json:"post_active_suspend"`
 }
 
+type ResolvedExecutionContextTreasuryPostSuspendResume struct {
+	Treasury          TreasuryRecord            `json:"treasury"`
+	PostSuspendResume TreasuryPostSuspendResume `json:"post_suspend_resume"`
+}
+
 type ResolvedExecutionContextTreasuryPostActiveAllocate struct {
 	Treasury           TreasuryRecord             `json:"treasury"`
 	PostActiveAllocate TreasuryPostActiveAllocate `json:"post_active_allocate"`
@@ -343,6 +355,18 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 			}
 		} else if NormalizeTreasuryState(record.State) != TreasuryStateSuspended {
 			return fmt.Errorf("mission store treasury post_active_suspend consumed transition requires state %q, got %q", TreasuryStateSuspended, record.State)
+		}
+	}
+	if record.PostSuspendResume != nil {
+		if err := validateTreasuryPostSuspendResume(*record.PostSuspendResume); err != nil {
+			return err
+		}
+		if strings.TrimSpace(record.PostSuspendResume.ConsumedTransitionID) == "" {
+			if NormalizeTreasuryState(record.State) != TreasuryStateSuspended {
+				return fmt.Errorf("mission store treasury post_suspend_resume requires state %q, got %q", TreasuryStateSuspended, record.State)
+			}
+		} else if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_suspend_resume consumed transition requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if record.PostActiveAllocate != nil {
@@ -531,6 +555,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
 	record.PostActiveSuspend = normalizeTreasuryPostActiveSuspend(record.PostActiveSuspend)
+	record.PostSuspendResume = normalizeTreasuryPostSuspendResume(record.PostSuspendResume)
 	record.PostActiveAllocate = normalizeTreasuryPostActiveAllocate(record.PostActiveAllocate)
 	record.PostActiveReinvest = normalizeTreasuryPostActiveReinvest(record.PostActiveReinvest)
 	record.PostActiveSpend = normalizeTreasuryPostActiveSpend(record.PostActiveSpend)
@@ -702,6 +727,42 @@ func ResolveExecutionContextTreasuryPostActiveSuspend(ec ExecutionContext) (*Res
 	return &ResolvedExecutionContextTreasuryPostActiveSuspend{
 		Treasury:          *treasury,
 		PostActiveSuspend: *treasury.PostActiveSuspend,
+	}, nil
+}
+
+func ResolveExecutionContextTreasuryPostSuspendResume(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostSuspendResume, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.PostSuspendResume == nil {
+		return nil, nil
+	}
+	block := *treasury.PostSuspendResume
+	if strings.TrimSpace(block.ConsumedTransitionID) != "" {
+		if treasury.State == TreasuryStateActive {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_suspend_resume is already consumed by transition %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(block.ConsumedTransitionID),
+		)
+	}
+	if treasury.State != TreasuryStateSuspended {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_suspend_resume requires state %q, got %q",
+			treasury.TreasuryID,
+			TreasuryStateSuspended,
+			treasury.State,
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostSuspendResume{
+		Treasury:          *treasury,
+		PostSuspendResume: block,
 	}, nil
 }
 
@@ -1161,6 +1222,17 @@ func normalizeTreasuryPostActiveSuspend(block *TreasuryPostActiveSuspend) *Treas
 	return &normalized
 }
 
+func normalizeTreasuryPostSuspendResume(block *TreasuryPostSuspendResume) *TreasuryPostSuspendResume {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.Reason = strings.TrimSpace(normalized.Reason)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.ConsumedTransitionID = strings.TrimSpace(normalized.ConsumedTransitionID)
+	return &normalized
+}
+
 func normalizeTreasuryPostActiveAllocate(block *TreasuryPostActiveAllocate) *TreasuryPostActiveAllocate {
 	if block == nil {
 		return nil
@@ -1292,6 +1364,21 @@ func validateTreasuryPostActiveSuspend(block TreasuryPostActiveSuspend) error {
 	}
 	if strings.TrimSpace(block.ConsumedTransitionID) != "" {
 		if err := validateTreasuryTransitionID(block.ConsumedTransitionID, "mission store treasury post_active_suspend"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostSuspendResume(block TreasuryPostSuspendResume) error {
+	if strings.TrimSpace(block.Reason) == "" {
+		return fmt.Errorf("mission store treasury post_suspend_resume.reason is required")
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_suspend_resume.source_ref is required")
+	}
+	if strings.TrimSpace(block.ConsumedTransitionID) != "" {
+		if err := validateTreasuryTransitionID(block.ConsumedTransitionID, "mission store treasury post_suspend_resume"); err != nil {
 			return err
 		}
 	}

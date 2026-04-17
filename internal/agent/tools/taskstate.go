@@ -39,6 +39,7 @@ type TaskState struct {
 	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryPostActiveSuspendHook  func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
+	treasuryPostSuspendResumeHook  func(string, missioncontrol.WriterLockLease, missioncontrol.PostSuspendTreasuryResumeInput, time.Time) error
 	treasuryPostActiveAllocateHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryAllocateInput, time.Time) error
 	treasuryPostActiveReinvestHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryReinvestInput, time.Time) error
 	treasuryPostActiveSpendHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySpendInput, time.Time) error
@@ -57,6 +58,7 @@ func NewTaskState() *TaskState {
 		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryPostActiveSuspendHook:  missioncontrol.ProducePostActiveTreasurySuspend,
+		treasuryPostSuspendResumeHook:  missioncontrol.ProducePostSuspendTreasuryResume,
 		treasuryPostActiveAllocateHook: missioncontrol.ProducePostActiveTreasuryAllocate,
 		treasuryPostActiveReinvestHook: missioncontrol.ProducePostActiveTreasuryReinvest,
 		treasuryPostActiveSpendHook:    missioncontrol.ProducePostActiveTreasurySpend,
@@ -321,6 +323,7 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
 	bootstrapHook := s.treasuryBootstrapProducerHook
 	postActiveSuspendHook := s.treasuryPostActiveSuspendHook
+	postSuspendResumeHook := s.treasuryPostSuspendResumeHook
 	postActiveAllocateHook := s.treasuryPostActiveAllocateHook
 	postActiveReinvestHook := s.treasuryPostActiveReinvestHook
 	postActiveSpendHook := s.treasuryPostActiveSpendHook
@@ -450,6 +453,17 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 		}, now)
 	}
 	if treasury.State == missioncontrol.TreasuryStateSuspended {
+		if postSuspendResumeHook != nil {
+			resolvedResume, err := missioncontrol.ResolveExecutionContextTreasuryPostSuspendResume(ec)
+			if err != nil {
+				return err
+			}
+			if resolvedResume != nil {
+				return postSuspendResumeHook(root, lease, missioncontrol.PostSuspendTreasuryResumeInput{
+					TreasuryRef: *ec.Step.TreasuryRef,
+				}, now)
+			}
+		}
 		return nil
 	}
 	if hook == nil {
