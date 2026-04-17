@@ -901,6 +901,94 @@ func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmail
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotSupportsCampaignZohoEmailAmbiguousOutcomeFailureThreshold(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Now().UTC().Truncate(time.Second)
+
+	job := testProjectedRuntimeJob()
+	job.Plan.Steps[1].CampaignRef = &CampaignRef{CampaignID: "campaign-mail"}
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-mail"
+		record.FrankObjectRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+			{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+		record.StopConditions = []string{"stop after 3 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "ambiguous_outcomes", Limit: 2}
+		record.ZohoEmailAddressing = &CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		}
+	})
+	if err := StoreCampaignRecord(root, campaign); err != nil {
+		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	runtime := JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{
+			mustBuildPreparedCampaignZohoEmailOutboundAction(t, "build", "campaign-mail", "subject-1", now.Add(-2*time.Minute)),
+			mustBuildPreparedCampaignZohoEmailOutboundAction(t, "build", "campaign-mail", "subject-2", now.Add(-time.Minute)),
+		},
+		CreatedAt:    now.Add(-3 * time.Minute),
+		UpdatedAt:    now,
+		StartedAt:    now.Add(-3 * time.Minute),
+		ActiveStepAt: now.Add(-2 * time.Minute),
+	}
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(root, job.ID, MissionStatusSnapshotOptions{
+		MissionFile: "mission.json",
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+
+	if snapshot.RuntimeSummary == nil {
+		t.Fatal("RuntimeSummary = nil, want committed runtime summary")
+	}
+	gate := snapshot.RuntimeSummary.CampaignZohoEmailSendGate
+	if gate == nil {
+		t.Fatal("RuntimeSummary.CampaignZohoEmailSendGate = nil, want derived gate")
+	}
+	if gate.CampaignID != "campaign-mail" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
+	}
+	if gate.Allowed {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want false at ambiguous-outcome limit: %#v", gate)
+	}
+	if !gate.Halted {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = false, want true at ambiguous-outcome limit: %#v", gate)
+	}
+	if gate.FailureThresholdMetric != "ambiguous_outcomes" {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.FailureThresholdMetric = %q, want ambiguous_outcomes", gate.FailureThresholdMetric)
+	}
+	if gate.AmbiguousOutcomeCount != 2 {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.AmbiguousOutcomeCount = %d, want 2", gate.AmbiguousOutcomeCount)
+	}
+	if gate.Reason != `campaign zoho email failure_threshold "ambiguous_outcomes" reached 2/2 counted ambiguous outcomes` {
+		t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want ambiguous-outcome threshold reason", gate.Reason)
+	}
+}
+
 func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSchedulerTriggers(t *testing.T) {
 	t.Parallel()
 

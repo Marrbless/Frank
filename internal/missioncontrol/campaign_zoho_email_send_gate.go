@@ -302,15 +302,26 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRe
 
 	decision.FailureThresholdMetric = normalizedCampaign.FailureThreshold.Metric
 	decision.FailureThresholdLimit = normalizedCampaign.FailureThreshold.Limit
+	failureCount := decision.FailureCount
+	failureLabel := "counted failures"
 	switch normalizedCampaign.FailureThreshold.Metric {
 	case "rejections", "verified_failed_sends":
+	case "ambiguous_outcomes":
+		failureCount = decision.AmbiguousOutcomeCount
+		failureLabel = "counted ambiguous outcomes"
 	default:
 		return CampaignZohoEmailSendGateDecision{}, fmt.Errorf("campaign zoho email failure_threshold.metric %q is not evaluable from committed outbound action records", normalizedCampaign.FailureThreshold.Metric)
 	}
-	if decision.FailureCount >= normalizedCampaign.FailureThreshold.Limit {
+	if failureCount >= normalizedCampaign.FailureThreshold.Limit {
 		decision.Allowed = false
 		decision.Halted = true
-		decision.Reason = fmt.Sprintf("campaign zoho email failure_threshold %q reached %d/%d counted failures", normalizedCampaign.FailureThreshold.Metric, decision.FailureCount, normalizedCampaign.FailureThreshold.Limit)
+		decision.Reason = fmt.Sprintf(
+			"campaign zoho email failure_threshold %q reached %d/%d %s",
+			normalizedCampaign.FailureThreshold.Metric,
+			failureCount,
+			normalizedCampaign.FailureThreshold.Limit,
+			failureLabel,
+		)
 		return decision, nil
 	}
 

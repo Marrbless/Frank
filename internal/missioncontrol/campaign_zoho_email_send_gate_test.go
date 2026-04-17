@@ -160,6 +160,43 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtFailureThreshold(t *testi
 	}
 }
 
+func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtAmbiguousOutcomeThreshold(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 19, 20, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 5 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "ambiguous_outcomes", Limit: 2}
+	})
+
+	records := []CampaignZohoEmailOutboundActionRecord{
+		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildPreparedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now)),
+		testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildPreparedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute))),
+		testCampaignZohoEmailOutboundActionRecord("job-3", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-3", "campaign-zoho", "subject-3", now.Add(2*time.Minute))),
+	}
+
+	decision, err := DeriveCampaignZohoEmailSendGateDecision(campaign, records, nil)
+	if err != nil {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %v", err)
+	}
+	if decision.Allowed {
+		t.Fatal("Decision.Allowed = true, want false once ambiguous-outcome threshold is reached")
+	}
+	if !decision.Halted {
+		t.Fatal("Decision.Halted = false, want true once ambiguous-outcome threshold is reached")
+	}
+	if decision.FailureThresholdMetric != "ambiguous_outcomes" {
+		t.Fatalf("Decision.FailureThresholdMetric = %q, want ambiguous_outcomes", decision.FailureThresholdMetric)
+	}
+	if decision.AmbiguousOutcomeCount != 2 {
+		t.Fatalf("Decision.AmbiguousOutcomeCount = %d, want 2", decision.AmbiguousOutcomeCount)
+	}
+	if decision.FailureCount != 0 {
+		t.Fatalf("Decision.FailureCount = %d, want 0", decision.FailureCount)
+	}
+}
+
 func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtReplyStopLimit(t *testing.T) {
 	t.Parallel()
 
