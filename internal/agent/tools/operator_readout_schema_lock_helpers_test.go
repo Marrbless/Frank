@@ -140,6 +140,9 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 	if _, ok := treasury["post_bootstrap_acquisition"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_bootstrap_acquisition")
 	}
+	if _, ok := treasury["post_active_suspend"]; ok {
+		treasuryKeys = append(treasuryKeys, "post_active_suspend")
+	}
 	if _, ok := treasury["post_active_allocate"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_active_allocate")
 	}
@@ -173,6 +176,17 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 			postBootstrapKeys = append(postBootstrapKeys, "consumed_entry_id")
 		}
 		assertTaskStateJSONObjectKeys(t, postBootstrapObject, postBootstrapKeys...)
+	}
+	if postActiveSuspend, ok := treasury["post_active_suspend"]; ok {
+		postActiveSuspendObject, ok := postActiveSuspend.(map[string]any)
+		if !ok {
+			t.Fatalf("treasury_preflight.treasury.post_active_suspend = %#v, want object", postActiveSuspend)
+		}
+		postActiveSuspendKeys := []string{"reason", "source_ref"}
+		if _, ok := postActiveSuspendObject["consumed_transition_id"]; ok {
+			postActiveSuspendKeys = append(postActiveSuspendKeys, "consumed_transition_id")
+		}
+		assertTaskStateJSONObjectKeys(t, postActiveSuspendObject, postActiveSuspendKeys...)
 	}
 	if postActiveAllocate, ok := treasury["post_active_allocate"]; ok {
 		postActiveAllocateObject, ok := postActiveAllocate.(map[string]any)

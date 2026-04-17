@@ -748,6 +748,82 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasurySuspendTransitionsTreasuryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 15, 35, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-suspend"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSuspend = &TreasuryPostActiveSuspend{
+			Reason:    "risk:manual-review-required",
+			SourceRef: "suspend:risk-review-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasurySuspend(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasurySuspendRecordInput{
+		TreasuryID: "treasury-post-active-suspend",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySuspend() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-suspend")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.State != TreasuryStateSuspended {
+		t.Fatalf("LoadTreasuryRecord().State = %q, want %q", treasury.State, TreasuryStateSuspended)
+	}
+	if treasury.PostActiveSuspend == nil || treasury.PostActiveSuspend.ConsumedTransitionID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveSuspend = %#v, want consumed transition linkage", treasury.PostActiveSuspend)
+	}
+	if !treasury.UpdatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryRecord().UpdatedAt = %s, want %s", treasury.UpdatedAt, recordedAt.UTC())
+	}
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-suspend")
+}
+
+func TestRecordPostActiveTreasurySuspendReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 14, 15, 45, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-suspend-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSuspend = &TreasuryPostActiveSuspend{
+			Reason:    "risk:manual-review-required",
+			SourceRef: "suspend:risk-review-b",
+		}
+	}))
+
+	input := PostActiveTreasurySuspendRecordInput{TreasuryID: "treasury-post-active-suspend-replay"}
+	if err := RecordPostActiveTreasurySuspend(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySuspend(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasurySuspend(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasurySuspend(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-suspend-replay" post-active suspend already consumed by transition "`) {
+		t.Fatalf("RecordPostActiveTreasurySuspend(replay) error = %q, want consumed rejection", err.Error())
+	}
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-suspend-replay")
+}
+
 func TestRecordPostActiveTreasuryAllocateAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

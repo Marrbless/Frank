@@ -645,6 +645,73 @@ func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSaveW
 	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
 }
 
+func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSuspendWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: &TreasuryRecord{
+			RecordVersion:  StoreRecordVersion,
+			TreasuryID:     "treasury-wallet",
+			DisplayName:    "Frank Treasury",
+			State:          TreasuryStateSuspended,
+			ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+			PostActiveSuspend: &TreasuryPostActiveSuspend{
+				Reason:               "risk:manual-review-required",
+				SourceRef:            "suspend:risk-review-a",
+				ConsumedTransitionID: "transition-suspend-value",
+			},
+			ContainerRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 21, 5, 0, 0, time.UTC),
+		},
+		Containers: []FrankContainerRecord{
+			{
+				RecordVersion:    StoreRecordVersion,
+				ContainerID:      "container-wallet",
+				ContainerKind:    "wallet",
+				Label:            "Primary Wallet",
+				ContainerClassID: "container-class-wallet",
+				State:            "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindTreasuryContainerClass,
+					RegistryID: "container-class-wallet",
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+	treasury := got["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveSuspend := treasury["post_active_suspend"].(map[string]any)
+	if postActiveSuspend["reason"] != "risk:manual-review-required" {
+		t.Fatalf("treasury_preflight.treasury.post_active_suspend.reason = %#v, want %q", postActiveSuspend["reason"], "risk:manual-review-required")
+	}
+	if postActiveSuspend["consumed_transition_id"] != "transition-suspend-value" {
+		t.Fatalf("treasury_preflight.treasury.post_active_suspend.consumed_transition_id = %#v, want %q", postActiveSuspend["consumed_transition_id"], "transition-suspend-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
+}
+
 func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveAllocateWhenPresent(t *testing.T) {
 	t.Parallel()
 

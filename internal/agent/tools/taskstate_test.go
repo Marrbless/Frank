@@ -918,6 +918,99 @@ func TestTaskStateActivateStepActiveTreasuryPathInvokesRealMutation(t *testing.T
 	}
 }
 
+func TestTaskStateActivateStepActiveTreasurySuspendPathCallsSuspendProducerOnce(t *testing.T) {
+	t.Parallel()
+
+	root, treasury := writeTaskStateActiveTreasurySuspendFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	suspendCalls := 0
+	allocateCalls := 0
+	var gotRoot string
+	var gotLease missioncontrol.WriterLockLease
+	var gotInput missioncontrol.PostActiveTreasurySuspendInput
+	var gotAt time.Time
+	state.treasuryPostActiveSuspendHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostActiveTreasurySuspendInput, now time.Time) error {
+		suspendCalls++
+		gotRoot = root
+		gotLease = lease
+		gotInput = input
+		gotAt = now
+		return nil
+	}
+	state.treasuryPostActiveAllocateHook = func(root string, lease missioncontrol.WriterLockLease, input missioncontrol.PostActiveTreasuryAllocateInput, now time.Time) error {
+		allocateCalls++
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	if suspendCalls != 1 {
+		t.Fatalf("treasuryPostActiveSuspendHook calls = %d, want 1", suspendCalls)
+	}
+	if allocateCalls != 0 {
+		t.Fatalf("treasuryPostActiveAllocateHook calls = %d, want 0 on active suspend path", allocateCalls)
+	}
+	if gotRoot != root {
+		t.Fatalf("treasuryPostActiveSuspendHook root = %q, want %q", gotRoot, root)
+	}
+	if gotLease.LeaseHolderID != taskStateTreasuryExecutionLeaseHolderID {
+		t.Fatalf("treasuryPostActiveSuspendHook lease = %#v, want %q", gotLease, taskStateTreasuryExecutionLeaseHolderID)
+	}
+	if !reflect.DeepEqual(gotInput, missioncontrol.PostActiveTreasurySuspendInput{
+		TreasuryRef: missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID},
+	}) {
+		t.Fatalf("treasuryPostActiveSuspendHook input = %#v, want treasury ref %q", gotInput, treasury.TreasuryID)
+	}
+	if gotAt.IsZero() {
+		t.Fatal("treasuryPostActiveSuspendHook now = zero, want activation timestamp")
+	}
+}
+
+func TestTaskStateActivateStepActiveTreasurySuspendPathInvokesRealProducer(t *testing.T) {
+	t.Parallel()
+
+	root, treasury := writeTaskStateActiveTreasurySuspendFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].TreasuryRef = &missioncontrol.TreasuryRef{TreasuryID: treasury.TreasuryID}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(first) error = %v", err)
+	}
+
+	firstTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(first) error = %v", err)
+	}
+	if firstTreasury.State != missioncontrol.TreasuryStateSuspended {
+		t.Fatalf("LoadTreasuryRecord(first).State = %q, want %q", firstTreasury.State, missioncontrol.TreasuryStateSuspended)
+	}
+	if firstTreasury.PostActiveSuspend == nil || firstTreasury.PostActiveSuspend.ConsumedTransitionID == "" {
+		t.Fatalf("LoadTreasuryRecord(first).PostActiveSuspend = %#v, want consumed transition linkage", firstTreasury.PostActiveSuspend)
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep(second) error = %v, want suspended no-op", err)
+	}
+
+	secondTreasury, err := missioncontrol.LoadTreasuryRecord(root, treasury.TreasuryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord(second) error = %v", err)
+	}
+	if !reflect.DeepEqual(secondTreasury, firstTreasury) {
+		t.Fatalf("LoadTreasuryRecord(second) = %#v, want unchanged %#v", secondTreasury, firstTreasury)
+	}
+}
+
 func TestTaskStateActivateStepActiveTreasuryAllocatePathCallsAllocateProducerOnce(t *testing.T) {
 	t.Parallel()
 
@@ -5376,6 +5469,23 @@ func writeTaskStateActiveTreasuryAcquisitionFixtures(t *testing.T) (string, miss
 		t.Fatalf("StoreTreasuryRecord() error = %v", err)
 	}
 	return root, treasury, container
+}
+
+func writeTaskStateActiveTreasurySuspendFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord) {
+	t.Helper()
+
+	root, treasury, _ := writeTaskStateTreasuryFixtures(t)
+
+	treasury.State = missioncontrol.TreasuryStateActive
+	treasury.PostActiveSuspend = &missioncontrol.TreasuryPostActiveSuspend{
+		Reason:    "risk:manual-review-required",
+		SourceRef: "suspend:risk-review-a",
+	}
+	treasury.UpdatedAt = treasury.UpdatedAt.Add(3 * time.Minute)
+	if err := missioncontrol.StoreTreasuryRecord(root, treasury); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	return root, treasury
 }
 
 func writeTaskStateActiveTreasuryAllocateFixtures(t *testing.T) (string, missioncontrol.TreasuryRecord, missioncontrol.FrankContainerRecord) {

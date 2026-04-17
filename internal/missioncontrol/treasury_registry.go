@@ -59,6 +59,7 @@ type TreasuryRecord struct {
 	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	PostActiveSuspend        *TreasuryPostActiveSuspend        `json:"post_active_suspend,omitempty"`
 	PostActiveAllocate       *TreasuryPostActiveAllocate       `json:"post_active_allocate,omitempty"`
 	PostActiveReinvest       *TreasuryPostActiveReinvest       `json:"post_active_reinvest,omitempty"`
 	PostActiveSpend          *TreasuryPostActiveSpend          `json:"post_active_spend,omitempty"`
@@ -84,6 +85,12 @@ type TreasuryPostBootstrapAcquisition struct {
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
 	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
+}
+
+type TreasuryPostActiveSuspend struct {
+	Reason               string `json:"reason"`
+	SourceRef            string `json:"source_ref"`
+	ConsumedTransitionID string `json:"consumed_transition_id,omitempty"`
 }
 
 type TreasuryPostActiveAllocate struct {
@@ -218,6 +225,11 @@ type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
 	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostActiveSuspend struct {
+	Treasury          TreasuryRecord            `json:"treasury"`
+	PostActiveSuspend TreasuryPostActiveSuspend `json:"post_active_suspend"`
+}
+
 type ResolvedExecutionContextTreasuryPostActiveAllocate struct {
 	Treasury           TreasuryRecord             `json:"treasury"`
 	PostActiveAllocate TreasuryPostActiveAllocate `json:"post_active_allocate"`
@@ -319,6 +331,18 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		}
 		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
 			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
+		}
+	}
+	if record.PostActiveSuspend != nil {
+		if err := validateTreasuryPostActiveSuspend(*record.PostActiveSuspend); err != nil {
+			return err
+		}
+		if strings.TrimSpace(record.PostActiveSuspend.ConsumedTransitionID) == "" {
+			if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+				return fmt.Errorf("mission store treasury post_active_suspend requires state %q, got %q", TreasuryStateActive, record.State)
+			}
+		} else if NormalizeTreasuryState(record.State) != TreasuryStateSuspended {
+			return fmt.Errorf("mission store treasury post_active_suspend consumed transition requires state %q, got %q", TreasuryStateSuspended, record.State)
 		}
 	}
 	if record.PostActiveAllocate != nil {
@@ -506,6 +530,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
+	record.PostActiveSuspend = normalizeTreasuryPostActiveSuspend(record.PostActiveSuspend)
 	record.PostActiveAllocate = normalizeTreasuryPostActiveAllocate(record.PostActiveAllocate)
 	record.PostActiveReinvest = normalizeTreasuryPostActiveReinvest(record.PostActiveReinvest)
 	record.PostActiveSpend = normalizeTreasuryPostActiveSpend(record.PostActiveSpend)
@@ -650,6 +675,33 @@ func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext
 	return &ResolvedExecutionContextTreasuryPostBootstrapAcquisition{
 		Treasury:                 *treasury,
 		PostBootstrapAcquisition: *treasury.PostBootstrapAcquisition,
+	}, nil
+}
+
+func ResolveExecutionContextTreasuryPostActiveSuspend(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostActiveSuspend, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostActiveSuspend == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(treasury.PostActiveSuspend.ConsumedTransitionID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_suspend is already consumed by transition %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(treasury.PostActiveSuspend.ConsumedTransitionID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostActiveSuspend{
+		Treasury:          *treasury,
+		PostActiveSuspend: *treasury.PostActiveSuspend,
 	}, nil
 }
 
@@ -1098,6 +1150,17 @@ func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcqui
 	return &normalized
 }
 
+func normalizeTreasuryPostActiveSuspend(block *TreasuryPostActiveSuspend) *TreasuryPostActiveSuspend {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.Reason = strings.TrimSpace(normalized.Reason)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.ConsumedTransitionID = strings.TrimSpace(normalized.ConsumedTransitionID)
+	return &normalized
+}
+
 func normalizeTreasuryPostActiveAllocate(block *TreasuryPostActiveAllocate) *TreasuryPostActiveAllocate {
 	if block == nil {
 		return nil
@@ -1214,6 +1277,21 @@ func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisi
 	}
 	if strings.TrimSpace(block.ConsumedEntryID) != "" {
 		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostActiveSuspend(block TreasuryPostActiveSuspend) error {
+	if strings.TrimSpace(block.Reason) == "" {
+		return fmt.Errorf("mission store treasury post_active_suspend.reason is required")
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_suspend.source_ref is required")
+	}
+	if strings.TrimSpace(block.ConsumedTransitionID) != "" {
+		if err := validateTreasuryTransitionID(block.ConsumedTransitionID, "mission store treasury post_active_suspend"); err != nil {
 			return err
 		}
 	}
@@ -1544,6 +1622,13 @@ func validateTreasuryID(treasuryID string, surface string) error {
 
 func validateTreasuryEntryID(entryID string, surface string) error {
 	if err := validateTreasuryIdentifierValue("entry_id", entryID); err != nil {
+		return fmt.Errorf("%s %w", surface, err)
+	}
+	return nil
+}
+
+func validateTreasuryTransitionID(transitionID string, surface string) error {
+	if err := validateTreasuryIdentifierValue("transition_id", transitionID); err != nil {
 		return fmt.Errorf("%s %w", surface, err)
 	}
 	return nil

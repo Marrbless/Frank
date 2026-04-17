@@ -1618,6 +1618,13 @@ from the active treasury container to one exact treasury-owned
 `allocation_target_ref`, plus optional same-record consumed linkage, without
 inventing a second treasury execution registry.
 
+For the approved first post-active treasury suspend lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_active_suspend` block for already-active treasuries. It holds only the
+exact suspend reason, source reference, and optional same-record consumed
+transition linkage needed to record one committed active-to-suspended treasury
+state transition, without inventing a second treasury lifecycle registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

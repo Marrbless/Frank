@@ -28,6 +28,10 @@ type PostBootstrapTreasuryAcquisitionInput struct {
 	TreasuryID string
 }
 
+type PostActiveTreasurySuspendRecordInput struct {
+	TreasuryID string
+}
+
 type PostActiveTreasuryAllocateRecordInput struct {
 	TreasuryID string
 }
@@ -250,6 +254,75 @@ func RecordPostBootstrapTreasuryAcquisition(root string, lease WriterLockLease, 
 		}
 
 		return commitPostBootstrapTreasuryAcquisitionBatch(root, updatedTreasury, entry)
+	})
+}
+
+// RecordPostActiveTreasurySuspend records exactly one post-active treasury
+// suspend transition by consuming the committed treasury.post_active_suspend
+// block on the same TreasuryRecord. The treasury record write is the only
+// visible commit point, so retries fail closed once the suspended state and
+// same-record consumed linkage have landed together.
+func RecordPostActiveTreasurySuspend(root string, lease WriterLockLease, input PostActiveTreasurySuspendRecordInput, now time.Time) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	input = normalizePostActiveTreasurySuspendRecordInput(input)
+	lock, err := acquireTreasuryMutationWriterLock(root, lease, now)
+	if err != nil {
+		return err
+	}
+
+	return withLockedTreasuryMutation(root, lock, now, func() error {
+		treasury, err := LoadTreasuryRecord(root, input.TreasuryID)
+		if err != nil {
+			return err
+		}
+		if treasury.PostActiveSuspend == nil {
+			return fmt.Errorf(
+				"mission store treasury %q post-active suspend requires committed treasury.post_active_suspend",
+				treasury.TreasuryID,
+			)
+		}
+		if strings.TrimSpace(treasury.PostActiveSuspend.ConsumedTransitionID) != "" {
+			return fmt.Errorf(
+				"mission store treasury %q post-active suspend already consumed by transition %q",
+				treasury.TreasuryID,
+				strings.TrimSpace(treasury.PostActiveSuspend.ConsumedTransitionID),
+			)
+		}
+		if treasury.State != TreasuryStateActive {
+			return fmt.Errorf(
+				"mission store treasury %q post-active suspend requires state %q, got %q",
+				treasury.TreasuryID,
+				TreasuryStateActive,
+				treasury.State,
+			)
+		}
+		if _, err := resolveTreasuryActiveContainerID(treasury); err != nil {
+			return err
+		}
+
+		block := *treasury.PostActiveSuspend
+		transitionID := derivePostActiveTreasurySuspendTransitionID(treasury.TreasuryID, block)
+
+		updatedTreasury := normalizeTreasuryRecord(treasury)
+		updatedTreasury.State = TreasuryStateSuspended
+		updatedTreasury.PostActiveSuspend.ConsumedTransitionID = transitionID
+		updatedTreasury.UpdatedAt = now
+		if err := ValidateTreasuryRecord(updatedTreasury); err != nil {
+			return err
+		}
+		if err := ValidateTreasuryContainerLinks(root, updatedTreasury.ContainerRefs); err != nil {
+			return err
+		}
+
+		return commitPostActiveTreasurySuspendBatch(root, updatedTreasury)
 	})
 }
 
@@ -822,6 +895,11 @@ func normalizePostBootstrapTreasuryAcquisitionInput(input PostBootstrapTreasuryA
 	return input
 }
 
+func normalizePostActiveTreasurySuspendRecordInput(input PostActiveTreasurySuspendRecordInput) PostActiveTreasurySuspendRecordInput {
+	input.TreasuryID = strings.TrimSpace(input.TreasuryID)
+	return input
+}
+
 func normalizePostActiveTreasuryAllocateRecordInput(input PostActiveTreasuryAllocateRecordInput) PostActiveTreasuryAllocateRecordInput {
 	input.TreasuryID = strings.TrimSpace(input.TreasuryID)
 	return input
@@ -1051,6 +1129,28 @@ func commitPostBootstrapTreasuryAcquisitionBatch(root string, treasury TreasuryR
 	return storeBatchWriteRecord(StoreTreasuryPath(root, treasury.TreasuryID), treasury)
 }
 
+func commitPostActiveTreasurySuspendBatch(root string, treasury TreasuryRecord) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryRecord(treasury); err != nil {
+		return err
+	}
+	if err := ValidateTreasuryContainerLinks(root, treasury.ContainerRefs); err != nil {
+		return err
+	}
+	if treasury.State != TreasuryStateSuspended {
+		return fmt.Errorf(
+			"mission store treasury post-active suspend target state %q is invalid",
+			treasury.State,
+		)
+	}
+	if treasury.PostActiveSuspend == nil || strings.TrimSpace(treasury.PostActiveSuspend.ConsumedTransitionID) == "" {
+		return fmt.Errorf("mission store treasury post-active suspend requires consumed_transition_id on committed treasury.post_active_suspend")
+	}
+	return storeBatchWriteRecord(StoreTreasuryPath(root, treasury.TreasuryID), treasury)
+}
+
 func commitPostActiveTreasuryAllocateBatch(root string, treasury TreasuryRecord, entry TreasuryLedgerEntry) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -1264,6 +1364,15 @@ func derivePostBootstrapTreasuryAcquisitionEntryID(treasuryID string, block Trea
 		block.ConfirmedAt.UTC().Format(time.RFC3339Nano),
 	}, "\x1f")))
 	return "entry-post-" + hex.EncodeToString(sum[:16])
+}
+
+func derivePostActiveTreasurySuspendTransitionID(treasuryID string, block TreasuryPostActiveSuspend) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strings.TrimSpace(treasuryID),
+		strings.TrimSpace(block.Reason),
+		strings.TrimSpace(block.SourceRef),
+	}, "\x1f")))
+	return "transition-suspend-" + hex.EncodeToString(sum[:16])
 }
 
 func derivePostActiveTreasuryAllocateEntryID(treasuryID string, block TreasuryPostActiveAllocate) string {
