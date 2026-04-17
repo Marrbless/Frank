@@ -1655,7 +1655,7 @@ func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailSendGate(t *testing
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", got["campaign_zoho_email_send_gate"])
 	}
-	assertJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
+	assertJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_bounce_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
 	if gateJSON["campaign_id"] != "campaign-mail" {
 		t.Fatalf("campaign_zoho_email_send_gate.campaign_id = %#v, want campaign-mail", gateJSON["campaign_id"])
 	}

@@ -289,7 +289,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnActivePath(t 
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
 	}
-	assertTaskStateJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
+	assertTaskStateJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_bounce_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
 	if gateJSON["campaign_id"] != campaign.CampaignID {
 		t.Fatalf("campaign_zoho_email_send_gate.campaign_id = %#v, want %q", gateJSON["campaign_id"], campaign.CampaignID)
 	}
@@ -348,7 +348,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
 	}
-	assertTaskStateJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
+	assertTaskStateJSONObjectKeys(t, gateJSON, "allowed", "ambiguous_outcome_count", "attributed_bounce_count", "attributed_reply_count", "campaign_id", "failure_count", "failure_threshold_limit", "failure_threshold_metric", "halted", "verified_success_count")
 	if gateJSON["campaign_id"] != campaign.CampaignID {
 		t.Fatalf("campaign_zoho_email_send_gate.campaign_id = %#v, want %q", gateJSON["campaign_id"], campaign.CampaignID)
 	}
@@ -461,13 +461,13 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailStopConditio
 	})
 }
 
-func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThresholdMetricAsClosedGate(t *testing.T) {
+func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailBouncedMessageThreshold(t *testing.T) {
 	t.Parallel()
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreTaskStateCampaignFixture(t, root, container)
 	campaign.StopConditions = []string{"stop after 3 verified sends"}
-	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 2}
 	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
 	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
 		t.Fatalf("StoreCampaignRecord() error = %v", err)
@@ -480,7 +480,39 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThres
 		State:        missioncontrol.JobStateRunning,
 		ActiveStepID: "build",
 	}
-	wantReason := `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records`
+	now := time.Now().UTC().Truncate(time.Second)
+	actionOne := mustBuildVerifiedFrankZohoCampaignAction(t, "build", campaign.CampaignID, "Frank intro one", now.Add(-3*time.Minute))
+	actionTwo := mustBuildVerifiedFrankZohoCampaignAction(t, "follow-up", campaign.CampaignID, "Frank intro two", now.Add(-2*time.Minute))
+	runtime.CampaignZohoEmailOutboundActions = []missioncontrol.CampaignZohoEmailOutboundAction{actionOne, actionTwo}
+	var changed bool
+	var err error
+	runtime, changed, err = missioncontrol.AppendFrankZohoBounceEvidence(runtime, missioncontrol.FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102001",
+		ReceivedAt:         now.Add(-time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+		CampaignID:         campaign.CampaignID,
+		OutboundActionID:   actionOne.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(first) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	runtime, changed, err = missioncontrol.AppendFrankZohoBounceEvidence(runtime, missioncontrol.FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102002",
+		ReceivedAt:         now.Add(-30 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102002/originalmessage",
+		CampaignID:         campaign.CampaignID,
+		OutboundActionID:   actionTwo.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(second) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	wantReason := `campaign zoho email failure_threshold "bounced_messages" reached 2/2 counted attributed bounces`
 
 	t.Run("active", func(t *testing.T) {
 		t.Parallel()
@@ -505,8 +537,11 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThres
 		if got.CampaignZohoEmailSendGate.Allowed {
 			t.Fatalf("CampaignZohoEmailSendGate.Allowed = true, want closed gate: %#v", got.CampaignZohoEmailSendGate)
 		}
-		if got.CampaignZohoEmailSendGate.Halted {
-			t.Fatalf("CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", got.CampaignZohoEmailSendGate)
+		if !got.CampaignZohoEmailSendGate.Halted {
+			t.Fatalf("CampaignZohoEmailSendGate.Halted = false, want halted gate at bounced-message threshold: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.AttributedBounceCount != 2 {
+			t.Fatalf("CampaignZohoEmailSendGate.AttributedBounceCount = %d, want 2", got.CampaignZohoEmailSendGate.AttributedBounceCount)
 		}
 		if got.CampaignZohoEmailSendGate.Reason != wantReason {
 			t.Fatalf("CampaignZohoEmailSendGate.Reason = %q, want %q", got.CampaignZohoEmailSendGate.Reason, wantReason)
@@ -519,6 +554,9 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThres
 		control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
 		if err != nil {
 			t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+		}
+		if err := missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "taskstate-bounced-threshold-test"}, &job, runtime, &control, now); err != nil {
+			t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
 		}
 
 		state := NewTaskState()
@@ -543,8 +581,11 @@ func TestTaskStateOperatorStatusSurfacesUnsupportedCampaignZohoEmailFailureThres
 		if got.CampaignZohoEmailSendGate.Allowed {
 			t.Fatalf("CampaignZohoEmailSendGate.Allowed = true, want closed gate: %#v", got.CampaignZohoEmailSendGate)
 		}
-		if got.CampaignZohoEmailSendGate.Halted {
-			t.Fatalf("CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", got.CampaignZohoEmailSendGate)
+		if !got.CampaignZohoEmailSendGate.Halted {
+			t.Fatalf("CampaignZohoEmailSendGate.Halted = false, want halted gate at bounced-message threshold: %#v", got.CampaignZohoEmailSendGate)
+		}
+		if got.CampaignZohoEmailSendGate.AttributedBounceCount != 2 {
+			t.Fatalf("CampaignZohoEmailSendGate.AttributedBounceCount = %d, want 2", got.CampaignZohoEmailSendGate.AttributedBounceCount)
 		}
 		if got.CampaignZohoEmailSendGate.Reason != wantReason {
 			t.Fatalf("CampaignZohoEmailSendGate.Reason = %q, want %q", got.CampaignZohoEmailSendGate.Reason, wantReason)

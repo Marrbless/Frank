@@ -23,6 +23,7 @@ type CampaignZohoEmailSendGateDecision struct {
 	TriggeredStopCondition string `json:"triggered_stop_condition,omitempty"`
 	VerifiedSuccessCount   int    `json:"verified_success_count"`
 	AttributedReplyCount   int    `json:"attributed_reply_count"`
+	AttributedBounceCount  int    `json:"attributed_bounce_count"`
 	FailureCount           int    `json:"failure_count"`
 	AmbiguousOutcomeCount  int    `json:"ambiguous_outcome_count"`
 	FailureThresholdMetric string `json:"failure_threshold_metric,omitempty"`
@@ -113,6 +114,55 @@ func ListCommittedAllFrankZohoInboundReplyRecords(root string) ([]FrankZohoInbou
 	return records, nil
 }
 
+func ListCommittedAllFrankZohoBounceEvidenceRecords(root string) ([]FrankZohoBounceEvidenceRecord, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(StoreJobsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	byBounceID := make(map[string]FrankZohoBounceEvidenceRecord)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		jobID := strings.TrimSpace(entry.Name())
+		if jobID == "" {
+			continue
+		}
+		records, err := ListCommittedFrankZohoBounceEvidenceRecords(root, jobID)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			existing, ok := byBounceID[record.BounceID]
+			if !ok || frankZohoBounceEvidenceRecordPreferred(record, existing) {
+				byBounceID[record.BounceID] = record
+			}
+		}
+	}
+
+	if len(byBounceID) == 0 {
+		return nil, nil
+	}
+	records := make([]FrankZohoBounceEvidenceRecord, 0, len(byBounceID))
+	for _, record := range byBounceID {
+		records = append(records, record)
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if !records[i].ReceivedAt.Equal(records[j].ReceivedAt) {
+			return records[i].ReceivedAt.Before(records[j].ReceivedAt)
+		}
+		return records[i].BounceID < records[j].BounceID
+	})
+	return records, nil
+}
+
 func ListCommittedCampaignZohoEmailOutboundActionRecordsByCampaign(root, campaignID string) ([]CampaignZohoEmailOutboundActionRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, err
@@ -167,7 +217,11 @@ func LoadCommittedCampaignZohoEmailSendGateDecision(root string, campaign Campai
 	if err != nil {
 		return CampaignZohoEmailSendGateDecision{}, err
 	}
-	return DeriveCampaignZohoEmailSendGateDecision(normalized, outboundRecords, inboundReplyRecords)
+	bounceRecords, err := ListCommittedAllFrankZohoBounceEvidenceRecords(root)
+	if err != nil {
+		return CampaignZohoEmailSendGateDecision{}, err
+	}
+	return DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence(normalized, outboundRecords, inboundReplyRecords, bounceRecords)
 }
 
 func DeriveCampaignZohoEmailSendGateDecisionFromRuntime(campaign CampaignRecord, runtime JobRuntimeState) (CampaignZohoEmailSendGateDecision, error) {
@@ -227,10 +281,45 @@ func DeriveCampaignZohoEmailSendGateDecisionFromRuntime(campaign CampaignRecord,
 			OriginalMessageURL: normalized.OriginalMessageURL,
 		})
 	}
-	return DeriveCampaignZohoEmailSendGateDecision(normalizeCampaignRecord(campaign), outboundRecords, inboundReplyRecords)
+	bounceRecords := make([]FrankZohoBounceEvidenceRecord, 0, len(runtime.FrankZohoBounceEvidence))
+	for _, evidence := range runtime.FrankZohoBounceEvidence {
+		normalized := NormalizeFrankZohoBounceEvidence(evidence)
+		bounceRecords = append(bounceRecords, FrankZohoBounceEvidenceRecord{
+			RecordVersion:             StoreRecordVersion,
+			LastSeq:                   1,
+			BounceID:                  normalized.BounceID,
+			JobID:                     runtime.JobID,
+			StepID:                    normalized.StepID,
+			Provider:                  normalized.Provider,
+			ProviderAccountID:         normalized.ProviderAccountID,
+			ProviderMessageID:         normalized.ProviderMessageID,
+			ProviderMailID:            normalized.ProviderMailID,
+			MIMEMessageID:             normalized.MIMEMessageID,
+			InReplyTo:                 normalized.InReplyTo,
+			References:                append([]string(nil), normalized.References...),
+			OriginalProviderMessageID: normalized.OriginalProviderMessageID,
+			OriginalProviderMailID:    normalized.OriginalProviderMailID,
+			OriginalMIMEMessageID:     normalized.OriginalMIMEMessageID,
+			FinalRecipient:            normalized.FinalRecipient,
+			DiagnosticCode:            normalized.DiagnosticCode,
+			ReceivedAt:                normalized.ReceivedAt,
+			OriginalMessageURL:        normalized.OriginalMessageURL,
+			CampaignID:                normalized.CampaignID,
+			OutboundActionID:          normalized.OutboundActionID,
+		})
+	}
+	return DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence(normalizeCampaignRecord(campaign), outboundRecords, inboundReplyRecords, bounceRecords)
 }
 
 func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRecords []CampaignZohoEmailOutboundActionRecord, inboundReplyRecords []FrankZohoInboundReplyRecord) (CampaignZohoEmailSendGateDecision, error) {
+	return deriveCampaignZohoEmailSendGateDecision(campaign, outboundRecords, inboundReplyRecords, nil)
+}
+
+func DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence(campaign CampaignRecord, outboundRecords []CampaignZohoEmailOutboundActionRecord, inboundReplyRecords []FrankZohoInboundReplyRecord, bounceRecords []FrankZohoBounceEvidenceRecord) (CampaignZohoEmailSendGateDecision, error) {
+	return deriveCampaignZohoEmailSendGateDecision(campaign, outboundRecords, inboundReplyRecords, bounceRecords)
+}
+
+func deriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRecords []CampaignZohoEmailOutboundActionRecord, inboundReplyRecords []FrankZohoInboundReplyRecord, bounceRecords []FrankZohoBounceEvidenceRecord) (CampaignZohoEmailSendGateDecision, error) {
 	normalizedCampaign := normalizeCampaignRecord(campaign)
 	decision := CampaignZohoEmailSendGateDecision{
 		CampaignID: strings.TrimSpace(normalizedCampaign.CampaignID),
@@ -275,6 +364,7 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRe
 		}
 	}
 	decision.AttributedReplyCount = campaignZohoEmailAttributedReplyCount(decision.CampaignID, outboundRecords, inboundReplyRecords)
+	decision.AttributedBounceCount = campaignZohoEmailAttributedBounceCount(decision.CampaignID, bounceRecords)
 
 	for _, stopCondition := range normalizedCampaign.StopConditions {
 		if limit, ok := campaignZohoEmailVerifiedSendStopLimit(stopCondition); ok {
@@ -309,6 +399,9 @@ func DeriveCampaignZohoEmailSendGateDecision(campaign CampaignRecord, outboundRe
 	case "ambiguous_outcomes":
 		failureCount = decision.AmbiguousOutcomeCount
 		failureLabel = "counted ambiguous outcomes"
+	case "bounced_messages":
+		failureCount = decision.AttributedBounceCount
+		failureLabel = "counted attributed bounces"
 	default:
 		return CampaignZohoEmailSendGateDecision{}, fmt.Errorf("campaign zoho email failure_threshold.metric %q is not evaluable from committed outbound action records", normalizedCampaign.FailureThreshold.Metric)
 	}
@@ -381,6 +474,20 @@ func campaignZohoEmailAttributedReplyCount(campaignID string, outboundRecords []
 	return count
 }
 
+func campaignZohoEmailAttributedBounceCount(campaignID string, bounceRecords []FrankZohoBounceEvidenceRecord) int {
+	count := 0
+	for _, record := range bounceRecords {
+		if strings.TrimSpace(record.CampaignID) != campaignID {
+			continue
+		}
+		if strings.TrimSpace(record.OutboundActionID) == "" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func sortCampaignZohoEmailOutboundActionRecords(byActionID map[string]CampaignZohoEmailOutboundActionRecord) []CampaignZohoEmailOutboundActionRecord {
 	if len(byActionID) == 0 {
 		return nil
@@ -426,6 +533,18 @@ func frankZohoInboundReplyRecordPreferred(candidate, existing FrankZohoInboundRe
 	}
 	leftPath := filepath.Join(strings.TrimSpace(candidate.JobID), strings.TrimSpace(candidate.ReplyID))
 	rightPath := filepath.Join(strings.TrimSpace(existing.JobID), strings.TrimSpace(existing.ReplyID))
+	return leftPath > rightPath
+}
+
+func frankZohoBounceEvidenceRecordPreferred(candidate, existing FrankZohoBounceEvidenceRecord) bool {
+	if !candidate.ReceivedAt.Equal(existing.ReceivedAt) {
+		return candidate.ReceivedAt.After(existing.ReceivedAt)
+	}
+	if candidate.LastSeq != existing.LastSeq {
+		return candidate.LastSeq > existing.LastSeq
+	}
+	leftPath := filepath.Join(strings.TrimSpace(candidate.JobID), strings.TrimSpace(candidate.BounceID))
+	rightPath := filepath.Join(strings.TrimSpace(existing.JobID), strings.TrimSpace(existing.BounceID))
 	return leftPath > rightPath
 }
 

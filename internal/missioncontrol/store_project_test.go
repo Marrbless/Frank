@@ -825,7 +825,7 @@ func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmail
 	}
 }
 
-func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmailFailureThresholdMetricAsClosedGate(t *testing.T) {
+func TestBuildCommittedMissionStatusSnapshotSupportsCampaignZohoEmailBouncedMessageFailureThreshold(t *testing.T) {
 	t.Parallel()
 
 	fixtures := writeExecutionContextFrankRegistryFixtures(t)
@@ -860,15 +860,124 @@ func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmail
 		t.Fatalf("StoreCampaignRecord() error = %v", err)
 	}
 
+	actionOne, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{To: []string{"person@example.com"}},
+		"Frank intro one",
+		"plaintext",
+		"Hello from Frank one",
+		now.Add(-3*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction(actionOne) error = %v", err)
+	}
+	actionOne, err = BuildCampaignZohoEmailOutboundSentAction(actionOne, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100001",
+		ProviderMailID:     "<mail-1@zoho.test>",
+		MIMEMessageID:      "<mime-1@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100001/originalmessage",
+	}, now.Add(-2*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction(actionOne) error = %v", err)
+	}
+	actionOne.State = CampaignZohoEmailOutboundActionStateVerified
+	actionOne.VerifiedAt = now.Add(-110 * time.Second)
+	if err := ValidateCampaignZohoEmailOutboundAction(actionOne); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(actionOne) error = %v", err)
+	}
+
+	actionTwo, err := BuildCampaignZohoEmailOutboundPreparedAction(
+		"build",
+		"campaign-mail",
+		"3323462000000008002",
+		"frank@omou.online",
+		"Frank",
+		CampaignZohoEmailAddressing{To: []string{"person@example.com"}},
+		"Frank intro two",
+		"plaintext",
+		"Hello from Frank two",
+		now.Add(-150*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundPreparedAction(actionTwo) error = %v", err)
+	}
+	actionTwo, err = BuildCampaignZohoEmailOutboundSentAction(actionTwo, FrankZohoSendReceipt{
+		StepID:             "build",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		FromAddress:        "frank@omou.online",
+		FromDisplayName:    "Frank",
+		ProviderMessageID:  "1711540357880100002",
+		ProviderMailID:     "<mail-2@zoho.test>",
+		MIMEMessageID:      "<mime-2@example.test>",
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880100002/originalmessage",
+	}, now.Add(-100*time.Second))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailOutboundSentAction(actionTwo) error = %v", err)
+	}
+	actionTwo.State = CampaignZohoEmailOutboundActionStateVerified
+	actionTwo.VerifiedAt = now.Add(-90 * time.Second)
+	if err := ValidateCampaignZohoEmailOutboundAction(actionTwo); err != nil {
+		t.Fatalf("ValidateCampaignZohoEmailOutboundAction(actionTwo) error = %v", err)
+	}
+
 	runtime := JobRuntimeState{
-		JobID:           job.ID,
-		State:           JobStateRunning,
-		ActiveStepID:    "build",
-		InspectablePlan: &inspectablePlan,
-		CreatedAt:       now.Add(-2 * time.Minute),
-		UpdatedAt:       now,
-		StartedAt:       now.Add(-2 * time.Minute),
-		ActiveStepAt:    now.Add(-time.Minute),
+		JobID:                            job.ID,
+		State:                            JobStateRunning,
+		ActiveStepID:                     "build",
+		InspectablePlan:                  &inspectablePlan,
+		CampaignZohoEmailOutboundActions: []CampaignZohoEmailOutboundAction{actionOne, actionTwo},
+		CreatedAt:                        now.Add(-2 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-2 * time.Minute),
+		ActiveStepAt:                     now.Add(-time.Minute),
+	}
+	var changed bool
+	runtime, changed, err = AppendFrankZohoBounceEvidence(runtime, FrankZohoBounceEvidence{
+		StepID:             "sync",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102001",
+		ReceivedAt:         now.Add(-30 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+		CampaignID:         "campaign-mail",
+		OutboundActionID:   actionOne.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(first) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	runtime, changed, err = AppendFrankZohoBounceEvidence(runtime, FrankZohoBounceEvidence{
+		StepID:             "sync",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102002",
+		ReceivedAt:         now.Add(-20 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102002/originalmessage",
+		CampaignID:         "campaign-mail",
+		OutboundActionID:   actionTwo.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(second) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	runtime, changed, err = AppendFrankZohoBounceEvidence(runtime, FrankZohoBounceEvidence{
+		StepID:             "sync",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102003",
+		ReceivedAt:         now.Add(-10 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102003/originalmessage",
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(third) changed=%v err=%v, want appended bounce evidence", changed, err)
 	}
 	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
 		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
@@ -889,14 +998,14 @@ func TestBuildCommittedMissionStatusSnapshotMayCarryUnsupportedCampaignZohoEmail
 		if gate.CampaignID != "campaign-mail" {
 			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.CampaignID = %q, want campaign-mail", gate.CampaignID)
 		}
-		if gate.Allowed {
-			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Allowed = true, want closed gate for unsupported failure threshold metric: %#v", gate)
+		if !gate.Allowed || gate.Halted {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate = %#v, want allowed non-halted gate below bounced-message threshold", gate)
 		}
-		if gate.Halted {
-			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Halted = true, want fail-closed unsupported gate without triggered halt: %#v", gate)
+		if gate.FailureThresholdMetric != "bounced_messages" {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.FailureThresholdMetric = %q, want bounced_messages", gate.FailureThresholdMetric)
 		}
-		if gate.Reason != `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records` {
-			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.Reason = %q, want unsupported failure-threshold reason", gate.Reason)
+		if gate.AttributedBounceCount != 2 {
+			t.Fatalf("RuntimeSummary.CampaignZohoEmailSendGate.AttributedBounceCount = %d, want 2", gate.AttributedBounceCount)
 		}
 	}
 }

@@ -144,7 +144,7 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignStopCondition(t *
 	}
 }
 
-func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdMetric(t *testing.T) {
+func TestFrankZohoSendEmailToolBlocksSendAtCampaignBouncedMessageThreshold(t *testing.T) {
 	t.Parallel()
 
 	var sendCalls atomic.Int32
@@ -156,10 +156,62 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdM
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
 	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
-	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+	campaign.FailureThreshold = missioncontrol.CampaignFailureThreshold{Metric: "bounced_messages", Limit: 2}
 	campaign.UpdatedAt = campaign.UpdatedAt.Add(time.Minute)
 	if err := missioncontrol.StoreCampaignRecord(root, campaign); err != nil {
 		t.Fatalf("StoreCampaignRecord() error = %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testTaskStateJob()
+	job.ID = "job-frank-zoho-bounce-threshold"
+	job.Plan.Steps[0].CampaignRef = &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID}
+	actionOne := mustBuildVerifiedFrankZohoCampaignAction(t, "build", campaign.CampaignID, "Frank intro one", now.Add(-3*time.Minute))
+	actionTwo := mustBuildVerifiedFrankZohoCampaignAction(t, "follow-up", campaign.CampaignID, "Frank intro two", now.Add(-2*time.Minute))
+	runtime := missioncontrol.JobRuntimeState{
+		JobID:                            job.ID,
+		State:                            missioncontrol.JobStateRunning,
+		ActiveStepID:                     "build",
+		CampaignZohoEmailOutboundActions: []missioncontrol.CampaignZohoEmailOutboundAction{actionOne, actionTwo},
+		CreatedAt:                        now.Add(-3 * time.Minute),
+		UpdatedAt:                        now,
+		StartedAt:                        now.Add(-3 * time.Minute),
+		ActiveStepAt:                     now.Add(-2 * time.Minute),
+	}
+	var changed bool
+	var err error
+	runtime, changed, err = missioncontrol.AppendFrankZohoBounceEvidence(runtime, missioncontrol.FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102001",
+		ReceivedAt:         now.Add(-time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+		CampaignID:         campaign.CampaignID,
+		OutboundActionID:   actionOne.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(first) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	runtime, changed, err = missioncontrol.AppendFrankZohoBounceEvidence(runtime, missioncontrol.FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "1711540357880102002",
+		ReceivedAt:         now.Add(-30 * time.Second),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102002/originalmessage",
+		CampaignID:         campaign.CampaignID,
+		OutboundActionID:   actionTwo.ActionID,
+	})
+	if err != nil || !changed {
+		t.Fatalf("AppendFrankZohoBounceEvidence(second) changed=%v err=%v, want appended bounce evidence", changed, err)
+	}
+	control, err := missioncontrol.BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if err := missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-bounced-threshold-test"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
 	}
 
 	reg := NewRegistry()
@@ -167,7 +219,7 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdM
 	reg.SetGuard(missioncontrol.NewDefaultToolGuard())
 
 	ec := testFrankZohoSendExecutionContext(root, campaign.CampaignID, tool.Name())
-	_, err := reg.Execute(
+	_, err = reg.Execute(
 		missioncontrol.WithExecutionContext(context.Background(), ec),
 		tool.Name(),
 		map[string]interface{}{
@@ -176,10 +228,10 @@ func TestFrankZohoSendEmailToolFailsClosedOnUnsupportedCampaignFailureThresholdM
 		},
 	)
 	if err == nil {
-		t.Fatal("Execute() error = nil, want unsupported failure-threshold rejection")
+		t.Fatal("Execute() error = nil, want bounced-message threshold rejection")
 	}
-	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records`) {
-		t.Fatalf("Execute() error = %q, want unsupported failure-threshold rejection", err)
+	if !strings.Contains(err.Error(), `campaign send gate is closed: campaign zoho email failure_threshold "bounced_messages" reached 2/2 counted attributed bounces`) {
+		t.Fatalf("Execute() error = %q, want bounced-message threshold rejection", err)
 	}
 	if got := sendCalls.Load(); got != 0 {
 		t.Fatalf("send calls = %d, want 0", got)
@@ -2547,6 +2599,48 @@ func testFrankZohoInboundReplyRecord(t *testing.T, jobID string, lastSeq uint64,
 		Subject:            normalized.Subject,
 		ReceivedAt:         normalized.ReceivedAt,
 		OriginalMessageURL: normalized.OriginalMessageURL,
+	}
+}
+
+func testFrankZohoBounceEvidenceRecord(t *testing.T, jobID string, lastSeq uint64, evidence missioncontrol.FrankZohoBounceEvidence) missioncontrol.FrankZohoBounceEvidenceRecord {
+	t.Helper()
+	normalized := missioncontrol.NormalizeFrankZohoBounceEvidence(evidence)
+	if normalized.BounceID == "" {
+		runtime, changed, err := missioncontrol.AppendFrankZohoBounceEvidence(missioncontrol.JobRuntimeState{}, normalized)
+		if err != nil {
+			t.Fatalf("AppendFrankZohoBounceEvidence() error = %v", err)
+		}
+		if !changed || len(runtime.FrankZohoBounceEvidence) != 1 {
+			t.Fatalf("AppendFrankZohoBounceEvidence() changed = %v len = %d, want one normalized bounce evidence", changed, len(runtime.FrankZohoBounceEvidence))
+		}
+		normalized = runtime.FrankZohoBounceEvidence[0]
+	}
+	stepID := normalized.StepID
+	if stepID == "" {
+		stepID = "sync-bounces"
+	}
+	return missioncontrol.FrankZohoBounceEvidenceRecord{
+		RecordVersion:             missioncontrol.StoreRecordVersion,
+		LastSeq:                   lastSeq,
+		BounceID:                  normalized.BounceID,
+		JobID:                     jobID,
+		StepID:                    stepID,
+		Provider:                  normalized.Provider,
+		ProviderAccountID:         normalized.ProviderAccountID,
+		ProviderMessageID:         normalized.ProviderMessageID,
+		ProviderMailID:            normalized.ProviderMailID,
+		MIMEMessageID:             normalized.MIMEMessageID,
+		InReplyTo:                 normalized.InReplyTo,
+		References:                append([]string(nil), normalized.References...),
+		OriginalProviderMessageID: normalized.OriginalProviderMessageID,
+		OriginalProviderMailID:    normalized.OriginalProviderMailID,
+		OriginalMIMEMessageID:     normalized.OriginalMIMEMessageID,
+		FinalRecipient:            normalized.FinalRecipient,
+		DiagnosticCode:            normalized.DiagnosticCode,
+		ReceivedAt:                normalized.ReceivedAt,
+		OriginalMessageURL:        normalized.OriginalMessageURL,
+		CampaignID:                normalized.CampaignID,
+		OutboundActionID:          normalized.OutboundActionID,
 	}
 }
 

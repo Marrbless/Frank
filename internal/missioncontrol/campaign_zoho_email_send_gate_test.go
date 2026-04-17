@@ -197,6 +197,72 @@ func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtAmbiguousOutcomeThreshold
 	}
 }
 
+func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtBouncedMessageThreshold(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 17, 19, 30, 0, 0, time.UTC)
+	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+		record.CampaignID = "campaign-zoho"
+		record.StopConditions = []string{"stop after 5 verified sends"}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "bounced_messages", Limit: 2}
+	})
+
+	records := []CampaignZohoEmailOutboundActionRecord{
+		testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now)),
+		testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute))),
+	}
+	bounces := []FrankZohoBounceEvidenceRecord{
+		testFrankZohoBounceEvidenceRecord(t, "job-b1", 1, NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+			StepID:             "sync",
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880102001",
+			ReceivedAt:         now.Add(2 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+			CampaignID:         "campaign-zoho",
+			OutboundActionID:   records[0].ActionID,
+		})),
+		testFrankZohoBounceEvidenceRecord(t, "job-b2", 1, NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+			StepID:             "sync",
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880102002",
+			ReceivedAt:         now.Add(3 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102002/originalmessage",
+			CampaignID:         "campaign-zoho",
+			OutboundActionID:   records[1].ActionID,
+		})),
+		testFrankZohoBounceEvidenceRecord(t, "job-b3", 1, NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+			StepID:             "sync",
+			Provider:           "zoho_mail",
+			ProviderAccountID:  "3323462000000008002",
+			ProviderMessageID:  "1711540357880102003",
+			ReceivedAt:         now.Add(4 * time.Minute),
+			OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/1711540357880102003/originalmessage",
+		})),
+	}
+
+	decision, err := DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence(campaign, records, nil, bounces)
+	if err != nil {
+		t.Fatalf("DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence() error = %v", err)
+	}
+	if decision.Allowed {
+		t.Fatal("Decision.Allowed = true, want false once bounced-message threshold is reached")
+	}
+	if !decision.Halted {
+		t.Fatal("Decision.Halted = false, want true once bounced-message threshold is reached")
+	}
+	if decision.FailureThresholdMetric != "bounced_messages" {
+		t.Fatalf("Decision.FailureThresholdMetric = %q, want bounced_messages", decision.FailureThresholdMetric)
+	}
+	if decision.AttributedBounceCount != 2 {
+		t.Fatalf("Decision.AttributedBounceCount = %d, want 2", decision.AttributedBounceCount)
+	}
+	if decision.Reason != `campaign zoho email failure_threshold "bounced_messages" reached 2/2 counted attributed bounces` {
+		t.Fatalf("Decision.Reason = %q, want bounced-message threshold reason", decision.Reason)
+	}
+}
+
 func TestDeriveCampaignZohoEmailSendGateDecisionHaltsAtReplyStopLimit(t *testing.T) {
 	t.Parallel()
 
@@ -267,21 +333,21 @@ func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedStopCond
 	}
 }
 
-func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedFailureThresholdMetric(t *testing.T) {
+func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedOpenFailureThresholdMetric(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 15, 19, 55, 0, 0, time.UTC)
 	campaign := validCampaignRecord(now, func(record *CampaignRecord) {
 		record.CampaignID = "campaign-zoho"
 		record.StopConditions = []string{"stop after 3 verified sends"}
-		record.FailureThreshold = CampaignFailureThreshold{Metric: "bounced_messages", Limit: 3}
+		record.FailureThreshold = CampaignFailureThreshold{Metric: "opens", Limit: 3}
 	})
 
 	_, err := DeriveCampaignZohoEmailSendGateDecision(campaign, nil, nil)
 	if err == nil {
 		t.Fatal("DeriveCampaignZohoEmailSendGateDecision() error = nil, want unsupported failure-threshold rejection")
 	}
-	if got := err.Error(); got != `campaign zoho email failure_threshold.metric "bounced_messages" is not evaluable from committed outbound action records` {
+	if got := err.Error(); got != `campaign zoho email failure_threshold.metric "opens" is not evaluable from committed outbound action records` {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported failure-threshold rejection", got)
 	}
 }
@@ -459,5 +525,47 @@ func testFrankZohoInboundReplyRecord(jobID string, lastSeq uint64, reply FrankZo
 		Subject:            normalized.Subject,
 		ReceivedAt:         normalized.ReceivedAt,
 		OriginalMessageURL: normalized.OriginalMessageURL,
+	}
+}
+
+func testFrankZohoBounceEvidenceRecord(t *testing.T, jobID string, lastSeq uint64, evidence FrankZohoBounceEvidence) FrankZohoBounceEvidenceRecord {
+	t.Helper()
+	normalized := NormalizeFrankZohoBounceEvidence(evidence)
+	if normalized.BounceID == "" {
+		runtime, changed, err := AppendFrankZohoBounceEvidence(JobRuntimeState{}, normalized)
+		if err != nil {
+			t.Fatalf("AppendFrankZohoBounceEvidence() error = %v", err)
+		}
+		if !changed || len(runtime.FrankZohoBounceEvidence) != 1 {
+			t.Fatalf("AppendFrankZohoBounceEvidence() changed = %v len = %d, want one normalized bounce evidence", changed, len(runtime.FrankZohoBounceEvidence))
+		}
+		normalized = runtime.FrankZohoBounceEvidence[0]
+	}
+	stepID := normalized.StepID
+	if stepID == "" {
+		stepID = "sync-bounces"
+	}
+	return FrankZohoBounceEvidenceRecord{
+		RecordVersion:             StoreRecordVersion,
+		LastSeq:                   lastSeq,
+		BounceID:                  normalized.BounceID,
+		JobID:                     jobID,
+		StepID:                    stepID,
+		Provider:                  normalized.Provider,
+		ProviderAccountID:         normalized.ProviderAccountID,
+		ProviderMessageID:         normalized.ProviderMessageID,
+		ProviderMailID:            normalized.ProviderMailID,
+		MIMEMessageID:             normalized.MIMEMessageID,
+		InReplyTo:                 normalized.InReplyTo,
+		References:                append([]string(nil), normalized.References...),
+		OriginalProviderMessageID: normalized.OriginalProviderMessageID,
+		OriginalProviderMailID:    normalized.OriginalProviderMailID,
+		OriginalMIMEMessageID:     normalized.OriginalMIMEMessageID,
+		FinalRecipient:            normalized.FinalRecipient,
+		DiagnosticCode:            normalized.DiagnosticCode,
+		ReceivedAt:                normalized.ReceivedAt,
+		OriginalMessageURL:        normalized.OriginalMessageURL,
+		CampaignID:                normalized.CampaignID,
+		OutboundActionID:          normalized.OutboundActionID,
 	}
 }
