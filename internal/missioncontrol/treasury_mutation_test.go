@@ -748,6 +748,138 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasurySpendAppendsDispositionEntryAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 50, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-spend"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.75",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetRef:       "vendor:domain-renewal",
+			SourceRef:       "spend:domain-renewal-a",
+			EvidenceLocator: "https://evidence.example/spend-a",
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasurySpend(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasurySpendRecordInput{
+		TreasuryID: "treasury-post-active-spend",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySpend() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-spend")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostActiveSpend == nil || treasury.PostActiveSpend.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveSpend = %#v, want consumed block", treasury.PostActiveSpend)
+	}
+	entry, err := LoadTreasuryLedgerEntry(root, "treasury-post-active-spend", treasury.PostActiveSpend.ConsumedEntryID)
+	if err != nil {
+		t.Fatalf("LoadTreasuryLedgerEntry() error = %v", err)
+	}
+	if entry.EntryKind != TreasuryLedgerEntryKindDisposition {
+		t.Fatalf("LoadTreasuryLedgerEntry().EntryKind = %q, want %q", entry.EntryKind, TreasuryLedgerEntryKindDisposition)
+	}
+	if entry.AssetCode != "USD" || entry.Amount != "0.75" || entry.SourceRef != "spend:domain-renewal-a" {
+		t.Fatalf("LoadTreasuryLedgerEntry() = %#v, want committed post-active spend payload", entry)
+	}
+	if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+		t.Fatalf("LoadTreasuryLedgerEntry().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+	}
+}
+
+func TestRecordPostActiveTreasurySpendReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 52, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-spend-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.85",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetRef: "vendor:domain-renewal",
+			SourceRef: "spend:domain-renewal-b",
+		}
+	}))
+
+	input := PostActiveTreasurySpendRecordInput{TreasuryID: "treasury-post-active-spend-replay"}
+	if err := RecordPostActiveTreasurySpend(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasurySpend(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasurySpend(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasurySpend(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-spend-replay" post-active spend already consumed by entry "`) {
+		t.Fatalf("RecordPostActiveTreasurySpend(replay) error = %q, want consumed rejection", err.Error())
+	}
+}
+
+func TestRecordPostActiveTreasurySpendFailsClosedWhenSourceDoesNotMatchActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 54, 0, 0, time.UTC)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-spend-mismatch"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.95",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-vault-mismatch",
+			},
+			TargetRef: "vendor:domain-renewal",
+			SourceRef: "spend:domain-renewal-c",
+		}
+	}))
+
+	err := RecordPostActiveTreasurySpend(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasurySpendRecordInput{
+		TreasuryID: "treasury-post-active-spend-mismatch",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasurySpend() error = nil, want source-container mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-spend-mismatch" post-active spend source_container_ref object_id "container-vault-mismatch" must match active treasury container "container-wallet"`) {
+		t.Fatalf("RecordPostActiveTreasurySpend() error = %q, want source-container mismatch rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-spend-mismatch")
+}
+
 func TestRecordPostActiveTreasuryTransferAppendsMovementEntryAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

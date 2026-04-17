@@ -645,6 +645,84 @@ func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSaveW
 	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
 }
 
+func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSpendWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: &TreasuryRecord{
+			RecordVersion:  StoreRecordVersion,
+			TreasuryID:     "treasury-wallet",
+			DisplayName:    "Frank Treasury",
+			State:          TreasuryStateActive,
+			ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+			PostActiveSpend: &TreasuryPostActiveSpend{
+				AssetCode: "USD",
+				Amount:    "0.75",
+				SourceContainerRef: FrankRegistryObjectRef{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+				TargetRef:       "vendor:domain-renewal",
+				SourceRef:       "spend:domain-renewal-a",
+				EvidenceLocator: "https://evidence.example/spend-a",
+				ConsumedEntryID: "entry-spend-value",
+			},
+			ContainerRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 21, 5, 0, 0, time.UTC),
+		},
+		Containers: []FrankContainerRecord{
+			{
+				RecordVersion:    StoreRecordVersion,
+				ContainerID:      "container-wallet",
+				ContainerKind:    "wallet",
+				Label:            "Primary Wallet",
+				ContainerClassID: "container-class-wallet",
+				State:            "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindTreasuryContainerClass,
+					RegistryID: "container-class-wallet",
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+	treasury := got["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveSpend := treasury["post_active_spend"].(map[string]any)
+	sourceRef := postActiveSpend["source_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("treasury_preflight.treasury.post_active_spend.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if postActiveSpend["target_ref"] != "vendor:domain-renewal" {
+		t.Fatalf("treasury_preflight.treasury.post_active_spend.target_ref = %#v, want %q", postActiveSpend["target_ref"], "vendor:domain-renewal")
+	}
+	if postActiveSpend["consumed_entry_id"] != "entry-spend-value" {
+		t.Fatalf("treasury_preflight.treasury.post_active_spend.consumed_entry_id = %#v, want %q", postActiveSpend["consumed_entry_id"], "entry-spend-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
+}
+
 func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveTransferWhenPresent(t *testing.T) {
 	t.Parallel()
 

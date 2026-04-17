@@ -409,6 +409,84 @@ func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSaveWhenPresent(t 
 	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
 }
 
+func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSpendWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"produce code"},
+					TreasuryRef:       &TreasuryRef{TreasuryID: "treasury-wallet"},
+				},
+				{
+					ID:   "final",
+					Type: StepTypeFinalResponse,
+				},
+			},
+		},
+	}
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-wallet"
+		record.State = TreasuryStateActive
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.75",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+			TargetRef:       "vendor:domain-renewal",
+			SourceRef:       "spend:domain-renewal-a",
+			EvidenceLocator: "https://evidence.example/spend-a",
+			ConsumedEntryID: "entry-spend-value",
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	if len(steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(steps))
+	}
+	step := steps[0].(map[string]any)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+	treasury := step["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveSpend := treasury["post_active_spend"].(map[string]any)
+	sourceRef := postActiveSpend["source_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_spend.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if postActiveSpend["target_ref"] != "vendor:domain-renewal" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_spend.target_ref = %#v, want %q", postActiveSpend["target_ref"], "vendor:domain-renewal")
+	}
+	if postActiveSpend["consumed_entry_id"] != "entry-spend-value" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_spend.consumed_entry_id = %#v, want %q", postActiveSpend["consumed_entry_id"], "entry-spend-value")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
+}
+
 func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveTransferWhenPresent(t *testing.T) {
 	t.Parallel()
 

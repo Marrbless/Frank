@@ -1594,6 +1594,14 @@ committed source container ref to one committed target container ref, plus
 optional evidence and same-record consumed linkage, without inventing a second
 treasury execution registry.
 
+For the approved first post-active treasury spend lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_active_spend` block for already-active treasuries. It holds only the
+spend inputs needed to record one committed spend disposition from the active
+treasury container to one exact external `target_ref`, plus optional evidence
+and same-record consumed linkage, without inventing a second treasury
+execution registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

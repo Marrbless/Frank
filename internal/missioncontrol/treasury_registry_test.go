@@ -52,6 +52,18 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			ConfirmedAt:     now.Add(2 * time.Minute),
 			ConsumedEntryID: " entry-post-value ",
 		},
+		PostActiveSpend: &TreasuryPostActiveSpend{
+			AssetCode: " USD ",
+			Amount:    " 0.75 ",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " " + fixtures.container.ContainerID + " ",
+			},
+			TargetRef:       " vendor:domain-renewal ",
+			SourceRef:       " spend:domain-renewal-a ",
+			EvidenceLocator: " https://evidence.example/spend-a ",
+			ConsumedEntryID: " entry-spend-value ",
+		},
 		PostActiveTransfer: &TreasuryPostActiveTransfer{
 			AssetCode: " USD ",
 			Amount:    " 1.05 ",
@@ -113,6 +125,18 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
 		ConsumedEntryID: "entry-post-value",
+	}
+	want.PostActiveSpend = &TreasuryPostActiveSpend{
+		AssetCode: "USD",
+		Amount:    "0.75",
+		SourceContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		},
+		TargetRef:       "vendor:domain-renewal",
+		SourceRef:       "spend:domain-renewal-a",
+		EvidenceLocator: "https://evidence.example/spend-a",
+		ConsumedEntryID: "entry-spend-value",
 	}
 	want.PostActiveTransfer = &TreasuryPostActiveTransfer{
 		AssetCode: "USD",
@@ -545,6 +569,95 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
+		},
+		{
+			name: "post active spend requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostActiveSpend = &TreasuryPostActiveSpend{
+						AssetCode: "USD",
+						Amount:    "0.75",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetRef: "vendor:domain-renewal",
+						SourceRef: "spend:domain-renewal-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_spend requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post active spend missing source container ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSpend = &TreasuryPostActiveSpend{
+						AssetCode: "USD",
+						Amount:    "0.75",
+						TargetRef: "vendor:domain-renewal",
+						SourceRef: "spend:domain-renewal-a",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_spend.source_container_ref: Frank object ref kind "" is invalid`,
+		},
+		{
+			name: "post active spend missing target ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSpend = &TreasuryPostActiveSpend{
+						AssetCode: "USD",
+						Amount:    "0.75",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						SourceRef: "spend:domain-renewal-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_spend.target_ref is required",
+		},
+		{
+			name: "post active spend missing source ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSpend = &TreasuryPostActiveSpend{
+						AssetCode: "USD",
+						Amount:    "0.75",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetRef: "vendor:domain-renewal",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_spend.source_ref is required",
+		},
+		{
+			name: "post active spend malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveSpend = &TreasuryPostActiveSpend{
+						AssetCode: "USD",
+						Amount:    "0.75",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetRef:       "vendor:domain-renewal",
+						SourceRef:       "spend:domain-renewal-a",
+						ConsumedEntryID: "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_spend entry_id "bad/id" is invalid`,
 		},
 		{
 			name: "post active transfer requires active treasury state",
@@ -1469,6 +1582,104 @@ func TestResolveExecutionContextTreasuryPostActiveSaveZeroRefPathPreservesPriorB
 	}
 	if got != nil {
 		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveSpendResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 1, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-spend"
+		record.State = TreasuryStateActive
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.75",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetRef:       "vendor:domain-renewal",
+			SourceRef:       "spend:domain-renewal-a",
+			EvidenceLocator: "https://evidence.example/spend-a",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostActiveSpend(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSpend() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveSpend() = nil, want resolved post-active spend")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSpend().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostActiveSpend, *record.PostActiveSpend) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSpend().PostActiveSpend = %#v, want %#v", got.PostActiveSpend, *record.PostActiveSpend)
+	}
+	if !reflect.DeepEqual(got.SourceContainer, fixtures.container) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSpend().SourceContainer = %#v, want %#v", got.SourceContainer, fixtures.container)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveSpendFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 2, 0, 0, time.UTC)
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-spend-consumed"
+		record.State = TreasuryStateActive
+		record.PostActiveSpend = &TreasuryPostActiveSpend{
+			AssetCode: "USD",
+			Amount:    "0.75",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetRef:       "vendor:domain-renewal",
+			SourceRef:       "spend:domain-renewal-a",
+			ConsumedEntryID: "entry-spend-value",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostActiveSpend(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveSpend() error = nil, want consumed spend rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-spend-consumed" treasury.post_active_spend is already consumed by entry "entry-spend-value"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSpend() error = %q, want consumed spend rejection", err.Error())
 	}
 }
 
