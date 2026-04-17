@@ -476,6 +476,99 @@ func TestPersistProjectedRuntimeStateProjectsFrankZohoInboundRepliesAppendOnly(t
 	}
 }
 
+func TestPersistProjectedRuntimeStateProjectsFrankZohoBounceEvidenceAppendOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testProjectedRuntimeJob()
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	inspectablePlan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	evidenceOne := NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+		StepID:                    "build",
+		Provider:                  "zoho_mail",
+		ProviderAccountID:         "3323462000000008002",
+		ProviderMessageID:         "1711540357880102000",
+		ProviderMailID:            "<bounce-1@zoho.test>",
+		MIMEMessageID:             "<bounce-1@example.test>",
+		InReplyTo:                 "<mime-1@example.test>",
+		References:                []string{"<seed@example.test>", "<mime-1@example.test>"},
+		OriginalProviderMessageID: "1711540357880100001",
+		OriginalProviderMailID:    "<sent-1@zoho.test>",
+		OriginalMIMEMessageID:     "<mime-1@example.test>",
+		FinalRecipient:            "person@example.com",
+		DiagnosticCode:            "smtp; 550 5.1.1 mailbox unavailable",
+		ReceivedAt:                now.Add(-40 * time.Second),
+		OriginalMessageURL:        "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102000/originalmessage",
+		CampaignID:                "campaign-mail",
+		OutboundActionID:          "action-1",
+	})
+	evidenceOne.BounceID = normalizedFrankZohoBounceEvidenceID(evidenceOne)
+	evidenceTwo := NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+		StepID:                "build",
+		Provider:              "zoho_mail",
+		ProviderAccountID:     "3323462000000008002",
+		ProviderMessageID:     "1711540357880102001",
+		ProviderMailID:        "<bounce-2@zoho.test>",
+		MIMEMessageID:         "<bounce-2@example.test>",
+		OriginalMIMEMessageID: "<mime-2@example.test>",
+		FinalRecipient:        "second@example.com",
+		DiagnosticCode:        "smtp; 550 5.2.2 mailbox full",
+		ReceivedAt:            now.Add(-10 * time.Second),
+		OriginalMessageURL:    "https://mail.zoho.com/api/accounts/3323462000000008002/messages/1711540357880102001/originalmessage",
+	})
+	evidenceTwo.BounceID = normalizedFrankZohoBounceEvidenceID(evidenceTwo)
+
+	runtime := JobRuntimeState{
+		JobID:                   job.ID,
+		State:                   JobStateRunning,
+		ActiveStepID:            "build",
+		InspectablePlan:         &inspectablePlan,
+		FrankZohoBounceEvidence: []FrankZohoBounceEvidence{evidenceOne},
+		CreatedAt:               now.Add(-2 * time.Minute),
+		UpdatedAt:               now,
+		StartedAt:               now.Add(-2 * time.Minute),
+		ActiveStepAt:            now.Add(-time.Minute),
+	}
+
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(first) error = %v", err)
+	}
+
+	runtime.FrankZohoBounceEvidence = append(runtime.FrankZohoBounceEvidence, evidenceTwo)
+	runtime.UpdatedAt = now.Add(time.Minute)
+	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now.Add(time.Minute)); err != nil {
+		t.Fatalf("PersistProjectedRuntimeState(second) error = %v", err)
+	}
+
+	records, err := ListCommittedFrankZohoBounceEvidenceRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() len = %d, want 2", len(records))
+	}
+	if records[0].OriginalMIMEMessageID != evidenceOne.OriginalMIMEMessageID {
+		t.Fatalf("records[0].OriginalMIMEMessageID = %q, want %q", records[0].OriginalMIMEMessageID, evidenceOne.OriginalMIMEMessageID)
+	}
+	if records[0].OutboundActionID != evidenceOne.OutboundActionID {
+		t.Fatalf("records[0].OutboundActionID = %q, want %q", records[0].OutboundActionID, evidenceOne.OutboundActionID)
+	}
+	if records[1].ProviderMessageID != evidenceTwo.ProviderMessageID {
+		t.Fatalf("records[1].ProviderMessageID = %q, want %q", records[1].ProviderMessageID, evidenceTwo.ProviderMessageID)
+	}
+	if records[1].CampaignID != "" || records[1].OutboundActionID != "" {
+		t.Fatalf("records[1] attribution = (%q, %q), want unattributed evidence", records[1].CampaignID, records[1].OutboundActionID)
+	}
+}
+
 func TestPersistProjectedRuntimeStateProjectsCampaignZohoEmailOutboundActionsLatestState(t *testing.T) {
 	t.Parallel()
 

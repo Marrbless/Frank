@@ -98,6 +98,7 @@ func projectRuntimeStateToStoreBatch(root string, lock WriterLockRecord, job *Jo
 		CampaignZohoEmailReplyWorkItems:  projectCampaignZohoEmailReplyWorkItemRecords(runtime, nextSeq),
 		FrankZohoSendReceipts:            projectFrankZohoSendReceiptRecords(runtime, nextSeq),
 		FrankZohoInboundReplies:          projectFrankZohoInboundReplyRecords(runtime, nextSeq),
+		FrankZohoBounceEvidence:          projectFrankZohoBounceEvidenceRecords(runtime, nextSeq),
 		ActiveJob:                        activeJob,
 		RemoveActiveJob:                  removeActiveJob,
 	}, nil
@@ -678,6 +679,46 @@ func projectFrankZohoInboundReplyRecords(runtime JobRuntimeState, nextSeq uint64
 			return records[i].ReceivedAt.Before(records[j].ReceivedAt)
 		}
 		return records[i].ReplyID < records[j].ReplyID
+	})
+	return records
+}
+
+func projectFrankZohoBounceEvidenceRecords(runtime JobRuntimeState, nextSeq uint64) []FrankZohoBounceEvidenceRecord {
+	if len(runtime.FrankZohoBounceEvidence) == 0 {
+		return nil
+	}
+	records := make([]FrankZohoBounceEvidenceRecord, 0, len(runtime.FrankZohoBounceEvidence))
+	for _, evidence := range runtime.FrankZohoBounceEvidence {
+		normalized := NormalizeFrankZohoBounceEvidence(evidence)
+		records = append(records, FrankZohoBounceEvidenceRecord{
+			RecordVersion:             StoreRecordVersion,
+			LastSeq:                   nextSeq,
+			BounceID:                  normalized.BounceID,
+			JobID:                     runtime.JobID,
+			StepID:                    normalized.StepID,
+			Provider:                  normalized.Provider,
+			ProviderAccountID:         normalized.ProviderAccountID,
+			ProviderMessageID:         normalized.ProviderMessageID,
+			ProviderMailID:            normalized.ProviderMailID,
+			MIMEMessageID:             normalized.MIMEMessageID,
+			InReplyTo:                 normalized.InReplyTo,
+			References:                append([]string(nil), normalized.References...),
+			OriginalProviderMessageID: normalized.OriginalProviderMessageID,
+			OriginalProviderMailID:    normalized.OriginalProviderMailID,
+			OriginalMIMEMessageID:     normalized.OriginalMIMEMessageID,
+			FinalRecipient:            normalized.FinalRecipient,
+			DiagnosticCode:            normalized.DiagnosticCode,
+			ReceivedAt:                normalized.ReceivedAt,
+			OriginalMessageURL:        normalized.OriginalMessageURL,
+			CampaignID:                normalized.CampaignID,
+			OutboundActionID:          normalized.OutboundActionID,
+		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if !records[i].ReceivedAt.Equal(records[j].ReceivedAt) {
+			return records[i].ReceivedAt.Before(records[j].ReceivedAt)
+		}
+		return records[i].BounceID < records[j].BounceID
 	})
 	return records
 }

@@ -260,6 +260,14 @@ func StoreFrankZohoInboundReplyPath(root string, jobID string, replyID string) s
 	return filepath.Join(StoreFrankZohoInboundRepliesDir(root, jobID), replyID+".json")
 }
 
+func StoreFrankZohoBounceEvidenceDir(root string, jobID string) string {
+	return filepath.Join(StoreJobDir(root, jobID), "frank_zoho_bounce_evidence")
+}
+
+func StoreFrankZohoBounceEvidencePath(root string, jobID string, bounceID string) string {
+	return filepath.Join(StoreFrankZohoBounceEvidenceDir(root, jobID), bounceID+".json")
+}
+
 func ValidateStoreRoot(root string) error {
 	if strings.TrimSpace(root) == "" {
 		return fmt.Errorf("mission store root is required")

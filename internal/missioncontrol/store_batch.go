@@ -23,6 +23,7 @@ type StoreBatch struct {
 	CampaignZohoEmailReplyWorkItems  []CampaignZohoEmailReplyWorkItemRecord
 	FrankZohoSendReceipts            []FrankZohoSendReceiptRecord
 	FrankZohoInboundReplies          []FrankZohoInboundReplyRecord
+	FrankZohoBounceEvidence          []FrankZohoBounceEvidenceRecord
 	// active_job.json remains a fixed-path arbitration record and must be
 	// reconciled against committed job_runtime.applied_seq during recovery.
 	ActiveJob       *ActiveJobRecord
@@ -103,6 +104,12 @@ func CommitStoreBatch(root string, heldLock WriterLockRecord, batch StoreBatch) 
 	for _, record := range batch.FrankZohoInboundReplies {
 		record.AttemptID = attemptID
 		if err := storeBatchWriteRecord(storeFrankZohoInboundReplyVersionPath(root, record.JobID, record.ReplyID, record.LastSeq, record.AttemptID), record); err != nil {
+			return err
+		}
+	}
+	for _, record := range batch.FrankZohoBounceEvidence {
+		record.AttemptID = attemptID
+		if err := storeBatchWriteRecord(storeFrankZohoBounceEvidenceVersionPath(root, record.JobID, record.BounceID, record.LastSeq, record.AttemptID), record); err != nil {
 			return err
 		}
 	}
@@ -263,6 +270,17 @@ func ValidateStoreBatch(batch StoreBatch, heldLock WriterLockRecord) error {
 		}
 		if record.LastSeq != targetSeq {
 			return fmt.Errorf("mission store batch frank zoho inbound reply %q last_seq %d does not match applied_seq %d", record.ReplyID, record.LastSeq, targetSeq)
+		}
+	}
+	for _, record := range batch.FrankZohoBounceEvidence {
+		if err := ValidateFrankZohoBounceEvidenceRecord(record); err != nil {
+			return err
+		}
+		if record.JobID != jobID {
+			return fmt.Errorf("mission store batch frank zoho bounce evidence %q job_id %q does not match job runtime %q", record.BounceID, record.JobID, jobID)
+		}
+		if record.LastSeq != targetSeq {
+			return fmt.Errorf("mission store batch frank zoho bounce evidence %q last_seq %d does not match applied_seq %d", record.BounceID, record.LastSeq, targetSeq)
 		}
 	}
 	if batch.ActiveJob != nil && batch.RemoveActiveJob {

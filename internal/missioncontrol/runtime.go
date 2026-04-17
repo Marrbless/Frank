@@ -86,6 +86,7 @@ type JobRuntimeState struct {
 	CampaignZohoEmailReplyWorkItems  []CampaignZohoEmailReplyWorkItem  `json:"-"`
 	FrankZohoSendReceipts            []FrankZohoSendReceipt            `json:"-"`
 	FrankZohoInboundReplies          []FrankZohoInboundReply           `json:"-"`
+	FrankZohoBounceEvidence          []FrankZohoBounceEvidence         `json:"-"`
 	ApprovalRequests                 []ApprovalRequest                 `json:"approval_requests,omitempty"`
 	ApprovalGrants                   []ApprovalGrant                   `json:"approval_grants,omitempty"`
 	BudgetBlocker                    *RuntimeBudgetBlockerRecord       `json:"budget_blocker,omitempty"`
@@ -147,6 +148,7 @@ func CloneJobRuntimeState(runtime *JobRuntimeState) *JobRuntimeState {
 	cloned.CampaignZohoEmailReplyWorkItems = cloneCampaignZohoEmailReplyWorkItems(runtime.CampaignZohoEmailReplyWorkItems)
 	cloned.FrankZohoSendReceipts = cloneFrankZohoSendReceipts(runtime.FrankZohoSendReceipts)
 	cloned.FrankZohoInboundReplies = cloneFrankZohoInboundReplies(runtime.FrankZohoInboundReplies)
+	cloned.FrankZohoBounceEvidence = cloneFrankZohoBounceEvidence(runtime.FrankZohoBounceEvidence)
 	if len(runtime.ApprovalRequests) > 0 {
 		cloned.ApprovalRequests = make([]ApprovalRequest, len(runtime.ApprovalRequests))
 		for i, request := range runtime.ApprovalRequests {

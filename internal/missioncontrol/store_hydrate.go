@@ -77,6 +77,10 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	if err != nil {
 		return hydratedCommittedStoreState{}, err
 	}
+	frankZohoBounceEvidenceRecords, err := ListCommittedFrankZohoBounceEvidenceRecords(root, jobID)
+	if err != nil {
+		return hydratedCommittedStoreState{}, err
+	}
 
 	runtime := hydrateCommittedJobRuntimeRecord(jobRuntime)
 	completedSteps, failedSteps := hydrateCommittedRuntimeStepOutcomes(stepRecords)
@@ -89,6 +93,7 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 	runtime.CampaignZohoEmailReplyWorkItems = hydrateCommittedCampaignZohoEmailReplyWorkItems(campaignZohoEmailReplyWorkItemRecords)
 	runtime.FrankZohoSendReceipts = hydrateCommittedFrankZohoSendReceipts(frankZohoSendReceiptRecords)
 	runtime.FrankZohoInboundReplies = hydrateCommittedFrankZohoInboundReplies(frankZohoInboundReplyRecords)
+	runtime.FrankZohoBounceEvidence = hydrateCommittedFrankZohoBounceEvidence(frankZohoBounceEvidenceRecords)
 	runtime, _ = NormalizeHydratedApprovalRequests(runtime, now)
 
 	control, err := hydrateCommittedRuntimeControl(root, jobRuntime)
@@ -427,6 +432,37 @@ func hydrateCommittedFrankZohoInboundReplies(records []FrankZohoInboundReplyReco
 		})
 	}
 	return replies
+}
+
+func hydrateCommittedFrankZohoBounceEvidence(records []FrankZohoBounceEvidenceRecord) []FrankZohoBounceEvidence {
+	if len(records) == 0 {
+		return nil
+	}
+
+	values := make([]FrankZohoBounceEvidence, len(records))
+	for i, record := range records {
+		values[i] = NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+			BounceID:                  record.BounceID,
+			StepID:                    record.StepID,
+			Provider:                  record.Provider,
+			ProviderAccountID:         record.ProviderAccountID,
+			ProviderMessageID:         record.ProviderMessageID,
+			ProviderMailID:            record.ProviderMailID,
+			MIMEMessageID:             record.MIMEMessageID,
+			InReplyTo:                 record.InReplyTo,
+			References:                append([]string(nil), record.References...),
+			OriginalProviderMessageID: record.OriginalProviderMessageID,
+			OriginalProviderMailID:    record.OriginalProviderMailID,
+			OriginalMIMEMessageID:     record.OriginalMIMEMessageID,
+			FinalRecipient:            record.FinalRecipient,
+			DiagnosticCode:            record.DiagnosticCode,
+			ReceivedAt:                record.ReceivedAt,
+			OriginalMessageURL:        record.OriginalMessageURL,
+			CampaignID:                record.CampaignID,
+			OutboundActionID:          record.OutboundActionID,
+		})
+	}
+	return values
 }
 
 func hydrateCommittedCampaignZohoEmailReplyWorkItems(records []CampaignZohoEmailReplyWorkItemRecord) []CampaignZohoEmailReplyWorkItem {
