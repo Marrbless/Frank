@@ -34,6 +34,10 @@ var readFrankZohoCampaignInboundReplies = func(ctx context.Context, providerAcco
 	return NewFrankZohoInboundReplyReader().Read(ctx, providerAccountID)
 }
 
+var readFrankZohoCampaignBounceEvidence = func(ctx context.Context, providerAccountID string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+	return NewFrankZohoBounceEvidenceReader().Read(ctx, providerAccountID)
+}
+
 type FrankZohoSendEmailTool struct {
 	client      *http.Client
 	apiBase     string
@@ -47,6 +51,12 @@ type FrankZohoSendProofVerifier struct {
 }
 
 type FrankZohoInboundReplyReader struct {
+	client      *http.Client
+	apiBase     string
+	accessToken func(context.Context) (string, error)
+}
+
+type FrankZohoBounceEvidenceReader struct {
 	client      *http.Client
 	apiBase     string
 	accessToken func(context.Context) (string, error)
@@ -201,6 +211,14 @@ func NewFrankZohoSendProofVerifier() *FrankZohoSendProofVerifier {
 
 func NewFrankZohoInboundReplyReader() *FrankZohoInboundReplyReader {
 	return &FrankZohoInboundReplyReader{
+		client:      &http.Client{Timeout: 30 * time.Second},
+		apiBase:     frankZohoMailAPIBase,
+		accessToken: frankZohoMailAccessTokenFromEnv,
+	}
+}
+
+func NewFrankZohoBounceEvidenceReader() *FrankZohoBounceEvidenceReader {
+	return &FrankZohoBounceEvidenceReader{
 		client:      &http.Client{Timeout: 30 * time.Second},
 		apiBase:     frankZohoMailAPIBase,
 		accessToken: frankZohoMailAccessTokenFromEnv,
@@ -539,6 +557,88 @@ func (r *FrankZohoInboundReplyReader) Read(ctx context.Context, providerAccountI
 		replies = append(replies, reply)
 	}
 	return replies, nil
+}
+
+func (r *FrankZohoBounceEvidenceReader) Read(ctx context.Context, providerAccountID string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	providerAccountID = strings.TrimSpace(providerAccountID)
+	if providerAccountID == "" {
+		return nil, fmt.Errorf("%s bounce evidence read requires provider_account_id", frankZohoSendEmailToolName)
+	}
+
+	tokenProvider := r.accessToken
+	if tokenProvider == nil {
+		tokenProvider = frankZohoMailAccessTokenFromEnv
+	}
+	token, err := tokenProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	client := r.client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	messagesURL := frankZohoMessagesURL(r.apiBase, providerAccountID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, messagesURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%s bounce evidence read request failed: %w", frankZohoSendEmailToolName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var decoded frankZohoMailboxMessagesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("%s bounce evidence read failed to decode Zoho messages response: %w", frankZohoSendEmailToolName, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s bounce evidence read: Zoho Mail returned HTTP %d", frankZohoSendEmailToolName, resp.StatusCode)
+	}
+	if decoded.Status.Code != 0 && decoded.Status.Code != 200 {
+		return nil, fmt.Errorf("%s bounce evidence read: Zoho Mail status %d: %s", frankZohoSendEmailToolName, decoded.Status.Code, strings.TrimSpace(decoded.Status.Description))
+	}
+
+	evidence := make([]missioncontrol.FrankZohoBounceEvidence, 0, len(decoded.Data))
+	for _, candidate := range decoded.Data {
+		messageID := strings.TrimSpace(string(candidate.MessageID))
+		if messageID == "" {
+			continue
+		}
+		receivedAt, err := parseFrankZohoMailboxReceivedAt(candidate.ReceivedTime)
+		if err != nil {
+			return nil, fmt.Errorf("%s bounce evidence read: parse received time for provider_message_id %q: %w", frankZohoSendEmailToolName, messageID, err)
+		}
+		originalMessageURL := frankZohoOriginalMessageURL(r.apiBase, providerAccountID, messageID)
+		originalMessage, err := frankZohoReadOriginalMessage(ctx, client, token, messageID, originalMessageURL)
+		if err != nil {
+			return nil, err
+		}
+		bounce, ok, err := frankZohoBounceEvidenceFromOriginalMessage(
+			providerAccountID,
+			messageID,
+			strings.TrimSpace(string(candidate.MailID)),
+			receivedAt,
+			originalMessageURL,
+			originalMessage,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		evidence = append(evidence, bounce)
+	}
+	return evidence, nil
 }
 
 func validateFrankZohoMailPreflight(preflight missioncontrol.ResolvedExecutionContextCampaignPreflight, requireCampaignAddressing bool) error {
@@ -899,6 +999,97 @@ func frankZohoInboundReplyFromOriginalMessage(providerAccountID string, provider
 		OriginalMessageURL: strings.TrimSpace(originalMessageURL),
 	})
 	return reply, true, nil
+}
+
+func frankZohoBounceEvidenceFromOriginalMessage(providerAccountID string, providerMessageID string, providerMailID string, receivedAt time.Time, originalMessageURL string, originalMessage string) (missioncontrol.FrankZohoBounceEvidence, bool, error) {
+	parsed, err := mail.ReadMessage(strings.NewReader(originalMessage))
+	if err != nil {
+		return missioncontrol.FrankZohoBounceEvidence{}, false, fmt.Errorf("%s bounce evidence read: parse original message for provider_message_id %q: %w", frankZohoSendEmailToolName, strings.TrimSpace(providerMessageID), err)
+	}
+
+	finalRecipient := frankZohoExtractReportField(originalMessage, "Final-Recipient")
+	if finalRecipient == "" {
+		finalRecipient = frankZohoExtractReportField(originalMessage, "X-Failed-Recipients")
+	}
+	diagnosticCode := frankZohoExtractReportField(originalMessage, "Diagnostic-Code")
+	originalMessageID := frankZohoExtractReportField(originalMessage, "Original-Message-ID")
+	if finalRecipient == "" && diagnosticCode == "" && originalMessageID == "" {
+		return missioncontrol.FrankZohoBounceEvidence{}, false, nil
+	}
+
+	bounce := missioncontrol.NormalizeFrankZohoBounceEvidence(missioncontrol.FrankZohoBounceEvidence{
+		Provider:              "zoho_mail",
+		ProviderAccountID:     strings.TrimSpace(providerAccountID),
+		ProviderMessageID:     strings.TrimSpace(providerMessageID),
+		ProviderMailID:        strings.TrimSpace(providerMailID),
+		MIMEMessageID:         strings.TrimSpace(parsed.Header.Get("Message-ID")),
+		InReplyTo:             strings.TrimSpace(parsed.Header.Get("In-Reply-To")),
+		References:            strings.Fields(strings.TrimSpace(parsed.Header.Get("References"))),
+		OriginalMIMEMessageID: originalMessageID,
+		FinalRecipient:        finalRecipient,
+		DiagnosticCode:        diagnosticCode,
+		ReceivedAt:            receivedAt.UTC(),
+		OriginalMessageURL:    strings.TrimSpace(originalMessageURL),
+	})
+	return bounce, true, nil
+}
+
+func frankZohoExtractReportField(message string, field string) string {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(message, "\r\n", "\n"), "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if !strings.EqualFold(strings.TrimSpace(beforeFirstColon(line)), field) {
+			continue
+		}
+		value := strings.TrimSpace(afterFirstColon(line))
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			if next == "" || (len(next) > 0 && next[0] != ' ' && next[0] != '\t') {
+				break
+			}
+			value = strings.TrimSpace(strings.Join([]string{value, strings.TrimSpace(next)}, " "))
+			i = j
+		}
+		if field == "Final-Recipient" {
+			return frankZohoExtractRecipientAddress(value)
+		}
+		if field == "X-Failed-Recipients" {
+			return strings.TrimSpace(strings.Split(value, ",")[0])
+		}
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func beforeFirstColon(line string) string {
+	idx := strings.IndexByte(line, ':')
+	if idx < 0 {
+		return line
+	}
+	return line[:idx]
+}
+
+func afterFirstColon(line string) string {
+	idx := strings.IndexByte(line, ':')
+	if idx < 0 || idx+1 >= len(line) {
+		return ""
+	}
+	return line[idx+1:]
+}
+
+func frankZohoExtractRecipientAddress(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.Index(value, ";"); idx >= 0 {
+		value = value[idx+1:]
+	}
+	return strings.Trim(strings.TrimSpace(value), "<>")
 }
 
 func frankZohoVerifyHeaderAddressList(header mail.Header, key string, want []string) error {

@@ -828,8 +828,10 @@ func TestFrankZohoCampaignSendAmbiguousFailureLeavesPreparedActionBlocked(t *tes
 
 func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	originalReadBounces := readFrankZohoCampaignBounceEvidence
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
+		readFrankZohoCampaignBounceEvidence = originalReadBounces
 	})
 
 	root, _, container := writeTaskStateTreasuryFixtures(t)
@@ -904,6 +906,9 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 			},
 		}, nil
 	}
+	readFrankZohoCampaignBounceEvidence = func(context.Context, string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+		return nil, nil
+	}
 
 	appended, err := state.SyncFrankZohoCampaignInboundReplies()
 	if err != nil {
@@ -956,6 +961,105 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly(t *testi
 	}
 	if workItems[0].State != string(missioncontrol.CampaignZohoEmailReplyWorkItemStateOpen) {
 		t.Fatalf("workItems[0].State = %q, want open", workItems[0].State)
+	}
+}
+
+func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsBounceEvidenceAppendOnly(t *testing.T) {
+	originalRead := readFrankZohoCampaignInboundReplies
+	originalReadBounces := readFrankZohoCampaignBounceEvidence
+	t.Cleanup(func() {
+		readFrankZohoCampaignInboundReplies = originalRead
+		readFrankZohoCampaignBounceEvidence = originalReadBounces
+	})
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank.custom@example.com", "Frank Custom", "9988776655443322110", true)
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-bounce-sync-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-bounce-sync",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{FrankZohoSendEmailToolName},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-bounce-sync",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{FrankZohoSendEmailToolName},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
+		return nil, nil
+	}
+	readFrankZohoCampaignBounceEvidence = func(_ context.Context, providerAccountID string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+		return []missioncontrol.FrankZohoBounceEvidence{
+			{
+				Provider:              "zoho_mail",
+				ProviderAccountID:     providerAccountID,
+				ProviderMessageID:     "1711540357880102000",
+				ProviderMailID:        "<bounce-1@zoho.test>",
+				MIMEMessageID:         "<bounce-1@example.test>",
+				InReplyTo:             "<mime-1@example.test>",
+				References:            []string{"<seed@example.test>", "<mime-1@example.test>"},
+				OriginalMIMEMessageID: "<mime-1@example.test>",
+				FinalRecipient:        "person@example.com",
+				DiagnosticCode:        "smtp; 550 5.1.1 mailbox unavailable",
+				ReceivedAt:            time.Date(2026, 4, 17, 16, 20, 0, 0, time.UTC),
+				OriginalMessageURL:    "https://mail.zoho.test/api/accounts/" + providerAccountID + "/messages/1711540357880102000/originalmessage",
+			},
+		}, nil
+	}
+
+	appended, err := state.SyncFrankZohoCampaignInboundReplies()
+	if err != nil {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies(first) error = %v", err)
+	}
+	if appended != 0 {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies(first) appended = %d, want 0 reply appends on bounce-only sync", appended)
+	}
+
+	appended, err = state.SyncFrankZohoCampaignInboundReplies()
+	if err != nil {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies(second) error = %v", err)
+	}
+	if appended != 0 {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies(second) appended = %d, want 0 duplicate reply appends", appended)
+	}
+
+	records, err := missioncontrol.ListCommittedFrankZohoBounceEvidenceRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() len = %d, want 1", len(records))
+	}
+	if records[0].StepID != "send-outbound-email" {
+		t.Fatalf("records[0].StepID = %q, want send step provenance", records[0].StepID)
+	}
+	if records[0].OriginalMIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("records[0].OriginalMIMEMessageID = %q, want preserved outbound MIME identity", records[0].OriginalMIMEMessageID)
+	}
+	if records[0].CampaignID != "" || records[0].OutboundActionID != "" {
+		t.Fatalf("records[0] attribution = (%q, %q), want unattributed bounce evidence in pre-attribution slice", records[0].CampaignID, records[0].OutboundActionID)
 	}
 }
 
@@ -1036,6 +1140,7 @@ func TestFrankZohoCampaignSendStopsAfterVerifiedSendLimit(t *testing.T) {
 
 func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1131,6 +1236,7 @@ func TestFrankZohoCampaignSendStopsAfterAttributedReplyLimit(t *testing.T) {
 
 func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1246,6 +1352,7 @@ func TestPrepareFrankZohoCampaignFollowUpPersistsLinkedAction(t *testing.T) {
 
 func TestPrepareFrankZohoCampaignSendAutoSelectsOldestReplyWorkItem(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1350,6 +1457,7 @@ func TestPrepareFrankZohoCampaignSendAutoSelectsOldestReplyWorkItem(t *testing.T
 
 func TestPrepareFrankZohoCampaignFollowUpVerifiedReplayRespondsWorkItem(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1491,6 +1599,7 @@ func TestPrepareFrankZohoCampaignFollowUpVerifiedReplayRespondsWorkItem(t *testi
 
 func TestRecordFrankZohoCampaignSendFailureReopensFollowUpWorkItemWhenGateAllowsRetry(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1590,6 +1699,7 @@ func TestRecordFrankZohoCampaignSendFailureReopensFollowUpWorkItemWhenGateAllows
 
 func TestRecordFrankZohoCampaignSendFailureKeepsFollowUpWorkItemClaimedWhenFailureGateCloses(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -1694,6 +1804,7 @@ func TestRecordFrankZohoCampaignSendFailureKeepsFollowUpWorkItemClaimedWhenFailu
 
 func TestPrepareFrankZohoCampaignFollowUpBlocksDuplicateUnresolvedAction(t *testing.T) {
 	originalRead := readFrankZohoCampaignInboundReplies
+	disableFrankZohoCampaignBounceEvidenceRead(t)
 	t.Cleanup(func() {
 		readFrankZohoCampaignInboundReplies = originalRead
 	})
@@ -2030,6 +2141,103 @@ func TestFrankZohoInboundReplyReaderUsesZohoBearerTokenAndMapsReplyHeaders(t *te
 	if got[0].ReceivedAt.IsZero() {
 		t.Fatal("ReceivedAt = zero, want provider received timestamp")
 	}
+}
+
+func TestFrankZohoBounceEvidenceReaderUsesZohoBearerTokenAndMapsBounceFields(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth []string
+	var gotPaths []string
+	const providerAccountID = "9988776655443322110"
+
+	reader := NewFrankZohoBounceEvidenceReader()
+	reader.apiBase = "https://mail.zoho.test/api"
+	reader.accessToken = func(context.Context) (string, error) {
+		return "test-zoho-token", nil
+	}
+	reader.client = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			gotPaths = append(gotPaths, r.URL.Path)
+			gotAuth = append(gotAuth, r.Header.Get("Authorization"))
+			switch r.URL.Path {
+			case "/api/accounts/9988776655443322110/messages":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{
+						"status": {"code": 200, "description": "success"},
+						"data": [
+							{"messageId": 1711540357880102000, "mailId": "<bounce-1@zoho.test>", "receivedTime": 1711540357880},
+							{"messageId": 1711540357880102999, "mailId": "<note@zoho.test>", "receivedTime": 1711540357999}
+						]
+					}`)),
+				}, nil
+			case "/api/accounts/9988776655443322110/messages/1711540357880102000/originalmessage":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"message/rfc822"}},
+					Body:       io.NopCloser(strings.NewReader("From: Mail Delivery System <mailer-daemon@example.test>\r\nSubject: Mail delivery failed\r\nMessage-ID: <bounce-1@example.test>\r\nContent-Type: multipart/report; report-type=delivery-status\r\n\r\nFinal-Recipient: rfc822; person@example.com\r\nDiagnostic-Code: smtp; 550 5.1.1 mailbox unavailable\r\nOriginal-Message-ID: <mime-1@example.test>\r\n")),
+				}, nil
+			case "/api/accounts/9988776655443322110/messages/1711540357880102999/originalmessage":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"message/rfc822"}},
+					Body:       io.NopCloser(strings.NewReader("From: Note <note@example.com>\r\nSubject: FYI\r\nMessage-ID: <note-1@example.test>\r\n\r\nNon-bounce body")),
+				}, nil
+			default:
+				t.Fatalf("unexpected path %q", r.URL.Path)
+				return nil, nil
+			}
+		}),
+	}
+
+	got, err := reader.Read(context.Background(), providerAccountID)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if len(gotPaths) != 3 {
+		t.Fatalf("request count = %d, want 3", len(gotPaths))
+	}
+	for i, auth := range gotAuth {
+		if auth != "Zoho-oauthtoken test-zoho-token" {
+			t.Fatalf("Authorization[%d] = %q, want Zoho OAuth header", i, auth)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(bounce evidence) = %d, want 1 bounce-shaped message", len(got))
+	}
+	if got[0].ProviderMessageID != "1711540357880102000" {
+		t.Fatalf("ProviderMessageID = %q, want mailbox message id", got[0].ProviderMessageID)
+	}
+	if got[0].FinalRecipient != "person@example.com" {
+		t.Fatalf("FinalRecipient = %q, want parsed bounce recipient", got[0].FinalRecipient)
+	}
+	if got[0].DiagnosticCode != "smtp; 550 5.1.1 mailbox unavailable" {
+		t.Fatalf("DiagnosticCode = %q, want parsed bounce diagnostic", got[0].DiagnosticCode)
+	}
+	if got[0].OriginalMIMEMessageID != "<mime-1@example.test>" {
+		t.Fatalf("OriginalMIMEMessageID = %q, want parsed original outbound MIME id", got[0].OriginalMIMEMessageID)
+	}
+	if got[0].ProviderAccountID != providerAccountID {
+		t.Fatalf("ProviderAccountID = %q, want %q", got[0].ProviderAccountID, providerAccountID)
+	}
+	if got[0].OriginalMessageURL != "https://mail.zoho.test/api/accounts/9988776655443322110/messages/1711540357880102000/originalmessage" {
+		t.Fatalf("OriginalMessageURL = %q, want originalmessage locator", got[0].OriginalMessageURL)
+	}
+	if got[0].ReceivedAt.IsZero() {
+		t.Fatal("ReceivedAt = zero, want provider received timestamp")
+	}
+}
+
+func disableFrankZohoCampaignBounceEvidenceRead(t *testing.T) {
+	t.Helper()
+	original := readFrankZohoCampaignBounceEvidence
+	readFrankZohoCampaignBounceEvidence = func(context.Context, string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readFrankZohoCampaignBounceEvidence = original
+	})
 }
 
 func testFrankZohoSendExecutionContext(root string, campaignID string, toolName string) missioncontrol.ExecutionContext {

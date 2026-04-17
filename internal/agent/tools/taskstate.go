@@ -752,6 +752,10 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	bounces, err := readFrankZohoCampaignBounceEvidence(context.Background(), sender.ProviderAccountID)
+	if err != nil {
+		return 0, err
+	}
 
 	nextRuntime := *missioncontrol.CloneJobRuntimeState(ec.Runtime)
 	appended := 0
@@ -767,7 +771,38 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 		nextRuntime = updatedRuntime
 		appended++
 	}
+	evidenceChanged := false
+	for _, bounce := range bounces {
+		bounce.StepID = ec.Step.ID
+		updatedRuntime, changed, err := missioncontrol.AppendFrankZohoBounceEvidence(nextRuntime, bounce)
+		if err != nil {
+			return 0, err
+		}
+		if !changed {
+			continue
+		}
+		nextRuntime = updatedRuntime
+		evidenceChanged = true
+	}
 	if appended > 0 {
+		s.mu.Lock()
+		err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
+		s.mu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+		s.notifyRuntimeChanged()
+
+		s.mu.Lock()
+		ec = missioncontrol.CloneExecutionContext(s.executionContext)
+		hasExecutionContext = s.hasExecutionContext
+		s.mu.Unlock()
+		if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
+			return appended, nil
+		}
+		nextRuntime = *missioncontrol.CloneJobRuntimeState(ec.Runtime)
+	}
+	if appended == 0 && evidenceChanged {
 		s.mu.Lock()
 		err = s.storeRuntimeStateLocked(ec.Job, nextRuntime, nil)
 		s.mu.Unlock()
