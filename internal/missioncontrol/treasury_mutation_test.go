@@ -748,6 +748,181 @@ func TestRecordPostBootstrapTreasuryAcquisitionFailsClosedOutsideActiveState(t *
 	assertNoTreasuryLedgerEntries(t, root, "treasury-post-bootstrap-funded")
 }
 
+func TestRecordPostActiveTreasuryReinvestAppendsPairedEntriesAndConsumesCommittedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 45, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-investment", "container-class-investment", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-reinvest"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.75",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001000",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			SourceRef:       "trade:reinvest-a",
+			EvidenceLocator: "https://evidence.example/reinvest-a",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+	}))
+
+	recordedAt := now.Add(2 * time.Minute)
+	if err := RecordPostActiveTreasuryReinvest(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryReinvestRecordInput{
+		TreasuryID: "treasury-post-active-reinvest",
+	}, recordedAt); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryReinvest() error = %v", err)
+	}
+
+	treasury, err := LoadTreasuryRecord(root, "treasury-post-active-reinvest")
+	if err != nil {
+		t.Fatalf("LoadTreasuryRecord() error = %v", err)
+	}
+	if treasury.PostActiveReinvest == nil || treasury.PostActiveReinvest.ConsumedEntryID == "" {
+		t.Fatalf("LoadTreasuryRecord().PostActiveReinvest = %#v, want consumed block", treasury.PostActiveReinvest)
+	}
+	entries, err := ListTreasuryLedgerEntries(root, "treasury-post-active-reinvest")
+	if err != nil {
+		t.Fatalf("ListTreasuryLedgerEntries() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("ListTreasuryLedgerEntries() len = %d, want 2", len(entries))
+	}
+	var sawDisposition, sawAcquisition bool
+	for _, entry := range entries {
+		if !entry.CreatedAt.Equal(recordedAt.UTC()) {
+			t.Fatalf("ListTreasuryLedgerEntries().CreatedAt = %s, want %s", entry.CreatedAt, recordedAt.UTC())
+		}
+		switch entry.EntryKind {
+		case TreasuryLedgerEntryKindDisposition:
+			sawDisposition = true
+			if entry.AssetCode != "USD" || entry.Amount != "0.75" || entry.SourceRef != "trade:reinvest-a" {
+				t.Fatalf("Disposition entry = %#v, want committed source payload", entry)
+			}
+		case TreasuryLedgerEntryKindAcquisition:
+			sawAcquisition = true
+			if entry.AssetCode != "BTC" || entry.Amount != "0.00001000" || entry.SourceRef != "trade:reinvest-a" {
+				t.Fatalf("Acquisition entry = %#v, want committed target payload", entry)
+			}
+			if entry.EntryID != treasury.PostActiveReinvest.ConsumedEntryID {
+				t.Fatalf("Acquisition entry id = %q, want consumed_entry_id %q", entry.EntryID, treasury.PostActiveReinvest.ConsumedEntryID)
+			}
+		default:
+			t.Fatalf("Entry kind = %q, want disposition/acquisition pair", entry.EntryKind)
+		}
+	}
+	if !sawDisposition || !sawAcquisition {
+		t.Fatalf("ListTreasuryLedgerEntries() = %#v, want disposition and acquisition entries", entries)
+	}
+}
+
+func TestRecordPostActiveTreasuryReinvestReplayFailsClosedAfterCommittedConsumption(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 47, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-investment-replay", "container-class-investment-replay", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-reinvest-replay"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.80",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001100",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			SourceRef:       "trade:reinvest-b",
+			EvidenceLocator: "https://evidence.example/reinvest-b",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+	}))
+
+	input := PostActiveTreasuryReinvestRecordInput{TreasuryID: "treasury-post-active-reinvest-replay"}
+	if err := RecordPostActiveTreasuryReinvest(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RecordPostActiveTreasuryReinvest(first) error = %v", err)
+	}
+
+	err := RecordPostActiveTreasuryReinvest(root, WriterLockLease{LeaseHolderID: "holder-1"}, input, now.Add(3*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryReinvest(replay) error = nil, want deterministic consumed rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-reinvest-replay" post-active reinvest already consumed by entry "`) {
+		t.Fatalf("RecordPostActiveTreasuryReinvest(replay) error = %q, want consumed rejection", err.Error())
+	}
+}
+
+func TestRecordPostActiveTreasuryReinvestFailsClosedWhenSourceDoesNotMatchActiveContainer(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	root := fixtures.root
+	now := time.Date(2026, 4, 10, 15, 49, 0, 0, time.UTC)
+	targetContainer := storeTreasurySaveTargetContainerForTest(t, root, "container-investment-mismatch", "container-class-investment-mismatch", now)
+	mustStoreTreasuryForMutationTest(t, root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-reinvest-mismatch"
+		record.State = TreasuryStateActive
+		record.ContainerRefs = []FrankRegistryObjectRef{{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		}}
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.90",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001200",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: targetContainer.ContainerID,
+			},
+			SourceRef:       "trade:reinvest-c",
+			EvidenceLocator: "https://evidence.example/reinvest-c",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+	}))
+
+	err := RecordPostActiveTreasuryReinvest(root, WriterLockLease{LeaseHolderID: "holder-1"}, PostActiveTreasuryReinvestRecordInput{
+		TreasuryID: "treasury-post-active-reinvest-mismatch",
+	}, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("RecordPostActiveTreasuryReinvest() error = nil, want source-container mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store treasury "treasury-post-active-reinvest-mismatch" post-active reinvest source_container_ref object_id "container-investment-mismatch" must match active treasury container "container-wallet"`) {
+		t.Fatalf("RecordPostActiveTreasuryReinvest() error = %q, want source-container mismatch rejection", err.Error())
+	}
+
+	assertNoTreasuryLedgerEntries(t, root, "treasury-post-active-reinvest-mismatch")
+}
+
 func TestRecordPostActiveTreasurySpendAppendsDispositionEntryAndConsumesCommittedBlock(t *testing.T) {
 	t.Parallel()
 

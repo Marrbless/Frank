@@ -409,6 +409,110 @@ func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSaveWhenPresent(t 
 	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
 }
 
+func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveReinvestWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"produce code"},
+					TreasuryRef:       &TreasuryRef{TreasuryID: "treasury-wallet"},
+				},
+				{
+					ID:   "final",
+					Type: StepTypeFinalResponse,
+				},
+			},
+		},
+	}
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-investment",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-investment", "check-container-class-investment", time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC))
+	investment := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-investment",
+		ContainerKind:        "wallet",
+		Label:                "Investment Wallet",
+		ContainerClassID:     "container-class-investment",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+		UpdatedAt:            time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, investment); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+	record := validTreasuryRecord(time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC), func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-wallet"
+		record.State = TreasuryStateActive
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.75",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001000",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-wallet",
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: "container-investment",
+			},
+			SourceRef:       "trade:reinvest-a",
+			EvidenceLocator: "https://evidence.example/reinvest-a",
+			ConfirmedAt:     time.Date(2026, 4, 8, 21, 4, 0, 0, time.UTC),
+			ConsumedEntryID: "entry-reinvest-value-in",
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryWithTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	if len(steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(steps))
+	}
+	step := steps[0].(map[string]any)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, step["treasury_preflight"])
+	treasury := step["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveReinvest := treasury["post_active_reinvest"].(map[string]any)
+	sourceRef := postActiveReinvest["source_container_ref"].(map[string]any)
+	targetRef := postActiveReinvest["target_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_reinvest.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if targetRef["object_id"] != "container-investment" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_reinvest.target_container_ref.object_id = %#v, want %q", targetRef["object_id"], "container-investment")
+	}
+	if postActiveReinvest["consumed_entry_id"] != "entry-reinvest-value-in" {
+		t.Fatalf("steps[0].treasury_preflight.treasury.post_active_reinvest.consumed_entry_id = %#v, want %q", postActiveReinvest["consumed_entry_id"], "entry-reinvest-value-in")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "inspect JSON", false, true)
+}
+
 func TestInspectSummaryWithTreasuryPreflightIncludesPostActiveSpendWhenPresent(t *testing.T) {
 	t.Parallel()
 

@@ -1602,6 +1602,14 @@ treasury container to one exact external `target_ref`, plus optional evidence
 and same-record consumed linkage, without inventing a second treasury
 execution registry.
 
+For the approved first post-active treasury reinvest lane on this branch line,
+that same treasury record may also carry one treasury-owned
+`post_active_reinvest` block for already-active treasuries. It holds only the
+exact executed source/target asset amounts, committed source/target container
+refs, source reference, one evidence locator, one confirmation timestamp, and
+optional same-record consumed linkage needed to record one committed reinvest
+transaction, without inventing a second treasury execution registry.
+
 Current branch-line boundary:
 
 - `TaskState.ActivateStep` is the single committed runtime/control-plane owner

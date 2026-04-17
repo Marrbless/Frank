@@ -38,6 +38,7 @@ type TaskState struct {
 	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
 	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
+	treasuryPostActiveReinvestHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryReinvestInput, time.Time) error
 	treasuryPostActiveSpendHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySpendInput, time.Time) error
 	treasuryPostActiveTransferHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryTransferInput, time.Time) error
 	treasuryPostActiveSaveHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySaveInput, time.Time) error
@@ -53,6 +54,7 @@ func NewTaskState() *TaskState {
 		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
 		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
+		treasuryPostActiveReinvestHook: missioncontrol.ProducePostActiveTreasuryReinvest,
 		treasuryPostActiveSpendHook:    missioncontrol.ProducePostActiveTreasurySpend,
 		treasuryPostActiveTransferHook: missioncontrol.ProducePostActiveTreasuryTransfer,
 		treasuryPostActiveSaveHook:     missioncontrol.ProducePostActiveTreasurySave,
@@ -314,6 +316,7 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 	root := strings.TrimSpace(s.missionStoreRoot)
 	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
 	bootstrapHook := s.treasuryBootstrapProducerHook
+	postActiveReinvestHook := s.treasuryPostActiveReinvestHook
 	postActiveSpendHook := s.treasuryPostActiveSpendHook
 	postActiveTransferHook := s.treasuryPostActiveTransferHook
 	postActiveSaveHook := s.treasuryPostActiveSaveHook
@@ -360,6 +363,17 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 		}, now)
 	}
 	if treasury.State == missioncontrol.TreasuryStateActive {
+		if postActiveReinvestHook != nil {
+			resolvedReinvest, err := missioncontrol.ResolveExecutionContextTreasuryPostActiveReinvest(ec)
+			if err != nil {
+				return err
+			}
+			if resolvedReinvest != nil {
+				return postActiveReinvestHook(root, lease, missioncontrol.PostActiveTreasuryReinvestInput{
+					TreasuryRef: *ec.Step.TreasuryRef,
+				}, now)
+			}
+		}
 		if postActiveSpendHook != nil {
 			resolvedSpend, err := missioncontrol.ResolveExecutionContextTreasuryPostActiveSpend(ec)
 			if err != nil {

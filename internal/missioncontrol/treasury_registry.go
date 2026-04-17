@@ -59,6 +59,7 @@ type TreasuryRecord struct {
 	ContainerRefs            []FrankRegistryObjectRef          `json:"container_refs,omitempty"`
 	BootstrapAcquisition     *TreasuryBootstrapAcquisition     `json:"bootstrap_acquisition,omitempty"`
 	PostBootstrapAcquisition *TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition,omitempty"`
+	PostActiveReinvest       *TreasuryPostActiveReinvest       `json:"post_active_reinvest,omitempty"`
 	PostActiveSpend          *TreasuryPostActiveSpend          `json:"post_active_spend,omitempty"`
 	PostActiveTransfer       *TreasuryPostActiveTransfer       `json:"post_active_transfer,omitempty"`
 	PostActiveSave           *TreasuryPostActiveSave           `json:"post_active_save,omitempty"`
@@ -82,6 +83,19 @@ type TreasuryPostBootstrapAcquisition struct {
 	EvidenceLocator string    `json:"evidence_locator"`
 	ConfirmedAt     time.Time `json:"confirmed_at,omitempty"`
 	ConsumedEntryID string    `json:"consumed_entry_id,omitempty"`
+}
+
+type TreasuryPostActiveReinvest struct {
+	SourceAssetCode    string                 `json:"source_asset_code"`
+	SourceAmount       string                 `json:"source_amount"`
+	TargetAssetCode    string                 `json:"target_asset_code"`
+	TargetAmount       string                 `json:"target_amount"`
+	SourceContainerRef FrankRegistryObjectRef `json:"source_container_ref"`
+	TargetContainerRef FrankRegistryObjectRef `json:"target_container_ref"`
+	SourceRef          string                 `json:"source_ref"`
+	EvidenceLocator    string                 `json:"evidence_locator"`
+	ConfirmedAt        time.Time              `json:"confirmed_at,omitempty"`
+	ConsumedEntryID    string                 `json:"consumed_entry_id,omitempty"`
 }
 
 type TreasuryPostActiveSpend struct {
@@ -194,6 +208,13 @@ type ResolvedExecutionContextTreasuryPostBootstrapAcquisition struct {
 	PostBootstrapAcquisition TreasuryPostBootstrapAcquisition `json:"post_bootstrap_acquisition"`
 }
 
+type ResolvedExecutionContextTreasuryPostActiveReinvest struct {
+	Treasury           TreasuryRecord             `json:"treasury"`
+	PostActiveReinvest TreasuryPostActiveReinvest `json:"post_active_reinvest"`
+	SourceContainer    FrankContainerRecord       `json:"source_container"`
+	TargetContainer    FrankContainerRecord       `json:"target_container"`
+}
+
 type ResolvedExecutionContextTreasuryPostActiveSpend struct {
 	Treasury        TreasuryRecord          `json:"treasury"`
 	PostActiveSpend TreasuryPostActiveSpend `json:"post_active_spend"`
@@ -282,6 +303,14 @@ func ValidateTreasuryRecord(record TreasuryRecord) error {
 		}
 		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
 			return fmt.Errorf("mission store treasury post_bootstrap_acquisition requires state %q, got %q", TreasuryStateActive, record.State)
+		}
+	}
+	if record.PostActiveReinvest != nil {
+		if err := validateTreasuryPostActiveReinvest(*record.PostActiveReinvest); err != nil {
+			return err
+		}
+		if NormalizeTreasuryState(record.State) != TreasuryStateActive {
+			return fmt.Errorf("mission store treasury post_active_reinvest requires state %q, got %q", TreasuryStateActive, record.State)
 		}
 	}
 	if record.PostActiveSpend != nil {
@@ -453,6 +482,7 @@ func normalizeTreasuryRecord(record TreasuryRecord) TreasuryRecord {
 	record.ContainerRefs = normalizeFrankRegistryObjectRefs(record.ContainerRefs)
 	record.BootstrapAcquisition = normalizeTreasuryBootstrapAcquisition(record.BootstrapAcquisition)
 	record.PostBootstrapAcquisition = normalizeTreasuryPostBootstrapAcquisition(record.PostBootstrapAcquisition)
+	record.PostActiveReinvest = normalizeTreasuryPostActiveReinvest(record.PostActiveReinvest)
 	record.PostActiveSpend = normalizeTreasuryPostActiveSpend(record.PostActiveSpend)
 	record.PostActiveTransfer = normalizeTreasuryPostActiveTransfer(record.PostActiveTransfer)
 	record.PostActiveSave = normalizeTreasuryPostActiveSave(record.PostActiveSave)
@@ -595,6 +625,80 @@ func ResolveExecutionContextTreasuryPostBootstrapAcquisition(ec ExecutionContext
 	return &ResolvedExecutionContextTreasuryPostBootstrapAcquisition{
 		Treasury:                 *treasury,
 		PostBootstrapAcquisition: *treasury.PostBootstrapAcquisition,
+	}, nil
+}
+
+func ResolveExecutionContextTreasuryPostActiveReinvest(ec ExecutionContext) (*ResolvedExecutionContextTreasuryPostActiveReinvest, error) {
+	treasury, err := ResolveExecutionContextTreasuryRef(ec)
+	if err != nil {
+		return nil, err
+	}
+	if treasury == nil {
+		return nil, nil
+	}
+	if treasury.State != TreasuryStateActive {
+		return nil, nil
+	}
+	if treasury.PostActiveReinvest == nil {
+		return nil, nil
+	}
+	block := *treasury.PostActiveReinvest
+	activeContainerID, err := resolveTreasuryActiveContainerID(*treasury)
+	if err != nil {
+		return nil, err
+	}
+	sourceResolved, err := ResolveFrankRegistryObjectRef(ec.MissionStoreRoot, block.SourceContainerRef)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest.source_container_ref: %w",
+			treasury.TreasuryID,
+			err,
+		)
+	}
+	if sourceResolved.Container == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest.source_container_ref kind %q object_id %q: expected Frank container record",
+			treasury.TreasuryID,
+			sourceResolved.Ref.Kind,
+			sourceResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(sourceResolved.Ref.ObjectID) != activeContainerID {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest.source_container_ref object_id %q must match active treasury container %q",
+			treasury.TreasuryID,
+			sourceResolved.Ref.ObjectID,
+			activeContainerID,
+		)
+	}
+	targetResolved, err := ResolveFrankRegistryObjectRef(ec.MissionStoreRoot, block.TargetContainerRef)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest.target_container_ref: %w",
+			treasury.TreasuryID,
+			err,
+		)
+	}
+	if targetResolved.Container == nil {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest.target_container_ref kind %q object_id %q: expected Frank container record",
+			treasury.TreasuryID,
+			targetResolved.Ref.Kind,
+			targetResolved.Ref.ObjectID,
+		)
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		return nil, fmt.Errorf(
+			"execution context treasury %q treasury.post_active_reinvest is already consumed by entry %q",
+			treasury.TreasuryID,
+			strings.TrimSpace(block.ConsumedEntryID),
+		)
+	}
+	return &ResolvedExecutionContextTreasuryPostActiveReinvest{
+		Treasury:           *treasury,
+		PostActiveReinvest: block,
+		SourceContainer:    *sourceResolved.Container,
+		TargetContainer:    *targetResolved.Container,
 	}, nil
 }
 
@@ -912,6 +1016,24 @@ func normalizeTreasuryPostBootstrapAcquisition(block *TreasuryPostBootstrapAcqui
 	return &normalized
 }
 
+func normalizeTreasuryPostActiveReinvest(block *TreasuryPostActiveReinvest) *TreasuryPostActiveReinvest {
+	if block == nil {
+		return nil
+	}
+	normalized := *block
+	normalized.SourceAssetCode = strings.TrimSpace(normalized.SourceAssetCode)
+	normalized.SourceAmount = strings.TrimSpace(normalized.SourceAmount)
+	normalized.TargetAssetCode = strings.TrimSpace(normalized.TargetAssetCode)
+	normalized.TargetAmount = strings.TrimSpace(normalized.TargetAmount)
+	normalized.SourceContainerRef = NormalizeFrankRegistryObjectRef(normalized.SourceContainerRef)
+	normalized.TargetContainerRef = NormalizeFrankRegistryObjectRef(normalized.TargetContainerRef)
+	normalized.SourceRef = strings.TrimSpace(normalized.SourceRef)
+	normalized.EvidenceLocator = strings.TrimSpace(normalized.EvidenceLocator)
+	normalized.ConfirmedAt = normalized.ConfirmedAt.UTC()
+	normalized.ConsumedEntryID = strings.TrimSpace(normalized.ConsumedEntryID)
+	return &normalized
+}
+
 func normalizeTreasuryPostActiveSpend(block *TreasuryPostActiveSpend) *TreasuryPostActiveSpend {
 	if block == nil {
 		return nil
@@ -996,6 +1118,48 @@ func validateTreasuryPostBootstrapAcquisition(block TreasuryPostBootstrapAcquisi
 	}
 	if strings.TrimSpace(block.ConsumedEntryID) != "" {
 		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_bootstrap_acquisition"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTreasuryPostActiveReinvest(block TreasuryPostActiveReinvest) error {
+	if err := validateTreasuryAssetCode(block.SourceAssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.source_%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.SourceAmount); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.source_%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAssetCode(block.TargetAssetCode); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.target_%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateTreasuryAmount(block.TargetAmount); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.target_%s", strings.TrimPrefix(err.Error(), "mission store treasury ledger entry "))
+	}
+	if err := validateFrankRegistryObjectRef(block.SourceContainerRef); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.source_container_ref: %w", err)
+	}
+	if NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind != FrankRegistryObjectKindContainer {
+		return fmt.Errorf("mission store treasury post_active_reinvest.source_container_ref kind %q is invalid", NormalizeFrankRegistryObjectRef(block.SourceContainerRef).Kind)
+	}
+	if err := validateFrankRegistryObjectRef(block.TargetContainerRef); err != nil {
+		return fmt.Errorf("mission store treasury post_active_reinvest.target_container_ref: %w", err)
+	}
+	if NormalizeFrankRegistryObjectRef(block.TargetContainerRef).Kind != FrankRegistryObjectKindContainer {
+		return fmt.Errorf("mission store treasury post_active_reinvest.target_container_ref kind %q is invalid", NormalizeFrankRegistryObjectRef(block.TargetContainerRef).Kind)
+	}
+	if strings.TrimSpace(block.SourceRef) == "" {
+		return fmt.Errorf("mission store treasury post_active_reinvest.source_ref is required")
+	}
+	if strings.TrimSpace(block.EvidenceLocator) == "" {
+		return fmt.Errorf("mission store treasury post_active_reinvest.evidence_locator is required")
+	}
+	if block.ConfirmedAt.IsZero() {
+		return fmt.Errorf("mission store treasury post_active_reinvest.confirmed_at is required")
+	}
+	if strings.TrimSpace(block.ConsumedEntryID) != "" {
+		if err := validateTreasuryEntryID(block.ConsumedEntryID, "mission store treasury post_active_reinvest"); err != nil {
 			return err
 		}
 	}

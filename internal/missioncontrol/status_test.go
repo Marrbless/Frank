@@ -645,6 +645,91 @@ func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSaveW
 	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
 }
 
+func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveReinvestWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	runtime := JobRuntimeState{
+		JobID:        "job-1",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+		StartedAt:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC),
+	}
+	preflight := ResolvedExecutionContextTreasuryPreflight{
+		Treasury: &TreasuryRecord{
+			RecordVersion:  StoreRecordVersion,
+			TreasuryID:     "treasury-wallet",
+			DisplayName:    "Frank Treasury",
+			State:          TreasuryStateActive,
+			ZeroSeedPolicy: TreasuryZeroSeedPolicyOwnerSeedForbidden,
+			PostActiveReinvest: &TreasuryPostActiveReinvest{
+				SourceAssetCode: "USD",
+				SourceAmount:    "0.75",
+				TargetAssetCode: "BTC",
+				TargetAmount:    "0.00001000",
+				SourceContainerRef: FrankRegistryObjectRef{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+				TargetContainerRef: FrankRegistryObjectRef{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-investment",
+				},
+				SourceRef:       "trade:reinvest-a",
+				EvidenceLocator: "https://evidence.example/reinvest-a",
+				ConfirmedAt:     time.Date(2026, 4, 8, 21, 4, 0, 0, time.UTC),
+				ConsumedEntryID: "entry-reinvest-value-in",
+			},
+			ContainerRefs: []FrankRegistryObjectRef{
+				{
+					Kind:     FrankRegistryObjectKindContainer,
+					ObjectID: "container-wallet",
+				},
+			},
+			CreatedAt: time.Date(2026, 4, 8, 21, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 4, 8, 21, 5, 0, 0, time.UTC),
+		},
+		Containers: []FrankContainerRecord{
+			{
+				RecordVersion:    StoreRecordVersion,
+				ContainerID:      "container-wallet",
+				ContainerKind:    "wallet",
+				Label:            "Primary Wallet",
+				ContainerClassID: "container-class-wallet",
+				State:            "active",
+				EligibilityTargetRef: AutonomyEligibilityTargetRef{
+					Kind:       EligibilityTargetKindTreasuryContainerClass,
+					RegistryID: "container-class-wallet",
+				},
+				CreatedAt: time.Date(2026, 4, 8, 21, 1, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 4, 8, 21, 2, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime, []string{"read"}, &preflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertResolvedTreasuryPreflightJSONEnvelope(t, got["treasury_preflight"])
+	treasury := got["treasury_preflight"].(map[string]any)["treasury"].(map[string]any)
+	postActiveReinvest := treasury["post_active_reinvest"].(map[string]any)
+	sourceRef := postActiveReinvest["source_container_ref"].(map[string]any)
+	targetRef := postActiveReinvest["target_container_ref"].(map[string]any)
+	if sourceRef["object_id"] != "container-wallet" {
+		t.Fatalf("treasury_preflight.treasury.post_active_reinvest.source_container_ref.object_id = %#v, want %q", sourceRef["object_id"], "container-wallet")
+	}
+	if targetRef["object_id"] != "container-investment" {
+		t.Fatalf("treasury_preflight.treasury.post_active_reinvest.target_container_ref.object_id = %#v, want %q", targetRef["object_id"], "container-investment")
+	}
+	if postActiveReinvest["consumed_entry_id"] != "entry-reinvest-value-in" {
+		t.Fatalf("treasury_preflight.treasury.post_active_reinvest.consumed_entry_id = %#v, want %q", postActiveReinvest["consumed_entry_id"], "entry-reinvest-value-in")
+	}
+	assertOperatorReadoutAdapterBoundary(t, formatted, "operator status JSON", false, true)
+}
+
 func TestFormatOperatorStatusSummaryWithTreasuryPreflightIncludesPostActiveSpendWhenPresent(t *testing.T) {
 	t.Parallel()
 

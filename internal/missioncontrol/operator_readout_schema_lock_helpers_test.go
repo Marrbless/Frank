@@ -183,6 +183,9 @@ func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
 	if _, ok := treasury["post_bootstrap_acquisition"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_bootstrap_acquisition")
 	}
+	if _, ok := treasury["post_active_reinvest"]; ok {
+		treasuryKeys = append(treasuryKeys, "post_active_reinvest")
+	}
 	if _, ok := treasury["post_active_spend"]; ok {
 		treasuryKeys = append(treasuryKeys, "post_active_spend")
 	}
@@ -210,6 +213,19 @@ func assertResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value any) {
 			postBootstrapKeys = append(postBootstrapKeys, "consumed_entry_id")
 		}
 		assertJSONObjectKeys(t, postBootstrapObject, postBootstrapKeys...)
+	}
+	if postActiveReinvest, ok := treasury["post_active_reinvest"]; ok {
+		postActiveReinvestObject, ok := postActiveReinvest.(map[string]any)
+		if !ok {
+			t.Fatalf("treasury_preflight.treasury.post_active_reinvest = %#v, want object", postActiveReinvest)
+		}
+		postActiveReinvestKeys := []string{"confirmed_at", "evidence_locator", "source_amount", "source_asset_code", "source_container_ref", "source_ref", "target_amount", "target_asset_code", "target_container_ref"}
+		if _, ok := postActiveReinvestObject["consumed_entry_id"]; ok {
+			postActiveReinvestKeys = append(postActiveReinvestKeys, "consumed_entry_id")
+		}
+		assertJSONObjectKeys(t, postActiveReinvestObject, postActiveReinvestKeys...)
+		assertJSONObjectKeys(t, postActiveReinvestObject["source_container_ref"], "kind", "object_id")
+		assertJSONObjectKeys(t, postActiveReinvestObject["target_container_ref"], "kind", "object_id")
 	}
 	if postActiveSpend, ok := treasury["post_active_spend"]; ok {
 		postActiveSpendObject, ok := postActiveSpend.(map[string]any)

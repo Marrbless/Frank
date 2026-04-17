@@ -52,6 +52,24 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 			ConfirmedAt:     now.Add(2 * time.Minute),
 			ConsumedEntryID: " entry-post-value ",
 		},
+		PostActiveReinvest: &TreasuryPostActiveReinvest{
+			SourceAssetCode: " USD ",
+			SourceAmount:    " 0.75 ",
+			TargetAssetCode: " BTC ",
+			TargetAmount:    " 0.00001000 ",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " " + fixtures.container.ContainerID + " ",
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKind(" container "),
+				ObjectID: " container-investment ",
+			},
+			SourceRef:       " trade:reinvest-a ",
+			EvidenceLocator: " https://evidence.example/reinvest-a ",
+			ConfirmedAt:     now.Add(150 * time.Second),
+			ConsumedEntryID: " entry-reinvest-value-in ",
+		},
 		PostActiveSpend: &TreasuryPostActiveSpend{
 			AssetCode: " USD ",
 			Amount:    " 0.75 ",
@@ -125,6 +143,24 @@ func TestTreasuryRecordRoundTripAndList(t *testing.T) {
 		EvidenceLocator: "https://evidence.example/payout-b",
 		ConfirmedAt:     now.Add(2 * time.Minute).UTC(),
 		ConsumedEntryID: "entry-post-value",
+	}
+	want.PostActiveReinvest = &TreasuryPostActiveReinvest{
+		SourceAssetCode: "USD",
+		SourceAmount:    "0.75",
+		TargetAssetCode: "BTC",
+		TargetAmount:    "0.00001000",
+		SourceContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: fixtures.container.ContainerID,
+		},
+		TargetContainerRef: FrankRegistryObjectRef{
+			Kind:     FrankRegistryObjectKindContainer,
+			ObjectID: "container-investment",
+		},
+		SourceRef:       "trade:reinvest-a",
+		EvidenceLocator: "https://evidence.example/reinvest-a",
+		ConfirmedAt:     now.Add(150 * time.Second).UTC(),
+		ConsumedEntryID: "entry-reinvest-value-in",
 	}
 	want.PostActiveSpend = &TreasuryPostActiveSpend{
 		AssetCode: "USD",
@@ -569,6 +605,130 @@ func TestTreasuryRecordValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: `mission store treasury post_bootstrap_acquisition entry_id "bad/id" is invalid`,
+		},
+		{
+			name: "post active reinvest requires active treasury state",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+						SourceAssetCode: "USD",
+						SourceAmount:    "0.75",
+						TargetAssetCode: "BTC",
+						TargetAmount:    "0.00001000",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-investment",
+						},
+						SourceRef:       "trade:reinvest-a",
+						EvidenceLocator: "https://evidence.example/reinvest-a",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: `mission store treasury post_active_reinvest requires state "active", got "bootstrap"`,
+		},
+		{
+			name: "post active reinvest missing source container ref",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+						SourceAssetCode: "USD",
+						SourceAmount:    "0.75",
+						TargetAssetCode: "BTC",
+						TargetAmount:    "0.00001000",
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-investment",
+						},
+						SourceRef:       "trade:reinvest-a",
+						EvidenceLocator: "https://evidence.example/reinvest-a",
+						ConfirmedAt:     now.Add(time.Minute),
+					}
+				}))
+			},
+			want: `mission store treasury post_active_reinvest.source_container_ref: Frank object ref kind "" is invalid`,
+		},
+		{
+			name: "post active reinvest missing evidence locator",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+						SourceAssetCode: "USD",
+						SourceAmount:    "0.75",
+						TargetAssetCode: "BTC",
+						TargetAmount:    "0.00001000",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-investment",
+						},
+						SourceRef:   "trade:reinvest-a",
+						ConfirmedAt: now.Add(time.Minute),
+					}
+				}))
+			},
+			want: "mission store treasury post_active_reinvest.evidence_locator is required",
+		},
+		{
+			name: "post active reinvest missing confirmed at",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+						SourceAssetCode: "USD",
+						SourceAmount:    "0.75",
+						TargetAssetCode: "BTC",
+						TargetAmount:    "0.00001000",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-investment",
+						},
+						SourceRef:       "trade:reinvest-a",
+						EvidenceLocator: "https://evidence.example/reinvest-a",
+					}
+				}))
+			},
+			want: "mission store treasury post_active_reinvest.confirmed_at is required",
+		},
+		{
+			name: "post active reinvest malformed consumed entry id",
+			run: func() error {
+				return StoreTreasuryRecord(root, validTreasuryRecord(now, func(record *TreasuryRecord) {
+					record.State = TreasuryStateActive
+					record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+						SourceAssetCode: "USD",
+						SourceAmount:    "0.75",
+						TargetAssetCode: "BTC",
+						TargetAmount:    "0.00001000",
+						SourceContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-wallet",
+						},
+						TargetContainerRef: FrankRegistryObjectRef{
+							Kind:     FrankRegistryObjectKindContainer,
+							ObjectID: "container-investment",
+						},
+						SourceRef:       "trade:reinvest-a",
+						EvidenceLocator: "https://evidence.example/reinvest-a",
+						ConfirmedAt:     now.Add(time.Minute),
+						ConsumedEntryID: "bad/id",
+					}
+				}))
+			},
+			want: `mission store treasury post_active_reinvest entry_id "bad/id" is invalid`,
 		},
 		{
 			name: "post active spend requires active treasury state",
@@ -1582,6 +1742,160 @@ func TestResolveExecutionContextTreasuryPostActiveSaveZeroRefPathPreservesPriorB
 	}
 	if got != nil {
 		t.Fatalf("ResolveExecutionContextTreasuryPostActiveSave() = %#v, want nil for zero-treasury step", got)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveReinvestResolvesCommittedActiveBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 1, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-investment",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-investment", "check-container-class-investment", now)
+	investment := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-investment",
+		ContainerKind:        "wallet",
+		Label:                "Investment Wallet",
+		ContainerClassID:     "container-class-investment",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, investment); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-reinvest"
+		record.State = TreasuryStateActive
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.75",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001000",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: investment.ContainerID,
+			},
+			SourceRef:       "trade:reinvest-a",
+			EvidenceLocator: "https://evidence.example/reinvest-a",
+			ConfirmedAt:     now.Add(time.Minute),
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+	record.RecordVersion = StoreRecordVersion
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	got, err := ResolveExecutionContextTreasuryPostActiveReinvest(ec)
+	if err != nil {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveReinvest() = nil, want resolved post-active reinvest")
+	}
+	if !reflect.DeepEqual(got.Treasury, record) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest().Treasury = %#v, want %#v", got.Treasury, record)
+	}
+	if !reflect.DeepEqual(got.PostActiveReinvest, *record.PostActiveReinvest) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest().PostActiveReinvest = %#v, want %#v", got.PostActiveReinvest, *record.PostActiveReinvest)
+	}
+	if !reflect.DeepEqual(got.SourceContainer, fixtures.container) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest().SourceContainer = %#v, want %#v", got.SourceContainer, fixtures.container)
+	}
+	if !reflect.DeepEqual(got.TargetContainer, investment) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest().TargetContainer = %#v, want %#v", got.TargetContainer, investment)
+	}
+}
+
+func TestResolveExecutionContextTreasuryPostActiveReinvestFailsClosedOnConsumedBlock(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writeExecutionContextFrankRegistryFixtures(t)
+	now := time.Date(2026, 4, 8, 17, 2, 0, 0, time.UTC)
+	target := AutonomyEligibilityTargetRef{
+		Kind:       EligibilityTargetKindTreasuryContainerClass,
+		RegistryID: "container-class-investment-consumed",
+	}
+	writeFrankRegistryEligibilityFixture(t, fixtures.root, target, EligibilityLabelAutonomyCompatible, "container-class-investment-consumed", "check-container-class-investment-consumed", now)
+	investment := FrankContainerRecord{
+		RecordVersion:        StoreRecordVersion,
+		ContainerID:          "container-investment-consumed",
+		ContainerKind:        "wallet",
+		Label:                "Investment Wallet",
+		ContainerClassID:     "container-class-investment-consumed",
+		State:                "active",
+		EligibilityTargetRef: target,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := StoreFrankContainerRecord(fixtures.root, investment); err != nil {
+		t.Fatalf("StoreFrankContainerRecord() error = %v", err)
+	}
+
+	record := validTreasuryRecord(now, func(record *TreasuryRecord) {
+		record.TreasuryID = "treasury-post-active-reinvest-consumed"
+		record.State = TreasuryStateActive
+		record.PostActiveReinvest = &TreasuryPostActiveReinvest{
+			SourceAssetCode: "USD",
+			SourceAmount:    "0.75",
+			TargetAssetCode: "BTC",
+			TargetAmount:    "0.00001000",
+			SourceContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: fixtures.container.ContainerID,
+			},
+			TargetContainerRef: FrankRegistryObjectRef{
+				Kind:     FrankRegistryObjectKindContainer,
+				ObjectID: investment.ContainerID,
+			},
+			SourceRef:       "trade:reinvest-a",
+			EvidenceLocator: "https://evidence.example/reinvest-a",
+			ConfirmedAt:     now.Add(time.Minute),
+			ConsumedEntryID: "entry-reinvest-value-in",
+		}
+		record.ContainerRefs = []FrankRegistryObjectRef{
+			{Kind: FrankRegistryObjectKindContainer, ObjectID: fixtures.container.ContainerID},
+		}
+	})
+	if err := StoreTreasuryRecord(fixtures.root, record); err != nil {
+		t.Fatalf("StoreTreasuryRecord() error = %v", err)
+	}
+
+	job := testExecutionJob()
+	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{TreasuryID: record.TreasuryID}
+	ec, err := ResolveExecutionContext(job, "build")
+	if err != nil {
+		t.Fatalf("ResolveExecutionContext() error = %v", err)
+	}
+	ec.MissionStoreRoot = fixtures.root
+
+	_, err = ResolveExecutionContextTreasuryPostActiveReinvest(ec)
+	if err == nil {
+		t.Fatal("ResolveExecutionContextTreasuryPostActiveReinvest() error = nil, want consumed reinvest rejection")
+	}
+	if !strings.Contains(err.Error(), `execution context treasury "treasury-post-active-reinvest-consumed" treasury.post_active_reinvest is already consumed by entry "entry-reinvest-value-in"`) {
+		t.Fatalf("ResolveExecutionContextTreasuryPostActiveReinvest() error = %q, want consumed reinvest rejection", err.Error())
 	}
 }
 
