@@ -1063,6 +1063,110 @@ func TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsBounceEvidenceAppen
 	}
 }
 
+func TestTaskStateSyncFrankZohoCampaignInboundRepliesUniquelyAttributesBounceEvidence(t *testing.T) {
+	originalRead := readFrankZohoCampaignInboundReplies
+	originalReadBounces := readFrankZohoCampaignBounceEvidence
+	t.Cleanup(func() {
+		readFrankZohoCampaignInboundReplies = originalRead
+		readFrankZohoCampaignBounceEvidence = originalReadBounces
+	})
+
+	root, _, container := writeTaskStateTreasuryFixtures(t)
+	campaign := mustStoreFrankZohoAddressedCampaignFixture(t, root, container)
+	mustStoreCampaignLinkedZohoMailboxSender(t, root, campaign, "frank.custom@example.com", "Frank Custom", "9988776655443322110", true)
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.SetRuntimePersistHook(func(job *missioncontrol.Job, runtime missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext) error {
+		return missioncontrol.PersistProjectedRuntimeState(root, missioncontrol.WriterLockLease{LeaseHolderID: "frank-zoho-bounce-attribution-test"}, job, runtime, control, time.Now().UTC())
+	})
+
+	job := missioncontrol.Job{
+		ID:           "job-frank-zoho-bounce-attribution",
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{FrankZohoSendEmailToolName},
+		Plan: missioncontrol.Plan{
+			ID: "plan-frank-zoho-bounce-attribution",
+			Steps: []missioncontrol.Step{
+				{
+					ID:                "send-outbound-email",
+					Type:              missioncontrol.StepTypeDiscussion,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+					AllowedTools:      []string{FrankZohoSendEmailToolName},
+					CampaignRef:       &missioncontrol.CampaignRef{CampaignID: campaign.CampaignID},
+				},
+				{
+					ID:                "final-response",
+					Type:              missioncontrol.StepTypeFinalResponse,
+					RequiredAuthority: missioncontrol.AuthorityTierLow,
+				},
+			},
+		},
+	}
+	if err := state.ActivateStep(job, "send-outbound-email"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	seedNow := time.Date(2026, 4, 17, 16, 10, 0, 0, time.UTC)
+	if err := missioncontrol.StoreJobRuntimeRecord(root, missioncontrol.JobRuntimeRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		WriterEpoch:   1,
+		AppliedSeq:    1,
+		JobID:         "job-frank-zoho-bounce-seed",
+		State:         missioncontrol.JobStateRunning,
+		ActiveStepID:  "send-outbound-email",
+		CreatedAt:     seedNow,
+		UpdatedAt:     seedNow,
+	}); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord(seed) error = %v", err)
+	}
+	seedAction := mustBuildVerifiedFrankZohoCampaignAction(t, "send-outbound-email", campaign.CampaignID, "Frank intro", seedNow)
+	if err := missioncontrol.StoreCampaignZohoEmailOutboundActionRecord(root, testFrankZohoCampaignActionRecord("job-frank-zoho-bounce-seed", 1, seedAction)); err != nil {
+		t.Fatalf("StoreCampaignZohoEmailOutboundActionRecord(seed) error = %v", err)
+	}
+
+	readFrankZohoCampaignInboundReplies = func(context.Context, string) ([]missioncontrol.FrankZohoInboundReply, error) {
+		return nil, nil
+	}
+	readFrankZohoCampaignBounceEvidence = func(_ context.Context, providerAccountID string) ([]missioncontrol.FrankZohoBounceEvidence, error) {
+		return []missioncontrol.FrankZohoBounceEvidence{
+			{
+				Provider:              "zoho_mail",
+				ProviderAccountID:     providerAccountID,
+				ProviderMessageID:     "1711540357880102000",
+				ProviderMailID:        "<bounce-1@zoho.test>",
+				MIMEMessageID:         "<bounce-1@example.test>",
+				OriginalMIMEMessageID: seedAction.MIMEMessageID,
+				FinalRecipient:        "person@example.com",
+				DiagnosticCode:        "smtp; 550 5.1.1 mailbox unavailable",
+				ReceivedAt:            time.Date(2026, 4, 17, 16, 20, 0, 0, time.UTC),
+				OriginalMessageURL:    "https://mail.zoho.test/api/accounts/" + providerAccountID + "/messages/1711540357880102000/originalmessage",
+			},
+		}, nil
+	}
+
+	appended, err := state.SyncFrankZohoCampaignInboundReplies()
+	if err != nil {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies() error = %v", err)
+	}
+	if appended != 0 {
+		t.Fatalf("SyncFrankZohoCampaignInboundReplies() appended = %d, want 0 reply appends on bounce-only sync", appended)
+	}
+
+	records, err := missioncontrol.ListCommittedFrankZohoBounceEvidenceRecords(root, job.ID)
+	if err != nil {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListCommittedFrankZohoBounceEvidenceRecords() len = %d, want 1", len(records))
+	}
+	if records[0].CampaignID != campaign.CampaignID {
+		t.Fatalf("records[0].CampaignID = %q, want %q", records[0].CampaignID, campaign.CampaignID)
+	}
+	if records[0].OutboundActionID != seedAction.ActionID {
+		t.Fatalf("records[0].OutboundActionID = %q, want %q", records[0].OutboundActionID, seedAction.ActionID)
+	}
+}
+
 func TestFrankZohoCampaignSendStopsAfterVerifiedSendLimit(t *testing.T) {
 	t.Parallel()
 

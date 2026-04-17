@@ -756,6 +756,13 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	var outboundRecords []missioncontrol.CampaignZohoEmailOutboundActionRecord
+	if len(bounces) > 0 {
+		outboundRecords, err = missioncontrol.ListCommittedAllCampaignZohoEmailOutboundActionRecords(ec.MissionStoreRoot)
+		if err != nil {
+			return 0, err
+		}
+	}
 
 	nextRuntime := *missioncontrol.CloneJobRuntimeState(ec.Runtime)
 	appended := 0
@@ -774,6 +781,13 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 	evidenceChanged := false
 	for _, bounce := range bounces {
 		bounce.StepID = ec.Step.ID
+		if action, ok := missioncontrol.AttributedCampaignZohoEmailOutboundActionForBounce(bounce, outboundRecords); ok {
+			bounce.CampaignID = strings.TrimSpace(action.CampaignID)
+			bounce.OutboundActionID = strings.TrimSpace(action.ActionID)
+		} else {
+			bounce.CampaignID = ""
+			bounce.OutboundActionID = ""
+		}
 		updatedRuntime, changed, err := missioncontrol.AppendFrankZohoBounceEvidence(nextRuntime, bounce)
 		if err != nil {
 			return 0, err

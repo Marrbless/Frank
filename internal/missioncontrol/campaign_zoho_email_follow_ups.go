@@ -126,6 +126,48 @@ func attributedCampaignZohoEmailOutboundActionForReply(reply FrankZohoInboundRep
 	return matches[0], true
 }
 
+func attributedCampaignZohoEmailOutboundActionForBounce(evidence FrankZohoBounceEvidence, outboundRecords []CampaignZohoEmailOutboundActionRecord) (CampaignZohoEmailOutboundActionRecord, bool) {
+	matches := make([]CampaignZohoEmailOutboundActionRecord, 0, 1)
+	for _, record := range outboundRecords {
+		action := NormalizeCampaignZohoEmailOutboundAction(CampaignZohoEmailOutboundAction{
+			ActionID:                record.ActionID,
+			StepID:                  record.StepID,
+			CampaignID:              record.CampaignID,
+			State:                   CampaignZohoEmailOutboundActionState(record.State),
+			Provider:                record.Provider,
+			ProviderAccountID:       record.ProviderAccountID,
+			FromAddress:             record.FromAddress,
+			FromDisplayName:         record.FromDisplayName,
+			Addressing:              record.Addressing,
+			Subject:                 record.Subject,
+			BodyFormat:              record.BodyFormat,
+			BodySHA256:              record.BodySHA256,
+			PreparedAt:              record.PreparedAt,
+			SentAt:                  record.SentAt,
+			VerifiedAt:              record.VerifiedAt,
+			FailedAt:                record.FailedAt,
+			ReplyToInboundReplyID:   record.ReplyToInboundReplyID,
+			ReplyToOutboundActionID: record.ReplyToOutboundActionID,
+			ProviderMessageID:       record.ProviderMessageID,
+			ProviderMailID:          record.ProviderMailID,
+			MIMEMessageID:           record.MIMEMessageID,
+			OriginalMessageURL:      record.OriginalMessageURL,
+			Failure:                 record.Failure,
+		})
+		if attributedCampaignZohoEmailBounceMatchesAction(evidence, action) {
+			matches = append(matches, record)
+		}
+	}
+	if len(matches) != 1 {
+		return CampaignZohoEmailOutboundActionRecord{}, false
+	}
+	return matches[0], true
+}
+
+func AttributedCampaignZohoEmailOutboundActionForBounce(evidence FrankZohoBounceEvidence, outboundRecords []CampaignZohoEmailOutboundActionRecord) (CampaignZohoEmailOutboundActionRecord, bool) {
+	return attributedCampaignZohoEmailOutboundActionForBounce(evidence, outboundRecords)
+}
+
 func attributedCampaignZohoEmailReplyMatchesAction(reply FrankZohoInboundReplyRecord, action CampaignZohoEmailOutboundAction) bool {
 	if action.MIMEMessageID == "" {
 		return false
@@ -155,4 +197,32 @@ func attributedCampaignZohoEmailReplyMatchesAction(reply FrankZohoInboundReplyRe
 		return false
 	}
 	return !reply.ReceivedAt.Before(outboundAt)
+}
+
+func attributedCampaignZohoEmailBounceMatchesAction(evidence FrankZohoBounceEvidence, action CampaignZohoEmailOutboundAction) bool {
+	matched := false
+	if evidence.OriginalProviderMessageID != "" && evidence.OriginalProviderMessageID == action.ProviderMessageID {
+		matched = true
+	}
+	if evidence.OriginalProviderMailID != "" && evidence.OriginalProviderMailID == action.ProviderMailID {
+		matched = true
+	}
+	if evidence.OriginalMIMEMessageID != "" && evidence.OriginalMIMEMessageID == action.MIMEMessageID {
+		matched = true
+	}
+	if !matched {
+		return false
+	}
+
+	outboundAt := action.SentAt
+	if outboundAt.IsZero() {
+		outboundAt = action.VerifiedAt
+	}
+	if outboundAt.IsZero() {
+		outboundAt = action.FailedAt
+	}
+	if outboundAt.IsZero() {
+		return false
+	}
+	return !evidence.ReceivedAt.Before(outboundAt)
 }
