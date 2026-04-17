@@ -12,32 +12,33 @@ const OperatorStatusApprovalHistoryLimit = 5
 const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
-	JobID                      string                                          `json:"job_id"`
-	State                      JobState                                        `json:"state"`
-	ActiveStepID               string                                          `json:"active_step_id,omitempty"`
-	AllowedTools               []string                                        `json:"allowed_tools,omitempty"`
-	DeferredSchedulerTriggers  []OperatorDeferredSchedulerTriggerStatus        `json:"deferred_scheduler_triggers,omitempty"`
-	CampaignPreflight          *ResolvedExecutionContextCampaignPreflight      `json:"campaign_preflight,omitempty"`
-	TreasuryPreflight          *ResolvedExecutionContextTreasuryPreflight      `json:"treasury_preflight,omitempty"`
-	BudgetBlocker              *OperatorBudgetBlockerStatus                    `json:"budget_blocker,omitempty"`
-	WaitingReason              string                                          `json:"waiting_reason,omitempty"`
-	WaitingAt                  *string                                         `json:"waiting_at,omitempty"`
-	PausedReason               string                                          `json:"paused_reason,omitempty"`
-	PausedAt                   *string                                         `json:"paused_at,omitempty"`
-	AbortedReason              string                                          `json:"aborted_reason,omitempty"`
-	FailedStepID               string                                          `json:"failed_step_id,omitempty"`
-	FailureReason              string                                          `json:"failure_reason,omitempty"`
-	FailedAt                   *string                                         `json:"failed_at,omitempty"`
-	ApprovalRequest            *OperatorApprovalRequestStatus                  `json:"approval_request,omitempty"`
-	ApprovalHistory            []OperatorApprovalHistoryEntry                  `json:"approval_history,omitempty"`
-	RecentAudit                []OperatorRecentAuditStatus                     `json:"recent_audit,omitempty"`
-	Artifacts                  []OperatorArtifactStatus                        `json:"artifacts,omitempty"`
-	CampaignZohoEmailOutbounds []OperatorCampaignZohoEmailOutboundActionStatus `json:"campaign_zoho_email_outbounds,omitempty"`
-	CampaignZohoEmailReplyWork []OperatorCampaignZohoEmailReplyWorkItemStatus  `json:"campaign_zoho_email_reply_work,omitempty"`
-	FrankZohoInboundReplies    []OperatorFrankZohoInboundReplyStatus           `json:"frank_zoho_inbound_replies,omitempty"`
-	CampaignZohoEmailSendGate  *CampaignZohoEmailSendGateDecision              `json:"campaign_zoho_email_send_gate,omitempty"`
-	FrankZohoSendProof         []OperatorFrankZohoSendProofStatus              `json:"frank_zoho_send_proof,omitempty"`
-	Truncation                 *OperatorStatusTruncation                       `json:"truncation,omitempty"`
+	JobID                              string                                                      `json:"job_id"`
+	State                              JobState                                                    `json:"state"`
+	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
+	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
+	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
+	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
+	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
+	FrankZohoMailboxBootstrapPreflight *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
+	BudgetBlocker                      *OperatorBudgetBlockerStatus                                `json:"budget_blocker,omitempty"`
+	WaitingReason                      string                                                      `json:"waiting_reason,omitempty"`
+	WaitingAt                          *string                                                     `json:"waiting_at,omitempty"`
+	PausedReason                       string                                                      `json:"paused_reason,omitempty"`
+	PausedAt                           *string                                                     `json:"paused_at,omitempty"`
+	AbortedReason                      string                                                      `json:"aborted_reason,omitempty"`
+	FailedStepID                       string                                                      `json:"failed_step_id,omitempty"`
+	FailureReason                      string                                                      `json:"failure_reason,omitempty"`
+	FailedAt                           *string                                                     `json:"failed_at,omitempty"`
+	ApprovalRequest                    *OperatorApprovalRequestStatus                              `json:"approval_request,omitempty"`
+	ApprovalHistory                    []OperatorApprovalHistoryEntry                              `json:"approval_history,omitempty"`
+	RecentAudit                        []OperatorRecentAuditStatus                                 `json:"recent_audit,omitempty"`
+	Artifacts                          []OperatorArtifactStatus                                    `json:"artifacts,omitempty"`
+	CampaignZohoEmailOutbounds         []OperatorCampaignZohoEmailOutboundActionStatus             `json:"campaign_zoho_email_outbounds,omitempty"`
+	CampaignZohoEmailReplyWork         []OperatorCampaignZohoEmailReplyWorkItemStatus              `json:"campaign_zoho_email_reply_work,omitempty"`
+	FrankZohoInboundReplies            []OperatorFrankZohoInboundReplyStatus                       `json:"frank_zoho_inbound_replies,omitempty"`
+	CampaignZohoEmailSendGate          *CampaignZohoEmailSendGateDecision                          `json:"campaign_zoho_email_send_gate,omitempty"`
+	FrankZohoSendProof                 []OperatorFrankZohoSendProofStatus                          `json:"frank_zoho_send_proof,omitempty"`
+	Truncation                         *OperatorStatusTruncation                                   `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
@@ -206,6 +207,10 @@ func FormatOperatorStatusSummaryWithAllowedToolsAndTreasuryPreflight(runtime Job
 }
 
 func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(runtime JobRuntimeState, allowedTools []string, campaignPreflight *ResolvedExecutionContextCampaignPreflight, treasuryPreflight *ResolvedExecutionContextTreasuryPreflight) (string, error) {
+	return FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(runtime, allowedTools, campaignPreflight, treasuryPreflight, nil)
+}
+
+func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(runtime JobRuntimeState, allowedTools []string, campaignPreflight *ResolvedExecutionContextCampaignPreflight, treasuryPreflight *ResolvedExecutionContextTreasuryPreflight, bootstrapPreflight *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight) (string, error) {
 	summary := buildOperatorStatusSummary(runtime, allowedTools)
 	if campaignPreflight != nil && campaignPreflight.Campaign != nil {
 		summary.CampaignPreflight = cloneResolvedExecutionContextCampaignPreflight(campaignPreflight)
@@ -223,6 +228,9 @@ func FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
 	}
 	if treasuryPreflight != nil && treasuryPreflight.Treasury != nil {
 		summary.TreasuryPreflight = cloneResolvedExecutionContextTreasuryPreflight(treasuryPreflight)
+	}
+	if bootstrapPreflight != nil && bootstrapPreflight.Identity != nil && bootstrapPreflight.Account != nil {
+		summary.FrankZohoMailboxBootstrapPreflight = cloneResolvedExecutionContextFrankZohoMailboxBootstrapPreflight(bootstrapPreflight)
 	}
 	return formatOperatorStatusSummary(summary)
 }
@@ -379,6 +387,23 @@ func cloneResolvedExecutionContextCampaignPreflight(preflight *ResolvedExecution
 	if preflight.Campaign != nil {
 		campaign := *preflight.Campaign
 		cloned.Campaign = &campaign
+	}
+	return &cloned
+}
+
+func cloneResolvedExecutionContextFrankZohoMailboxBootstrapPreflight(preflight *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight) *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight {
+	if preflight == nil {
+		return nil
+	}
+
+	cloned := ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}
+	if preflight.Identity != nil {
+		identity := *preflight.Identity
+		cloned.Identity = &identity
+	}
+	if preflight.Account != nil {
+		account := *preflight.Account
+		cloned.Account = &account
 	}
 	return &cloned
 }

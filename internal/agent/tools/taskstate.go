@@ -2080,15 +2080,16 @@ func (s *TaskState) OperatorStatus(jobID string) (string, error) {
 				Message: "operator command does not match the active job",
 			}
 		}
-		campaignPreflight, treasuryPreflight, err := resolveExecutionContextCampaignAndTreasuryPreflight(ec)
+		campaignPreflight, treasuryPreflight, bootstrapPreflight, err := resolveExecutionContextCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(ec)
 		if err != nil {
 			return "", err
 		}
-		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryPreflight(
+		summary, err := missioncontrol.FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(
 			*ec.Runtime,
 			missioncontrol.EffectiveAllowedTools(ec.Job, ec.Step),
 			campaignPreflight,
 			treasuryPreflight,
+			bootstrapPreflight,
 		)
 		if err != nil {
 			return "", err
@@ -2189,12 +2190,12 @@ func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, mi
 	return string(append(data, '\n')), nil
 }
 
-func resolveExecutionContextCampaignAndTreasuryPreflight(ec missioncontrol.ExecutionContext) (*missioncontrol.ResolvedExecutionContextCampaignPreflight, *missioncontrol.ResolvedExecutionContextTreasuryPreflight, error) {
+func resolveExecutionContextCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(ec missioncontrol.ExecutionContext) (*missioncontrol.ResolvedExecutionContextCampaignPreflight, *missioncontrol.ResolvedExecutionContextTreasuryPreflight, *missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight, error) {
 	var campaignPreflight *missioncontrol.ResolvedExecutionContextCampaignPreflight
 	if ec.Step != nil && ec.Step.CampaignRef != nil {
 		resolved, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		campaignPreflight = &resolved
 	}
@@ -2203,11 +2204,23 @@ func resolveExecutionContextCampaignAndTreasuryPreflight(ec missioncontrol.Execu
 	if ec.Step != nil && ec.Step.TreasuryRef != nil {
 		resolved, err := missioncontrol.ResolveExecutionContextTreasuryPreflight(ec)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		treasuryPreflight = &resolved
 	}
-	return campaignPreflight, treasuryPreflight, nil
+
+	var bootstrapPreflight *missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight
+	if ec.Step != nil && missioncontrol.DeclaresFrankZohoMailboxBootstrap(*ec.Step) {
+		resolved, err := missioncontrol.ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if resolved.Identity != nil && resolved.Account != nil {
+			bootstrapPreflight = &resolved
+		}
+	}
+
+	return campaignPreflight, treasuryPreflight, bootstrapPreflight, nil
 }
 
 func (s *TaskState) OperatorInspect(jobID string, stepID string) (string, error) {

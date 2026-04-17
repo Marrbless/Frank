@@ -156,6 +156,52 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedCampaignPr
 	}
 }
 
+func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBootstrapPreflight(t *testing.T) {
+	t.Parallel()
+
+	root, identity, account := writeTaskStateZohoMailboxBootstrapFixtures(t)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].GovernedExternalTargets = []missioncontrol.AutonomyEligibilityTargetRef{
+		{Kind: missioncontrol.EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		{Kind: missioncontrol.EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+	}
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	envelope := mustTaskStateJSONObject(t, summary)
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "job_id", "state")
+	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
+	if got.CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
+	}
+	if got.TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on bootstrap-only path", got.TreasuryPreflight)
+	}
+	if got.FrankZohoMailboxBootstrapPreflight == nil {
+		t.Fatal("FrankZohoMailboxBootstrapPreflight = nil, want resolved bootstrap pair")
+	}
+	if got.FrankZohoMailboxBootstrapPreflight.Identity == nil || !reflect.DeepEqual(*got.FrankZohoMailboxBootstrapPreflight.Identity, identity) {
+		t.Fatalf("FrankZohoMailboxBootstrapPreflight.Identity = %#v, want %#v", got.FrankZohoMailboxBootstrapPreflight.Identity, identity)
+	}
+	if got.FrankZohoMailboxBootstrapPreflight.Account == nil || !reflect.DeepEqual(*got.FrankZohoMailboxBootstrapPreflight.Account, account) {
+		t.Fatalf("FrankZohoMailboxBootstrapPreflight.Account = %#v, want %#v", got.FrankZohoMailboxBootstrapPreflight.Account, account)
+	}
+}
+
 func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailAddressing(t *testing.T) {
 	t.Parallel()
 

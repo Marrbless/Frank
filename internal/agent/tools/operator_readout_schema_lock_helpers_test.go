@@ -296,6 +296,32 @@ func assertTaskStateResolvedTreasuryPreflightJSONEnvelope(t *testing.T, value an
 	assertTaskStateJSONObjectKeys(t, eligibility, "kind", "registry_id")
 }
 
+func assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("frank_zoho_mailbox_bootstrap_preflight = %#v, want object", value)
+	}
+	assertTaskStateJSONObjectKeys(t, preflight, "account", "identity")
+
+	identity, ok := preflight["identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("frank_zoho_mailbox_bootstrap_preflight.identity = %#v, want object", preflight["identity"])
+	}
+	assertTaskStateJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at", "zoho_mailbox")
+	assertTaskStateJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
+	assertTaskStateJSONObjectKeys(t, identity["zoho_mailbox"], "from_address", "from_display_name")
+
+	account, ok := preflight["account"].(map[string]any)
+	if !ok {
+		t.Fatalf("frank_zoho_mailbox_bootstrap_preflight.account = %#v, want object", preflight["account"])
+	}
+	assertTaskStateJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at", "zoho_mailbox")
+	assertTaskStateJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
+	assertTaskStateJSONObjectKeys(t, account["zoho_mailbox"], "admin_oauth_token_env_var_ref", "bootstrap_password_env_var_ref", "confirmed_created", "organization_id", "provider_account_id")
+}
+
 func assertTaskStateReadoutAdapterBoundary(t *testing.T, readout string, allowCampaignPreflight bool, allowTreasuryPreflight bool) {
 	t.Helper()
 

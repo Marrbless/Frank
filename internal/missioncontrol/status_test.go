@@ -1541,6 +1541,81 @@ func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailAddressingInCampaig
 	}
 }
 
+func TestFormatOperatorStatusSummarySurfacesFrankZohoMailboxBootstrapPreflight(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 16, 15, 0, 0, 0, time.UTC)
+	runtime := JobRuntimeState{
+		JobID:        "job-mail-bootstrap",
+		State:        JobStateRunning,
+		ActiveStepID: "build",
+	}
+	identity := FrankIdentityRecord{
+		RecordVersion:        StoreRecordVersion,
+		IdentityID:           "identity-mail",
+		IdentityKind:         "email",
+		DisplayName:          "Frank Mail",
+		ProviderOrPlatformID: "provider-mail",
+		ZohoMailbox: &FrankZohoMailboxIdentity{
+			FromAddress:     "frank@example.com",
+			FromDisplayName: "Frank",
+		},
+		IdentityMode:         IdentityModeAgentAlias,
+		State:                "candidate",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindProvider, RegistryID: "provider-mail"},
+		CreatedAt:            now,
+		UpdatedAt:            now.Add(time.Minute),
+	}
+	account := FrankAccountRecord{
+		RecordVersion:        StoreRecordVersion,
+		AccountID:            "account-mail",
+		AccountKind:          "mailbox",
+		Label:                "Inbox",
+		ProviderOrPlatformID: "provider-mail",
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "agent_recoverable",
+		State:                "candidate",
+		EligibilityTargetRef: AutonomyEligibilityTargetRef{Kind: EligibilityTargetKindAccountClass, RegistryID: "account-class-mailbox"},
+		ZohoMailbox: &FrankZohoMailboxAccount{
+			OrganizationID:             "zoid-123",
+			AdminOAuthTokenEnvVarRef:   "PICOBOT_ZOHO_MAIL_ADMIN_TOKEN",
+			BootstrapPasswordEnvVarRef: "PICOBOT_ZOHO_MAIL_BOOTSTRAP_PASSWORD",
+			ProviderAccountID:          "3323462000000008002",
+			ConfirmedCreated:           true,
+		},
+		CreatedAt: now.Add(2 * time.Minute),
+		UpdatedAt: now.Add(3 * time.Minute),
+	}
+	bootstrapPreflight := ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{
+		Identity: &identity,
+		Account:  &account,
+	}
+
+	formatted, err := FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight(runtime, []string{"read"}, nil, nil, &bootstrapPreflight)
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummaryWithAllowedToolsAndCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	assertJSONObjectKeys(t, got, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "job_id", "state")
+	assertResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, got["frank_zoho_mailbox_bootstrap_preflight"])
+
+	var summary OperatorStatusSummary
+	if err := json.Unmarshal([]byte(formatted), &summary); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if summary.FrankZohoMailboxBootstrapPreflight == nil {
+		t.Fatal("FrankZohoMailboxBootstrapPreflight = nil, want resolved bootstrap pair")
+	}
+	if summary.FrankZohoMailboxBootstrapPreflight.Identity == nil || !reflect.DeepEqual(*summary.FrankZohoMailboxBootstrapPreflight.Identity, identity) {
+		t.Fatalf("FrankZohoMailboxBootstrapPreflight.Identity = %#v, want %#v", summary.FrankZohoMailboxBootstrapPreflight.Identity, identity)
+	}
+	if summary.FrankZohoMailboxBootstrapPreflight.Account == nil || !reflect.DeepEqual(*summary.FrankZohoMailboxBootstrapPreflight.Account, account) {
+		t.Fatalf("FrankZohoMailboxBootstrapPreflight.Account = %#v, want %#v", summary.FrankZohoMailboxBootstrapPreflight.Account, account)
+	}
+}
+
 func TestFormatOperatorStatusSummarySurfacesCampaignZohoEmailSendGate(t *testing.T) {
 	t.Parallel()
 
