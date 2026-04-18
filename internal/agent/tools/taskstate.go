@@ -49,6 +49,7 @@ type TaskState struct {
 	treasuryPostAcquisitionHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
 	notificationsCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
+	sharedStorageCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -69,6 +70,7 @@ func NewTaskState() *TaskState {
 		treasuryPostAcquisitionHook:    missioncontrol.RecordPostBootstrapTreasuryAcquisition,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
 		notificationsCapabilityHook:    defaultNotificationsCapabilityExposureHook,
+		sharedStorageCapabilityHook:    defaultSharedStorageCapabilityExposureHook,
 	}
 }
 
@@ -294,9 +296,6 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.applyNotificationsCapabilityForStep(job, stepID, now); err != nil {
-		return err
-	}
 	if err := s.applyCampaignReadinessGuardForStep(job, stepID); err != nil {
 		return err
 	}
@@ -304,6 +303,12 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyNotificationsCapabilityForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applySharedStorageCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -376,6 +381,66 @@ func defaultNotificationsCapabilityExposureHook(root string, ec missioncontrol.E
 	}
 
 	_, err = missioncontrol.StoreTelegramNotificationsCapabilityExposure(root)
+	return err
+}
+
+func (s *TaskState) applySharedStorageCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.sharedStorageCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresSharedStorageCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedSharedStorageCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+
+	record, err := missioncontrol.ResolveSharedStorageCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		return nil
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	_, err = missioncontrol.RequireExposedSharedStorageCapabilityRecord(root)
+	return err
+}
+
+func defaultSharedStorageCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedSharedStorageCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("shared_storage capability exposure requires readable config: %w", err)
+	}
+
+	_, err = missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
 	return err
 }
 

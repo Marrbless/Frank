@@ -5341,6 +5341,132 @@ func TestTaskStateActivateStepNotificationsCapabilityFailsClosedWithoutExposedRe
 	}
 }
 
+func TestTaskStateActivateStepSharedStorageCapabilityPathCallsHookOnce(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateSharedStorageCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-shared-storage",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.sharedStorageCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, filepath.Join(t.TempDir(), "workspace")); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("sharedStorageCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedSharedStorageCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.SharedStorageWorkspaceCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.SharedStorageWorkspaceCapabilityID)
+	}
+}
+
+func TestTaskStateActivateStepSharedStorageCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateSharedStorageCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-shared-storage",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedSharedStorageCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.SharedStorageWorkspaceCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.SharedStorageWorkspaceCapabilityValidator)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "SOUL.md")); err != nil {
+		t.Fatalf("Stat(SOUL.md) error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepSharedStorageCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateSharedStorageCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-shared-storage",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.sharedStorageCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("sharedStorageCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-shared-storage", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepSharedStorageCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateSharedStorageCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-shared-storage",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.sharedStorageCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed shared_storage exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -5531,6 +5657,30 @@ func writeTaskStateNotificationsCapabilityProposalFixture(t *testing.T, state mi
 		Validators:       []string{"telegram owner-control channel confirmed"},
 		KillSwitch:       "disable telegram channel and revoke proposal",
 		DataAccessed:     []string{"notifications"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateSharedStorageCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 17, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-shared-storage",
+		CapabilityName:   missioncontrol.SharedStorageCapabilityName,
+		WhyNeeded:        "mission requires shared workspace storage",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"workspace data exposure"},
+		Validators:       []string{"configured workspace root initialized and writable"},
+		KillSwitch:       "disable workspace-backed shared_storage exposure and revoke proposal",
+		DataAccessed:     []string{"shared storage"},
 		ApprovalRequired: true,
 		CreatedAt:        now,
 		State:            state,
