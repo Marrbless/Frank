@@ -52,6 +52,7 @@ type TaskState struct {
 	sharedStorageCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
 	contactsCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
 	locationCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
+	cameraCapabilityHook           func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -75,6 +76,7 @@ func NewTaskState() *TaskState {
 		sharedStorageCapabilityHook:    defaultSharedStorageCapabilityExposureHook,
 		contactsCapabilityHook:         defaultContactsCapabilityExposureHook,
 		locationCapabilityHook:         defaultLocationCapabilityExposureHook,
+		cameraCapabilityHook:           defaultCameraCapabilityExposureHook,
 	}
 }
 
@@ -319,6 +321,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyLocationCapabilityForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyCameraCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -601,6 +606,81 @@ func defaultLocationCapabilityExposureHook(root string, ec missioncontrol.Execut
 	}
 
 	_, err = missioncontrol.StoreWorkspaceLocationCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func (s *TaskState) applyCameraCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.cameraCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresCameraCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedCameraCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("camera capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("camera capability exposure requires readable config: %w", err)
+	}
+
+	record, err := missioncontrol.ResolveCameraCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		_, err = missioncontrol.RequireReadableCameraSourceRecord(root, cfg.Agents.Defaults.Workspace)
+		return err
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	if _, err := missioncontrol.RequireExposedCameraCapabilityRecord(root); err != nil {
+		return err
+	}
+	_, err = missioncontrol.RequireReadableCameraSourceRecord(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func defaultCameraCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedCameraCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("camera capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("camera capability exposure requires readable config: %w", err)
+	}
+
+	_, err = missioncontrol.StoreWorkspaceCameraCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
 	return err
 }
 

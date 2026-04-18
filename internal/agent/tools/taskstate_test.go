@@ -5781,6 +5781,163 @@ func TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutSharedStorageE
 	}
 }
 
+func TestTaskStateActivateStepCameraCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.cameraCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceCameraCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("cameraCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedCameraCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedCameraCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.CameraLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.CameraLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableCameraSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableCameraSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepCameraCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedCameraCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedCameraCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.CameraLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.CameraLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableCameraSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableCameraSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.CameraLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.CameraLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepCameraCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.cameraCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("cameraCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-camera", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.cameraCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed camera exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `camera capability requires one committed capability record named "camera"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.cameraCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("cameraCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `camera capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -6072,6 +6229,48 @@ func writeTaskStateLocationCapabilityProposalFixture(t *testing.T, state mission
 }
 
 func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateCameraCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 19, 3, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-camera",
+		CapabilityName:   missioncontrol.CameraCapabilityName,
+		WhyNeeded:        "mission requires local shared camera-image access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local camera source exposure"},
+		Validators:       []string{"shared_storage exposed and committed camera source file exists and is readable"},
+		KillSwitch:       "disable camera capability exposure and remove committed camera source reference",
+		DataAccessed:     []string{"camera"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateCameraCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
