@@ -107,6 +107,33 @@ func writeMalformedTreasuryRecordForMainTest(t *testing.T, root string, treasury
 	}
 }
 
+func writeMissionInspectNotificationsCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 18, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-notifications",
+		CapabilityName:   missioncontrol.NotificationsCapabilityName,
+		WhyNeeded:        "mission requires operator-facing notifications",
+		MissionFamilies:  []string{"outreach"},
+		Risks:            []string{"notification spam"},
+		Validators:       []string{"telegram owner-control channel confirmed"},
+		KillSwitch:       "disable telegram channel and revoke proposal",
+		DataAccessed:     []string{"notifications"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreTelegramNotificationsCapabilityExposure(root); err != nil {
+		t.Fatalf("StoreTelegramNotificationsCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -1809,6 +1836,84 @@ func TestMissionInspectCommandWithoutStepIDPreservesExistingBehavior(t *testing.
 	}
 	if got.Steps[0].StepID != "build" || got.Steps[1].StepID != "final" {
 		t.Fatalf("step order = %#v, want build/final", got.Steps)
+	}
+}
+
+func TestMissionInspectCommandNotificationsCapabilityReturnsCommittedRecord(t *testing.T) {
+	root := writeMissionInspectNotificationsCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.NotificationsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-notifications",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--notifications-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectNotificationsCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.CapabilityID != missioncontrol.NotificationsTelegramCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", got.CapabilityID, missioncontrol.NotificationsTelegramCapabilityID)
+	}
+	if !got.Exposed {
+		t.Fatal("Exposed = false, want true")
+	}
+}
+
+func TestMissionInspectCommandNotificationsCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--notifications-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --notifications-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandNotificationsCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectNotificationsCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--notifications-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want notifications requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require notifications capability`) {
+		t.Fatalf("Execute() error = %q, want notifications requirement rejection", err)
 	}
 }
 
