@@ -200,6 +200,45 @@ func writeMissionInspectContactsCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectLocationCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace-root")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-location",
+		CapabilityName:   missioncontrol.LocationCapabilityName,
+		WhyNeeded:        "mission requires local shared location access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local location exposure"},
+		Validators:       []string{"shared_storage exposed and committed location source file exists and is readable"},
+		KillSwitch:       "disable location capability exposure and remove committed location source reference",
+		DataAccessed:     []string{"location"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceLocationCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceLocationCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -2139,6 +2178,87 @@ func TestMissionInspectCommandContactsCapabilityRejectsStepWithoutRequirement(t 
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require contacts capability`) {
 		t.Fatalf("Execute() error = %q, want contacts requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandLocationCapabilityReturnsCommittedRecordAndSource(t *testing.T) {
+	root := writeMissionInspectLocationCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--location-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectLocationCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.Capability.CapabilityID != missioncontrol.LocationLocalFileCapabilityID {
+		t.Fatalf("Capability.CapabilityID = %q, want %q", got.Capability.CapabilityID, missioncontrol.LocationLocalFileCapabilityID)
+	}
+	if !got.Capability.Exposed {
+		t.Fatal("Capability.Exposed = false, want true")
+	}
+	if got.Source.Path != missioncontrol.LocationLocalFileDefaultPath {
+		t.Fatalf("Source.Path = %q, want %q", got.Source.Path, missioncontrol.LocationLocalFileDefaultPath)
+	}
+}
+
+func TestMissionInspectCommandLocationCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--location-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --location-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandLocationCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectLocationCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--location-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want location requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require location capability`) {
+		t.Fatalf("Execute() error = %q, want location requirement rejection", err)
 	}
 }
 

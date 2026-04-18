@@ -791,6 +791,7 @@ func NewRootCmd() *cobra.Command {
 			notificationsCapabilityOnly, _ := cmd.Flags().GetBool("notifications-capability")
 			sharedStorageCapabilityOnly, _ := cmd.Flags().GetBool("shared-storage-capability")
 			contactsCapabilityOnly, _ := cmd.Flags().GetBool("contacts-capability")
+			locationCapabilityOnly, _ := cmd.Flags().GetBool("location-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -846,6 +847,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if locationCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --location-capability")
+				}
+				record, err := newMissionInspectLocationCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve location capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode location capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write location capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -871,6 +890,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("notifications-capability", false, "Print the committed notifications capability record from the mission store")
 	missionInspectCmd.Flags().Bool("shared-storage-capability", false, "Print the committed shared_storage capability record from the mission store")
 	missionInspectCmd.Flags().Bool("contacts-capability", false, "Print the committed contacts capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("location-capability", false, "Print the committed location capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1917,6 +1937,10 @@ type missionInspectContactsCapability struct {
 	Capability missioncontrol.CapabilityRecord     `json:"capability"`
 	Source     missioncontrol.ContactsSourceRecord `json:"source"`
 }
+type missionInspectLocationCapability struct {
+	Capability missioncontrol.CapabilityRecord     `json:"capability"`
+	Source     missioncontrol.LocationSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2158,6 +2182,41 @@ func newMissionInspectContactsCapability(job missioncontrol.Job, stepID string, 
 		return missionInspectContactsCapability{}, err
 	}
 	return missionInspectContactsCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectLocationCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectLocationCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectLocationCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectLocationCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresLocationCapability(*ec.Step) {
+			return missionInspectLocationCapability{}, fmt.Errorf("step %q does not require location capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectLocationCapability{}, fmt.Errorf("location capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveLocationCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectLocationCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableLocationSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectLocationCapability{}, err
+	}
+	return missionInspectLocationCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil
