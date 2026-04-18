@@ -10,6 +10,12 @@ import (
 	"github.com/local/picobot/internal/chat"
 )
 
+type WhatsAppAuthenticatedIdentity struct {
+	PhoneJID               string
+	LIDJID                 string
+	AuthenticatedDeviceJID string
+}
+
 // StartWhatsApp is a no-op stub used when the binary is built with the
 // 'lite' build tag. If WhatsApp is enabled in the config it logs a clear
 // warning and returns nil so the gateway continues with other channels.
@@ -22,4 +28,10 @@ func StartWhatsApp(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom 
 func SetupWhatsApp(dbPath string) error {
 	return fmt.Errorf("WhatsApp support is not compiled into this binary\n" +
 		"Download the full version of picobot from the github releases page")
+}
+
+func ReadWhatsAppAuthenticatedIdentity(ctx context.Context, dbPath string) (WhatsAppAuthenticatedIdentity, error) {
+	_ = ctx
+	_ = dbPath
+	return WhatsAppAuthenticatedIdentity{}, fmt.Errorf("WhatsApp support is not compiled into this binary")
 }

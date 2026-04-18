@@ -15,6 +15,7 @@ import (
 	qrterminal "github.com/mdp/qrterminal/v3"
 	"go.mau.fi/whatsmeow"
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
+	waStore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -80,6 +81,46 @@ func (l quietLogger) Warnf(msg string, args ...interface{})  {}
 func (l quietLogger) Infof(msg string, args ...interface{})  {}
 func (l quietLogger) Debugf(msg string, args ...interface{}) {}
 func (l quietLogger) Sub(module string) waLog.Logger         { return l }
+
+type WhatsAppAuthenticatedIdentity struct {
+	PhoneJID               string
+	LIDJID                 string
+	AuthenticatedDeviceJID string
+}
+
+func ReadWhatsAppAuthenticatedIdentity(ctx context.Context, dbPath string) (WhatsAppAuthenticatedIdentity, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return WhatsAppAuthenticatedIdentity{}, fmt.Errorf("whatsapp database path not provided")
+	}
+
+	container, err := sqlstore.New(ctx, "sqlite", "file:"+dbPath+"?_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)", quietLogger{})
+	if err != nil {
+		return WhatsAppAuthenticatedIdentity{}, fmt.Errorf("failed to connect to whatsapp database: %w", err)
+	}
+
+	deviceStore, err := container.GetFirstDevice(ctx)
+	if err != nil {
+		return WhatsAppAuthenticatedIdentity{}, fmt.Errorf("failed to get whatsapp device: %w", err)
+	}
+
+	return readWhatsAppAuthenticatedIdentity(deviceStore), nil
+}
+
+func readWhatsAppAuthenticatedIdentity(deviceStore *waStore.Device) WhatsAppAuthenticatedIdentity {
+	if deviceStore == nil {
+		return WhatsAppAuthenticatedIdentity{}
+	}
+
+	identity := WhatsAppAuthenticatedIdentity{}
+	if deviceStore.ID != nil && !deviceStore.ID.IsEmpty() {
+		identity.PhoneJID = strings.TrimSpace(deviceStore.ID.String())
+		identity.AuthenticatedDeviceJID = identity.PhoneJID
+	}
+	if lid := deviceStore.GetLID(); !lid.IsEmpty() {
+		identity.LIDJID = strings.TrimSpace(lid.String())
+	}
+	return identity
+}
 
 // StartWhatsApp starts a WhatsApp bot using the whatsmeow library.
 // dbPath is the path to the SQLite database for storing session data.
