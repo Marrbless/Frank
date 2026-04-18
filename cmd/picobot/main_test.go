@@ -239,6 +239,45 @@ func writeMissionInspectLocationCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectCameraCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace-root")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 4, 19, 3, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-camera",
+		CapabilityName:   missioncontrol.CameraCapabilityName,
+		WhyNeeded:        "mission requires local shared camera-image access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local camera source exposure"},
+		Validators:       []string{"shared_storage exposed and committed camera source file exists and is readable"},
+		KillSwitch:       "disable camera capability exposure and remove committed camera source reference",
+		DataAccessed:     []string{"camera"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceCameraCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceCameraCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -2259,6 +2298,87 @@ func TestMissionInspectCommandLocationCapabilityRejectsStepWithoutRequirement(t 
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require location capability`) {
 		t.Fatalf("Execute() error = %q, want location requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandCameraCapabilityReturnsCommittedRecordAndSource(t *testing.T) {
+	root := writeMissionInspectCameraCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-camera",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--camera-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectCameraCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.Capability.CapabilityID != missioncontrol.CameraLocalFileCapabilityID {
+		t.Fatalf("Capability.CapabilityID = %q, want %q", got.Capability.CapabilityID, missioncontrol.CameraLocalFileCapabilityID)
+	}
+	if !got.Capability.Exposed {
+		t.Fatal("Capability.Exposed = false, want true")
+	}
+	if got.Source.Path != missioncontrol.CameraLocalFileDefaultPath {
+		t.Fatalf("Source.Path = %q, want %q", got.Source.Path, missioncontrol.CameraLocalFileDefaultPath)
+	}
+}
+
+func TestMissionInspectCommandCameraCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--camera-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --camera-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandCameraCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectCameraCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--camera-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want camera requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require camera capability`) {
+		t.Fatalf("Execute() error = %q, want camera requirement rejection", err)
 	}
 }
 

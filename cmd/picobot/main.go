@@ -792,6 +792,7 @@ func NewRootCmd() *cobra.Command {
 			sharedStorageCapabilityOnly, _ := cmd.Flags().GetBool("shared-storage-capability")
 			contactsCapabilityOnly, _ := cmd.Flags().GetBool("contacts-capability")
 			locationCapabilityOnly, _ := cmd.Flags().GetBool("location-capability")
+			cameraCapabilityOnly, _ := cmd.Flags().GetBool("camera-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -865,6 +866,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if cameraCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --camera-capability")
+				}
+				record, err := newMissionInspectCameraCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve camera capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode camera capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write camera capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -891,6 +910,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("shared-storage-capability", false, "Print the committed shared_storage capability record from the mission store")
 	missionInspectCmd.Flags().Bool("contacts-capability", false, "Print the committed contacts capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("location-capability", false, "Print the committed location capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("camera-capability", false, "Print the committed camera capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1941,6 +1961,10 @@ type missionInspectLocationCapability struct {
 	Capability missioncontrol.CapabilityRecord     `json:"capability"`
 	Source     missioncontrol.LocationSourceRecord `json:"source"`
 }
+type missionInspectCameraCapability struct {
+	Capability missioncontrol.CapabilityRecord   `json:"capability"`
+	Source     missioncontrol.CameraSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2217,6 +2241,41 @@ func newMissionInspectLocationCapability(job missioncontrol.Job, stepID string, 
 		return missionInspectLocationCapability{}, err
 	}
 	return missionInspectLocationCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectCameraCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectCameraCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectCameraCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectCameraCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresCameraCapability(*ec.Step) {
+			return missionInspectCameraCapability{}, fmt.Errorf("step %q does not require camera capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectCameraCapability{}, fmt.Errorf("camera capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveCameraCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectCameraCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableCameraSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectCameraCapability{}, err
+	}
+	return missionInspectCameraCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil
