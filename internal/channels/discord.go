@@ -19,6 +19,51 @@ type discordSender interface {
 	ChannelTyping(channelID string, options ...discordgo.RequestOption) error
 }
 
+type discordIdentityReader interface {
+	User(userID string, options ...discordgo.RequestOption) (*discordgo.User, error)
+}
+
+type DiscordBotIdentity struct {
+	BotUserID     string
+	Username      string
+	GlobalName    string
+	Discriminator string
+}
+
+var newDiscordIdentityReader = func(token string) (discordIdentityReader, error) {
+	return discordgo.New("Bot " + token)
+}
+
+func ReadDiscordBotIdentity(ctx context.Context, token string) (DiscordBotIdentity, error) {
+	_ = ctx
+
+	if strings.TrimSpace(token) == "" {
+		return DiscordBotIdentity{}, fmt.Errorf("discord token not provided")
+	}
+
+	reader, err := newDiscordIdentityReader(token)
+	if err != nil {
+		return DiscordBotIdentity{}, fmt.Errorf("failed to create discord session: %w", err)
+	}
+	return readDiscordBotIdentity(reader)
+}
+
+func readDiscordBotIdentity(reader discordIdentityReader) (DiscordBotIdentity, error) {
+	botUser, err := reader.User("@me")
+	if err != nil {
+		return DiscordBotIdentity{}, fmt.Errorf("failed to get bot user: %w", err)
+	}
+	if strings.TrimSpace(botUser.ID) == "" {
+		return DiscordBotIdentity{}, fmt.Errorf("discord bot identity returned empty bot user id")
+	}
+	return DiscordBotIdentity{
+		BotUserID:     strings.TrimSpace(botUser.ID),
+		Username:      strings.TrimSpace(botUser.Username),
+		GlobalName:    strings.TrimSpace(botUser.GlobalName),
+		Discriminator: strings.TrimSpace(botUser.Discriminator),
+	}, nil
+}
+
 // StartDiscord starts a Discord bot using the discordgo library.
 // allowFrom restricts which Discord user IDs may send messages; empty means allow all.
 func StartDiscord(ctx context.Context, hub *chat.Hub, token string, allowFrom []string) error {
@@ -40,16 +85,16 @@ func StartDiscord(ctx context.Context, hub *chat.Hub, token string, allowFrom []
 		return fmt.Errorf("failed to open discord connection: %w", err)
 	}
 
-	botUser, err := session.User("@me")
+	botIdentity, err := readDiscordBotIdentity(session)
 	if err != nil {
 		if closeErr := session.Close(); closeErr != nil {
 			log.Printf("discord: error closing session: %v", closeErr)
 		}
-		return fmt.Errorf("failed to get bot user: %w", err)
+		return err
 	}
-	log.Printf("discord: connected as %s (%s)", botUser.Username, botUser.ID)
+	log.Printf("discord: connected as %s (%s)", botIdentity.Username, botIdentity.BotUserID)
 
-	client := newDiscordClient(ctx, session, hub, botUser.ID, allowFrom)
+	client := newDiscordClient(ctx, session, hub, botIdentity.BotUserID, allowFrom)
 	session.AddHandler(client.handleMessage)
 	go client.runOutbound()
 	go func() {
