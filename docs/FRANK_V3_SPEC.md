@@ -1764,6 +1764,8 @@ No immediate exposure is required yet for:
 - Bluetooth/NFC,
 - broad app control.
 
+Repo normalization note: the durable capability identifier for spec label `SMS/phone` is `sms_phone`.
+
 ### Postponed data domains
 
 No immediate exposure is required yet for:
