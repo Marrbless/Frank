@@ -17,74 +17,76 @@ import (
 // The main use right now is enforcing that a new deliverable task must
 // initialize projects/current via frank_new_project before writing there.
 type TaskState struct {
-	mu                             sync.Mutex
-	currentTaskID                  string
-	projectInitialized             bool
-	missionStoreRoot               string
-	executionContext               missioncontrol.ExecutionContext
-	hasExecutionContext            bool
-	missionJob                     missioncontrol.Job
-	hasMissionJob                  bool
-	runtimeControl                 missioncontrol.RuntimeControlContext
-	hasRuntimeControl              bool
-	runtimeState                   missioncontrol.JobRuntimeState
-	hasRuntimeState                bool
-	operatorChannel                string
-	operatorChatID                 string
-	auditEvents                    []missioncontrol.AuditEvent
-	runtimePersistHook             func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeProjectionHook          func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
-	runtimeChangeHook              func()
-	campaignReadinessGuardHook     func(missioncontrol.ExecutionContext) error
-	zohoMailboxBootstrapHook       func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
-	treasuryFirstAcquisitionHook   func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
-	treasuryBootstrapProducerHook  func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
-	treasuryPostActiveSuspendHook  func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
-	treasuryPostSuspendResumeHook  func(string, missioncontrol.WriterLockLease, missioncontrol.PostSuspendTreasuryResumeInput, time.Time) error
-	treasuryPostActiveAllocateHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryAllocateInput, time.Time) error
-	treasuryPostActiveReinvestHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryReinvestInput, time.Time) error
-	treasuryPostActiveSpendHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySpendInput, time.Time) error
-	treasuryPostActiveTransferHook func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryTransferInput, time.Time) error
-	treasuryPostActiveSaveHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySaveInput, time.Time) error
-	treasuryPostAcquisitionHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
-	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
-	notificationsCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
-	sharedStorageCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
-	contactsCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
-	locationCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
-	cameraCapabilityHook           func(string, missioncontrol.ExecutionContext, time.Time) error
-	microphoneCapabilityHook       func(string, missioncontrol.ExecutionContext, time.Time) error
-	smsPhoneCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
-	bluetoothNFCCapabilityHook     func(string, missioncontrol.ExecutionContext, time.Time) error
-	broadAppControlCapabilityHook  func(string, missioncontrol.ExecutionContext, time.Time) error
+	mu                                 sync.Mutex
+	currentTaskID                      string
+	projectInitialized                 bool
+	missionStoreRoot                   string
+	executionContext                   missioncontrol.ExecutionContext
+	hasExecutionContext                bool
+	missionJob                         missioncontrol.Job
+	hasMissionJob                      bool
+	runtimeControl                     missioncontrol.RuntimeControlContext
+	hasRuntimeControl                  bool
+	runtimeState                       missioncontrol.JobRuntimeState
+	hasRuntimeState                    bool
+	operatorChannel                    string
+	operatorChatID                     string
+	auditEvents                        []missioncontrol.AuditEvent
+	runtimePersistHook                 func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeProjectionHook              func(*missioncontrol.Job, missioncontrol.JobRuntimeState, *missioncontrol.RuntimeControlContext) error
+	runtimeChangeHook                  func()
+	campaignReadinessGuardHook         func(missioncontrol.ExecutionContext) error
+	zohoMailboxBootstrapHook           func(string, missioncontrol.ResolvedExecutionContextFrankZohoMailboxBootstrapPair, time.Time) error
+	telegramOwnerControlOnboardingHook func(string, missioncontrol.ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle, time.Time) error
+	treasuryFirstAcquisitionHook       func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
+	treasuryBootstrapProducerHook      func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
+	treasuryPostActiveSuspendHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
+	treasuryPostSuspendResumeHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostSuspendTreasuryResumeInput, time.Time) error
+	treasuryPostActiveAllocateHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryAllocateInput, time.Time) error
+	treasuryPostActiveReinvestHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryReinvestInput, time.Time) error
+	treasuryPostActiveSpendHook        func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySpendInput, time.Time) error
+	treasuryPostActiveTransferHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasuryTransferInput, time.Time) error
+	treasuryPostActiveSaveHook         func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySaveInput, time.Time) error
+	treasuryPostAcquisitionHook        func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
+	treasuryActivationProducerHook     func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
+	notificationsCapabilityHook        func(string, missioncontrol.ExecutionContext, time.Time) error
+	sharedStorageCapabilityHook        func(string, missioncontrol.ExecutionContext, time.Time) error
+	contactsCapabilityHook             func(string, missioncontrol.ExecutionContext, time.Time) error
+	locationCapabilityHook             func(string, missioncontrol.ExecutionContext, time.Time) error
+	cameraCapabilityHook               func(string, missioncontrol.ExecutionContext, time.Time) error
+	microphoneCapabilityHook           func(string, missioncontrol.ExecutionContext, time.Time) error
+	smsPhoneCapabilityHook             func(string, missioncontrol.ExecutionContext, time.Time) error
+	bluetoothNFCCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
+	broadAppControlCapabilityHook      func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
 
 func NewTaskState() *TaskState {
 	return &TaskState{
-		campaignReadinessGuardHook:     missioncontrol.RequireExecutionContextCampaignReadiness,
-		zohoMailboxBootstrapHook:       missioncontrol.ProduceFrankZohoMailboxBootstrap,
-		treasuryFirstAcquisitionHook:   missioncontrol.RecordFirstTreasuryAcquisition,
-		treasuryBootstrapProducerHook:  missioncontrol.ProduceFirstValueTreasuryBootstrap,
-		treasuryPostActiveSuspendHook:  missioncontrol.ProducePostActiveTreasurySuspend,
-		treasuryPostSuspendResumeHook:  missioncontrol.ProducePostSuspendTreasuryResume,
-		treasuryPostActiveAllocateHook: missioncontrol.ProducePostActiveTreasuryAllocate,
-		treasuryPostActiveReinvestHook: missioncontrol.ProducePostActiveTreasuryReinvest,
-		treasuryPostActiveSpendHook:    missioncontrol.ProducePostActiveTreasurySpend,
-		treasuryPostActiveTransferHook: missioncontrol.ProducePostActiveTreasuryTransfer,
-		treasuryPostActiveSaveHook:     missioncontrol.ProducePostActiveTreasurySave,
-		treasuryPostAcquisitionHook:    missioncontrol.RecordPostBootstrapTreasuryAcquisition,
-		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
-		notificationsCapabilityHook:    defaultNotificationsCapabilityExposureHook,
-		sharedStorageCapabilityHook:    defaultSharedStorageCapabilityExposureHook,
-		contactsCapabilityHook:         defaultContactsCapabilityExposureHook,
-		locationCapabilityHook:         defaultLocationCapabilityExposureHook,
-		cameraCapabilityHook:           defaultCameraCapabilityExposureHook,
-		microphoneCapabilityHook:       defaultMicrophoneCapabilityExposureHook,
-		smsPhoneCapabilityHook:         defaultSMSPhoneCapabilityExposureHook,
-		bluetoothNFCCapabilityHook:     defaultBluetoothNFCCapabilityExposureHook,
-		broadAppControlCapabilityHook:  defaultBroadAppControlCapabilityExposureHook,
+		campaignReadinessGuardHook:         missioncontrol.RequireExecutionContextCampaignReadiness,
+		zohoMailboxBootstrapHook:           missioncontrol.ProduceFrankZohoMailboxBootstrap,
+		telegramOwnerControlOnboardingHook: missioncontrol.ProduceFrankTelegramOwnerControlOnboarding,
+		treasuryFirstAcquisitionHook:       missioncontrol.RecordFirstTreasuryAcquisition,
+		treasuryBootstrapProducerHook:      missioncontrol.ProduceFirstValueTreasuryBootstrap,
+		treasuryPostActiveSuspendHook:      missioncontrol.ProducePostActiveTreasurySuspend,
+		treasuryPostSuspendResumeHook:      missioncontrol.ProducePostSuspendTreasuryResume,
+		treasuryPostActiveAllocateHook:     missioncontrol.ProducePostActiveTreasuryAllocate,
+		treasuryPostActiveReinvestHook:     missioncontrol.ProducePostActiveTreasuryReinvest,
+		treasuryPostActiveSpendHook:        missioncontrol.ProducePostActiveTreasurySpend,
+		treasuryPostActiveTransferHook:     missioncontrol.ProducePostActiveTreasuryTransfer,
+		treasuryPostActiveSaveHook:         missioncontrol.ProducePostActiveTreasurySave,
+		treasuryPostAcquisitionHook:        missioncontrol.RecordPostBootstrapTreasuryAcquisition,
+		treasuryActivationProducerHook:     missioncontrol.ProduceFundedTreasuryActivation,
+		notificationsCapabilityHook:        defaultNotificationsCapabilityExposureHook,
+		sharedStorageCapabilityHook:        defaultSharedStorageCapabilityExposureHook,
+		contactsCapabilityHook:             defaultContactsCapabilityExposureHook,
+		locationCapabilityHook:             defaultLocationCapabilityExposureHook,
+		cameraCapabilityHook:               defaultCameraCapabilityExposureHook,
+		microphoneCapabilityHook:           defaultMicrophoneCapabilityExposureHook,
+		smsPhoneCapabilityHook:             defaultSMSPhoneCapabilityExposureHook,
+		bluetoothNFCCapabilityHook:         defaultBluetoothNFCCapabilityExposureHook,
+		broadAppControlCapabilityHook:      defaultBroadAppControlCapabilityExposureHook,
 	}
 }
 
@@ -314,6 +316,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyZohoMailboxBootstrapForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyTelegramOwnerControlOnboardingForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
@@ -1207,6 +1212,36 @@ func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, ste
 	}
 
 	return hook(ec.MissionStoreRoot, pair, now)
+}
+
+func (s *TaskState) applyTelegramOwnerControlOnboardingForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.telegramOwnerControlOnboardingHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.DeclaresFrankTelegramOwnerControlOnboarding(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec)
+	if err != nil {
+		return err
+	}
+	if !ok || hook == nil {
+		return nil
+	}
+	return hook(ec.MissionStoreRoot, bundle, now)
 }
 
 func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, stepID string) error {

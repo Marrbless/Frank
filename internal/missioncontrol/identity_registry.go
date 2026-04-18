@@ -11,22 +11,27 @@ import (
 )
 
 type FrankIdentityRecord struct {
-	RecordVersion        int                          `json:"record_version"`
-	IdentityID           string                       `json:"identity_id"`
-	IdentityKind         string                       `json:"identity_kind"`
-	DisplayName          string                       `json:"display_name"`
-	ProviderOrPlatformID string                       `json:"provider_or_platform_id"`
-	ZohoMailbox          *FrankZohoMailboxIdentity    `json:"zoho_mailbox,omitempty"`
-	IdentityMode         IdentityMode                 `json:"identity_mode"`
-	State                string                       `json:"state"`
-	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
-	CreatedAt            time.Time                    `json:"created_at"`
-	UpdatedAt            time.Time                    `json:"updated_at"`
+	RecordVersion        int                                `json:"record_version"`
+	IdentityID           string                             `json:"identity_id"`
+	IdentityKind         string                             `json:"identity_kind"`
+	DisplayName          string                             `json:"display_name"`
+	ProviderOrPlatformID string                             `json:"provider_or_platform_id"`
+	ZohoMailbox          *FrankZohoMailboxIdentity          `json:"zoho_mailbox,omitempty"`
+	TelegramOwnerControl *FrankTelegramOwnerControlIdentity `json:"telegram_owner_control,omitempty"`
+	IdentityMode         IdentityMode                       `json:"identity_mode"`
+	State                string                             `json:"state"`
+	EligibilityTargetRef AutonomyEligibilityTargetRef       `json:"eligibility_target_ref"`
+	CreatedAt            time.Time                          `json:"created_at"`
+	UpdatedAt            time.Time                          `json:"updated_at"`
 }
 
 type FrankZohoMailboxIdentity struct {
 	FromAddress     string `json:"from_address"`
 	FromDisplayName string `json:"from_display_name"`
+}
+
+type FrankTelegramOwnerControlIdentity struct {
+	OwnerUserID string `json:"owner_user_id,omitempty"`
 }
 
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
@@ -44,19 +49,20 @@ type FrankIdentityObjectView struct {
 }
 
 type FrankAccountRecord struct {
-	RecordVersion        int                          `json:"record_version"`
-	AccountID            string                       `json:"account_id"`
-	AccountKind          string                       `json:"account_kind"`
-	Label                string                       `json:"label"`
-	ProviderOrPlatformID string                       `json:"provider_or_platform_id"`
-	ZohoMailbox          *FrankZohoMailboxAccount     `json:"zoho_mailbox,omitempty"`
-	IdentityID           string                       `json:"identity_id"`
-	ControlModel         string                       `json:"control_model"`
-	RecoveryModel        string                       `json:"recovery_model"`
-	State                string                       `json:"state"`
-	EligibilityTargetRef AutonomyEligibilityTargetRef `json:"eligibility_target_ref"`
-	CreatedAt            time.Time                    `json:"created_at"`
-	UpdatedAt            time.Time                    `json:"updated_at"`
+	RecordVersion        int                               `json:"record_version"`
+	AccountID            string                            `json:"account_id"`
+	AccountKind          string                            `json:"account_kind"`
+	Label                string                            `json:"label"`
+	ProviderOrPlatformID string                            `json:"provider_or_platform_id"`
+	ZohoMailbox          *FrankZohoMailboxAccount          `json:"zoho_mailbox,omitempty"`
+	TelegramOwnerControl *FrankTelegramOwnerControlAccount `json:"telegram_owner_control,omitempty"`
+	IdentityID           string                            `json:"identity_id"`
+	ControlModel         string                            `json:"control_model"`
+	RecoveryModel        string                            `json:"recovery_model"`
+	State                string                            `json:"state"`
+	EligibilityTargetRef AutonomyEligibilityTargetRef      `json:"eligibility_target_ref"`
+	CreatedAt            time.Time                         `json:"created_at"`
+	UpdatedAt            time.Time                         `json:"updated_at"`
 }
 
 type FrankZohoMailboxAccount struct {
@@ -65,6 +71,10 @@ type FrankZohoMailboxAccount struct {
 	BootstrapPasswordEnvVarRef string `json:"bootstrap_password_env_var_ref,omitempty"`
 	ProviderAccountID          string `json:"provider_account_id,omitempty"`
 	ConfirmedCreated           bool   `json:"confirmed_created,omitempty"`
+}
+
+type FrankTelegramOwnerControlAccount struct {
+	BotUserID string `json:"bot_user_id,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -133,7 +143,21 @@ type ResolvedExecutionContextFrankZohoMailboxBootstrapPair struct {
 	Account  FrankAccountRecord  `json:"account"`
 }
 
+type ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle struct {
+	Identity      FrankIdentityRecord    `json:"identity"`
+	Account       FrankAccountRecord     `json:"account"`
+	Provider      PlatformRecord         `json:"provider"`
+	ProviderCheck EligibilityCheckRecord `json:"provider_check"`
+	AccountClass  PlatformRecord         `json:"account_class"`
+	AccountCheck  EligibilityCheckRecord `json:"account_check"`
+}
+
 type ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight struct {
+	Identity *FrankIdentityRecord `json:"identity,omitempty"`
+	Account  *FrankAccountRecord  `json:"account,omitempty"`
+}
+
+type ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight struct {
 	Identity *FrankIdentityRecord `json:"identity,omitempty"`
 	Account  *FrankAccountRecord  `json:"account,omitempty"`
 }
@@ -211,6 +235,11 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
+	if record.TelegramOwnerControl != nil {
+		if err := validateFrankTelegramOwnerControlIdentity(*record.TelegramOwnerControl); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -250,6 +279,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.ZohoMailbox != nil {
 		if err := validateFrankZohoMailboxAccount(*record.ZohoMailbox); err != nil {
+			return err
+		}
+	}
+	if record.TelegramOwnerControl != nil {
+		if err := validateFrankTelegramOwnerControlAccount(*record.TelegramOwnerControl); err != nil {
 			return err
 		}
 	}
@@ -491,6 +525,13 @@ func DeclaresFrankZohoMailboxBootstrap(step Step) bool {
 	return hasProviderTarget && hasAccountClassTarget
 }
 
+func DeclaresFrankTelegramOwnerControlOnboarding(step Step) bool {
+	if NormalizeIdentityMode(step.IdentityMode) != IdentityModeOwnerOnlyControl {
+		return false
+	}
+	return len(step.FrankObjectRefs) > 0
+}
+
 func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (ResolvedExecutionContextFrankZohoMailboxBootstrapPair, bool, error) {
 	resolved, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
 	if err != nil {
@@ -549,6 +590,105 @@ func ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec ExecutionContext) (
 	}, true, nil
 }
 
+func ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec ExecutionContext) (ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle, bool, error) {
+	resolved, err := ResolveExecutionContextFrankRegistryObjectRefs(ec)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, err
+	}
+
+	identities := make([]FrankIdentityRecord, 0, len(resolved.Identities))
+	for _, identity := range resolved.Identities {
+		if identity.TelegramOwnerControl != nil {
+			identities = append(identities, identity)
+		}
+	}
+	accounts := make([]FrankAccountRecord, 0, len(resolved.Accounts))
+	for _, account := range resolved.Accounts {
+		if account.TelegramOwnerControl != nil {
+			accounts = append(accounts, account)
+		}
+	}
+
+	if len(identities) == 0 && len(accounts) == 0 {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, nil
+	}
+	if len(identities) != 1 {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context Frank object refs must resolve exactly one telegram owner-control identity, got %d", len(identities))
+	}
+	if len(accounts) != 1 {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context Frank object refs must resolve exactly one telegram owner-control account, got %d", len(accounts))
+	}
+
+	identity := identities[0]
+	account := accounts[0]
+	if strings.TrimSpace(account.IdentityID) != strings.TrimSpace(identity.IdentityID) {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf(
+			"execution context telegram owner-control account %q must link identity_id %q, got %q",
+			account.AccountID,
+			identity.IdentityID,
+			account.IdentityID,
+		)
+	}
+	if strings.TrimSpace(account.ProviderOrPlatformID) != strings.TrimSpace(identity.ProviderOrPlatformID) {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf(
+			"execution context telegram owner-control account %q provider_or_platform_id %q does not match identity %q provider_or_platform_id %q",
+			account.AccountID,
+			account.ProviderOrPlatformID,
+			identity.IdentityID,
+			identity.ProviderOrPlatformID,
+		)
+	}
+	if identity.EligibilityTargetRef.Kind != EligibilityTargetKindProvider {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf(
+			"execution context telegram owner-control identity %q eligibility_target_ref.kind %q must be %q",
+			identity.IdentityID,
+			identity.EligibilityTargetRef.Kind,
+			EligibilityTargetKindProvider,
+		)
+	}
+	if account.EligibilityTargetRef.Kind != EligibilityTargetKindAccountClass {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf(
+			"execution context telegram owner-control account %q eligibility_target_ref.kind %q must be %q",
+			account.AccountID,
+			account.EligibilityTargetRef.Kind,
+			EligibilityTargetKindAccountClass,
+		)
+	}
+
+	provider, err := LoadPlatformRecord(ec.MissionStoreRoot, identity.EligibilityTargetRef.RegistryID)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control identity %q provider target %q: %w", identity.IdentityID, identity.EligibilityTargetRef.RegistryID, err)
+	}
+	if provider.TargetClass != EligibilityTargetKindProvider {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control provider %q target_class %q must be %q", provider.PlatformID, provider.TargetClass, EligibilityTargetKindProvider)
+	}
+	providerCheck, err := LoadEligibilityCheckRecord(ec.MissionStoreRoot, provider.LastCheckID)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control provider %q last_check_id %q: %w", provider.PlatformID, provider.LastCheckID, err)
+	}
+
+	accountClass, err := LoadPlatformRecord(ec.MissionStoreRoot, account.EligibilityTargetRef.RegistryID)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control account %q account-class target %q: %w", account.AccountID, account.EligibilityTargetRef.RegistryID, err)
+	}
+	if accountClass.TargetClass != EligibilityTargetKindAccountClass {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control account-class %q target_class %q must be %q", accountClass.PlatformID, accountClass.TargetClass, EligibilityTargetKindAccountClass)
+	}
+	accountCheck, err := LoadEligibilityCheckRecord(ec.MissionStoreRoot, accountClass.LastCheckID)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{}, false, fmt.Errorf("execution context telegram owner-control account-class %q last_check_id %q: %w", accountClass.PlatformID, accountClass.LastCheckID, err)
+	}
+
+	return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingBundle{
+		Identity:      identity,
+		Account:       account,
+		Provider:      provider,
+		ProviderCheck: providerCheck,
+		AccountClass:  accountClass,
+		AccountCheck:  accountCheck,
+	}, true, nil
+}
+
 func ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec ExecutionContext) (ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight, error) {
 	if ec.Step == nil {
 		return ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight{}, fmt.Errorf("execution context step is required")
@@ -574,12 +714,38 @@ func ResolveExecutionContextFrankZohoMailboxBootstrapPreflight(ec ExecutionConte
 	}, nil
 }
 
+func ResolveExecutionContextFrankTelegramOwnerControlOnboardingPreflight(ec ExecutionContext) (ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight, error) {
+	if ec.Step == nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{}, fmt.Errorf("execution context step is required")
+	}
+	if !DeclaresFrankTelegramOwnerControlOnboarding(*ec.Step) {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{}, nil
+	}
+	if strings.TrimSpace(ec.MissionStoreRoot) == "" {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{}, fmt.Errorf("mission store root is required to resolve Frank object refs")
+	}
+
+	bundle, ok, err := ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec)
+	if err != nil {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{}, err
+	}
+	if !ok {
+		return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{}, nil
+	}
+
+	return ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight{
+		Identity: &bundle.Identity,
+		Account:  &bundle.Account,
+	}, nil
+}
+
 func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
 	}
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
 	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
+	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlIdentity(record.TelegramOwnerControl)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -624,6 +790,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	}
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
 	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
+	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlAccount(record.TelegramOwnerControl)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -712,6 +879,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 		return FrankIdentityRecord{}, err
 	}
 	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
+	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlIdentity(record.TelegramOwnerControl)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -730,6 +898,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 		return FrankAccountRecord{}, err
 	}
 	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
+	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlAccount(record.TelegramOwnerControl)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -782,6 +951,24 @@ func normalizeFrankZohoMailboxAccount(config *FrankZohoMailboxAccount) *FrankZoh
 	return &normalized
 }
 
+func normalizeFrankTelegramOwnerControlIdentity(config *FrankTelegramOwnerControlIdentity) *FrankTelegramOwnerControlIdentity {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.OwnerUserID = strings.TrimSpace(normalized.OwnerUserID)
+	return &normalized
+}
+
+func normalizeFrankTelegramOwnerControlAccount(config *FrankTelegramOwnerControlAccount) *FrankTelegramOwnerControlAccount {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.BotUserID = strings.TrimSpace(normalized.BotUserID)
+	return &normalized
+}
+
 func validateFrankZohoMailboxAccount(config FrankZohoMailboxAccount) error {
 	organizationID := strings.TrimSpace(config.OrganizationID)
 	adminOAuthTokenEnvVarRef := strings.TrimSpace(config.AdminOAuthTokenEnvVarRef)
@@ -829,4 +1016,30 @@ func validateFrankZohoMailboxIdentity(config FrankZohoMailboxIdentity) error {
 		return fmt.Errorf("mission store Frank identity zoho_mailbox.from_display_name is required")
 	}
 	return nil
+}
+
+func validateFrankTelegramOwnerControlIdentity(config FrankTelegramOwnerControlIdentity) error {
+	if ownerUserID := strings.TrimSpace(config.OwnerUserID); ownerUserID != "" && !isDigitsOnly(ownerUserID) {
+		return fmt.Errorf("mission store Frank identity telegram_owner_control.owner_user_id must be numeric when present")
+	}
+	return nil
+}
+
+func validateFrankTelegramOwnerControlAccount(config FrankTelegramOwnerControlAccount) error {
+	if botUserID := strings.TrimSpace(config.BotUserID); botUserID != "" && !isDigitsOnly(botUserID) {
+		return fmt.Errorf("mission store Frank account telegram_owner_control.bot_user_id must be numeric when present")
+	}
+	return nil
+}
+
+func isDigitsOnly(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

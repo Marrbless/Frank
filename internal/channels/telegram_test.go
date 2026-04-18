@@ -88,3 +88,29 @@ func TestStartTelegramWithBase(t *testing.T) {
 	// give a small grace period
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestReadTelegramBotIdentityWithBase(t *testing.T) {
+	t.Parallel()
+
+	token := "testtoken"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getMe") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"result":{"id":123456789,"is_bot":true,"username":"frank_owner_bot"}}`))
+	}))
+	defer server.Close()
+
+	got, err := ReadTelegramBotIdentityWithBase(context.Background(), token, server.URL+"/bot"+token)
+	if err != nil {
+		t.Fatalf("ReadTelegramBotIdentityWithBase() error = %v", err)
+	}
+	if got.BotUserID != "123456789" {
+		t.Fatalf("BotUserID = %q, want %q", got.BotUserID, "123456789")
+	}
+	if got.Username != "frank_owner_bot" {
+		t.Fatalf("Username = %q, want %q", got.Username, "frank_owner_bot")
+	}
+}

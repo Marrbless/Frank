@@ -14,6 +14,11 @@ import (
 	"github.com/local/picobot/internal/chat"
 )
 
+type TelegramBotIdentity struct {
+	BotUserID string `json:"bot_user_id"`
+	Username  string `json:"username,omitempty"`
+}
+
 // StartTelegram is a convenience wrapper that uses the real polling implementation
 // with the standard Telegram base URL.
 // allowFrom is a list of Telegram user IDs permitted to interact with the bot.
@@ -24,6 +29,60 @@ func StartTelegram(ctx context.Context, hub *chat.Hub, token string, allowFrom [
 	}
 	base := "https://api.telegram.org/bot" + token
 	return StartTelegramWithBase(ctx, hub, token, base, allowFrom)
+}
+
+func ReadTelegramBotIdentity(ctx context.Context, token string) (TelegramBotIdentity, error) {
+	if token == "" {
+		return TelegramBotIdentity{}, fmt.Errorf("telegram token not provided")
+	}
+	base := "https://api.telegram.org/bot" + token
+	return ReadTelegramBotIdentityWithBase(ctx, token, base)
+}
+
+func ReadTelegramBotIdentityWithBase(ctx context.Context, token, base string) (TelegramBotIdentity, error) {
+	if token == "" {
+		return TelegramBotIdentity{}, fmt.Errorf("telegram token not provided")
+	}
+	if base == "" {
+		return TelegramBotIdentity{}, fmt.Errorf("base URL is required")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/getMe", nil)
+	if err != nil {
+		return TelegramBotIdentity{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return TelegramBotIdentity{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return TelegramBotIdentity{}, err
+	}
+	var payload struct {
+		Ok     bool `json:"ok"`
+		Result struct {
+			ID       int64  `json:"id"`
+			IsBot    bool   `json:"is_bot"`
+			Username string `json:"username"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return TelegramBotIdentity{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !payload.Ok {
+		return TelegramBotIdentity{}, fmt.Errorf("telegram getMe failed")
+	}
+	if !payload.Result.IsBot || payload.Result.ID <= 0 {
+		return TelegramBotIdentity{}, fmt.Errorf("telegram getMe did not return a bot identity")
+	}
+	return TelegramBotIdentity{
+		BotUserID: strconv.FormatInt(payload.Result.ID, 10),
+		Username:  payload.Result.Username,
+	}, nil
 }
 
 // StartTelegramWithBase starts long-polling against the given base URL (e.g., https://api.telegram.org/bot<TOKEN> or a test server URL).
