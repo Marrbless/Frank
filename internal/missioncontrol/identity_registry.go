@@ -21,6 +21,7 @@ type FrankIdentityRecord struct {
 	SlackOwnerControl    *FrankSlackOwnerControlIdentity    `json:"slack_owner_control,omitempty"`
 	DiscordOwnerControl  *FrankDiscordOwnerControlIdentity  `json:"discord_owner_control,omitempty"`
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlIdentity `json:"whatsapp_owner_control,omitempty"`
+	GitHub               *FrankGitHubIdentity               `json:"github,omitempty"`
 	IdentityMode         IdentityMode                       `json:"identity_mode"`
 	State                string                             `json:"state"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef       `json:"eligibility_target_ref"`
@@ -54,6 +55,13 @@ type FrankWhatsAppOwnerControlIdentity struct {
 	PushName string `json:"push_name,omitempty"`
 }
 
+type FrankGitHubIdentity struct {
+	GitHubUserID         string `json:"github_user_id,omitempty"`
+	Login                string `json:"login,omitempty"`
+	NodeID               string `json:"node_id,omitempty"`
+	PrimaryVerifiedEmail string `json:"primary_verified_email,omitempty"`
+}
+
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
 // object names without forcing a durable storage migration.
 type FrankIdentityObjectView struct {
@@ -79,6 +87,7 @@ type FrankAccountRecord struct {
 	SlackOwnerControl    *FrankSlackOwnerControlAccount    `json:"slack_owner_control,omitempty"`
 	DiscordOwnerControl  *FrankDiscordOwnerControlAccount  `json:"discord_owner_control,omitempty"`
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlAccount `json:"whatsapp_owner_control,omitempty"`
+	GitHub               *FrankGitHubAccount               `json:"github,omitempty"`
 	IdentityID           string                            `json:"identity_id"`
 	ControlModel         string                            `json:"control_model"`
 	RecoveryModel        string                            `json:"recovery_model"`
@@ -111,6 +120,11 @@ type FrankDiscordOwnerControlAccount struct {
 type FrankWhatsAppOwnerControlAccount struct {
 	AuthenticatedDeviceJID string `json:"authenticated_device_jid,omitempty"`
 	AuthStoreRef           string `json:"auth_store_ref,omitempty"`
+	ConfirmedAuthenticated bool   `json:"confirmed_authenticated,omitempty"`
+}
+
+type FrankGitHubAccount struct {
+	TokenEnvVarRef         string `json:"token_env_var_ref,omitempty"`
 	ConfirmedAuthenticated bool   `json:"confirmed_authenticated,omitempty"`
 }
 
@@ -292,6 +306,11 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
+	if record.GitHub != nil {
+		if err := validateFrankGitHubIdentity(*record.GitHub); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -351,6 +370,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.WhatsAppOwnerControl != nil {
 		if err := validateFrankWhatsAppOwnerControlAccount(*record.WhatsAppOwnerControl); err != nil {
+			return err
+		}
+	}
+	if record.GitHub != nil {
+		if err := validateFrankGitHubAccount(*record.GitHub); err != nil {
 			return err
 		}
 	}
@@ -816,6 +840,7 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	record.SlackOwnerControl = normalizeFrankSlackOwnerControlIdentity(record.SlackOwnerControl)
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlIdentity(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
+	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -864,6 +889,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	record.SlackOwnerControl = normalizeFrankSlackOwnerControlAccount(record.SlackOwnerControl)
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlAccount(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
+	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -956,6 +982,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	record.SlackOwnerControl = normalizeFrankSlackOwnerControlIdentity(record.SlackOwnerControl)
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlIdentity(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
+	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -978,6 +1005,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	record.SlackOwnerControl = normalizeFrankSlackOwnerControlAccount(record.SlackOwnerControl)
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlAccount(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
+	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {

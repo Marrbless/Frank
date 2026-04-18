@@ -41,6 +41,7 @@ type TaskState struct {
 	slackOwnerControlOnboardingHook    func(string, missioncontrol.ResolvedExecutionContextFrankSlackOwnerControlOnboardingBundle, time.Time) error
 	discordOwnerControlOnboardingHook  func(string, missioncontrol.ResolvedExecutionContextFrankDiscordOwnerControlOnboardingBundle, time.Time) error
 	whatsAppOwnerControlOnboardingHook func(string, missioncontrol.ResolvedExecutionContextFrankWhatsAppOwnerControlOnboardingBundle, time.Time) error
+	gitHubOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankGitHubOnboardingBundle, time.Time) error
 	treasuryFirstAcquisitionHook       func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook      func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryPostActiveSuspendHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
@@ -73,6 +74,7 @@ func NewTaskState() *TaskState {
 		slackOwnerControlOnboardingHook:    missioncontrol.ProduceFrankSlackOwnerControlOnboarding,
 		discordOwnerControlOnboardingHook:  missioncontrol.ProduceFrankDiscordOwnerControlOnboarding,
 		whatsAppOwnerControlOnboardingHook: missioncontrol.ProduceFrankWhatsAppOwnerControlOnboarding,
+		gitHubOnboardingHook:               missioncontrol.ProduceFrankGitHubOnboarding,
 		treasuryFirstAcquisitionHook:       missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:      missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryPostActiveSuspendHook:      missioncontrol.ProducePostActiveTreasurySuspend,
@@ -334,6 +336,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyWhatsAppOwnerControlOnboardingForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyGitHubOnboardingForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
@@ -1340,6 +1345,36 @@ func (s *TaskState) applyWhatsAppOwnerControlOnboardingForStep(job missioncontro
 	ec.MissionStoreRoot = root
 
 	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankWhatsAppOwnerControlOnboardingBundle(ec)
+	if err != nil {
+		return err
+	}
+	if !ok || hook == nil {
+		return nil
+	}
+	return hook(ec.MissionStoreRoot, bundle, now)
+}
+
+func (s *TaskState) applyGitHubOnboardingForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.gitHubOnboardingHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.DeclaresFrankGitHubOnboarding(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankGitHubOnboardingBundle(ec)
 	if err != nil {
 		return err
 	}
