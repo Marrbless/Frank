@@ -795,6 +795,7 @@ func NewRootCmd() *cobra.Command {
 			cameraCapabilityOnly, _ := cmd.Flags().GetBool("camera-capability")
 			microphoneCapabilityOnly, _ := cmd.Flags().GetBool("microphone-capability")
 			smsPhoneCapabilityOnly, _ := cmd.Flags().GetBool("sms-phone-capability")
+			bluetoothNFCCapabilityOnly, _ := cmd.Flags().GetBool("bluetooth-nfc-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -922,6 +923,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if bluetoothNFCCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --bluetooth-nfc-capability")
+				}
+				record, err := newMissionInspectBluetoothNFCCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve bluetooth_nfc capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode bluetooth_nfc capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write bluetooth_nfc capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -951,6 +970,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("camera-capability", false, "Print the committed camera capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("microphone-capability", false, "Print the committed microphone capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("sms-phone-capability", false, "Print the committed sms_phone capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("bluetooth-nfc-capability", false, "Print the committed bluetooth_nfc capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -2013,6 +2033,10 @@ type missionInspectSMSPhoneCapability struct {
 	Capability missioncontrol.CapabilityRecord     `json:"capability"`
 	Source     missioncontrol.SMSPhoneSourceRecord `json:"source"`
 }
+type missionInspectBluetoothNFCCapability struct {
+	Capability missioncontrol.CapabilityRecord         `json:"capability"`
+	Source     missioncontrol.BluetoothNFCSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2394,6 +2418,41 @@ func newMissionInspectSMSPhoneCapability(job missioncontrol.Job, stepID string, 
 		return missionInspectSMSPhoneCapability{}, err
 	}
 	return missionInspectSMSPhoneCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectBluetoothNFCCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectBluetoothNFCCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectBluetoothNFCCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectBluetoothNFCCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresBluetoothNFCCapability(*ec.Step) {
+			return missionInspectBluetoothNFCCapability{}, fmt.Errorf("step %q does not require bluetooth_nfc capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectBluetoothNFCCapability{}, fmt.Errorf("bluetooth_nfc capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveBluetoothNFCCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectBluetoothNFCCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableBluetoothNFCSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectBluetoothNFCCapability{}, err
+	}
+	return missionInspectBluetoothNFCCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil

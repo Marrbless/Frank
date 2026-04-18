@@ -356,6 +356,45 @@ func writeMissionInspectSMSPhoneCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectBluetoothNFCCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace-root")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-bluetooth-nfc",
+		CapabilityName:   missioncontrol.BluetoothNFCCapabilityName,
+		WhyNeeded:        "mission requires local shared Bluetooth/NFC source access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local Bluetooth/NFC source exposure"},
+		Validators:       []string{"shared_storage exposed and committed bluetooth_nfc source file exists and is readable"},
+		KillSwitch:       "disable bluetooth_nfc capability exposure and remove committed bluetooth_nfc source reference",
+		DataAccessed:     []string{"Bluetooth/NFC"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceBluetoothNFCCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceBluetoothNFCCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -2619,6 +2658,87 @@ func TestMissionInspectCommandSMSPhoneCapabilityRejectsStepWithoutRequirement(t 
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require sms_phone capability`) {
 		t.Fatalf("Execute() error = %q, want sms_phone requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandBluetoothNFCCapabilityReturnsCommittedRecordAndSource(t *testing.T) {
+	root := writeMissionInspectBluetoothNFCCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--bluetooth-nfc-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectBluetoothNFCCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.Capability.CapabilityID != missioncontrol.BluetoothNFCLocalFileCapabilityID {
+		t.Fatalf("Capability.CapabilityID = %q, want %q", got.Capability.CapabilityID, missioncontrol.BluetoothNFCLocalFileCapabilityID)
+	}
+	if !got.Capability.Exposed {
+		t.Fatal("Capability.Exposed = false, want true")
+	}
+	if got.Source.Path != missioncontrol.BluetoothNFCLocalFileDefaultPath {
+		t.Fatalf("Source.Path = %q, want %q", got.Source.Path, missioncontrol.BluetoothNFCLocalFileDefaultPath)
+	}
+}
+
+func TestMissionInspectCommandBluetoothNFCCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--bluetooth-nfc-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --bluetooth-nfc-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandBluetoothNFCCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectBluetoothNFCCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--bluetooth-nfc-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want bluetooth_nfc requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require bluetooth_nfc capability`) {
+		t.Fatalf("Execute() error = %q, want bluetooth_nfc requirement rejection", err)
 	}
 }
 
