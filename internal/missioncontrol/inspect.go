@@ -10,18 +10,19 @@ type InspectSummary struct {
 }
 
 type InspectStep struct {
-	StepID                                string                                                         `json:"step_id"`
-	StepType                              StepType                                                       `json:"step_type"`
-	DependsOn                             []string                                                       `json:"depends_on"`
-	RequiredAuthority                     AuthorityTier                                                  `json:"required_authority"`
-	AllowedTools                          []string                                                       `json:"allowed_tools"`
-	SuccessCriteria                       []string                                                       `json:"success_criteria"`
-	EffectiveAllowedTools                 []string                                                       `json:"effective_allowed_tools"`
-	RequiresApproval                      bool                                                           `json:"requires_approval"`
-	CampaignPreflight                     *ResolvedExecutionContextCampaignPreflight                     `json:"campaign_preflight,omitempty"`
-	TreasuryPreflight                     *ResolvedExecutionContextTreasuryPreflight                     `json:"treasury_preflight,omitempty"`
-	FrankZohoMailboxBootstrapPreflight    *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight    `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
-	CapabilityOnboardingProposalPreflight *ResolvedExecutionContextCapabilityOnboardingProposalPreflight `json:"capability_onboarding_proposal_preflight,omitempty"`
+	StepID                                       string                                                                `json:"step_id"`
+	StepType                                     StepType                                                              `json:"step_type"`
+	DependsOn                                    []string                                                              `json:"depends_on"`
+	RequiredAuthority                            AuthorityTier                                                         `json:"required_authority"`
+	AllowedTools                                 []string                                                              `json:"allowed_tools"`
+	SuccessCriteria                              []string                                                              `json:"success_criteria"`
+	EffectiveAllowedTools                        []string                                                              `json:"effective_allowed_tools"`
+	RequiresApproval                             bool                                                                  `json:"requires_approval"`
+	CampaignPreflight                            *ResolvedExecutionContextCampaignPreflight                            `json:"campaign_preflight,omitempty"`
+	TreasuryPreflight                            *ResolvedExecutionContextTreasuryPreflight                            `json:"treasury_preflight,omitempty"`
+	FrankZohoMailboxBootstrapPreflight           *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight           `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
+	FrankTelegramOwnerControlOnboardingPreflight *ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight `json:"frank_telegram_owner_control_onboarding_preflight,omitempty"`
+	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
 
 func NewInspectSummary(job Job, stepID string) (InspectSummary, error) {
@@ -59,6 +60,13 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if bootstrapPreflight.Identity != nil && bootstrapPreflight.Account != nil {
 			summary.FrankZohoMailboxBootstrapPreflight = &bootstrapPreflight
+		}
+		telegramOwnerControlPreflight, err := ResolveExecutionContextFrankTelegramOwnerControlOnboardingPreflight(ec)
+		if err != nil {
+			return InspectStep{}, err
+		}
+		if telegramOwnerControlPreflight.Identity != nil && telegramOwnerControlPreflight.Account != nil {
+			summary.FrankTelegramOwnerControlOnboardingPreflight = &telegramOwnerControlPreflight
 		}
 		capabilityPreflight, err := ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec)
 		if err != nil {

@@ -2024,6 +2024,51 @@ func TestMissionInspectCommandZohoMailboxBootstrapStepSurfacesResolvedPreflight(
 	}
 }
 
+func TestMissionInspectCommandTelegramOwnerControlStepSurfacesResolvedPreflight(t *testing.T) {
+	root, identity, account := writeMissionInspectTelegramOwnerControlFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].IdentityMode = missioncontrol.IdentityModeOwnerOnlyControl
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight == nil {
+		t.Fatal("FrankTelegramOwnerControlOnboardingPreflight = nil, want resolved onboarding bundle")
+	}
+	if got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Identity == nil || !reflect.DeepEqual(*got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Identity, identity) {
+		t.Fatalf("FrankTelegramOwnerControlOnboardingPreflight.Identity = %#v, want %#v", got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Identity, identity)
+	}
+	if got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Account == nil || !reflect.DeepEqual(*got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Account, account) {
+		t.Fatalf("FrankTelegramOwnerControlOnboardingPreflight.Account = %#v, want %#v", got.Steps[0].FrankTelegramOwnerControlOnboardingPreflight.Account, account)
+	}
+	if got.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on telegram owner-control-only path", got.Steps[0].CampaignPreflight)
+	}
+	if got.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on telegram owner-control-only path", got.Steps[0].TreasuryPreflight)
+	}
+}
+
 func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
@@ -10612,6 +10657,61 @@ func writeMissionInspectZohoMailboxBootstrapFixtures(t *testing.T) (string, miss
 		ControlModel:         "agent_managed",
 		RecoveryModel:        "agent_recoverable",
 		State:                "active",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	return root, identity, account
+}
+
+func writeMissionInspectTelegramOwnerControlFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 18, 0, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-telegram-owner-control",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-telegram-owner-control",
+	}
+	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "telegram owner-control", "check-provider-telegram", now)
+	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "telegram owner-control account", "check-account-class-telegram", now.Add(time.Minute))
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-telegram-owner-control",
+		IdentityKind:         "owner_control_channel",
+		DisplayName:          "Telegram Owner Control",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		TelegramOwnerControl: &missioncontrol.FrankTelegramOwnerControlIdentity{},
+		IdentityMode:         missioncontrol.IdentityModeOwnerOnlyControl,
+		State:                "candidate",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-telegram-owner-control",
+		AccountKind:          "owner_control_channel",
+		Label:                "Telegram Owner Control",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		TelegramOwnerControl: &missioncontrol.FrankTelegramOwnerControlAccount{},
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "owner_controlled",
+		RecoveryModel:        "owner_recoverable",
+		State:                "candidate",
 		EligibilityTargetRef: accountTarget,
 		CreatedAt:            now.Add(2 * time.Minute).UTC(),
 		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
