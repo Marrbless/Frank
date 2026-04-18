@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -5217,6 +5219,128 @@ func TestTaskStateActivateStepBootstrapTreasuryWithoutCommittedAcquisitionFailsC
 	}
 }
 
+func TestTaskStateActivateStepNotificationsCapabilityPathCallsHookOnce(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateNotificationsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.NotificationsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-notifications",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.notificationsCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreTelegramNotificationsCapabilityExposure(root); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("notificationsCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedNotificationsCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedNotificationsCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.NotificationsTelegramCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.NotificationsTelegramCapabilityID)
+	}
+}
+
+func TestTaskStateActivateStepNotificationsCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateNotificationsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := `{"channels":{"telegram":{"enabled":true,"token":"telegram-token","allowFrom":["12345"]}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.NotificationsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-notifications",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedNotificationsCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedNotificationsCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.NotificationsTelegramCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.NotificationsTelegramCapabilityValidator)
+	}
+}
+
+func TestTaskStateActivateStepNotificationsCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateNotificationsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.NotificationsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-notifications",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.notificationsCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("notificationsCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-notifications", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepNotificationsCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateNotificationsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.NotificationsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-notifications",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.notificationsCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed notifications exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `notifications capability requires one committed capability record named "notifications"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -5391,6 +5515,30 @@ func TestTaskStateOperatorInspectTerminalRuntimeUsesPersistedInspectablePlanWith
 	if len(summary.Steps) != 1 || summary.Steps[0].StepID != "final" {
 		t.Fatalf("Steps = %#v, want one final step", summary.Steps)
 	}
+}
+
+func writeTaskStateNotificationsCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 16, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-notifications",
+		CapabilityName:   missioncontrol.NotificationsCapabilityName,
+		WhyNeeded:        "mission requires operator-facing notifications",
+		MissionFamilies:  []string{"outreach"},
+		Risks:            []string{"notification spam"},
+		Validators:       []string{"telegram owner-control channel confirmed"},
+		KillSwitch:       "disable telegram channel and revoke proposal",
+		DataAccessed:     []string{"notifications"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
 }
 
 func testTaskStateJob() missioncontrol.Job {

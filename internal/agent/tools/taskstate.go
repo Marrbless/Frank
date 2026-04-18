@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/local/picobot/internal/config"
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
@@ -47,6 +48,7 @@ type TaskState struct {
 	treasuryPostActiveSaveHook     func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySaveInput, time.Time) error
 	treasuryPostAcquisitionHook    func(string, missioncontrol.WriterLockLease, missioncontrol.PostBootstrapTreasuryAcquisitionInput, time.Time) error
 	treasuryActivationProducerHook func(string, missioncontrol.WriterLockLease, missioncontrol.DefaultTreasuryActivationPolicyInput, time.Time) error
+	notificationsCapabilityHook    func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -66,6 +68,7 @@ func NewTaskState() *TaskState {
 		treasuryPostActiveSaveHook:     missioncontrol.ProducePostActiveTreasurySave,
 		treasuryPostAcquisitionHook:    missioncontrol.RecordPostBootstrapTreasuryAcquisition,
 		treasuryActivationProducerHook: missioncontrol.ProduceFundedTreasuryActivation,
+		notificationsCapabilityHook:    defaultNotificationsCapabilityExposureHook,
 	}
 }
 
@@ -285,9 +288,13 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	}
 	s.mu.Unlock()
 
+	job.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
 	now := time.Now()
 	runtimeState, err := missioncontrol.SetJobRuntimeActiveStep(job, current, stepID, now)
 	if err != nil {
+		return err
+	}
+	if err := s.applyNotificationsCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyCampaignReadinessGuardForStep(job, stepID); err != nil {
@@ -306,6 +313,69 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 	if err == nil {
 		s.notifyRuntimeChanged()
 	}
+	return err
+}
+
+func (s *TaskState) applyNotificationsCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.notificationsCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresNotificationsCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedNotificationsCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+
+	record, err := missioncontrol.ResolveNotificationsCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		return nil
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	_, err = missioncontrol.RequireExposedNotificationsCapabilityRecord(root)
+	return err
+}
+
+func defaultNotificationsCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedNotificationsCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("notifications capability exposure requires readable config: %w", err)
+	}
+	if !cfg.Channels.Telegram.Enabled || strings.TrimSpace(cfg.Channels.Telegram.Token) == "" || len(cfg.Channels.Telegram.AllowFrom) == 0 {
+		return fmt.Errorf("notifications capability exposure requires configured Telegram owner-control channel")
+	}
+
+	_, err = missioncontrol.StoreTelegramNotificationsCapabilityExposure(root)
 	return err
 }
 
