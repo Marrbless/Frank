@@ -185,7 +185,11 @@ func (s *TaskState) MissionJobWithStoreRoot() (missioncontrol.Job, string, bool)
 	if !s.hasMissionJob {
 		return missioncontrol.Job{}, strings.TrimSpace(s.missionStoreRoot), false
 	}
-	return *missioncontrol.CloneJob(&s.missionJob), strings.TrimSpace(s.missionStoreRoot), true
+	job := missioncontrol.CloneJob(&s.missionJob)
+	if job != nil {
+		job.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
+	}
+	return *job, strings.TrimSpace(s.missionStoreRoot), true
 }
 
 func (s *TaskState) OperatorSession() (string, string, bool) {
@@ -310,14 +314,6 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 		return nil
 	}
 
-	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
-	if err != nil {
-		return err
-	}
-	if ec.Step == nil || ec.Step.TreasuryRef == nil {
-		return nil
-	}
-
 	s.mu.Lock()
 	root := strings.TrimSpace(s.missionStoreRoot)
 	firstAcquisitionHook := s.treasuryFirstAcquisitionHook
@@ -332,6 +328,15 @@ func (s *TaskState) applyTreasuryExecutionForStep(job missioncontrol.Job, stepID
 	postAcquisitionHook := s.treasuryPostAcquisitionHook
 	hook := s.treasuryActivationProducerHook
 	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || ec.Step.TreasuryRef == nil {
+		return nil
+	}
 	ec.MissionStoreRoot = root
 
 	treasury, err := missioncontrol.ResolveExecutionContextTreasuryRef(ec)
@@ -480,6 +485,12 @@ func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, ste
 		return nil
 	}
 
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.zohoMailboxBootstrapHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
 	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
 	if err != nil {
 		return err
@@ -487,11 +498,7 @@ func (s *TaskState) applyZohoMailboxBootstrapForStep(job missioncontrol.Job, ste
 	if ec.Step == nil || !missioncontrol.DeclaresFrankZohoMailboxBootstrap(*ec.Step) {
 		return nil
 	}
-
-	s.mu.Lock()
-	ec.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
-	hook := s.zohoMailboxBootstrapHook
-	s.mu.Unlock()
+	ec.MissionStoreRoot = root
 
 	pair, ok, err := missioncontrol.ResolveExecutionContextFrankZohoMailboxBootstrapPair(ec)
 	if err != nil {
@@ -512,6 +519,12 @@ func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, s
 		return nil
 	}
 
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.campaignReadinessGuardHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
 	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
 	if err != nil {
 		return err
@@ -519,11 +532,7 @@ func (s *TaskState) applyCampaignReadinessGuardForStep(job missioncontrol.Job, s
 	if ec.Step == nil || ec.Step.CampaignRef == nil {
 		return nil
 	}
-
-	s.mu.Lock()
-	ec.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
-	hook := s.campaignReadinessGuardHook
-	s.mu.Unlock()
+	ec.MissionStoreRoot = root
 	if hook == nil {
 		return nil
 	}
@@ -2682,7 +2691,11 @@ func (s *TaskState) storeMissionJobLocked(job *missioncontrol.Job) {
 	if job == nil {
 		return
 	}
-	s.missionJob = *missioncontrol.CloneJob(job)
+	cloned := missioncontrol.CloneJob(job)
+	if cloned != nil {
+		cloned.MissionStoreRoot = strings.TrimSpace(s.missionStoreRoot)
+		s.missionJob = *cloned
+	}
 	s.hasMissionJob = true
 }
 

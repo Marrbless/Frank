@@ -782,7 +782,7 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := validateMissionJob(job); err != nil {
+			if err := validateMissionJob(job, resolveMissionStoreRoot(cmd)); err != nil {
 				return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 			}
 
@@ -960,7 +960,7 @@ func NewRootCmd() *cobra.Command {
 					return fmt.Errorf("failed to decode mission file %q: %w", missionFile, err)
 				}
 
-				if err := validateMissionStepSelection(job, stepID); err != nil {
+				if err := validateMissionStepSelection(job, stepID, resolveMissionStoreRoot(cmd)); err != nil {
 					return fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 				}
 
@@ -1546,7 +1546,7 @@ func newMissionOperatorSetStepHook(cmd *cobra.Command, ag *agent.AgentLoop, job 
 		}
 
 		missionFile := missionStatusSnapshotMissionFile(cmd)
-		if err := validateMissionStepSelection(*job, stepID); err != nil {
+		if err := validateMissionStepSelection(*job, stepID, resolveMissionStoreRoot(cmd)); err != nil {
 			return "", fmt.Errorf("failed to validate mission file %q: %w", missionFile, err)
 		}
 
@@ -1919,15 +1919,16 @@ func loadMissionStatusFrankZohoVerifiedSendProofFile(ctx context.Context, path s
 	return data, nil
 }
 
-func validateMissionJob(job missioncontrol.Job) error {
+func validateMissionJob(job missioncontrol.Job, storeRoot string) error {
+	job.MissionStoreRoot = storeRoot
 	if validationErrors := missioncontrol.ValidatePlan(job); len(validationErrors) > 0 {
 		return validationErrors[0]
 	}
 	return nil
 }
 
-func validateMissionStepSelection(job missioncontrol.Job, stepID string) error {
-	if err := validateMissionJob(job); err != nil {
+func validateMissionStepSelection(job missioncontrol.Job, stepID string, storeRoot string) error {
+	if err := validateMissionJob(job, storeRoot); err != nil {
 		return err
 	}
 

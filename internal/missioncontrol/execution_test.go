@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
@@ -212,7 +213,17 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
+	now := time.Date(2026, time.April, 17, 12, 0, 0, 0, time.UTC)
+	record := validCapabilityOnboardingProposalRecord(now, func(record *CapabilityOnboardingProposalRecord) {
+		record.ProposalID = "proposal-1"
+	})
+	if err := StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+
 	job := testExecutionJob()
+	job.MissionStoreRoot = root
 	job.Plan.Steps[0].GovernedExternalTargets = []AutonomyEligibilityTargetRef{
 		{
 			Kind:       EligibilityTargetKindProvider,
@@ -234,8 +245,8 @@ func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentity
 	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &CapabilityOnboardingProposalRef{
 		ProposalID: " proposal-1 ",
 	}
-	job.Plan.Steps[0].RequiredCapabilities = []string{" camera ", "", " photos "}
-	job.Plan.Steps[0].RequiredDataDomains = []string{" contacts ", " ", " photos/media "}
+	job.Plan.Steps[0].RequiredCapabilities = []string{" camera ", " photos "}
+	job.Plan.Steps[0].RequiredDataDomains = []string{" contacts ", " photos/media "}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("   ")
 
 	ec, err := ResolveExecutionContext(job, "build")

@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestValidatePlanEmptyPlan(t *testing.T) {
@@ -351,6 +352,153 @@ func TestValidatePlanRejectsMalformedTreasuryRefs(t *testing.T) {
 				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
 			}
 		})
+	}
+}
+
+func TestValidatePlanRejectsMalformedCapabilityRequirements(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:                   "draft",
+			Type:                 StepTypeDiscussion,
+			RequiredCapabilities: []string{"   "},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidCapabilityRequirement,
+			StepID:  "draft",
+			Message: "required_capabilities entries must be non-empty",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsRequiredCapabilityWithoutCommittedProposalRef(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:                  "draft",
+			Type:                StepTypeDiscussion,
+			RequiredDataDomains: []string{"contacts"},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeMissingCapabilityProposal,
+			StepID:  "draft",
+			Message: "capability onboarding proposal ref is required when step declares required capabilities or data domains",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsCapabilityProposalRefWithoutMissionStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{
+			ID:                   "draft",
+			Type:                 StepTypeDiscussion,
+			RequiredCapabilities: []string{"camera"},
+			CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+				ProposalID: "proposal-1",
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeMissingCapabilityProposal,
+			StepID:  "draft",
+			Message: "mission store root is required to resolve capability onboarding proposal refs",
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAcceptsCommittedCapabilityProposalForRequiredCapability(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, time.April, 17, 12, 0, 0, 0, time.UTC)
+	record := validCapabilityOnboardingProposalRecord(now, func(record *CapabilityOnboardingProposalRecord) {
+		record.ProposalID = "proposal-camera"
+		record.CapabilityName = "camera"
+		record.DataAccessed = []string{"photos/media"}
+		record.State = CapabilityOnboardingProposalStateProposed
+	})
+	if err := StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+
+	job := testJob([]Step{
+		{
+			ID:                   "draft",
+			Type:                 StepTypeDiscussion,
+			RequiredCapabilities: []string{"camera"},
+			RequiredDataDomains:  []string{"photos/media"},
+			CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+				ProposalID: "proposal-camera",
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	})
+	job.MissionStoreRoot = root
+
+	if errors := ValidatePlan(job); len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsCommittedCapabilityProposalInRejectedState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, time.April, 17, 12, 0, 0, 0, time.UTC)
+	record := validCapabilityOnboardingProposalRecord(now, func(record *CapabilityOnboardingProposalRecord) {
+		record.ProposalID = "proposal-camera"
+		record.State = CapabilityOnboardingProposalStateRejected
+	})
+	if err := StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+
+	job := testJob([]Step{
+		{
+			ID:                   "draft",
+			Type:                 StepTypeDiscussion,
+			RequiredCapabilities: []string{"camera"},
+			CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+				ProposalID: "proposal-camera",
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	})
+	job.MissionStoreRoot = root
+
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeInvalidCapabilityProposalRef,
+			StepID:  "draft",
+			Message: `capability onboarding proposal "proposal-camera" state "rejected" is not valid for plan validation`,
+		},
+	}
+	if got := ValidatePlan(job); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", got, want)
 	}
 }
 

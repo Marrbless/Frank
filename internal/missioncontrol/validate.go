@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -13,6 +14,9 @@ const (
 	RejectionCodeInvalidFrankObjectRef         RejectionCode = "invalid_frank_object_ref"
 	RejectionCodeInvalidCampaignRef            RejectionCode = "invalid_campaign_ref"
 	RejectionCodeInvalidTreasuryRef            RejectionCode = "invalid_treasury_ref"
+	RejectionCodeInvalidCapabilityRequirement  RejectionCode = "invalid_capability_requirement"
+	RejectionCodeInvalidCapabilityProposalRef  RejectionCode = "invalid_capability_onboarding_proposal_ref"
+	RejectionCodeMissingCapabilityProposal     RejectionCode = "missing_capability_onboarding_proposal"
 	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
@@ -68,6 +72,7 @@ func ValidatePlan(job Job) []ValidationError {
 	toolScopeErrors := make([]ValidationError, 0)
 
 	maxAuthority, maxAuthorityOK := authorityRank(job.MaxAuthority)
+	storeRoot := strings.TrimSpace(job.MissionStoreRoot)
 
 	for _, step := range steps {
 		if !isValidStepType(step.Type) {
@@ -141,6 +146,8 @@ func ValidatePlan(job Job) []ValidationError {
 		invalidTypeErrors = append(invalidTypeErrors, validateFrankObjectRefs(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateCampaignRefDeclaration(step)...)
 		invalidTypeErrors = append(invalidTypeErrors, validateTreasuryRefDeclaration(step)...)
+		invalidTypeErrors = append(invalidTypeErrors, validateCapabilityRequirementDeclaration(step)...)
+		invalidTypeErrors = append(invalidTypeErrors, validateCapabilityOnboardingProposalDeclaration(step, storeRoot)...)
 
 		if step.RequiredAuthority != "" {
 			requiredAuthority, requiredAuthorityOK := authorityRank(step.RequiredAuthority)
@@ -206,6 +213,103 @@ func ValidatePlan(job Job) []ValidationError {
 	errors = append(errors, authorityErrors...)
 	errors = append(errors, toolScopeErrors...)
 	return errors
+}
+
+func validateCapabilityRequirementDeclaration(step Step) []ValidationError {
+	errors := make([]ValidationError, 0, 2)
+	if err := validateCapabilityRequirementStrings(step.RequiredCapabilities, "required_capabilities"); err != nil {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidCapabilityRequirement,
+			StepID:  step.ID,
+			Message: err.Error(),
+		})
+	}
+	if err := validateCapabilityRequirementStrings(step.RequiredDataDomains, "required_data_domains"); err != nil {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidCapabilityRequirement,
+			StepID:  step.ID,
+			Message: err.Error(),
+		})
+	}
+	return errors
+}
+
+func validateCapabilityRequirementStrings(values []string, field string) error {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s entries must be non-empty", field)
+		}
+	}
+	return nil
+}
+
+func validateCapabilityOnboardingProposalDeclaration(step Step, storeRoot string) []ValidationError {
+	requiredCapabilities := NormalizeStepRequiredCapabilities(step.RequiredCapabilities)
+	requiredDataDomains := NormalizeStepRequiredDataDomains(step.RequiredDataDomains)
+	requiresProposal := len(requiredCapabilities) > 0 || len(requiredDataDomains) > 0
+
+	if step.CapabilityOnboardingProposalRef == nil {
+		if !requiresProposal {
+			return nil
+		}
+		return []ValidationError{
+			{
+				Code:    RejectionCodeMissingCapabilityProposal,
+				StepID:  step.ID,
+				Message: "capability onboarding proposal ref is required when step declares required capabilities or data domains",
+			},
+		}
+	}
+
+	normalizedRef := NormalizeCapabilityOnboardingProposalRef(*step.CapabilityOnboardingProposalRef)
+	if err := ValidateCapabilityOnboardingProposalRef(normalizedRef); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidCapabilityProposalRef,
+				StepID:  step.ID,
+				Message: err.Error(),
+			},
+		}
+	}
+	if strings.TrimSpace(storeRoot) == "" {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeMissingCapabilityProposal,
+				StepID:  step.ID,
+				Message: "mission store root is required to resolve capability onboarding proposal refs",
+			},
+		}
+	}
+
+	record, err := ResolveCapabilityOnboardingProposalRef(storeRoot, normalizedRef)
+	if err != nil {
+		if errors.Is(err, ErrCapabilityOnboardingProposalRecordNotFound) {
+			return []ValidationError{
+				{
+					Code:    RejectionCodeMissingCapabilityProposal,
+					StepID:  step.ID,
+					Message: fmt.Sprintf("capability onboarding proposal %q not found", normalizedRef.ProposalID),
+				},
+			}
+		}
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidCapabilityProposalRef,
+				StepID:  step.ID,
+				Message: err.Error(),
+			},
+		}
+	}
+	if !CapabilityOnboardingProposalStateValidForPlan(record.State) {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeInvalidCapabilityProposalRef,
+				StepID:  step.ID,
+				Message: fmt.Sprintf("capability onboarding proposal %q state %q is not valid for plan validation", record.ProposalID, record.State),
+			},
+		}
+	}
+	return nil
 }
 
 func validateIdentityModeDeclaration(step Step) []ValidationError {

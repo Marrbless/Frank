@@ -34,6 +34,7 @@ func NewInspectSummaryWithTreasuryPreflight(job Job, stepID string, storeRoot st
 }
 
 func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, storeRoot string) (InspectSummary, error) {
+	job.MissionStoreRoot = storeRoot
 	return newInspectSummary(job, stepID, func(step Step, ec ExecutionContext) (InspectStep, error) {
 		ec.MissionStoreRoot = storeRoot
 		summary := newInspectStepSummary(step, ec)

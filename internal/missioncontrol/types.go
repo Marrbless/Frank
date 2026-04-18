@@ -77,12 +77,13 @@ type CapabilityOnboardingProposalRef struct {
 }
 
 type Job struct {
-	ID           string        `json:"id"`
-	SpecVersion  string        `json:"spec_version,omitempty"`
-	State        JobState      `json:"state"`
-	MaxAuthority AuthorityTier `json:"max_authority"`
-	AllowedTools []string      `json:"allowed_tools"`
-	Plan         Plan          `json:"plan"`
+	ID               string        `json:"id"`
+	SpecVersion      string        `json:"spec_version,omitempty"`
+	State            JobState      `json:"state"`
+	MaxAuthority     AuthorityTier `json:"max_authority"`
+	AllowedTools     []string      `json:"allowed_tools"`
+	Plan             Plan          `json:"plan"`
+	MissionStoreRoot string        `json:"-"`
 }
 
 type Plan struct {
