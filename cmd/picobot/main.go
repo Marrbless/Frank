@@ -796,6 +796,7 @@ func NewRootCmd() *cobra.Command {
 			microphoneCapabilityOnly, _ := cmd.Flags().GetBool("microphone-capability")
 			smsPhoneCapabilityOnly, _ := cmd.Flags().GetBool("sms-phone-capability")
 			bluetoothNFCCapabilityOnly, _ := cmd.Flags().GetBool("bluetooth-nfc-capability")
+			broadAppControlCapabilityOnly, _ := cmd.Flags().GetBool("broad-app-control-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -941,6 +942,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if broadAppControlCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --broad-app-control-capability")
+				}
+				record, err := newMissionInspectBroadAppControlCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve broad_app_control capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode broad_app_control capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write broad_app_control capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -971,6 +990,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("microphone-capability", false, "Print the committed microphone capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("sms-phone-capability", false, "Print the committed sms_phone capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("bluetooth-nfc-capability", false, "Print the committed bluetooth_nfc capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("broad-app-control-capability", false, "Print the committed broad_app_control capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -2037,6 +2057,10 @@ type missionInspectBluetoothNFCCapability struct {
 	Capability missioncontrol.CapabilityRecord         `json:"capability"`
 	Source     missioncontrol.BluetoothNFCSourceRecord `json:"source"`
 }
+type missionInspectBroadAppControlCapability struct {
+	Capability missioncontrol.CapabilityRecord            `json:"capability"`
+	Source     missioncontrol.BroadAppControlSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2453,6 +2477,41 @@ func newMissionInspectBluetoothNFCCapability(job missioncontrol.Job, stepID stri
 		return missionInspectBluetoothNFCCapability{}, err
 	}
 	return missionInspectBluetoothNFCCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectBroadAppControlCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectBroadAppControlCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectBroadAppControlCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectBroadAppControlCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresBroadAppControlCapability(*ec.Step) {
+			return missionInspectBroadAppControlCapability{}, fmt.Errorf("step %q does not require broad_app_control capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectBroadAppControlCapability{}, fmt.Errorf("broad_app_control capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveBroadAppControlCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectBroadAppControlCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableBroadAppControlSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectBroadAppControlCapability{}, err
+	}
+	return missionInspectBroadAppControlCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil
