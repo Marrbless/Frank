@@ -5624,6 +5624,163 @@ func TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutSharedStorageE
 	}
 }
 
+func TestTaskStateActivateStepLocationCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.locationCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceLocationCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("locationCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedLocationCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedLocationCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.LocationLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.LocationLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableLocationSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableLocationSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepLocationCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedLocationCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedLocationCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.LocationLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.LocationLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableLocationSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableLocationSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.LocationLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.LocationLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepLocationCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.locationCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("locationCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-location", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.locationCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed location exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `location capability requires one committed capability record named "location"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-location",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.locationCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("locationCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `location capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -5873,6 +6030,48 @@ func writeTaskStateContactsCapabilityProposalFixture(t *testing.T, state mission
 }
 
 func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateLocationCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-location",
+		CapabilityName:   missioncontrol.LocationCapabilityName,
+		WhyNeeded:        "mission requires local shared location access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local location exposure"},
+		Validators:       []string{"shared_storage exposed and committed location source file exists and is readable"},
+		KillSwitch:       "disable location capability exposure and remove committed location source reference",
+		DataAccessed:     []string{"location"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
