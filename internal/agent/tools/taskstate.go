@@ -56,6 +56,7 @@ type TaskState struct {
 	microphoneCapabilityHook       func(string, missioncontrol.ExecutionContext, time.Time) error
 	smsPhoneCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
 	bluetoothNFCCapabilityHook     func(string, missioncontrol.ExecutionContext, time.Time) error
+	broadAppControlCapabilityHook  func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -83,6 +84,7 @@ func NewTaskState() *TaskState {
 		microphoneCapabilityHook:       defaultMicrophoneCapabilityExposureHook,
 		smsPhoneCapabilityHook:         defaultSMSPhoneCapabilityExposureHook,
 		bluetoothNFCCapabilityHook:     defaultBluetoothNFCCapabilityExposureHook,
+		broadAppControlCapabilityHook:  defaultBroadAppControlCapabilityExposureHook,
 	}
 }
 
@@ -339,6 +341,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyBluetoothNFCCapabilityForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyBroadAppControlCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -921,6 +926,81 @@ func defaultBluetoothNFCCapabilityExposureHook(root string, ec missioncontrol.Ex
 	}
 
 	_, err = missioncontrol.StoreWorkspaceBluetoothNFCCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func (s *TaskState) applyBroadAppControlCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.broadAppControlCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresBroadAppControlCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedBroadAppControlCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("broad_app_control capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("broad_app_control capability exposure requires readable config: %w", err)
+	}
+
+	record, err := missioncontrol.ResolveBroadAppControlCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		_, err = missioncontrol.RequireReadableBroadAppControlSourceRecord(root, cfg.Agents.Defaults.Workspace)
+		return err
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	if _, err := missioncontrol.RequireExposedBroadAppControlCapabilityRecord(root); err != nil {
+		return err
+	}
+	_, err = missioncontrol.RequireReadableBroadAppControlSourceRecord(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func defaultBroadAppControlCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedBroadAppControlCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("broad_app_control capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("broad_app_control capability exposure requires readable config: %w", err)
+	}
+
+	_, err = missioncontrol.StoreWorkspaceBroadAppControlCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
 	return err
 }
 

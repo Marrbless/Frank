@@ -6409,6 +6409,163 @@ func TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutSharedStor
 	}
 }
 
+func TestTaskStateActivateStepBroadAppControlCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-broad-app-control",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.broadAppControlCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceBroadAppControlCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("broadAppControlCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedBroadAppControlCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedBroadAppControlCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.BroadAppControlLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.BroadAppControlLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableBroadAppControlSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableBroadAppControlSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepBroadAppControlCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-broad-app-control",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedBroadAppControlCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedBroadAppControlCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.BroadAppControlLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.BroadAppControlLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableBroadAppControlSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableBroadAppControlSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.BroadAppControlLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.BroadAppControlLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepBroadAppControlCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-broad-app-control",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.broadAppControlCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("broadAppControlCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-broad-app-control", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepBroadAppControlCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-broad-app-control",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.broadAppControlCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed broad_app_control exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `broad_app_control capability requires one committed capability record named "broad_app_control"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepBroadAppControlCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-broad-app-control",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.broadAppControlCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("broadAppControlCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `broad_app_control capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -6868,6 +7025,48 @@ func writeTaskStateBluetoothNFCCapabilityProposalFixture(t *testing.T, state mis
 }
 
 func writeTaskStateBluetoothNFCCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateBroadAppControlCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-broad-app-control",
+		CapabilityName:   missioncontrol.BroadAppControlCapabilityName,
+		WhyNeeded:        "mission requires local shared broad app control source access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local broad app control source exposure"},
+		Validators:       []string{"shared_storage exposed and committed broad_app_control source file exists and is readable"},
+		KillSwitch:       "disable broad_app_control capability exposure and remove committed broad_app_control source reference",
+		DataAccessed:     []string{"broad app control"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateBroadAppControlCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()

@@ -1766,6 +1766,7 @@ No immediate exposure is required yet for:
 
 Repo normalization note: the durable capability identifier for spec label `SMS/phone` is `sms_phone`.
 Repo normalization note: the durable capability identifier for spec label `Bluetooth/NFC` is `bluetooth_nfc`.
+Repo normalization note: the durable capability identifier for spec label `broad app control` is `broad_app_control`.
 
 ### Postponed data domains
 
