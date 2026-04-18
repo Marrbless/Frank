@@ -794,6 +794,7 @@ func NewRootCmd() *cobra.Command {
 			locationCapabilityOnly, _ := cmd.Flags().GetBool("location-capability")
 			cameraCapabilityOnly, _ := cmd.Flags().GetBool("camera-capability")
 			microphoneCapabilityOnly, _ := cmd.Flags().GetBool("microphone-capability")
+			smsPhoneCapabilityOnly, _ := cmd.Flags().GetBool("sms-phone-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -903,6 +904,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if smsPhoneCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --sms-phone-capability")
+				}
+				record, err := newMissionInspectSMSPhoneCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve sms_phone capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode sms_phone capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write sms_phone capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -931,6 +950,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("location-capability", false, "Print the committed location capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("camera-capability", false, "Print the committed camera capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("microphone-capability", false, "Print the committed microphone capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("sms-phone-capability", false, "Print the committed sms_phone capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1989,6 +2009,10 @@ type missionInspectMicrophoneCapability struct {
 	Capability missioncontrol.CapabilityRecord       `json:"capability"`
 	Source     missioncontrol.MicrophoneSourceRecord `json:"source"`
 }
+type missionInspectSMSPhoneCapability struct {
+	Capability missioncontrol.CapabilityRecord     `json:"capability"`
+	Source     missioncontrol.SMSPhoneSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2335,6 +2359,41 @@ func newMissionInspectMicrophoneCapability(job missioncontrol.Job, stepID string
 		return missionInspectMicrophoneCapability{}, err
 	}
 	return missionInspectMicrophoneCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectSMSPhoneCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectSMSPhoneCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectSMSPhoneCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectSMSPhoneCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresSMSPhoneCapability(*ec.Step) {
+			return missionInspectSMSPhoneCapability{}, fmt.Errorf("step %q does not require sms_phone capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectSMSPhoneCapability{}, fmt.Errorf("sms_phone capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveSMSPhoneCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectSMSPhoneCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableSMSPhoneSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectSMSPhoneCapability{}, err
+	}
+	return missionInspectSMSPhoneCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil

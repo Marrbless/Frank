@@ -317,6 +317,45 @@ func writeMissionInspectMicrophoneCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectSMSPhoneCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace-root")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-sms-phone",
+		CapabilityName:   missioncontrol.SMSPhoneCapabilityName,
+		WhyNeeded:        "mission requires local shared SMS/phone source access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local SMS/phone source exposure"},
+		Validators:       []string{"shared_storage exposed and committed sms_phone source file exists and is readable"},
+		KillSwitch:       "disable sms_phone capability exposure and remove committed sms_phone source reference",
+		DataAccessed:     []string{"SMS/phone"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSMSPhoneCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSMSPhoneCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -2499,6 +2538,87 @@ func TestMissionInspectCommandMicrophoneCapabilityRejectsStepWithoutRequirement(
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require microphone capability`) {
 		t.Fatalf("Execute() error = %q, want microphone requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandSMSPhoneCapabilityReturnsCommittedRecordAndSource(t *testing.T) {
+	root := writeMissionInspectSMSPhoneCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SMSPhoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-sms-phone",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--sms-phone-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSMSPhoneCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.Capability.CapabilityID != missioncontrol.SMSPhoneLocalFileCapabilityID {
+		t.Fatalf("Capability.CapabilityID = %q, want %q", got.Capability.CapabilityID, missioncontrol.SMSPhoneLocalFileCapabilityID)
+	}
+	if !got.Capability.Exposed {
+		t.Fatal("Capability.Exposed = false, want true")
+	}
+	if got.Source.Path != missioncontrol.SMSPhoneLocalFileDefaultPath {
+		t.Fatalf("Source.Path = %q, want %q", got.Source.Path, missioncontrol.SMSPhoneLocalFileDefaultPath)
+	}
+}
+
+func TestMissionInspectCommandSMSPhoneCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--sms-phone-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --sms-phone-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandSMSPhoneCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectSMSPhoneCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--sms-phone-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want sms_phone requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require sms_phone capability`) {
+		t.Fatalf("Execute() error = %q, want sms_phone requirement rejection", err)
 	}
 }
 
