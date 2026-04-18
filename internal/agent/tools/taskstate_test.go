@@ -5467,6 +5467,163 @@ func TestTaskStateActivateStepSharedStorageCapabilityFailsClosedWithoutExposedRe
 	}
 }
 
+func TestTaskStateActivateStepContactsCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.contactsCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceContactsCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("contactsCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedContactsCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedContactsCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.ContactsLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.ContactsLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableContactsSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableContactsSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepContactsCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedContactsCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedContactsCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.ContactsLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.ContactsLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableContactsSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableContactsSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.ContactsLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.ContactsLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepContactsCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.contactsCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("contactsCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-contacts", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.contactsCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed contacts exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `contacts capability requires one committed capability record named "contacts"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.contactsCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("contactsCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `contacts capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -5689,6 +5846,48 @@ func writeTaskStateSharedStorageCapabilityProposalFixture(t *testing.T, state mi
 		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
 	}
 	return root
+}
+
+func writeTaskStateContactsCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 22, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-contacts",
+		CapabilityName:   missioncontrol.ContactsCapabilityName,
+		WhyNeeded:        "mission requires local shared contacts access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local contacts exposure"},
+		Validators:       []string{"shared_storage exposed and committed contacts source file exists and is readable"},
+		KillSwitch:       "disable contacts capability exposure and remove committed contacts source reference",
+		DataAccessed:     []string{"contacts"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
 }
 
 func testTaskStateJob() missioncontrol.Job {
