@@ -125,6 +125,73 @@ func TestNewInspectSummaryFromInspectablePlanReturnsResolvableStep(t *testing.T)
 	}
 }
 
+func TestNewInspectSummaryWithCampaignAndTreasuryPreflightIncludesCapabilityOnboardingProposalPreflight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+	record := validCapabilityOnboardingProposalRecord(now, func(record *CapabilityOnboardingProposalRecord) {
+		record.ProposalID = "proposal-camera"
+		record.CapabilityName = "camera"
+		record.DataAccessed = []string{"photos/media"}
+	})
+	if err := StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"write", "read", "search"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                   "build",
+					Type:                 StepTypeOneShotCode,
+					RequiredAuthority:    AuthorityTierLow,
+					AllowedTools:         []string{"read"},
+					SuccessCriteria:      []string{"produce code"},
+					RequiredCapabilities: []string{"camera"},
+					RequiredDataDomains:  []string{"photos/media"},
+					CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+						ProposalID: "proposal-camera",
+					},
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	summary, err := NewInspectSummaryWithCampaignAndTreasuryPreflight(job, "build", root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithCampaignAndTreasuryPreflight() error = %v", err)
+	}
+	if len(summary.Steps) != 1 {
+		t.Fatalf("Steps len = %d, want 1", len(summary.Steps))
+	}
+	preflight := summary.Steps[0].CapabilityOnboardingProposalPreflight
+	if preflight == nil {
+		t.Fatal("CapabilityOnboardingProposalPreflight = nil, want resolved proposal")
+	}
+	if preflight.Proposal == nil {
+		t.Fatal("CapabilityOnboardingProposalPreflight.Proposal = nil, want proposal record")
+	}
+	if preflight.Proposal.ProposalID != "proposal-camera" {
+		t.Fatalf("CapabilityOnboardingProposalPreflight.Proposal.ProposalID = %q, want %q", preflight.Proposal.ProposalID, "proposal-camera")
+	}
+	if !reflect.DeepEqual(preflight.RequiredCapabilities, []string{"camera"}) {
+		t.Fatalf("CapabilityOnboardingProposalPreflight.RequiredCapabilities = %#v, want %#v", preflight.RequiredCapabilities, []string{"camera"})
+	}
+	if !reflect.DeepEqual(preflight.RequiredDataDomains, []string{"photos/media"}) {
+		t.Fatalf("CapabilityOnboardingProposalPreflight.RequiredDataDomains = %#v, want %#v", preflight.RequiredDataDomains, []string{"photos/media"})
+	}
+}
+
 func TestInspectSummariesDoNotImplicitlySurfaceAdapterOnlyCampaignOrTreasuryFields(t *testing.T) {
 	t.Parallel()
 

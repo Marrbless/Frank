@@ -47,3 +47,26 @@ func CapabilityOnboardingProposalStateValidForPlan(state CapabilityOnboardingPro
 		return false
 	}
 }
+
+type ResolvedExecutionContextCapabilityOnboardingProposalPreflight struct {
+	Proposal             *CapabilityOnboardingProposalRecord `json:"proposal,omitempty"`
+	RequiredCapabilities []string                            `json:"required_capabilities,omitempty"`
+	RequiredDataDomains  []string                            `json:"required_data_domains,omitempty"`
+}
+
+func ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec ExecutionContext) (ResolvedExecutionContextCapabilityOnboardingProposalPreflight, error) {
+	proposal, err := ResolveExecutionContextCapabilityOnboardingProposal(ec)
+	if err != nil {
+		return ResolvedExecutionContextCapabilityOnboardingProposalPreflight{}, err
+	}
+	if proposal == nil {
+		return ResolvedExecutionContextCapabilityOnboardingProposalPreflight{}, nil
+	}
+
+	proposalCopy := *proposal
+	return ResolvedExecutionContextCapabilityOnboardingProposalPreflight{
+		Proposal:             &proposalCopy,
+		RequiredCapabilities: append([]string(nil), NormalizeStepRequiredCapabilities(ec.Step.RequiredCapabilities)...),
+		RequiredDataDomains:  append([]string(nil), NormalizeStepRequiredDataDomains(ec.Step.RequiredDataDomains)...),
+	}, nil
+}
