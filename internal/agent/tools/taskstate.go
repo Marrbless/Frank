@@ -53,6 +53,7 @@ type TaskState struct {
 	contactsCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
 	locationCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
 	cameraCapabilityHook           func(string, missioncontrol.ExecutionContext, time.Time) error
+	microphoneCapabilityHook       func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -77,6 +78,7 @@ func NewTaskState() *TaskState {
 		contactsCapabilityHook:         defaultContactsCapabilityExposureHook,
 		locationCapabilityHook:         defaultLocationCapabilityExposureHook,
 		cameraCapabilityHook:           defaultCameraCapabilityExposureHook,
+		microphoneCapabilityHook:       defaultMicrophoneCapabilityExposureHook,
 	}
 }
 
@@ -324,6 +326,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyCameraCapabilityForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyMicrophoneCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -681,6 +686,81 @@ func defaultCameraCapabilityExposureHook(root string, ec missioncontrol.Executio
 	}
 
 	_, err = missioncontrol.StoreWorkspaceCameraCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func (s *TaskState) applyMicrophoneCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.microphoneCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresMicrophoneCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedMicrophoneCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("microphone capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("microphone capability exposure requires readable config: %w", err)
+	}
+
+	record, err := missioncontrol.ResolveMicrophoneCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		_, err = missioncontrol.RequireReadableMicrophoneSourceRecord(root, cfg.Agents.Defaults.Workspace)
+		return err
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	if _, err := missioncontrol.RequireExposedMicrophoneCapabilityRecord(root); err != nil {
+		return err
+	}
+	_, err = missioncontrol.RequireReadableMicrophoneSourceRecord(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func defaultMicrophoneCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedMicrophoneCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("microphone capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("microphone capability exposure requires readable config: %w", err)
+	}
+
+	_, err = missioncontrol.StoreWorkspaceMicrophoneCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
 	return err
 }
 

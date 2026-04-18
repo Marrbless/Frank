@@ -5938,6 +5938,163 @@ func TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutSharedStorageExp
 	}
 }
 
+func TestTaskStateActivateStepMicrophoneCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-microphone",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.microphoneCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceMicrophoneCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("microphoneCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedMicrophoneCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedMicrophoneCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.MicrophoneLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.MicrophoneLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableMicrophoneSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableMicrophoneSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepMicrophoneCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-microphone",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedMicrophoneCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedMicrophoneCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.MicrophoneLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.MicrophoneLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableMicrophoneSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableMicrophoneSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.MicrophoneLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.MicrophoneLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepMicrophoneCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-microphone",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.microphoneCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("microphoneCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-microphone", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-microphone",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.microphoneCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed microphone exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `microphone capability requires one committed capability record named "microphone"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-microphone",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.microphoneCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("microphoneCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `microphone capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -6271,6 +6428,48 @@ func writeTaskStateCameraCapabilityProposalFixture(t *testing.T, state missionco
 }
 
 func writeTaskStateCameraCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateMicrophoneCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 19, 5, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-microphone",
+		CapabilityName:   missioncontrol.MicrophoneCapabilityName,
+		WhyNeeded:        "mission requires local shared microphone-audio access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local microphone source exposure"},
+		Validators:       []string{"shared_storage exposed and committed microphone source file exists and is readable"},
+		KillSwitch:       "disable microphone capability exposure and remove committed microphone source reference",
+		DataAccessed:     []string{"microphone"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateMicrophoneCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()
