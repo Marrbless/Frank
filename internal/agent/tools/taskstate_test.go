@@ -6252,6 +6252,163 @@ func TestTaskStateActivateStepSMSPhoneCapabilityFailsClosedWithoutSharedStorageE
 	}
 }
 
+func TestTaskStateActivateStepBluetoothNFCCapabilityPathCallsHookOnce(t *testing.T) {
+	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	calls := 0
+	state.bluetoothNFCCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		calls++
+		if _, err := missioncontrol.StoreWorkspaceBluetoothNFCCapabilityExposure(root, workspace); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("bluetoothNFCCapabilityHook calls = %d, want 1", calls)
+	}
+
+	record, err := missioncontrol.RequireExposedBluetoothNFCCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedBluetoothNFCCapabilityRecord() error = %v", err)
+	}
+	if record.CapabilityID != missioncontrol.BluetoothNFCLocalFileCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", record.CapabilityID, missioncontrol.BluetoothNFCLocalFileCapabilityID)
+	}
+	if _, err := missioncontrol.RequireReadableBluetoothNFCSourceRecord(root, workspace); err != nil {
+		t.Fatalf("RequireReadableBluetoothNFCSourceRecord() error = %v", err)
+	}
+}
+
+func TestTaskStateActivateStepBluetoothNFCCapabilityPathInvokesRealMutation(t *testing.T) {
+	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+
+	if err := state.ActivateStep(job, "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	record, err := missioncontrol.RequireExposedBluetoothNFCCapabilityRecord(root)
+	if err != nil {
+		t.Fatalf("RequireExposedBluetoothNFCCapabilityRecord() error = %v", err)
+	}
+	if record.Validator != missioncontrol.BluetoothNFCLocalFileCapabilityValidator {
+		t.Fatalf("Validator = %q, want %q", record.Validator, missioncontrol.BluetoothNFCLocalFileCapabilityValidator)
+	}
+	source, err := missioncontrol.RequireReadableBluetoothNFCSourceRecord(root, workspace)
+	if err != nil {
+		t.Fatalf("RequireReadableBluetoothNFCSourceRecord() error = %v", err)
+	}
+	if source.Path != missioncontrol.BluetoothNFCLocalFileDefaultPath {
+		t.Fatalf("Path = %q, want %q", source.Path, missioncontrol.BluetoothNFCLocalFileDefaultPath)
+	}
+}
+
+func TestTaskStateActivateStepBluetoothNFCCapabilityRequiresApprovedProposal(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateProposed)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.bluetoothNFCCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("bluetoothNFCCapabilityHook() called for unapproved proposal")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want approved-proposal rejection")
+	}
+	if !strings.Contains(err.Error(), `requires approved capability onboarding proposal "proposal-bluetooth-nfc", got state "proposed"`) {
+		t.Fatalf("ActivateStep() error = %q, want approved-proposal rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
+	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.bluetoothNFCCapabilityHook = nil
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want fail-closed bluetooth_nfc exposure rejection")
+	}
+	if !strings.Contains(err.Error(), `bluetooth_nfc capability requires one committed capability record named "bluetooth_nfc"`) {
+		t.Fatalf("ActivateStep() error = %q, want missing capability record rejection", err)
+	}
+}
+
+func TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutSharedStorageExposure(t *testing.T) {
+	t.Parallel()
+
+	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
+	job := testTaskStateJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-bluetooth-nfc",
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	state.bluetoothNFCCapabilityHook = func(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+		t.Fatal("bluetoothNFCCapabilityHook() called without shared_storage exposure")
+		return nil
+	}
+
+	err := state.ActivateStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateStep() error = nil, want shared_storage rejection")
+	}
+	if !strings.Contains(err.Error(), `bluetooth_nfc capability requires shared_storage exposure: shared_storage capability requires one committed capability record named "shared_storage"`) {
+		t.Fatalf("ActivateStep() error = %q, want shared_storage rejection", err)
+	}
+}
+
 func TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob(t *testing.T) {
 	t.Parallel()
 
@@ -6669,6 +6826,48 @@ func writeTaskStateSMSPhoneCapabilityProposalFixture(t *testing.T, state mission
 }
 
 func writeTaskStateSMSPhoneCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateBluetoothNFCCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-bluetooth-nfc",
+		CapabilityName:   missioncontrol.BluetoothNFCCapabilityName,
+		WhyNeeded:        "mission requires local shared Bluetooth/NFC source access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local Bluetooth/NFC source exposure"},
+		Validators:       []string{"shared_storage exposed and committed bluetooth_nfc source file exists and is readable"},
+		KillSwitch:       "disable bluetooth_nfc capability exposure and remove committed bluetooth_nfc source reference",
+		DataAccessed:     []string{"Bluetooth/NFC"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            state,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	return root
+}
+
+func writeTaskStateBluetoothNFCCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
 	home := t.TempDir()

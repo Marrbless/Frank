@@ -55,6 +55,7 @@ type TaskState struct {
 	cameraCapabilityHook           func(string, missioncontrol.ExecutionContext, time.Time) error
 	microphoneCapabilityHook       func(string, missioncontrol.ExecutionContext, time.Time) error
 	smsPhoneCapabilityHook         func(string, missioncontrol.ExecutionContext, time.Time) error
+	bluetoothNFCCapabilityHook     func(string, missioncontrol.ExecutionContext, time.Time) error
 }
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
@@ -81,6 +82,7 @@ func NewTaskState() *TaskState {
 		cameraCapabilityHook:           defaultCameraCapabilityExposureHook,
 		microphoneCapabilityHook:       defaultMicrophoneCapabilityExposureHook,
 		smsPhoneCapabilityHook:         defaultSMSPhoneCapabilityExposureHook,
+		bluetoothNFCCapabilityHook:     defaultBluetoothNFCCapabilityExposureHook,
 	}
 }
 
@@ -334,6 +336,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applySMSPhoneCapabilityForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyBluetoothNFCCapabilityForStep(job, stepID, now); err != nil {
 		return err
 	}
 
@@ -841,6 +846,81 @@ func defaultSMSPhoneCapabilityExposureHook(root string, ec missioncontrol.Execut
 	}
 
 	_, err = missioncontrol.StoreWorkspaceSMSPhoneCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func (s *TaskState) applyBluetoothNFCCapabilityForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.bluetoothNFCCapabilityHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.StepRequiresBluetoothNFCCapability(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	if _, err := missioncontrol.RequireApprovedBluetoothNFCCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("bluetooth_nfc capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("bluetooth_nfc capability exposure requires readable config: %w", err)
+	}
+
+	record, err := missioncontrol.ResolveBluetoothNFCCapabilityRecord(root)
+	switch {
+	case err == nil && record.Exposed:
+		_, err = missioncontrol.RequireReadableBluetoothNFCSourceRecord(root, cfg.Agents.Defaults.Workspace)
+		return err
+	case err == nil:
+	case errors.Is(err, missioncontrol.ErrCapabilityRecordNotFound):
+	default:
+		return err
+	}
+
+	if hook != nil {
+		if err := hook(root, ec, now); err != nil {
+			return err
+		}
+	}
+
+	if _, err := missioncontrol.RequireExposedBluetoothNFCCapabilityRecord(root); err != nil {
+		return err
+	}
+	_, err = missioncontrol.RequireReadableBluetoothNFCSourceRecord(root, cfg.Agents.Defaults.Workspace)
+	return err
+}
+
+func defaultBluetoothNFCCapabilityExposureHook(root string, ec missioncontrol.ExecutionContext, now time.Time) error {
+	_ = now
+
+	if _, err := missioncontrol.RequireApprovedBluetoothNFCCapabilityOnboardingProposal(ec); err != nil {
+		return err
+	}
+	if _, err := missioncontrol.RequireExposedSharedStorageCapabilityRecord(root); err != nil {
+		return fmt.Errorf("bluetooth_nfc capability requires shared_storage exposure: %w", err)
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("bluetooth_nfc capability exposure requires readable config: %w", err)
+	}
+
+	_, err = missioncontrol.StoreWorkspaceBluetoothNFCCapabilityExposure(root, cfg.Agents.Defaults.Workspace)
 	return err
 }
 
