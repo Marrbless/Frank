@@ -793,6 +793,7 @@ func NewRootCmd() *cobra.Command {
 			contactsCapabilityOnly, _ := cmd.Flags().GetBool("contacts-capability")
 			locationCapabilityOnly, _ := cmd.Flags().GetBool("location-capability")
 			cameraCapabilityOnly, _ := cmd.Flags().GetBool("camera-capability")
+			microphoneCapabilityOnly, _ := cmd.Flags().GetBool("microphone-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -884,6 +885,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if microphoneCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --microphone-capability")
+				}
+				record, err := newMissionInspectMicrophoneCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve microphone capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode microphone capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write microphone capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -911,6 +930,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().Bool("contacts-capability", false, "Print the committed contacts capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("location-capability", false, "Print the committed location capability record and source from the mission store")
 	missionInspectCmd.Flags().Bool("camera-capability", false, "Print the committed camera capability record and source from the mission store")
+	missionInspectCmd.Flags().Bool("microphone-capability", false, "Print the committed microphone capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1965,6 +1985,10 @@ type missionInspectCameraCapability struct {
 	Capability missioncontrol.CapabilityRecord   `json:"capability"`
 	Source     missioncontrol.CameraSourceRecord `json:"source"`
 }
+type missionInspectMicrophoneCapability struct {
+	Capability missioncontrol.CapabilityRecord       `json:"capability"`
+	Source     missioncontrol.MicrophoneSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2276,6 +2300,41 @@ func newMissionInspectCameraCapability(job missioncontrol.Job, stepID string, st
 		return missionInspectCameraCapability{}, err
 	}
 	return missionInspectCameraCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
+}
+
+func newMissionInspectMicrophoneCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectMicrophoneCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectMicrophoneCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectMicrophoneCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresMicrophoneCapability(*ec.Step) {
+			return missionInspectMicrophoneCapability{}, fmt.Errorf("step %q does not require microphone capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectMicrophoneCapability{}, fmt.Errorf("microphone capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveMicrophoneCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectMicrophoneCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableMicrophoneSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectMicrophoneCapability{}, err
+	}
+	return missionInspectMicrophoneCapability{
 		Capability: *capability,
 		Source:     *source,
 	}, nil
