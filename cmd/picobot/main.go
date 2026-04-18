@@ -789,6 +789,7 @@ func NewRootCmd() *cobra.Command {
 			stepID, _ := cmd.Flags().GetString("step-id")
 			storeRoot := resolveMissionStoreRoot(cmd)
 			notificationsCapabilityOnly, _ := cmd.Flags().GetBool("notifications-capability")
+			sharedStorageCapabilityOnly, _ := cmd.Flags().GetBool("shared-storage-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -805,6 +806,24 @@ func NewRootCmd() *cobra.Command {
 				recordData = append(recordData, '\n')
 				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
 					return fmt.Errorf("failed to write notifications capability inspection output: %w", err)
+				}
+				return nil
+			}
+			if sharedStorageCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --shared-storage-capability")
+				}
+				record, err := newMissionInspectSharedStorageCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve shared_storage capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode shared_storage capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write shared_storage capability inspection output: %w", err)
 				}
 				return nil
 			}
@@ -831,6 +850,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().String("mission-store-root", "", "Path to the durable mission store root")
 	missionInspectCmd.Flags().String("step-id", "", "Optional mission step ID to filter the inspection summary to one step")
 	missionInspectCmd.Flags().Bool("notifications-capability", false, "Print the committed notifications capability record from the mission store")
+	missionInspectCmd.Flags().Bool("shared-storage-capability", false, "Print the committed shared_storage capability record from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1872,6 +1892,7 @@ type missionPruneStoreSummary struct {
 
 type missionInspectSummary = missioncontrol.InspectSummary
 type missionInspectNotificationsCapability = missioncontrol.CapabilityRecord
+type missionInspectSharedStorageCapability = missioncontrol.CapabilityRecord
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2056,6 +2077,29 @@ func newMissionInspectNotificationsCapability(job missioncontrol.Job, stepID str
 	record, err := missioncontrol.ResolveNotificationsCapabilityRecord(job.MissionStoreRoot)
 	if err != nil {
 		return missionInspectNotificationsCapability{}, err
+	}
+	return *record, nil
+}
+
+func newMissionInspectSharedStorageCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectSharedStorageCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectSharedStorageCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectSharedStorageCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresSharedStorageCapability(*ec.Step) {
+			return missionInspectSharedStorageCapability{}, fmt.Errorf("step %q does not require shared_storage capability", stepID)
+		}
+	}
+
+	record, err := missioncontrol.ResolveSharedStorageCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectSharedStorageCapability{}, err
 	}
 	return *record, nil
 }

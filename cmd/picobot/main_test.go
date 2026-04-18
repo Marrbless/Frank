@@ -134,6 +134,33 @@ func writeMissionInspectNotificationsCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectSharedStorageCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-shared-storage",
+		CapabilityName:   missioncontrol.SharedStorageCapabilityName,
+		WhyNeeded:        "mission requires shared workspace storage",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"workspace data exposure"},
+		Validators:       []string{"configured workspace root initialized and writable"},
+		KillSwitch:       "disable workspace-backed shared_storage exposure and revoke proposal",
+		DataAccessed:     []string{"shared storage"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, filepath.Join(t.TempDir(), "workspace")); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -1914,6 +1941,84 @@ func TestMissionInspectCommandNotificationsCapabilityRejectsStepWithoutRequireme
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require notifications capability`) {
 		t.Fatalf("Execute() error = %q, want notifications requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandSharedStorageCapabilityReturnsCommittedRecord(t *testing.T) {
+	root := writeMissionInspectSharedStorageCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-shared-storage",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--shared-storage-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSharedStorageCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.CapabilityID != missioncontrol.SharedStorageWorkspaceCapabilityID {
+		t.Fatalf("CapabilityID = %q, want %q", got.CapabilityID, missioncontrol.SharedStorageWorkspaceCapabilityID)
+	}
+	if !got.Exposed {
+		t.Fatal("Exposed = false, want true")
+	}
+}
+
+func TestMissionInspectCommandSharedStorageCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--shared-storage-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --shared-storage-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandSharedStorageCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectSharedStorageCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--shared-storage-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want shared_storage requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require shared_storage capability`) {
+		t.Fatalf("Execute() error = %q, want shared_storage requirement rejection", err)
 	}
 }
 
