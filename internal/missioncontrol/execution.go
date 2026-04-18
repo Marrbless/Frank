@@ -77,10 +77,13 @@ func copyStep(step Step) Step {
 	stepCopy.AllowedTools = append([]string(nil), step.AllowedTools...)
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
+	stepCopy.RequiredCapabilities = append([]string(nil), step.RequiredCapabilities...)
+	stepCopy.RequiredDataDomains = append([]string(nil), step.RequiredDataDomains...)
 	stepCopy.GovernedExternalTargets = cloneAutonomyEligibilityTargetRefs(step.GovernedExternalTargets)
 	stepCopy.FrankObjectRefs = cloneFrankRegistryObjectRefs(step.FrankObjectRefs)
 	stepCopy.CampaignRef = cloneCampaignRef(step.CampaignRef)
 	stepCopy.TreasuryRef = cloneTreasuryRef(step.TreasuryRef)
+	stepCopy.CapabilityOnboardingProposalRef = cloneCapabilityOnboardingProposalRef(step.CapabilityOnboardingProposalRef)
 	stepCopy.SystemAction = cloneSystemActionSpec(step.SystemAction)
 	return stepCopy
 }
@@ -88,9 +91,12 @@ func copyStep(step Step) Step {
 func normalizedStep(step Step) Step {
 	stepCopy := copyStep(step)
 	stepCopy.IdentityMode = NormalizeIdentityMode(stepCopy.IdentityMode)
+	stepCopy.RequiredCapabilities = NormalizeStepRequiredCapabilities(stepCopy.RequiredCapabilities)
+	stepCopy.RequiredDataDomains = NormalizeStepRequiredDataDomains(stepCopy.RequiredDataDomains)
 	stepCopy.FrankObjectRefs = normalizeFrankRegistryObjectRefs(stepCopy.FrankObjectRefs)
 	stepCopy.CampaignRef = normalizeCampaignRefPtr(stepCopy.CampaignRef)
 	stepCopy.TreasuryRef = normalizeTreasuryRefPtr(stepCopy.TreasuryRef)
+	stepCopy.CapabilityOnboardingProposalRef = normalizeCapabilityOnboardingProposalRefPtr(stepCopy.CapabilityOnboardingProposalRef)
 	return stepCopy
 }
 
@@ -159,5 +165,23 @@ func normalizeTreasuryRefPtr(ref *TreasuryRef) *TreasuryRef {
 	}
 
 	normalized := NormalizeTreasuryRef(*ref)
+	return &normalized
+}
+
+func cloneCapabilityOnboardingProposalRef(ref *CapabilityOnboardingProposalRef) *CapabilityOnboardingProposalRef {
+	if ref == nil {
+		return nil
+	}
+
+	cloned := *ref
+	return &cloned
+}
+
+func normalizeCapabilityOnboardingProposalRefPtr(ref *CapabilityOnboardingProposalRef) *CapabilityOnboardingProposalRef {
+	if ref == nil {
+		return nil
+	}
+
+	normalized := NormalizeCapabilityOnboardingProposalRef(*ref)
 	return &normalized
 }

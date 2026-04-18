@@ -17,31 +17,38 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 				ID: "plan-1",
 				Steps: []Step{
 					{
-						ID:                "build",
-						Type:              StepTypeOneShotCode,
-						DependsOn:         []string{"prep"},
-						RequiredAuthority: AuthorityTierMedium,
-						AllowedTools:      []string{"read"},
-						RequiresApproval:  true,
-						SuccessCriteria:   []string{"produce code"},
+						ID:                   "build",
+						Type:                 StepTypeOneShotCode,
+						DependsOn:            []string{"prep"},
+						RequiredAuthority:    AuthorityTierMedium,
+						AllowedTools:         []string{"read"},
+						RequiresApproval:     true,
+						SuccessCriteria:      []string{"produce code"},
+						RequiredCapabilities: []string{"camera"},
+						RequiredDataDomains:  []string{"photos/media"},
 						CampaignRef: &CampaignRef{
 							CampaignID: "campaign-1",
 						},
 						TreasuryRef: &TreasuryRef{
 							TreasuryID: "treasury-1",
 						},
+						CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+							ProposalID: "proposal-1",
+						},
 					},
 				},
 			},
 		},
 		Step: &Step{
-			ID:                "build",
-			Type:              StepTypeOneShotCode,
-			DependsOn:         []string{"prep"},
-			RequiredAuthority: AuthorityTierMedium,
-			AllowedTools:      []string{"read"},
-			RequiresApproval:  true,
-			SuccessCriteria:   []string{"produce code"},
+			ID:                   "build",
+			Type:                 StepTypeOneShotCode,
+			DependsOn:            []string{"prep"},
+			RequiredAuthority:    AuthorityTierMedium,
+			AllowedTools:         []string{"read"},
+			RequiresApproval:     true,
+			SuccessCriteria:      []string{"produce code"},
+			RequiredCapabilities: []string{"camera"},
+			RequiredDataDomains:  []string{"photos/media"},
 			FrankObjectRefs: []FrankRegistryObjectRef{
 				{
 					Kind:     FrankRegistryObjectKindIdentity,
@@ -53,6 +60,9 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 			},
 			TreasuryRef: &TreasuryRef{
 				TreasuryID: "treasury-1",
+			},
+			CapabilityOnboardingProposalRef: &CapabilityOnboardingProposalRef{
+				ProposalID: "proposal-1",
 			},
 		},
 		MissionStoreRoot: "/tmp/mission-store",
@@ -74,10 +84,16 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	cloned.Job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
 	cloned.Job.Plan.Steps[0].CampaignRef.CampaignID = "mutated-plan-campaign"
 	cloned.Job.Plan.Steps[0].TreasuryRef.TreasuryID = "mutated-plan-treasury"
+	cloned.Job.Plan.Steps[0].RequiredCapabilities[0] = "mutated-plan-capability"
+	cloned.Job.Plan.Steps[0].RequiredDataDomains[0] = "mutated-plan-domain"
+	cloned.Job.Plan.Steps[0].CapabilityOnboardingProposalRef.ProposalID = "mutated-plan-proposal"
 	cloned.Step.SuccessCriteria[0] = "mutated-success"
+	cloned.Step.RequiredCapabilities[0] = "mutated-step-capability"
+	cloned.Step.RequiredDataDomains[0] = "mutated-step-domain"
 	cloned.Step.FrankObjectRefs[0].ObjectID = "mutated-object"
 	cloned.Step.CampaignRef.CampaignID = "mutated-step-campaign"
 	cloned.Step.TreasuryRef.TreasuryID = "mutated-step-treasury"
+	cloned.Step.CapabilityOnboardingProposalRef.ProposalID = "mutated-step-proposal"
 	cloned.GovernedExternalTargets[0].RegistryID = "mutated-target"
 
 	if original.Job.AllowedTools[0] != "read" {
@@ -95,6 +111,18 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	if original.Step.SuccessCriteria[0] != "produce code" {
 		t.Fatalf("original Step.SuccessCriteria[0] = %q, want %q", original.Step.SuccessCriteria[0], "produce code")
 	}
+	if original.Job.Plan.Steps[0].RequiredCapabilities[0] != "camera" {
+		t.Fatalf("original Job.Plan.Steps[0].RequiredCapabilities[0] = %q, want %q", original.Job.Plan.Steps[0].RequiredCapabilities[0], "camera")
+	}
+	if original.Job.Plan.Steps[0].RequiredDataDomains[0] != "photos/media" {
+		t.Fatalf("original Job.Plan.Steps[0].RequiredDataDomains[0] = %q, want %q", original.Job.Plan.Steps[0].RequiredDataDomains[0], "photos/media")
+	}
+	if original.Step.RequiredCapabilities[0] != "camera" {
+		t.Fatalf("original Step.RequiredCapabilities[0] = %q, want %q", original.Step.RequiredCapabilities[0], "camera")
+	}
+	if original.Step.RequiredDataDomains[0] != "photos/media" {
+		t.Fatalf("original Step.RequiredDataDomains[0] = %q, want %q", original.Step.RequiredDataDomains[0], "photos/media")
+	}
 	if original.Step.FrankObjectRefs[0].ObjectID != "identity-1" {
 		t.Fatalf("original Step.FrankObjectRefs[0].ObjectID = %q, want %q", original.Step.FrankObjectRefs[0].ObjectID, "identity-1")
 	}
@@ -109,6 +137,12 @@ func TestCloneExecutionContextDeepCopiesNestedData(t *testing.T) {
 	}
 	if original.Step.TreasuryRef == nil || original.Step.TreasuryRef.TreasuryID != "treasury-1" {
 		t.Fatalf("original Step.TreasuryRef = %#v, want treasury-1", original.Step.TreasuryRef)
+	}
+	if original.Job.Plan.Steps[0].CapabilityOnboardingProposalRef == nil || original.Job.Plan.Steps[0].CapabilityOnboardingProposalRef.ProposalID != "proposal-1" {
+		t.Fatalf("original Job.Plan.Steps[0].CapabilityOnboardingProposalRef = %#v, want proposal-1", original.Job.Plan.Steps[0].CapabilityOnboardingProposalRef)
+	}
+	if original.Step.CapabilityOnboardingProposalRef == nil || original.Step.CapabilityOnboardingProposalRef.ProposalID != "proposal-1" {
+		t.Fatalf("original Step.CapabilityOnboardingProposalRef = %#v, want proposal-1", original.Step.CapabilityOnboardingProposalRef)
 	}
 
 	if original.GovernedExternalTargets[0].RegistryID != "provider-mail" {
@@ -164,6 +198,15 @@ func TestResolveExecutionContextValidPlan(t *testing.T) {
 	if ec.Step.TreasuryRef != nil {
 		t.Fatalf("ResolveExecutionContext().Step.TreasuryRef = %#v, want nil for zero-treasury step", ec.Step.TreasuryRef)
 	}
+	if ec.Step.CapabilityOnboardingProposalRef != nil {
+		t.Fatalf("ResolveExecutionContext().Step.CapabilityOnboardingProposalRef = %#v, want nil for zero-proposal step", ec.Step.CapabilityOnboardingProposalRef)
+	}
+	if ec.Step.RequiredCapabilities != nil {
+		t.Fatalf("ResolveExecutionContext().Step.RequiredCapabilities = %#v, want nil for zero-capability step", ec.Step.RequiredCapabilities)
+	}
+	if ec.Step.RequiredDataDomains != nil {
+		t.Fatalf("ResolveExecutionContext().Step.RequiredDataDomains = %#v, want nil for zero-data-domain step", ec.Step.RequiredDataDomains)
+	}
 }
 
 func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentityMode(t *testing.T) {
@@ -188,6 +231,11 @@ func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentity
 	job.Plan.Steps[0].TreasuryRef = &TreasuryRef{
 		TreasuryID: " treasury-1 ",
 	}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &CapabilityOnboardingProposalRef{
+		ProposalID: " proposal-1 ",
+	}
+	job.Plan.Steps[0].RequiredCapabilities = []string{" camera ", "", " photos "}
+	job.Plan.Steps[0].RequiredDataDomains = []string{" contacts ", " ", " photos/media "}
 	job.Plan.Steps[0].IdentityMode = IdentityMode("   ")
 
 	ec, err := ResolveExecutionContext(job, "build")
@@ -223,6 +271,18 @@ func TestResolveExecutionContextCarriesStepControlPlaneRefsAndNormalizedIdentity
 	wantTreasuryRef := &TreasuryRef{TreasuryID: "treasury-1"}
 	if !reflect.DeepEqual(ec.Step.TreasuryRef, wantTreasuryRef) {
 		t.Fatalf("ResolveExecutionContext().Step.TreasuryRef = %#v, want %#v", ec.Step.TreasuryRef, wantTreasuryRef)
+	}
+	wantProposalRef := &CapabilityOnboardingProposalRef{ProposalID: "proposal-1"}
+	if !reflect.DeepEqual(ec.Step.CapabilityOnboardingProposalRef, wantProposalRef) {
+		t.Fatalf("ResolveExecutionContext().Step.CapabilityOnboardingProposalRef = %#v, want %#v", ec.Step.CapabilityOnboardingProposalRef, wantProposalRef)
+	}
+	wantCapabilities := []string{"camera", "photos"}
+	if !reflect.DeepEqual(ec.Step.RequiredCapabilities, wantCapabilities) {
+		t.Fatalf("ResolveExecutionContext().Step.RequiredCapabilities = %#v, want %#v", ec.Step.RequiredCapabilities, wantCapabilities)
+	}
+	wantDataDomains := []string{"contacts", "photos/media"}
+	if !reflect.DeepEqual(ec.Step.RequiredDataDomains, wantDataDomains) {
+		t.Fatalf("ResolveExecutionContext().Step.RequiredDataDomains = %#v, want %#v", ec.Step.RequiredDataDomains, wantDataDomains)
 	}
 	if ec.Step.IdentityMode != IdentityModeAgentAlias {
 		t.Fatalf("ResolveExecutionContext().Step.IdentityMode = %q, want %q", ec.Step.IdentityMode, IdentityModeAgentAlias)
@@ -319,6 +379,11 @@ func TestCloneJobReturnsIndependentCopy(t *testing.T) {
 	t.Parallel()
 
 	job := testExecutionJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{"camera"}
+	job.Plan.Steps[0].RequiredDataDomains = []string{"photos/media"}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-1",
+	}
 
 	cloned := CloneJob(&job)
 	if cloned == nil {
@@ -329,6 +394,9 @@ func TestCloneJobReturnsIndependentCopy(t *testing.T) {
 	job.Plan.Steps[0].ID = "mutated-step-id"
 	job.Plan.Steps[0].AllowedTools[0] = "mutated-step-tool"
 	job.Plan.Steps[0].SuccessCriteria[0] = "mutated-success"
+	job.Plan.Steps[0].RequiredCapabilities[0] = "mutated-capability"
+	job.Plan.Steps[0].RequiredDataDomains[0] = "mutated-domain"
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef.ProposalID = "mutated-proposal"
 
 	if cloned.AllowedTools[0] != "read" {
 		t.Fatalf("CloneJob().AllowedTools[0] = %q, want %q", cloned.AllowedTools[0], "read")
@@ -341,6 +409,15 @@ func TestCloneJobReturnsIndependentCopy(t *testing.T) {
 	}
 	if cloned.Plan.Steps[0].SuccessCriteria[0] != "produce code" {
 		t.Fatalf("CloneJob().Plan.Steps[0].SuccessCriteria[0] = %q, want %q", cloned.Plan.Steps[0].SuccessCriteria[0], "produce code")
+	}
+	if cloned.Plan.Steps[0].RequiredCapabilities[0] != "camera" {
+		t.Fatalf("CloneJob().Plan.Steps[0].RequiredCapabilities[0] = %q, want %q", cloned.Plan.Steps[0].RequiredCapabilities[0], "camera")
+	}
+	if cloned.Plan.Steps[0].RequiredDataDomains[0] != "photos/media" {
+		t.Fatalf("CloneJob().Plan.Steps[0].RequiredDataDomains[0] = %q, want %q", cloned.Plan.Steps[0].RequiredDataDomains[0], "photos/media")
+	}
+	if cloned.Plan.Steps[0].CapabilityOnboardingProposalRef == nil || cloned.Plan.Steps[0].CapabilityOnboardingProposalRef.ProposalID != "proposal-1" {
+		t.Fatalf("CloneJob().Plan.Steps[0].CapabilityOnboardingProposalRef = %#v, want proposal-1", cloned.Plan.Steps[0].CapabilityOnboardingProposalRef)
 	}
 }
 

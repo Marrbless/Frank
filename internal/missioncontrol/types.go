@@ -72,6 +72,10 @@ type TreasuryRef struct {
 	TreasuryID string `json:"treasury_id"`
 }
 
+type CapabilityOnboardingProposalRef struct {
+	ProposalID string `json:"proposal_id"`
+}
+
 type Job struct {
 	ID           string        `json:"id"`
 	SpecVersion  string        `json:"spec_version,omitempty"`
@@ -87,26 +91,29 @@ type Plan struct {
 }
 
 type Step struct {
-	ID                        string                         `json:"id"`
-	Type                      StepType                       `json:"type"`
-	Subtype                   StepSubtype                    `json:"subtype,omitempty"`
-	ApprovalScope             string                         `json:"approval_scope,omitempty"`
-	DependsOn                 []string                       `json:"depends_on"`
-	RequiredAuthority         AuthorityTier                  `json:"required_authority"`
-	AllowedTools              []string                       `json:"allowed_tools"`
-	RequiresApproval          bool                           `json:"requires_approval"`
-	SuccessCriteria           []string                       `json:"success_criteria"`
-	StaticArtifactPath        string                         `json:"static_artifact_path,omitempty"`
-	StaticArtifactFormat      string                         `json:"static_artifact_format,omitempty"`
-	OneShotArtifactPath       string                         `json:"one_shot_artifact_path,omitempty"`
-	LongRunningStartupCommand []string                       `json:"long_running_startup_command,omitempty"`
-	LongRunningArtifactPath   string                         `json:"long_running_artifact_path,omitempty"`
-	IdentityMode              IdentityMode                   `json:"identity_mode,omitempty"`
-	GovernedExternalTargets   []AutonomyEligibilityTargetRef `json:"governed_external_targets,omitempty"`
-	FrankObjectRefs           []FrankRegistryObjectRef       `json:"frank_object_refs,omitempty"`
-	CampaignRef               *CampaignRef                   `json:"campaign_ref,omitempty"`
-	TreasuryRef               *TreasuryRef                   `json:"treasury_ref,omitempty"`
-	SystemAction              *SystemAction                  `json:"system_action,omitempty"`
+	ID                              string                           `json:"id"`
+	Type                            StepType                         `json:"type"`
+	Subtype                         StepSubtype                      `json:"subtype,omitempty"`
+	ApprovalScope                   string                           `json:"approval_scope,omitempty"`
+	DependsOn                       []string                         `json:"depends_on"`
+	RequiredAuthority               AuthorityTier                    `json:"required_authority"`
+	AllowedTools                    []string                         `json:"allowed_tools"`
+	RequiresApproval                bool                             `json:"requires_approval"`
+	SuccessCriteria                 []string                         `json:"success_criteria"`
+	StaticArtifactPath              string                           `json:"static_artifact_path,omitempty"`
+	StaticArtifactFormat            string                           `json:"static_artifact_format,omitempty"`
+	OneShotArtifactPath             string                           `json:"one_shot_artifact_path,omitempty"`
+	LongRunningStartupCommand       []string                         `json:"long_running_startup_command,omitempty"`
+	LongRunningArtifactPath         string                           `json:"long_running_artifact_path,omitempty"`
+	IdentityMode                    IdentityMode                     `json:"identity_mode,omitempty"`
+	RequiredCapabilities            []string                         `json:"required_capabilities,omitempty"`
+	RequiredDataDomains             []string                         `json:"required_data_domains,omitempty"`
+	GovernedExternalTargets         []AutonomyEligibilityTargetRef   `json:"governed_external_targets,omitempty"`
+	FrankObjectRefs                 []FrankRegistryObjectRef         `json:"frank_object_refs,omitempty"`
+	CampaignRef                     *CampaignRef                     `json:"campaign_ref,omitempty"`
+	TreasuryRef                     *TreasuryRef                     `json:"treasury_ref,omitempty"`
+	CapabilityOnboardingProposalRef *CapabilityOnboardingProposalRef `json:"capability_onboarding_proposal_ref,omitempty"`
+	SystemAction                    *SystemAction                    `json:"system_action,omitempty"`
 }
 
 func NormalizeIdentityMode(mode IdentityMode) IdentityMode {
@@ -144,6 +151,38 @@ func NormalizeCampaignRef(ref CampaignRef) CampaignRef {
 func NormalizeTreasuryRef(ref TreasuryRef) TreasuryRef {
 	ref.TreasuryID = strings.TrimSpace(ref.TreasuryID)
 	return ref
+}
+
+func NormalizeCapabilityOnboardingProposalRef(ref CapabilityOnboardingProposalRef) CapabilityOnboardingProposalRef {
+	ref.ProposalID = strings.TrimSpace(ref.ProposalID)
+	return ref
+}
+
+func NormalizeStepRequiredCapabilities(values []string) []string {
+	return normalizeStepDeclarationStrings(values)
+}
+
+func NormalizeStepRequiredDataDomains(values []string) []string {
+	return normalizeStepDeclarationStrings(values)
+}
+
+func normalizeStepDeclarationStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 type ValidationError struct {
