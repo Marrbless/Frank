@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,19 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
+
+type stubSlackAuthTester struct {
+	response *slack.AuthTestResponse
+	err      error
+}
+
+func (s stubSlackAuthTester) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
+	_ = ctx
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
+}
 
 // mockSlackPoster captures outbound Slack posts for testing without a live connection.
 type mockSlackPoster struct {
@@ -52,6 +66,63 @@ func TestStartSlack_InvalidTokenPrefixes(t *testing.T) {
 	err = StartSlack(ctx, hub, "xapp-test", "bad-bot-token", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "xoxb-") {
 		t.Fatalf("expected xoxb- prefix error, got: %v", err)
+	}
+}
+
+func TestReadSlackAuthIdentity(t *testing.T) {
+	originalClient := newSlackAuthTestClient
+	defer func() { newSlackAuthTestClient = originalClient }()
+	newSlackAuthTestClient = func(botToken string) slackAuthTester {
+		if botToken != "xoxb-test-token" {
+			t.Fatalf("newSlackAuthTestClient() botToken = %q, want %q", botToken, "xoxb-test-token")
+		}
+		return stubSlackAuthTester{
+			response: &slack.AuthTestResponse{
+				TeamID: "T123",
+				UserID: "U234",
+				BotID:  "B345",
+			},
+		}
+	}
+
+	got, err := ReadSlackAuthIdentity(context.Background(), "xoxb-test-token")
+	if err != nil {
+		t.Fatalf("ReadSlackAuthIdentity() error = %v", err)
+	}
+	if got.TeamID != "T123" || got.UserID != "U234" || got.BotID != "B345" {
+		t.Fatalf("ReadSlackAuthIdentity() = %#v, want team/user/bot ids", got)
+	}
+}
+
+func TestReadSlackAuthIdentityRejectsEmptyUserID(t *testing.T) {
+	originalClient := newSlackAuthTestClient
+	defer func() { newSlackAuthTestClient = originalClient }()
+	newSlackAuthTestClient = func(botToken string) slackAuthTester {
+		_ = botToken
+		return stubSlackAuthTester{
+			response: &slack.AuthTestResponse{
+				TeamID: "T123",
+			},
+		}
+	}
+
+	_, err := ReadSlackAuthIdentity(context.Background(), "xoxb-test-token")
+	if err == nil || !strings.Contains(err.Error(), "empty user ID") {
+		t.Fatalf("ReadSlackAuthIdentity() error = %v, want empty user ID rejection", err)
+	}
+}
+
+func TestReadSlackAuthIdentitySurfacesProviderFailure(t *testing.T) {
+	originalClient := newSlackAuthTestClient
+	defer func() { newSlackAuthTestClient = originalClient }()
+	newSlackAuthTestClient = func(botToken string) slackAuthTester {
+		_ = botToken
+		return stubSlackAuthTester{err: fmt.Errorf("provider down")}
+	}
+
+	_, err := ReadSlackAuthIdentity(context.Background(), "xoxb-test-token")
+	if err == nil || !strings.Contains(err.Error(), "provider down") {
+		t.Fatalf("ReadSlackAuthIdentity() error = %v, want provider failure", err)
 	}
 }
 

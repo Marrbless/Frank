@@ -18,6 +18,7 @@ type FrankIdentityRecord struct {
 	ProviderOrPlatformID string                             `json:"provider_or_platform_id"`
 	ZohoMailbox          *FrankZohoMailboxIdentity          `json:"zoho_mailbox,omitempty"`
 	TelegramOwnerControl *FrankTelegramOwnerControlIdentity `json:"telegram_owner_control,omitempty"`
+	SlackOwnerControl    *FrankSlackOwnerControlIdentity    `json:"slack_owner_control,omitempty"`
 	IdentityMode         IdentityMode                       `json:"identity_mode"`
 	State                string                             `json:"state"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef       `json:"eligibility_target_ref"`
@@ -32,6 +33,11 @@ type FrankZohoMailboxIdentity struct {
 
 type FrankTelegramOwnerControlIdentity struct {
 	OwnerUserID string `json:"owner_user_id,omitempty"`
+}
+
+type FrankSlackOwnerControlIdentity struct {
+	TeamID string `json:"team_id,omitempty"`
+	UserID string `json:"user_id,omitempty"`
 }
 
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
@@ -56,6 +62,7 @@ type FrankAccountRecord struct {
 	ProviderOrPlatformID string                            `json:"provider_or_platform_id"`
 	ZohoMailbox          *FrankZohoMailboxAccount          `json:"zoho_mailbox,omitempty"`
 	TelegramOwnerControl *FrankTelegramOwnerControlAccount `json:"telegram_owner_control,omitempty"`
+	SlackOwnerControl    *FrankSlackOwnerControlAccount    `json:"slack_owner_control,omitempty"`
 	IdentityID           string                            `json:"identity_id"`
 	ControlModel         string                            `json:"control_model"`
 	RecoveryModel        string                            `json:"recovery_model"`
@@ -75,6 +82,10 @@ type FrankZohoMailboxAccount struct {
 
 type FrankTelegramOwnerControlAccount struct {
 	BotUserID string `json:"bot_user_id,omitempty"`
+}
+
+type FrankSlackOwnerControlAccount struct {
+	BotID string `json:"bot_id,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -240,6 +251,11 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
+	if record.SlackOwnerControl != nil {
+		if err := validateFrankSlackOwnerControlIdentity(*record.SlackOwnerControl); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -284,6 +300,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.TelegramOwnerControl != nil {
 		if err := validateFrankTelegramOwnerControlAccount(*record.TelegramOwnerControl); err != nil {
+			return err
+		}
+	}
+	if record.SlackOwnerControl != nil {
+		if err := validateFrankSlackOwnerControlAccount(*record.SlackOwnerControl); err != nil {
 			return err
 		}
 	}
@@ -746,6 +767,7 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
 	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
 	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlIdentity(record.TelegramOwnerControl)
+	record.SlackOwnerControl = normalizeFrankSlackOwnerControlIdentity(record.SlackOwnerControl)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -791,6 +813,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
 	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
 	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlAccount(record.TelegramOwnerControl)
+	record.SlackOwnerControl = normalizeFrankSlackOwnerControlAccount(record.SlackOwnerControl)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -880,6 +903,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	}
 	record.ZohoMailbox = normalizeFrankZohoMailboxIdentity(record.ZohoMailbox)
 	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlIdentity(record.TelegramOwnerControl)
+	record.SlackOwnerControl = normalizeFrankSlackOwnerControlIdentity(record.SlackOwnerControl)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -899,6 +923,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	}
 	record.ZohoMailbox = normalizeFrankZohoMailboxAccount(record.ZohoMailbox)
 	record.TelegramOwnerControl = normalizeFrankTelegramOwnerControlAccount(record.TelegramOwnerControl)
+	record.SlackOwnerControl = normalizeFrankSlackOwnerControlAccount(record.SlackOwnerControl)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
