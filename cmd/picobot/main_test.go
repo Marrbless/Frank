@@ -161,6 +161,45 @@ func writeMissionInspectSharedStorageCapabilityFixtures(t *testing.T) string {
 	return root
 }
 
+func writeMissionInspectContactsCapabilityFixtures(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace-root")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 4, 18, 23, 0, 0, 0, time.UTC)
+	record := missioncontrol.CapabilityOnboardingProposalRecord{
+		ProposalID:       "proposal-contacts",
+		CapabilityName:   missioncontrol.ContactsCapabilityName,
+		WhyNeeded:        "mission requires local shared contacts access",
+		MissionFamilies:  []string{"workspace"},
+		Risks:            []string{"local contacts exposure"},
+		Validators:       []string{"shared_storage exposed and committed contacts source file exists and is readable"},
+		KillSwitch:       "disable contacts capability exposure and remove committed contacts source reference",
+		DataAccessed:     []string{"contacts"},
+		ApprovalRequired: true,
+		CreatedAt:        now,
+		State:            missioncontrol.CapabilityOnboardingProposalStateApproved,
+	}
+	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+	if _, err := missioncontrol.StoreWorkspaceContactsCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceContactsCapabilityExposure() error = %v", err)
+	}
+	return root
+}
+
 func TestMemoryCLI_ReadAppendWriteRecent(t *testing.T) {
 	// set HOME to a temp dir so onboard writes to temp
 	tmp := t.TempDir()
@@ -2019,6 +2058,87 @@ func TestMissionInspectCommandSharedStorageCapabilityRejectsStepWithoutRequireme
 	}
 	if !strings.Contains(err.Error(), `step "build" does not require shared_storage capability`) {
 		t.Fatalf("Execute() error = %q, want shared_storage requirement rejection", err)
+	}
+}
+
+func TestMissionInspectCommandContactsCapabilityReturnsCommittedRecordAndSource(t *testing.T) {
+	root := writeMissionInspectContactsCapabilityFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
+	job.Plan.Steps[0].CapabilityOnboardingProposalRef = &missioncontrol.CapabilityOnboardingProposalRef{
+		ProposalID: "proposal-contacts",
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--contacts-capability",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectContactsCapability
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got.Capability.CapabilityID != missioncontrol.ContactsLocalFileCapabilityID {
+		t.Fatalf("Capability.CapabilityID = %q, want %q", got.Capability.CapabilityID, missioncontrol.ContactsLocalFileCapabilityID)
+	}
+	if !got.Capability.Exposed {
+		t.Fatal("Capability.Exposed = false, want true")
+	}
+	if got.Source.Path != missioncontrol.ContactsLocalFileDefaultPath {
+		t.Fatalf("Source.Path = %q, want %q", got.Source.Path, missioncontrol.ContactsLocalFileDefaultPath)
+	}
+}
+
+func TestMissionInspectCommandContactsCapabilityRequiresStoreRoot(t *testing.T) {
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-file", path, "--contacts-capability"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want store-root requirement")
+	}
+	if !strings.Contains(err.Error(), "--mission-store-root is required with --contacts-capability") {
+		t.Fatalf("Execute() error = %q, want store-root requirement", err)
+	}
+}
+
+func TestMissionInspectCommandContactsCapabilityRejectsStepWithoutRequirement(t *testing.T) {
+	root := writeMissionInspectContactsCapabilityFixtures(t)
+	path := writeMissionBootstrapJobFile(t, testMissionBootstrapJob())
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"mission", "inspect",
+		"--mission-file", path,
+		"--mission-store-root", root,
+		"--step-id", "build",
+		"--contacts-capability",
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want contacts requirement rejection")
+	}
+	if !strings.Contains(err.Error(), `step "build" does not require contacts capability`) {
+		t.Fatalf("Execute() error = %q, want contacts requirement rejection", err)
 	}
 }
 

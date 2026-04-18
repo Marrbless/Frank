@@ -790,6 +790,7 @@ func NewRootCmd() *cobra.Command {
 			storeRoot := resolveMissionStoreRoot(cmd)
 			notificationsCapabilityOnly, _ := cmd.Flags().GetBool("notifications-capability")
 			sharedStorageCapabilityOnly, _ := cmd.Flags().GetBool("shared-storage-capability")
+			contactsCapabilityOnly, _ := cmd.Flags().GetBool("contacts-capability")
 
 			if notificationsCapabilityOnly {
 				if storeRoot == "" {
@@ -827,6 +828,24 @@ func NewRootCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if contactsCapabilityOnly {
+				if storeRoot == "" {
+					return fmt.Errorf("--mission-store-root is required with --contacts-capability")
+				}
+				record, err := newMissionInspectContactsCapability(job, stepID, storeRoot)
+				if err != nil {
+					return fmt.Errorf("failed to resolve contacts capability inspection for %q: %w", missionFile, err)
+				}
+				recordData, err := json.MarshalIndent(record, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to encode contacts capability inspection output: %w", err)
+				}
+				recordData = append(recordData, '\n')
+				if _, err := cmd.OutOrStdout().Write(recordData); err != nil {
+					return fmt.Errorf("failed to write contacts capability inspection output: %w", err)
+				}
+				return nil
+			}
 
 			summary, err := newMissionInspectSummary(job, stepID, storeRoot)
 			if err != nil {
@@ -851,6 +870,7 @@ func NewRootCmd() *cobra.Command {
 	missionInspectCmd.Flags().String("step-id", "", "Optional mission step ID to filter the inspection summary to one step")
 	missionInspectCmd.Flags().Bool("notifications-capability", false, "Print the committed notifications capability record from the mission store")
 	missionInspectCmd.Flags().Bool("shared-storage-capability", false, "Print the committed shared_storage capability record from the mission store")
+	missionInspectCmd.Flags().Bool("contacts-capability", false, "Print the committed contacts capability record and source from the mission store")
 
 	missionAssertCmd := &cobra.Command{
 		Use:          "assert",
@@ -1893,6 +1913,10 @@ type missionPruneStoreSummary struct {
 type missionInspectSummary = missioncontrol.InspectSummary
 type missionInspectNotificationsCapability = missioncontrol.CapabilityRecord
 type missionInspectSharedStorageCapability = missioncontrol.CapabilityRecord
+type missionInspectContactsCapability struct {
+	Capability missioncontrol.CapabilityRecord     `json:"capability"`
+	Source     missioncontrol.ContactsSourceRecord `json:"source"`
+}
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
 var loadGatewayStatusObservation = missioncontrol.LoadGatewayStatusObservation
@@ -2102,6 +2126,41 @@ func newMissionInspectSharedStorageCapability(job missioncontrol.Job, stepID str
 		return missionInspectSharedStorageCapability{}, err
 	}
 	return *record, nil
+}
+
+func newMissionInspectContactsCapability(job missioncontrol.Job, stepID string, storeRoot string) (missionInspectContactsCapability, error) {
+	job.MissionStoreRoot = strings.TrimSpace(storeRoot)
+	if job.MissionStoreRoot == "" {
+		return missionInspectContactsCapability{}, fmt.Errorf("mission store root is required")
+	}
+
+	if stepID != "" {
+		ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+		if err != nil {
+			return missionInspectContactsCapability{}, err
+		}
+		if ec.Step == nil || !missioncontrol.StepRequiresContactsCapability(*ec.Step) {
+			return missionInspectContactsCapability{}, fmt.Errorf("step %q does not require contacts capability", stepID)
+		}
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return missionInspectContactsCapability{}, fmt.Errorf("contacts capability inspection requires readable config: %w", err)
+	}
+
+	capability, err := missioncontrol.ResolveContactsCapabilityRecord(job.MissionStoreRoot)
+	if err != nil {
+		return missionInspectContactsCapability{}, err
+	}
+	source, err := missioncontrol.RequireReadableContactsSourceRecord(job.MissionStoreRoot, cfg.Agents.Defaults.Workspace)
+	if err != nil {
+		return missionInspectContactsCapability{}, err
+	}
+	return missionInspectContactsCapability{
+		Capability: *capability,
+		Source:     *source,
+	}, nil
 }
 
 func activateMissionStepFromControlData(ag *agent.AgentLoop, job missioncontrol.Job, path string, data []byte) (string, bool, error) {
