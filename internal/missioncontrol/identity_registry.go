@@ -22,6 +22,7 @@ type FrankIdentityRecord struct {
 	DiscordOwnerControl  *FrankDiscordOwnerControlIdentity  `json:"discord_owner_control,omitempty"`
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlIdentity `json:"whatsapp_owner_control,omitempty"`
 	GitHub               *FrankGitHubIdentity               `json:"github,omitempty"`
+	Stripe               *FrankStripeIdentity               `json:"stripe,omitempty"`
 	IdentityMode         IdentityMode                       `json:"identity_mode"`
 	State                string                             `json:"state"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef       `json:"eligibility_target_ref"`
@@ -62,6 +63,14 @@ type FrankGitHubIdentity struct {
 	PrimaryVerifiedEmail string `json:"primary_verified_email,omitempty"`
 }
 
+type FrankStripeIdentity struct {
+	StripeAccountID      string `json:"stripe_account_id,omitempty"`
+	BusinessProfileName  string `json:"business_profile_name,omitempty"`
+	DashboardDisplayName string `json:"dashboard_display_name,omitempty"`
+	Country              string `json:"country,omitempty"`
+	DefaultCurrency      string `json:"default_currency,omitempty"`
+}
+
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
 // object names without forcing a durable storage migration.
 type FrankIdentityObjectView struct {
@@ -88,6 +97,7 @@ type FrankAccountRecord struct {
 	DiscordOwnerControl  *FrankDiscordOwnerControlAccount  `json:"discord_owner_control,omitempty"`
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlAccount `json:"whatsapp_owner_control,omitempty"`
 	GitHub               *FrankGitHubAccount               `json:"github,omitempty"`
+	Stripe               *FrankStripeAccount               `json:"stripe,omitempty"`
 	IdentityID           string                            `json:"identity_id"`
 	ControlModel         string                            `json:"control_model"`
 	RecoveryModel        string                            `json:"recovery_model"`
@@ -126,6 +136,16 @@ type FrankWhatsAppOwnerControlAccount struct {
 type FrankGitHubAccount struct {
 	TokenEnvVarRef         string `json:"token_env_var_ref,omitempty"`
 	ConfirmedAuthenticated bool   `json:"confirmed_authenticated,omitempty"`
+}
+
+type FrankStripeAccount struct {
+	SecretKeyEnvVarRef         string `json:"secret_key_env_var_ref,omitempty"`
+	ConfirmedAuthenticated     bool   `json:"confirmed_authenticated,omitempty"`
+	ChargesEnabled             *bool  `json:"charges_enabled,omitempty"`
+	PayoutsEnabled             *bool  `json:"payouts_enabled,omitempty"`
+	DetailsSubmitted           *bool  `json:"details_submitted,omitempty"`
+	RequirementsDisabledReason string `json:"requirements_disabled_reason,omitempty"`
+	Livemode                   *bool  `json:"livemode,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -311,6 +331,11 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
+	if record.Stripe != nil {
+		if err := validateFrankStripeIdentity(*record.Stripe); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -375,6 +400,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.GitHub != nil {
 		if err := validateFrankGitHubAccount(*record.GitHub); err != nil {
+			return err
+		}
+	}
+	if record.Stripe != nil {
+		if err := validateFrankStripeAccount(*record.Stripe); err != nil {
 			return err
 		}
 	}
@@ -841,6 +871,7 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlIdentity(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
+	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -890,6 +921,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlAccount(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
+	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -983,6 +1015,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlIdentity(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
+	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -1006,6 +1039,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	record.DiscordOwnerControl = normalizeFrankDiscordOwnerControlAccount(record.DiscordOwnerControl)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
+	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
