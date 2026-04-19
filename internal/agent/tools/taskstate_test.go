@@ -5437,9 +5437,7 @@ func TestTaskStateActivateStepSharedStorageCapabilityFailsClosedWithoutExposedRe
 func TestTaskStateActivateStepContactsCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
@@ -5480,9 +5478,7 @@ func TestTaskStateActivateStepContactsCapabilityPathCallsHookOnce(t *testing.T) 
 func TestTaskStateActivateStepContactsCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
@@ -5542,9 +5538,7 @@ func TestTaskStateActivateStepContactsCapabilityRequiresApprovedProposal(t *test
 func TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateContactsCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateContactsCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.ContactsCapabilityName}
@@ -5594,9 +5588,7 @@ func TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutSharedStorageE
 func TestTaskStateActivateStepLocationCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
@@ -5637,9 +5629,7 @@ func TestTaskStateActivateStepLocationCapabilityPathCallsHookOnce(t *testing.T) 
 func TestTaskStateActivateStepLocationCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
@@ -5699,9 +5689,7 @@ func TestTaskStateActivateStepLocationCapabilityRequiresApprovedProposal(t *test
 func TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateLocationCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateLocationCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.LocationCapabilityName}
@@ -5751,9 +5739,7 @@ func TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutSharedStorageE
 func TestTaskStateActivateStepCameraCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
@@ -5794,9 +5780,7 @@ func TestTaskStateActivateStepCameraCapabilityPathCallsHookOnce(t *testing.T) {
 func TestTaskStateActivateStepCameraCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
@@ -5856,9 +5840,7 @@ func TestTaskStateActivateStepCameraCapabilityRequiresApprovedProposal(t *testin
 func TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateCameraCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateCameraCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.CameraCapabilityName}
@@ -5908,9 +5890,7 @@ func TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutSharedStorageExp
 func TestTaskStateActivateStepMicrophoneCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
@@ -5951,9 +5931,7 @@ func TestTaskStateActivateStepMicrophoneCapabilityPathCallsHookOnce(t *testing.T
 func TestTaskStateActivateStepMicrophoneCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
@@ -6013,9 +5991,7 @@ func TestTaskStateActivateStepMicrophoneCapabilityRequiresApprovedProposal(t *te
 func TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateMicrophoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateMicrophoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.MicrophoneCapabilityName}
@@ -6065,9 +6041,7 @@ func TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutSharedStorag
 func TestTaskStateActivateStepSMSPhoneCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateSMSPhoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateSMSPhoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SMSPhoneCapabilityName}
@@ -6108,9 +6082,7 @@ func TestTaskStateActivateStepSMSPhoneCapabilityPathCallsHookOnce(t *testing.T) 
 func TestTaskStateActivateStepSMSPhoneCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateSMSPhoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateSMSPhoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SMSPhoneCapabilityName}
@@ -6170,9 +6142,7 @@ func TestTaskStateActivateStepSMSPhoneCapabilityRequiresApprovedProposal(t *test
 func TestTaskStateActivateStepSMSPhoneCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateSMSPhoneCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateSMSPhoneCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SMSPhoneCapabilityName}
@@ -6222,9 +6192,7 @@ func TestTaskStateActivateStepSMSPhoneCapabilityFailsClosedWithoutSharedStorageE
 func TestTaskStateActivateStepBluetoothNFCCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
@@ -6265,9 +6233,7 @@ func TestTaskStateActivateStepBluetoothNFCCapabilityPathCallsHookOnce(t *testing
 func TestTaskStateActivateStepBluetoothNFCCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
@@ -6327,9 +6293,7 @@ func TestTaskStateActivateStepBluetoothNFCCapabilityRequiresApprovedProposal(t *
 func TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateBluetoothNFCCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBluetoothNFCCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BluetoothNFCCapabilityName}
@@ -6379,9 +6343,7 @@ func TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutSharedStor
 func TestTaskStateActivateStepBroadAppControlCapabilityPathCallsHookOnce(t *testing.T) {
 	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
@@ -6422,9 +6384,7 @@ func TestTaskStateActivateStepBroadAppControlCapabilityPathCallsHookOnce(t *test
 func TestTaskStateActivateStepBroadAppControlCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}
@@ -6484,9 +6444,7 @@ func TestTaskStateActivateStepBroadAppControlCapabilityRequiresApprovedProposal(
 func TestTaskStateActivateStepBroadAppControlCapabilityFailsClosedWithoutExposedRecord(t *testing.T) {
 	root := writeTaskStateBroadAppControlCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
 	workspace := writeTaskStateBroadAppControlCapabilityConfigFixture(t)
-	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
-		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
-	}
+	storeTaskStateSharedStorageCapabilityExposure(t, root, workspace)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.BroadAppControlCapabilityName}

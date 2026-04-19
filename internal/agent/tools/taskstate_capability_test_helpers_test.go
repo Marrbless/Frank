@@ -254,3 +254,11 @@ func writeTaskStateBroadAppControlCapabilityConfigFixture(t *testing.T) string {
 
 	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
 }
+
+func storeTaskStateSharedStorageCapabilityExposure(t *testing.T, root string, workspace string) {
+	t.Helper()
+
+	if _, err := missioncontrol.StoreWorkspaceSharedStorageCapabilityExposure(root, workspace); err != nil {
+		t.Fatalf("StoreWorkspaceSharedStorageCapabilityExposure() error = %v", err)
+	}
+}
