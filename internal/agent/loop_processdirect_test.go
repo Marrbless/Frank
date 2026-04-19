@@ -44,7 +44,7 @@ func (p *writeMemoryCallingProvider) GetDefaultModel() string { return "test" }
 func TestProcessDirectExecutesToolCall(t *testing.T) {
 	b := chat.NewHub(10)
 	prov := &writeMemoryCallingProvider{}
-	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil)
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil, nil)
 
 	if ag.MissionRequired() {
 		t.Fatal("MissionRequired() = true, want false")

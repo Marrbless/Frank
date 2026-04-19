@@ -40,7 +40,7 @@ func (f *FakeProvider) GetDefaultModel() string { return "fake" }
 func TestAgentExecutesToolCall(t *testing.T) {
 	b := chat.NewHub(10)
 	p := &FakeProvider{}
-	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil, nil)
 
 	if _, ok := ag.ActiveMissionStep(); ok {
 		t.Fatal("taskState.ExecutionContext() ok = true, want false")

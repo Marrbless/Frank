@@ -219,6 +219,12 @@ The agent exposes these built-in tools. `cron` is available only when a schedule
 | `read_skill` | Read a skill's content |
 | `delete_skill` | Delete a skill |
 
+### MCP Server Tools
+
+Additional tools are registered dynamically from any MCP servers listed in `mcpServers` in your `config.json`. Each tool emitted by a server is exposed to the agent under the name `mcp_{server}_{tool}` — for example, a server named `my-server` exposing a `some-action` tool becomes `mcp_my-server_some-action`. This surface is optional and inert unless you configure an MCP server explicitly. Interim tool activity messages are also optional and can be disabled with `agents.defaults.enableToolActivityIndicator` or `PICOBOT_ENABLE_TOOL_ACTIVITY_INDICATOR=false`.
+
+See [CONFIG.md](CONFIG.md#mcpservers) for the full mcpServers configuration reference.
+
 ## Setting Up Telegram (BotFather Guide)
 
 To chat with Picobot on Telegram, you need to create a bot via **@BotFather**.
