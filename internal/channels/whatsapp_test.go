@@ -10,7 +10,6 @@ import (
 	"time"
 
 	waE2E "go.mau.fi/whatsmeow/proto/waE2E"
-	waStore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
@@ -483,28 +482,5 @@ func TestWhatsAppClient_StopAllTyping(t *testing.T) {
 
 	if remaining != 0 {
 		t.Errorf("expected 0 typing stops after stopAllTyping, got %d", remaining)
-	}
-}
-
-func TestReadWhatsAppAuthenticatedIdentity(t *testing.T) {
-	got := readWhatsAppAuthenticatedIdentity(&waStore.Device{
-		ID: &types.JID{User: "15551234567", Server: "s.whatsapp.net"},
-	})
-
-	if got.PhoneJID != "15551234567@s.whatsapp.net" {
-		t.Fatalf("PhoneJID = %q, want %q", got.PhoneJID, "15551234567@s.whatsapp.net")
-	}
-	if got.AuthenticatedDeviceJID != "15551234567@s.whatsapp.net" {
-		t.Fatalf("AuthenticatedDeviceJID = %q, want %q", got.AuthenticatedDeviceJID, "15551234567@s.whatsapp.net")
-	}
-	if got.LIDJID != "" {
-		t.Fatalf("LIDJID = %q, want empty when device has no lid", got.LIDJID)
-	}
-}
-
-func TestReadWhatsAppAuthenticatedIdentityNilDevice(t *testing.T) {
-	got := readWhatsAppAuthenticatedIdentity(nil)
-	if got != (WhatsAppAuthenticatedIdentity{}) {
-		t.Fatalf("readWhatsAppAuthenticatedIdentity(nil) = %#v, want zero identity", got)
 	}
 }

@@ -443,32 +443,6 @@ func assertResolvedFrankDiscordOwnerControlOnboardingPreflightJSONEnvelope(t *te
 	assertOptionalJSONObjectKeys(t, account["discord_owner_control"], "bot_user_id")
 }
 
-func assertResolvedFrankWhatsAppOwnerControlOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
-	t.Helper()
-
-	preflight, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("frank_whatsapp_owner_control_onboarding_preflight = %#v, want object", value)
-	}
-	assertJSONObjectKeys(t, preflight, "account", "identity")
-
-	identity, ok := preflight["identity"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_whatsapp_owner_control_onboarding_preflight.identity = %#v, want object", preflight["identity"])
-	}
-	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at", "whatsapp_owner_control")
-	assertJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
-	assertOptionalJSONObjectKeys(t, identity["whatsapp_owner_control"], "phone_jid", "lid_jid", "push_name")
-
-	account, ok := preflight["account"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_whatsapp_owner_control_onboarding_preflight.account = %#v, want object", preflight["account"])
-	}
-	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at", "whatsapp_owner_control")
-	assertJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
-	assertOptionalJSONObjectKeys(t, account["whatsapp_owner_control"], "authenticated_device_jid", "auth_store_ref", "confirmed_authenticated")
-}
-
 func assertOptionalJSONObjectKeys(t *testing.T, value any, optional ...string) {
 	t.Helper()
 
