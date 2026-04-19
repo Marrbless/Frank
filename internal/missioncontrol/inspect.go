@@ -22,7 +22,6 @@ type InspectStep struct {
 	TreasuryPreflight                            *ResolvedExecutionContextTreasuryPreflight                            `json:"treasury_preflight,omitempty"`
 	FrankZohoMailboxBootstrapPreflight           *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight           `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
 	FrankTelegramOwnerControlOnboardingPreflight *ResolvedExecutionContextFrankTelegramOwnerControlOnboardingPreflight `json:"frank_telegram_owner_control_onboarding_preflight,omitempty"`
-	FrankSlackOwnerControlOnboardingPreflight    *ResolvedExecutionContextFrankSlackOwnerControlOnboardingPreflight    `json:"frank_slack_owner_control_onboarding_preflight,omitempty"`
 	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
 
@@ -68,13 +67,6 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if telegramOwnerControlPreflight.Identity != nil && telegramOwnerControlPreflight.Account != nil {
 			summary.FrankTelegramOwnerControlOnboardingPreflight = &telegramOwnerControlPreflight
-		}
-		slackOwnerControlPreflight, err := ResolveExecutionContextFrankSlackOwnerControlOnboardingPreflight(ec)
-		if err != nil {
-			return InspectStep{}, err
-		}
-		if slackOwnerControlPreflight.Identity != nil && slackOwnerControlPreflight.Account != nil {
-			summary.FrankSlackOwnerControlOnboardingPreflight = &slackOwnerControlPreflight
 		}
 		capabilityPreflight, err := ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec)
 		if err != nil {

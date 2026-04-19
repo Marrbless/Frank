@@ -20,20 +20,6 @@ type slackPoster interface {
 	PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error)
 }
 
-type slackAuthTester interface {
-	AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error)
-}
-
-type SlackAuthIdentity struct {
-	TeamID string
-	UserID string
-	BotID  string
-}
-
-var newSlackAuthTestClient = func(botToken string) slackAuthTester {
-	return slack.New(botToken)
-}
-
 // StartSlack starts a Slack bot using Socket Mode.
 // allowUsers restricts which Slack user IDs may send messages; empty means allow all.
 // allowChannels restricts which Slack channel IDs may send messages; empty means allow all.
@@ -56,9 +42,12 @@ func StartSlack(ctx context.Context, hub *chat.Hub, appToken, botToken string, a
 		slack.OptionAppLevelToken(appToken),
 	)
 
-	auth, err := readSlackAuthIdentity(ctx, api)
+	auth, err := api.AuthTest()
 	if err != nil {
 		return fmt.Errorf("slack auth test failed: %w", err)
+	}
+	if auth.UserID == "" {
+		return fmt.Errorf("slack auth test returned empty user ID")
 	}
 
 	socketClient := socketmode.New(api)
@@ -79,38 +68,6 @@ func StartSlack(ctx context.Context, hub *chat.Hub, appToken, botToken string, a
 	}()
 
 	return nil
-}
-
-func ReadSlackAuthIdentity(ctx context.Context, botToken string) (SlackAuthIdentity, error) {
-	botToken = strings.TrimSpace(botToken)
-	if botToken == "" {
-		return SlackAuthIdentity{}, fmt.Errorf("slack bot token not provided")
-	}
-	if !strings.HasPrefix(botToken, "xoxb-") {
-		return SlackAuthIdentity{}, fmt.Errorf("slack bot token must start with xoxb-")
-	}
-	return readSlackAuthIdentity(ctx, newSlackAuthTestClient(botToken))
-}
-
-func readSlackAuthIdentity(ctx context.Context, client slackAuthTester) (SlackAuthIdentity, error) {
-	auth, err := client.AuthTestContext(ctx)
-	if err != nil {
-		return SlackAuthIdentity{}, err
-	}
-	if auth == nil {
-		return SlackAuthIdentity{}, fmt.Errorf("slack auth test returned empty response")
-	}
-	if strings.TrimSpace(auth.TeamID) == "" {
-		return SlackAuthIdentity{}, fmt.Errorf("slack auth test returned empty team ID")
-	}
-	if strings.TrimSpace(auth.UserID) == "" {
-		return SlackAuthIdentity{}, fmt.Errorf("slack auth test returned empty user ID")
-	}
-	return SlackAuthIdentity{
-		TeamID: strings.TrimSpace(auth.TeamID),
-		UserID: strings.TrimSpace(auth.UserID),
-		BotID:  strings.TrimSpace(auth.BotID),
-	}, nil
 }
 
 type slackClient struct {

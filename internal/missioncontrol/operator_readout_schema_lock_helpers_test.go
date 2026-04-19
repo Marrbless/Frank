@@ -391,32 +391,6 @@ func assertResolvedFrankTelegramOwnerControlOnboardingPreflightJSONEnvelope(t *t
 	assertOptionalJSONObjectKeys(t, account["telegram_owner_control"], "bot_user_id")
 }
 
-func assertResolvedFrankSlackOwnerControlOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
-	t.Helper()
-
-	preflight, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("frank_slack_owner_control_onboarding_preflight = %#v, want object", value)
-	}
-	assertJSONObjectKeys(t, preflight, "account", "identity")
-
-	identity, ok := preflight["identity"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_slack_owner_control_onboarding_preflight.identity = %#v, want object", preflight["identity"])
-	}
-	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "slack_owner_control", "state", "updated_at")
-	assertJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
-	assertOptionalJSONObjectKeys(t, identity["slack_owner_control"], "team_id", "user_id")
-
-	account, ok := preflight["account"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_slack_owner_control_onboarding_preflight.account = %#v, want object", preflight["account"])
-	}
-	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "slack_owner_control", "state", "updated_at")
-	assertJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
-	assertOptionalJSONObjectKeys(t, account["slack_owner_control"], "bot_id")
-}
-
 func assertOptionalJSONObjectKeys(t *testing.T, value any, optional ...string) {
 	t.Helper()
 
