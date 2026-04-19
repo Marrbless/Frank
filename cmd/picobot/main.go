@@ -1849,39 +1849,8 @@ func writeJSONAtomic(path string, value any, encodeErrPrefix string, writeErrPre
 	}
 	data = append(data, '\n')
 
-	if err := writeJSONBytesAtomic(path, data); err != nil {
+	if err := missioncontrol.WriteStoreFileAtomic(path, data); err != nil {
 		return fmt.Errorf("%s %q: %w", writeErrPrefix, path, err)
-	}
-
-	return nil
-}
-
-func writeJSONBytesAtomic(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-
-	tempPath := tempFile.Name()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if closeErr := tempFile.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		_ = os.Remove(tempPath)
-	}()
-
-	if _, err = tempFile.Write(data); err != nil {
-		return err
-	}
-	if err = tempFile.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tempPath, path); err != nil {
-		return err
 	}
 
 	return nil

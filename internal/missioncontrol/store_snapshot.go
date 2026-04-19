@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 var missionStatusSnapshotReadFile = os.ReadFile
 var missionStatusSnapshotDecode = decodeMissionStatusSnapshotJSON
-var missionStatusSnapshotWriteFileAtomic = writeMissionStatusSnapshotFileAtomic
+var missionStatusSnapshotWriteFileAtomic = WriteStoreFileAtomic
 
 func WriteMissionStatusSnapshotAtomic(path string, snapshot MissionStatusSnapshot) error {
 	return writeMissionStatusSnapshotJSONAtomic(path, snapshot, "failed to encode mission status snapshot", "failed to write mission status snapshot")
@@ -32,37 +31,6 @@ func writeMissionStatusSnapshotJSONAtomic(path string, value any, encodeErrPrefi
 
 	if err := missionStatusSnapshotWriteFileAtomic(path, data); err != nil {
 		return fmt.Errorf("%s %q: %w", writeErrPrefix, path, err)
-	}
-
-	return nil
-}
-
-func writeMissionStatusSnapshotFileAtomic(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-
-	tempPath := tempFile.Name()
-	defer func() {
-		if err == nil {
-			return
-		}
-		if closeErr := tempFile.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		_ = os.Remove(tempPath)
-	}()
-
-	if _, err = tempFile.Write(data); err != nil {
-		return err
-	}
-	if err = tempFile.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tempPath, path); err != nil {
-		return err
 	}
 
 	return nil

@@ -156,8 +156,7 @@ func (t *EditMemoryTool) Execute(ctx context.Context, args map[string]interface{
 	}
 	newText, _ := args["new_text"].(string) // defaults to "" (deletion) if absent
 	if isHeartbeatContent(newText) {
-		// return "", fmt.Errorf("edit_memory: heartbeat status logs must not be stored in memory — skip this edit")
-		return "", nil // skip sliently
+		return "", nil // Skip heartbeat-status edits instead of persisting noise.
 	}
 
 	name, err := resolveMemoryTarget(target)
