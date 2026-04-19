@@ -2384,51 +2384,6 @@ func TestMissionInspectCommandGoogleOnboardingStepSurfacesResolvedPreflight(t *t
 	}
 }
 
-func TestMissionInspectCommandLinkedInOnboardingStepSurfacesResolvedPreflight(t *testing.T) {
-	root, identity, account := writeMissionInspectLinkedInFixtures(t)
-	job := testMissionBootstrapJob()
-	job.Plan.Steps[0].IdentityMode = missioncontrol.IdentityModeAgentAlias
-	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
-		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
-		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
-	}
-	path := writeMissionBootstrapJobFile(t, job)
-
-	cmd := NewRootCmd()
-	out := &bytes.Buffer{}
-	cmd.SetOut(out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	var got missionInspectSummary
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-
-	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
-		t.Fatalf("Steps = %#v, want one build step", got.Steps)
-	}
-	if got.Steps[0].FrankLinkedInOnboardingPreflight == nil {
-		t.Fatal("FrankLinkedInOnboardingPreflight = nil, want resolved onboarding bundle")
-	}
-	if got.Steps[0].FrankLinkedInOnboardingPreflight.Identity == nil || !reflect.DeepEqual(*got.Steps[0].FrankLinkedInOnboardingPreflight.Identity, identity) {
-		t.Fatalf("FrankLinkedInOnboardingPreflight.Identity = %#v, want %#v", got.Steps[0].FrankLinkedInOnboardingPreflight.Identity, identity)
-	}
-	if got.Steps[0].FrankLinkedInOnboardingPreflight.Account == nil || !reflect.DeepEqual(*got.Steps[0].FrankLinkedInOnboardingPreflight.Account, account) {
-		t.Fatalf("FrankLinkedInOnboardingPreflight.Account = %#v, want %#v", got.Steps[0].FrankLinkedInOnboardingPreflight.Account, account)
-	}
-	if got.Steps[0].CampaignPreflight != nil {
-		t.Fatalf("CampaignPreflight = %#v, want nil on linkedin onboarding-only path", got.Steps[0].CampaignPreflight)
-	}
-	if got.Steps[0].TreasuryPreflight != nil {
-		t.Fatalf("TreasuryPreflight = %#v, want nil on linkedin onboarding-only path", got.Steps[0].TreasuryPreflight)
-	}
-}
-
 func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
@@ -11462,63 +11417,6 @@ func writeMissionInspectGoogleFixtures(t *testing.T) (string, missioncontrol.Fra
 		ProviderOrPlatformID: providerTarget.RegistryID,
 		Google: &missioncontrol.FrankGoogleAccount{
 			OAuthAccessTokenEnvVarRef: "PICOBOT_GOOGLE_ACCESS_TOKEN",
-		},
-		IdentityID:           identity.IdentityID,
-		ControlModel:         "agent_managed",
-		RecoveryModel:        "env_ref_recoverable",
-		State:                "candidate",
-		EligibilityTargetRef: accountTarget,
-		CreatedAt:            now.Add(2 * time.Minute).UTC(),
-		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
-	}
-	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
-		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
-	}
-
-	return root, identity, account
-}
-
-func writeMissionInspectLinkedInFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC)
-	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
-		Kind:       missioncontrol.EligibilityTargetKindProvider,
-		RegistryID: "provider-linkedin",
-	}
-	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
-		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
-		RegistryID: "account-class-linkedin",
-	}
-	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "linkedin", "check-provider-linkedin", now)
-	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "linkedin account", "check-account-class-linkedin", now.Add(time.Minute))
-
-	identity := missioncontrol.FrankIdentityRecord{
-		RecordVersion:        missioncontrol.StoreRecordVersion,
-		IdentityID:           "identity-linkedin",
-		IdentityKind:         "platform_identity",
-		DisplayName:          "Frank LinkedIn",
-		ProviderOrPlatformID: providerTarget.RegistryID,
-		LinkedIn:             &missioncontrol.FrankLinkedInIdentity{},
-		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
-		State:                "candidate",
-		EligibilityTargetRef: providerTarget,
-		CreatedAt:            now.UTC(),
-		UpdatedAt:            now.Add(time.Minute).UTC(),
-	}
-	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
-		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
-	}
-
-	account := missioncontrol.FrankAccountRecord{
-		RecordVersion:        missioncontrol.StoreRecordVersion,
-		AccountID:            "account-linkedin",
-		AccountKind:          "platform_account",
-		Label:                "LinkedIn Account",
-		ProviderOrPlatformID: providerTarget.RegistryID,
-		LinkedIn: &missioncontrol.FrankLinkedInAccount{
-			OAuthAccessTokenEnvVarRef: "PICOBOT_LINKEDIN_ACCESS_TOKEN",
 		},
 		IdentityID:           identity.IdentityID,
 		ControlModel:         "agent_managed",

@@ -45,7 +45,6 @@ type TaskState struct {
 	stripeOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankStripeOnboardingBundle, time.Time) error
 	payPalOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankPayPalOnboardingBundle, time.Time) error
 	googleOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankGoogleOnboardingBundle, time.Time) error
-	linkedInOnboardingHook             func(string, missioncontrol.ResolvedExecutionContextFrankLinkedInOnboardingBundle, time.Time) error
 	treasuryFirstAcquisitionHook       func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook      func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryPostActiveSuspendHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
@@ -82,7 +81,6 @@ func NewTaskState() *TaskState {
 		stripeOnboardingHook:               missioncontrol.ProduceFrankStripeOnboarding,
 		payPalOnboardingHook:               missioncontrol.ProduceFrankPayPalOnboarding,
 		googleOnboardingHook:               missioncontrol.ProduceFrankGoogleOnboarding,
-		linkedInOnboardingHook:             missioncontrol.ProduceFrankLinkedInOnboarding,
 		treasuryFirstAcquisitionHook:       missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:      missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryPostActiveSuspendHook:      missioncontrol.ProducePostActiveTreasurySuspend,
@@ -356,9 +354,6 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyGoogleOnboardingForStep(job, stepID, now); err != nil {
-		return err
-	}
-	if err := s.applyLinkedInOnboardingForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
@@ -1485,36 +1480,6 @@ func (s *TaskState) applyGoogleOnboardingForStep(job missioncontrol.Job, stepID 
 	ec.MissionStoreRoot = root
 
 	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankGoogleOnboardingBundle(ec)
-	if err != nil {
-		return err
-	}
-	if !ok || hook == nil {
-		return nil
-	}
-	return hook(ec.MissionStoreRoot, bundle, now)
-}
-
-func (s *TaskState) applyLinkedInOnboardingForStep(job missioncontrol.Job, stepID string, now time.Time) error {
-	if s == nil {
-		return nil
-	}
-
-	s.mu.Lock()
-	root := strings.TrimSpace(s.missionStoreRoot)
-	hook := s.linkedInOnboardingHook
-	s.mu.Unlock()
-	job.MissionStoreRoot = root
-
-	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
-	if err != nil {
-		return err
-	}
-	if ec.Step == nil || !missioncontrol.DeclaresFrankLinkedInOnboarding(*ec.Step) {
-		return nil
-	}
-	ec.MissionStoreRoot = root
-
-	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankLinkedInOnboardingBundle(ec)
 	if err != nil {
 		return err
 	}
