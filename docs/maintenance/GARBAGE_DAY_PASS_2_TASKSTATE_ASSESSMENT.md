@@ -1,0 +1,270 @@
+# Garbage Day Pass 2 TaskState Assessment
+
+## Facts
+- Canonical repo: `/mnt/d/pbot/picobot`
+- Current HEAD: `f8dfc0252e9ddd697826a9c4c34af8f4d171cac1`
+- Current branch/status at assessment start: `frank-v3-foundation`, clean worktree
+- First Garbage Day diff still uncommitted: no; the prior pass is no longer present as live uncommitted diff
+- Validation run: `go test -count=1 ./...`
+- Validation result: passed
+
+## Target file line counts
+- `internal/agent/tools/taskstate.go`: `3614`
+- `internal/agent/tools/taskstate_test.go`: `7763`
+- `internal/agent/tools/taskstate_status_test.go`: `1553`
+- Total target surface: `12930` lines
+
+## Public functions and types in target files
+- Exported type in `taskstate.go`:
+  - `TaskState`
+- Exported constructor and state accessors:
+  - `NewTaskState`
+  - `BeginTask`
+  - `MarkProjectInitialized`
+  - `ProjectInitialized`
+  - `SetMissionStoreRoot`
+  - `SetExecutionContext`
+  - `ExecutionContext`
+  - `MissionRuntimeState`
+  - `MissionRuntimeControl`
+  - `MissionJobWithStoreRoot`
+  - `OperatorSession`
+  - `SetRuntimeChangeHook`
+  - `SetRuntimePersistHook`
+  - `SetRuntimeProjectionHook`
+  - `SetOperatorSession`
+  - `EmitAuditEvent`
+  - `AuditEvents`
+  - `ClearExecutionContext`
+- Exported activation/runtime lifecycle methods:
+  - `ActivateStep`
+  - `ResumeRuntime`
+  - `HydrateRuntimeControl`
+  - `ApplyStepOutput`
+  - `EnforceUnattendedWallClockBudget`
+  - `RecordFailedToolAction`
+- Exported Zoho/runtime mutation methods:
+  - `RecordFrankZohoSendReceipt`
+  - `SyncFrankZohoCampaignInboundReplies`
+  - `PrepareFrankZohoCampaignSend`
+  - `RecordFrankZohoCampaignSend`
+  - `RecordFrankZohoCampaignSendFailure`
+  - `ManageFrankZohoCampaignReplyWorkItem`
+- Exported owner-facing message budget methods:
+  - `RecordOwnerFacingMessage`
+  - `RecordOwnerFacingCheckIn`
+  - `RecordOwnerFacingDailySummary`
+  - `RecordOwnerFacingApprovalRequest`
+  - `RecordOwnerFacingCompletion`
+  - `RecordOwnerFacingWaitingUser`
+  - `RecordOwnerFacingBudgetPause`
+  - `RecordOwnerFacingDenyAck`
+  - `RecordOwnerFacingPauseAck`
+  - `RecordOwnerFacingSetStepAck`
+  - `RecordOwnerFacingRevokeApprovalAck`
+  - `RecordOwnerFacingResumeAck`
+- Exported operator-input and control methods:
+  - `ApplyWaitingUserInput`
+  - `ApplyNaturalApprovalDecision`
+  - `ApplyApprovalDecision`
+  - `RevokeApproval`
+  - `PauseRuntime`
+  - `ResumeRuntimeControl`
+  - `AbortRuntime`
+  - `OperatorStatus`
+  - `OperatorInspect`
+- Exported functions/types in the two target test files:
+  - none
+
+## Major responsibility clusters
+- Core mutable state, hooks, snapshots, and session metadata:
+  - `TaskState` fields and constructor at [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:19)
+  - basic getters/setters and audit accessors through [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:290)
+- Step activation dispatcher:
+  - `ActivateStep` at [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:293)
+  - this is the first major seam because it delegates into independent policy lanes already
+- Capability/onboarding application cluster:
+  - notifications, shared storage, contacts, location, camera, microphone, sms-phone, bluetooth-nfc, broad-app-control at [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:364)
+  - each handler follows the same shape: resolve context, gate on requirement, verify approved proposal, verify exposure/readability, invoke hook, re-check committed record
+- Treasury execution cluster:
+  - `applyTreasuryExecutionForStep` at [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:1012)
+  - largest activation sub-dispatcher; state-driven branch tree over bootstrap, active, suspended, and funded paths
+- Zoho mailbox bootstrap and Telegram onboarding cluster:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:1183)
+  - small but protected because each bridges a completed V3 lane
+- Runtime resume/hydration/output/budget cluster:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:1273)
+  - includes resume/hydrate, step completion, unattended budget, failed tool accounting, and receipt recording
+- Zoho campaign send and reply-work-item lifecycle cluster:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:1465)
+  - includes mailbox sync, prepared/sent/failed action replay handling, reply work-item claim/reopen/respond transitions
+- Owner-facing budget counter cluster:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:2093)
+  - twelve methods share near-identical control flow with only the missioncontrol counter function and accepted runtime state changing
+- Waiting-user and approval command cluster:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:2427)
+  - dual-path logic for active execution-context vs persisted runtime-control operation
+- Operator readout adapter cluster:
+  - `OperatorStatus`, persisted gate helper, deferred-trigger formatting, preflight resolution, `OperatorInspect` at [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:2840)
+  - mostly read-only, which makes it the safest non-test extraction seam
+- Persistence, hydration, projection, and runtime-control internals:
+  - [taskstate.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate.go:3217)
+  - central write-path for all other methods; highest coupling and highest regression risk
+
+## Repeated test fixtures and helpers
+- Duplicate malformed treasury writer exists in both target test files:
+  - [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:17)
+  - [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:14)
+- Status-only deferred scheduler trigger helper is small and self-contained:
+  - [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:36)
+  - safe future consolidation target if status/readout helpers are split out
+- Capability proposal fixture block is oversized and highly repetitive:
+  - eight proposal writers from [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:6745) through [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7067)
+  - each writes one `CapabilityOnboardingProposalRecord` with only capability-specific literals changing
+- Capability config fixture block is near-mechanical duplication:
+  - seven config writers from [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:6817) through [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7085)
+  - each creates `.picobot/config.json`, sets `HOME`, and returns a workspace path
+- Treasury fixture family is large but already partially layered:
+  - base fixture at [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7155)
+  - delta fixtures for bootstrap/acquisition/suspend/resume/allocate/reinvest/spend/transfer/save from [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7223) onward
+  - good future candidate for table-driven scenario builders, but only after extraction of the production treasury dispatcher
+- Campaign/bootstrap fixtures repeat provider/account eligibility bootstrap:
+  - `writeTaskStateZohoMailboxBootstrapFixtures` at [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7545)
+  - `mustStoreTaskStateCampaignFixture` at [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:7650)
+  - both rebuild provider/account eligibility and mailbox identity/account state
+
+## Duplicated assertion patterns
+- Active-path readout pattern repeated throughout status tests:
+  - `NewTaskState` -> `SetMissionStoreRoot` -> `ActivateStep` -> `OperatorStatus` -> `mustTaskStateReadoutJSON`
+  - examples start at [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:44)
+- Persisted-path readout pattern repeated throughout status tests:
+  - build runtime control -> `HydrateRuntimeControl` -> `OperatorStatus` -> compare active/persisted envelopes
+  - examples at [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:315) and [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:692)
+- JSON envelope/key assertions are repeated across both inspect and status:
+  - `mustTaskStateJSONObject`
+  - `assertTaskStateJSONObjectKeys`
+  - `mustTaskStateJSONArray`
+  - `assertTaskStateReadoutAdapterBoundary`
+  - usages at [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:185) and [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:5089)
+- Hook-count assertion shape repeats across treasury/capability/bootstrap tests:
+  - assign hook, count invocations, capture root/input/lease/time, assert one path called and neighboring path not called
+  - examples at [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:608), [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:1880), and [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:5222)
+- Fail-closed error assertions repeat with string matching instead of structured error decoding:
+  - examples at [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:781), [taskstate_status_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_status_test.go:797), and many `FailsClosed` tests in `taskstate_test.go`
+- Owner-facing budget tests repeat the same pause-at-budget scaffold against different methods:
+  - [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:2254) through [taskstate_test.go](/mnt/d/pbot/picobot/internal/agent/tools/taskstate_test.go:2589)
+
+## Protected behavior areas
+- Active execution-context vs persisted runtime-control parity:
+  - `OperatorStatus`, `OperatorInspect`, approval commands, and runtime-control commands intentionally support both paths
+  - parity is asserted by `...ActiveAndPersistedPathsPreserveAdapterBoundaryContract` and related tests
+- Treasury lane semantics:
+  - state-driven dispatch in `applyTreasuryExecutionForStep` must remain fail-closed and deterministic
+  - completed treasury lifecycle lanes should not be generalized or reopened casually
+- Capability exposure gating:
+  - proposal approval, shared-storage dependency, config readability, exposure existence, and source readability are all guarded independently
+  - do not collapse these into a generic framework that changes failure ordering or messaging
+- Zoho mailbox bootstrap and campaign send gate behavior:
+  - mailbox bootstrap preflight, send gate projection, reply work-item claiming/reopening, and bounce attribution are protected V3 behavior
+  - related tests live partly outside the three target files in `frank_zoho_send_email_test.go` and `frank_zoho_manage_reply_work_item_test.go`
+- Approval binding/revocation semantics:
+  - wrong-job/wrong-step non-binding, expiry refresh, reusable grant behavior, revoke-after-reboot behavior, and terminal-state rejection are highly coupled and strongly protected by tests
+- Operator readout envelope shape:
+  - JSON key presence/omission, deterministic ordering, truncation metadata, deferred trigger insertion, and audit ordering are contract surfaces, not cosmetic formatting
+- Persistence/hydration write path:
+  - `storeRuntimeStateLocked`, `persistPreparedRuntimeStateLocked`, `hydrateRuntimeControlLocked`, and `applyRuntimeControl` are the central mutation spine
+  - casual extraction here is more dangerous than the file size alone suggests
+
+## Proposed extraction sequence in smallest safe slices
+- Slice 1: extract read-only operator readout helpers from `taskstate.go`
+  - Candidate members: `OperatorStatus`, `persistedTaskStateCampaignZohoEmailSendGate`, `formatOperatorStatusReadoutWithDeferredSchedulerTriggers`, `resolveExecutionContextCampaignAndTreasuryAndFrankZohoMailboxBootstrapPreflight`, `OperatorInspect`
+  - Why first: mostly read-only, already separated from write-path helpers, strong active/persisted contract tests exist
+- Slice 2: consolidate test-only readout assertions and duplicated malformed/deferred fixture helpers
+  - Candidate members: repeated status/inspect setup + JSON envelope assertions in the two target test files
+  - Why second: no production behavior change, reduces noise before production extraction
+- Slice 3: extract owner-facing budget counter helper
+  - Candidate members: `RecordOwnerFacing*` family and the repeated “clone -> state gate -> missioncontrol.Record... -> store -> notify” pattern
+  - Why third: smallest production write-path slice with highly repetitive structure and focused tests
+- Slice 4: extract capability exposure runner shared pattern, but keep concrete per-capability policy functions
+  - Candidate members: `applyNotificationsCapabilityForStep` through `applyBroadAppControlCapabilityForStep`
+  - Preserve rule: extract shared scaffolding only; keep each concrete capability’s approval/exposure/readability semantics explicit
+- Slice 5: extract treasury activation dispatcher without changing branch order
+  - Candidate members: `applyTreasuryExecutionForStep` and its state sub-branches
+  - Preserve rule: no generic framework; keep explicit bootstrap/active/suspended/funded lane handling
+- Slice 6: extract runtime operator-control dual-path logic
+  - Candidate members: `ApplyNaturalApprovalDecision`, `ApplyApprovalDecision`, `RevokeApproval`, `applyRuntimeControl`, plus the natural-approval resolvers
+  - Preserve rule: active-context path and reboot-safe persisted path must remain visibly separate
+- Slice 7: extract Zoho campaign runtime lifecycle
+  - Candidate members: `SyncFrankZohoCampaignInboundReplies`, `PrepareFrankZohoCampaignSend`, `RecordFrankZohoCampaignSend`, `RecordFrankZohoCampaignSendFailure`, `ManageFrankZohoCampaignReplyWorkItem`, and the reply-work-item transitions
+  - Why later: strong internal cohesion, but tests span adjacent package files outside the three target files
+- Slice 8: consider persistence-core extraction last, only after the earlier seams reduce call-site noise
+  - Candidate members: `storeRuntimeStateLocked`, `persistPreparedRuntimeStateLocked`, `persistHydratedRuntimeStateLocked`, `hydrateRuntimeControlLocked`, `projectRuntimeStateLocked`, `runtimeAuditContext`
+  - Why last: highest coupling and largest blast radius
+
+## Tests that must pass for each proposed slice
+- Slice 1: operator readouts
+  - `go test -count=1 ./internal/agent/tools -run 'TestTaskStateOperator(Status|Inspect)'`
+  - Especially:
+    - `TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryContract`
+    - `TestTaskStateOperatorStatusPreservesDeterministicDeferredSchedulerOrdering`
+    - `TestTaskStateOperatorStatusReportsTerminalRuntimeDeterministically`
+    - `TestTaskStateOperatorInspectActiveAndPersistedPathsPreserveAdapterBoundaryContract`
+    - `TestTaskStateOperatorInspectUsesPersistedInspectablePlanWithoutMissionJob`
+- Slice 2: test-only helper consolidation
+  - Same readout test set as Slice 1
+  - Plus representative fixture-driven tests:
+    - `TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath`
+    - `TestTaskStateOperatorStatusShowsDeferredSchedulerTriggersOnChosenReadoutPath`
+- Slice 3: owner-facing budget counters
+  - `go test -count=1 ./internal/agent/tools -run 'TestTaskState(ApplyStepOutput|RecordOwnerFacing|EnforceUnattendedWallClockBudget|RecordFailedToolAction)'`
+  - Especially:
+    - `TestTaskStateApplyStepOutputPausesForUnattendedWallClockBudget`
+    - `TestTaskStateRecordOwnerFacingMessagePausesAtBudget`
+    - `TestTaskStateRecordOwnerFacingResumeAckPausesAtOwnerMessageBudget`
+    - `TestTaskStateApplyStepOutputTransitionsDiscussionSubtypeToWaitingUser`
+- Slice 4: capability exposure runners
+  - `go test -count=1 ./internal/agent/tools -run 'TestTaskStateActivateStep(Notifications|SharedStorage|Contacts|Location|Camera|Microphone|SMSPhone|BluetoothNFCCapability|BroadAppControlCapability)'`
+  - Especially the `CallsHookOnce`, `InvokesRealMutation`, `RequiresApprovedProposal`, and `FailsClosed...` variants for each capability
+- Slice 5: treasury dispatcher
+  - `go test -count=1 ./internal/agent/tools -run 'TestTaskStateActivateStep(Treasury|ActiveTreasury|SuspendedTreasury|BootstrapTreasury)'`
+  - Plus status coverage:
+    - `TestTaskStateActivateStepInvalidTreasuryStateFailsClosedForStatusPath`
+    - `TestTaskStateOperatorStatusPersistedRuntimePathUnchangedForTreasurySteps`
+- Slice 6: approval/runtime-control dual-path logic
+  - `go test -count=1 ./internal/agent/tools -run 'TestTaskState(ApplyApprovalDecision|ApplyNaturalApprovalDecision|HydrateRuntimeControl|ResumeRuntimeControl|PauseRuntime|AbortRuntime|RevokeApproval)'`
+  - Especially:
+    - `TestTaskStateApplyApprovalDecisionUsesPersistedRuntimeControlAfterExecutionContextTeardown`
+    - `TestTaskStateApplyNaturalApprovalDecisionUsesPersistedRuntimeControlAfterExecutionContextTeardown`
+    - `TestTaskStateResumeRuntimeControlDoesNotBypassPendingApproval`
+    - `TestTaskStateHydrateRuntimeControlRejectsTerminalOperatorCommands`
+    - `TestTaskStateRevokeApprovalPreventsOneJobReuse`
+- Slice 7: Zoho campaign runtime lifecycle
+  - `go test -count=1 ./internal/agent/tools -run 'Test(TaskStateSyncFrankZohoCampaignInboundReplies|PrepareFrankZohoCampaignSend|RecordFrankZohoCampaignSendFailure|ManageFrankZohoCampaignReplyWorkItem)'`
+  - Especially:
+    - `TestTaskStateSyncFrankZohoCampaignInboundRepliesPersistsAppendOnly`
+    - `TestPrepareFrankZohoCampaignSendAutoSelectsOldestReplyWorkItem`
+    - `TestRecordFrankZohoCampaignSendFailureReopensFollowUpWorkItemWhenGateAllowsRetry`
+    - `TestManageFrankZohoCampaignReplyWorkItemDefersCommittedItem`
+- Slice 8: persistence core
+  - Full package lock:
+    - `go test -count=1 ./internal/agent/tools`
+  - Focus tests:
+    - `TestTaskStateEmitAuditEventPersistsIntoRuntimeHistoryAndTruncatesDeterministically`
+    - `TestTaskStateHydrateRuntimeControlRestoresAuditHistoryWithoutDuplication`
+    - `TestTaskStateHydrateRuntimeControlLeavesTerminalRuntimeUnchanged`
+
+## Explicit non-goals
+- No Go source changes in this pass
+- No decomposition implementation in this pass
+- No new Frank V4 behavior
+- No reopening of completed Zoho, treasury, capability exposure, or Telegram onboarding lanes
+- No test deletion
+- No test weakening
+- No dependency additions
+- No commit
+
+## Assessment summary
+- `taskstate.go` is large, but it is not random. It already contains seam-shaped clusters.
+- The safest first production extraction is the read-only operator readout cluster.
+- The safest first overall cleanup is test-only helper consolidation in the target test files.
+- The riskiest area is the shared mutation spine around runtime persistence, hydration, and dual-path operator control.
