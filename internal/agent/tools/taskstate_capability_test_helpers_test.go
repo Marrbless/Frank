@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -184,4 +187,64 @@ func writeTaskStateBroadAppControlCapabilityProposalFixture(t *testing.T, state 
 		dataAccessed:    []string{"broad app control"},
 		createdAt:       time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC),
 	}, state)
+}
+
+func writeTaskStateWorkspaceCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".picobot")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	workspace := filepath.Join(home, "workspace-root")
+	configPath := filepath.Join(configDir, "config.json")
+	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	t.Setenv("HOME", home)
+	return workspace
+}
+
+func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateCameraCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateMicrophoneCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateSMSPhoneCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateBluetoothNFCCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
+func writeTaskStateBroadAppControlCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
 }
