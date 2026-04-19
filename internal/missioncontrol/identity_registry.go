@@ -23,7 +23,6 @@ type FrankIdentityRecord struct {
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlIdentity `json:"whatsapp_owner_control,omitempty"`
 	GitHub               *FrankGitHubIdentity               `json:"github,omitempty"`
 	Stripe               *FrankStripeIdentity               `json:"stripe,omitempty"`
-	PayPal               *FrankPayPalIdentity               `json:"paypal,omitempty"`
 	IdentityMode         IdentityMode                       `json:"identity_mode"`
 	State                string                             `json:"state"`
 	EligibilityTargetRef AutonomyEligibilityTargetRef       `json:"eligibility_target_ref"`
@@ -72,15 +71,6 @@ type FrankStripeIdentity struct {
 	DefaultCurrency      string `json:"default_currency,omitempty"`
 }
 
-type FrankPayPalIdentity struct {
-	PayPalUserID    string `json:"paypal_user_id,omitempty"`
-	Sub             string `json:"sub,omitempty"`
-	Email           string `json:"email,omitempty"`
-	EmailVerified   *bool  `json:"email_verified,omitempty"`
-	VerifiedAccount *bool  `json:"verified_account,omitempty"`
-	AccountType     string `json:"account_type,omitempty"`
-}
-
 // FrankIdentityObjectView is a read-model adapter that exposes canonical
 // object names without forcing a durable storage migration.
 type FrankIdentityObjectView struct {
@@ -108,7 +98,6 @@ type FrankAccountRecord struct {
 	WhatsAppOwnerControl *FrankWhatsAppOwnerControlAccount `json:"whatsapp_owner_control,omitempty"`
 	GitHub               *FrankGitHubAccount               `json:"github,omitempty"`
 	Stripe               *FrankStripeAccount               `json:"stripe,omitempty"`
-	PayPal               *FrankPayPalAccount               `json:"paypal,omitempty"`
 	IdentityID           string                            `json:"identity_id"`
 	ControlModel         string                            `json:"control_model"`
 	RecoveryModel        string                            `json:"recovery_model"`
@@ -157,13 +146,6 @@ type FrankStripeAccount struct {
 	DetailsSubmitted           *bool  `json:"details_submitted,omitempty"`
 	RequirementsDisabledReason string `json:"requirements_disabled_reason,omitempty"`
 	Livemode                   *bool  `json:"livemode,omitempty"`
-}
-
-type FrankPayPalAccount struct {
-	ClientIDEnvVarRef      string `json:"client_id_env_var_ref,omitempty"`
-	ClientSecretEnvVarRef  string `json:"client_secret_env_var_ref,omitempty"`
-	ConfirmedAuthenticated bool   `json:"confirmed_authenticated,omitempty"`
-	Environment            string `json:"environment,omitempty"`
 }
 
 // FrankAccountObjectView is a read-model adapter that exposes canonical
@@ -354,11 +336,6 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
-	if record.PayPal != nil {
-		if err := validateFrankPayPalIdentity(*record.PayPal); err != nil {
-			return err
-		}
-	}
 	if err := validateIdentityMode(record.IdentityMode); err != nil {
 		return err
 	}
@@ -428,11 +405,6 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.Stripe != nil {
 		if err := validateFrankStripeAccount(*record.Stripe); err != nil {
-			return err
-		}
-	}
-	if record.PayPal != nil {
-		if err := validateFrankPayPalAccount(*record.PayPal); err != nil {
 			return err
 		}
 	}
@@ -900,7 +872,6 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
 	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
-	record.PayPal = normalizeFrankPayPalIdentity(record.PayPal)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -951,7 +922,6 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
 	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
-	record.PayPal = normalizeFrankPayPalAccount(record.PayPal)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {
@@ -1046,7 +1016,6 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlIdentity(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubIdentity(record.GitHub)
 	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
-	record.PayPal = normalizeFrankPayPalIdentity(record.PayPal)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -1071,7 +1040,6 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	record.WhatsAppOwnerControl = normalizeFrankWhatsAppOwnerControlAccount(record.WhatsAppOwnerControl)
 	record.GitHub = normalizeFrankGitHubAccount(record.GitHub)
 	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
-	record.PayPal = normalizeFrankPayPalAccount(record.PayPal)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
 	if err := ValidateFrankAccountRecord(record); err != nil {

@@ -27,7 +27,6 @@ type InspectStep struct {
 	FrankWhatsAppOwnerControlOnboardingPreflight *ResolvedExecutionContextFrankWhatsAppOwnerControlOnboardingPreflight `json:"frank_whatsapp_owner_control_onboarding_preflight,omitempty"`
 	FrankGitHubOnboardingPreflight               *ResolvedExecutionContextFrankGitHubOnboardingPreflight               `json:"frank_github_onboarding_preflight,omitempty"`
 	FrankStripeOnboardingPreflight               *ResolvedExecutionContextFrankStripeOnboardingPreflight               `json:"frank_stripe_onboarding_preflight,omitempty"`
-	FrankPayPalOnboardingPreflight               *ResolvedExecutionContextFrankPayPalOnboardingPreflight               `json:"frank_paypal_onboarding_preflight,omitempty"`
 	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
 
@@ -108,13 +107,6 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if stripePreflight.Identity != nil && stripePreflight.Account != nil {
 			summary.FrankStripeOnboardingPreflight = &stripePreflight
-		}
-		payPalPreflight, err := ResolveExecutionContextFrankPayPalOnboardingPreflight(ec)
-		if err != nil {
-			return InspectStep{}, err
-		}
-		if payPalPreflight.Identity != nil && payPalPreflight.Account != nil {
-			summary.FrankPayPalOnboardingPreflight = &payPalPreflight
 		}
 		capabilityPreflight, err := ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec)
 		if err != nil {
