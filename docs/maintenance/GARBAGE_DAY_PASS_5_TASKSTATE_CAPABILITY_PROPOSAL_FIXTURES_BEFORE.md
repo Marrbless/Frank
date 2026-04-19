@@ -1,0 +1,105 @@
+# Garbage Day Pass 5 TaskState Capability Proposal Fixtures Before
+
+## Repo
+- repo root: `/mnt/d/pbot/picobot`
+- branch: `frank-v3-foundation`
+- HEAD: `192d225ae0fe9cc5f5a14e176975d6a6bd5b41a1`
+
+## Git Status
+```text
+## frank-v3-foundation
+```
+
+## Pass 4 Commit State
+- Pass 4 is committed or otherwise no longer present as an uncommitted worktree diff.
+- Evidence: `git status --short --branch` is clean before Pass 5.
+
+## Line Counts
+- `internal/agent/tools/taskstate_test.go`: `7741`
+- `internal/agent/tools/taskstate_capability_test_helpers_test.go`: not present before extraction
+
+## Exact Capability Proposal Fixture Functions Or Repeated Blocks Found
+- `writeTaskStateNotificationsCapabilityProposalFixture`
+- `writeTaskStateSharedStorageCapabilityProposalFixture`
+- `writeTaskStateContactsCapabilityProposalFixture`
+- `writeTaskStateLocationCapabilityProposalFixture`
+- `writeTaskStateCameraCapabilityProposalFixture`
+- `writeTaskStateMicrophoneCapabilityProposalFixture`
+- `writeTaskStateSMSPhoneCapabilityProposalFixture`
+- `writeTaskStateBluetoothNFCCapabilityProposalFixture`
+- `writeTaskStateBroadAppControlCapabilityProposalFixture`
+- Repeated block shape inside each function:
+  - `root := t.TempDir()`
+  - `now := time.Date(...)`
+  - `record := missioncontrol.CapabilityOnboardingProposalRecord{...}`
+  - `missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record)`
+  - `return root`
+
+## Exact Helpers Planned For Extraction
+- Shared private test-only helper:
+  - `writeTaskStateCapabilityProposalFixture`
+- Shared private test-only data carrier:
+  - `taskStateCapabilityProposalFixtureSpec`
+- Existing wrapper fixture names preserved and moved into helper file:
+  - `writeTaskStateNotificationsCapabilityProposalFixture`
+  - `writeTaskStateSharedStorageCapabilityProposalFixture`
+  - `writeTaskStateContactsCapabilityProposalFixture`
+  - `writeTaskStateLocationCapabilityProposalFixture`
+  - `writeTaskStateCameraCapabilityProposalFixture`
+  - `writeTaskStateMicrophoneCapabilityProposalFixture`
+  - `writeTaskStateSMSPhoneCapabilityProposalFixture`
+  - `writeTaskStateBluetoothNFCCapabilityProposalFixture`
+  - `writeTaskStateBroadAppControlCapabilityProposalFixture`
+
+## Targeted Tests Discovered
+```text
+TestTaskStateActivateStepTelegramOwnerControlOnboardingInvokesHookWithResolvedBundle
+TestTaskStateActivateStepTelegramOwnerControlOnboardingFailsClosedWithoutAccount
+TestTaskStateActivateStepNotificationsCapabilityPathCallsHookOnce
+TestTaskStateActivateStepNotificationsCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepNotificationsCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepNotificationsCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepSharedStorageCapabilityPathCallsHookOnce
+TestTaskStateActivateStepSharedStorageCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepSharedStorageCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepSharedStorageCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepContactsCapabilityPathCallsHookOnce
+TestTaskStateActivateStepContactsCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepContactsCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepContactsCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepLocationCapabilityPathCallsHookOnce
+TestTaskStateActivateStepLocationCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepLocationCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepLocationCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepCameraCapabilityPathCallsHookOnce
+TestTaskStateActivateStepCameraCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepCameraCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepCameraCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepMicrophoneCapabilityPathCallsHookOnce
+TestTaskStateActivateStepMicrophoneCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepMicrophoneCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepMicrophoneCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepSMSPhoneCapabilityPathCallsHookOnce
+TestTaskStateActivateStepSMSPhoneCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepSMSPhoneCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepSMSPhoneCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepSMSPhoneCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepBluetoothNFCCapabilityPathCallsHookOnce
+TestTaskStateActivateStepBluetoothNFCCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepBluetoothNFCCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepBluetoothNFCCapabilityFailsClosedWithoutSharedStorageExposure
+TestTaskStateActivateStepBroadAppControlCapabilityPathCallsHookOnce
+TestTaskStateActivateStepBroadAppControlCapabilityPathInvokesRealMutation
+TestTaskStateActivateStepBroadAppControlCapabilityRequiresApprovedProposal
+TestTaskStateActivateStepBroadAppControlCapabilityFailsClosedWithoutExposedRecord
+TestTaskStateActivateStepBroadAppControlCapabilityFailsClosedWithoutSharedStorageExposure
+```
+
+## Baseline Validation
+- command: `go test -count=1 ./internal/agent/tools -run 'Test.*(Capability|Onboarding|Exposure|Proposal)'`
+- result: `ok  	github.com/local/picobot/internal/agent/tools	0.768s`

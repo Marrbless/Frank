@@ -6720,78 +6720,6 @@ func TestTaskStateOperatorInspectTerminalRuntimeUsesPersistedInspectablePlanWith
 	}
 }
 
-func writeTaskStateNotificationsCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 18, 16, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-notifications",
-		CapabilityName:   missioncontrol.NotificationsCapabilityName,
-		WhyNeeded:        "mission requires operator-facing notifications",
-		MissionFamilies:  []string{"outreach"},
-		Risks:            []string{"notification spam"},
-		Validators:       []string{"telegram owner-control channel confirmed"},
-		KillSwitch:       "disable telegram channel and revoke proposal",
-		DataAccessed:     []string{"notifications"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
-func writeTaskStateSharedStorageCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 18, 17, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-shared-storage",
-		CapabilityName:   missioncontrol.SharedStorageCapabilityName,
-		WhyNeeded:        "mission requires shared workspace storage",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"workspace data exposure"},
-		Validators:       []string{"configured workspace root initialized and writable"},
-		KillSwitch:       "disable workspace-backed shared_storage exposure and revoke proposal",
-		DataAccessed:     []string{"shared storage"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
-func writeTaskStateContactsCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 18, 22, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-contacts",
-		CapabilityName:   missioncontrol.ContactsCapabilityName,
-		WhyNeeded:        "mission requires local shared contacts access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local contacts exposure"},
-		Validators:       []string{"shared_storage exposed and committed contacts source file exists and is readable"},
-		KillSwitch:       "disable contacts capability exposure and remove committed contacts source reference",
-		DataAccessed:     []string{"contacts"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
 func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
@@ -6808,30 +6736,6 @@ func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
 	}
 	t.Setenv("HOME", home)
 	return workspace
-}
-
-func writeTaskStateLocationCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-location",
-		CapabilityName:   missioncontrol.LocationCapabilityName,
-		WhyNeeded:        "mission requires local shared location access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local location exposure"},
-		Validators:       []string{"shared_storage exposed and committed location source file exists and is readable"},
-		KillSwitch:       "disable location capability exposure and remove committed location source reference",
-		DataAccessed:     []string{"location"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
 }
 
 func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
@@ -6852,30 +6756,6 @@ func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
 	return workspace
 }
 
-func writeTaskStateCameraCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 3, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-camera",
-		CapabilityName:   missioncontrol.CameraCapabilityName,
-		WhyNeeded:        "mission requires local shared camera-image access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local camera source exposure"},
-		Validators:       []string{"shared_storage exposed and committed camera source file exists and is readable"},
-		KillSwitch:       "disable camera capability exposure and remove committed camera source reference",
-		DataAccessed:     []string{"camera"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
 func writeTaskStateCameraCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
@@ -6892,30 +6772,6 @@ func writeTaskStateCameraCapabilityConfigFixture(t *testing.T) string {
 	}
 	t.Setenv("HOME", home)
 	return workspace
-}
-
-func writeTaskStateMicrophoneCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 5, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-microphone",
-		CapabilityName:   missioncontrol.MicrophoneCapabilityName,
-		WhyNeeded:        "mission requires local shared microphone-audio access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local microphone source exposure"},
-		Validators:       []string{"shared_storage exposed and committed microphone source file exists and is readable"},
-		KillSwitch:       "disable microphone capability exposure and remove committed microphone source reference",
-		DataAccessed:     []string{"microphone"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
 }
 
 func writeTaskStateMicrophoneCapabilityConfigFixture(t *testing.T) string {
@@ -6936,30 +6792,6 @@ func writeTaskStateMicrophoneCapabilityConfigFixture(t *testing.T) string {
 	return workspace
 }
 
-func writeTaskStateSMSPhoneCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-sms-phone",
-		CapabilityName:   missioncontrol.SMSPhoneCapabilityName,
-		WhyNeeded:        "mission requires local shared SMS/phone source access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local SMS/phone source exposure"},
-		Validators:       []string{"shared_storage exposed and committed sms_phone source file exists and is readable"},
-		KillSwitch:       "disable sms_phone capability exposure and remove committed sms_phone source reference",
-		DataAccessed:     []string{"SMS/phone"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
 func writeTaskStateSMSPhoneCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
@@ -6978,30 +6810,6 @@ func writeTaskStateSMSPhoneCapabilityConfigFixture(t *testing.T) string {
 	return workspace
 }
 
-func writeTaskStateBluetoothNFCCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-bluetooth-nfc",
-		CapabilityName:   missioncontrol.BluetoothNFCCapabilityName,
-		WhyNeeded:        "mission requires local shared Bluetooth/NFC source access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local Bluetooth/NFC source exposure"},
-		Validators:       []string{"shared_storage exposed and committed bluetooth_nfc source file exists and is readable"},
-		KillSwitch:       "disable bluetooth_nfc capability exposure and remove committed bluetooth_nfc source reference",
-		DataAccessed:     []string{"Bluetooth/NFC"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
-}
-
 func writeTaskStateBluetoothNFCCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 
@@ -7018,30 +6826,6 @@ func writeTaskStateBluetoothNFCCapabilityConfigFixture(t *testing.T) string {
 	}
 	t.Setenv("HOME", home)
 	return workspace
-}
-
-func writeTaskStateBroadAppControlCapabilityProposalFixture(t *testing.T, state missioncontrol.CapabilityOnboardingProposalState) string {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)
-	record := missioncontrol.CapabilityOnboardingProposalRecord{
-		ProposalID:       "proposal-broad-app-control",
-		CapabilityName:   missioncontrol.BroadAppControlCapabilityName,
-		WhyNeeded:        "mission requires local shared broad app control source access",
-		MissionFamilies:  []string{"workspace"},
-		Risks:            []string{"local broad app control source exposure"},
-		Validators:       []string{"shared_storage exposed and committed broad_app_control source file exists and is readable"},
-		KillSwitch:       "disable broad_app_control capability exposure and remove committed broad_app_control source reference",
-		DataAccessed:     []string{"broad app control"},
-		ApprovalRequired: true,
-		CreatedAt:        now,
-		State:            state,
-	}
-	if err := missioncontrol.StoreCapabilityOnboardingProposalRecord(root, record); err != nil {
-		t.Fatalf("StoreCapabilityOnboardingProposalRecord() error = %v", err)
-	}
-	return root
 }
 
 func writeTaskStateBroadAppControlCapabilityConfigFixture(t *testing.T) string {
