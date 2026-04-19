@@ -6,18 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/local/picobot/internal/chat"
 )
-
-type stubDiscordIdentityReader struct {
-	user *discordgo.User
-	err  error
-}
-
-func (s stubDiscordIdentityReader) User(userID string, options ...discordgo.RequestOption) (*discordgo.User, error) {
-	return s.user, s.err
-}
 
 // TestSplitMessage tests the splitMessage helper function.
 func TestSplitMessage(t *testing.T) {
@@ -320,64 +310,5 @@ func TestDiscordClient_NewlineSplit(t *testing.T) {
 	// Second chunk should start with 'b'
 	if !strings.HasPrefix(chunks[1], "b") {
 		t.Error("second chunk should start with 'b'")
-	}
-}
-
-func TestReadDiscordBotIdentity(t *testing.T) {
-	t.Parallel()
-
-	got, err := readDiscordBotIdentity(stubDiscordIdentityReader{
-		user: &discordgo.User{
-			ID:            "123456789012345678",
-			Username:      "frankbot",
-			GlobalName:    "Frank",
-			Discriminator: "1234",
-		},
-	})
-	if err != nil {
-		t.Fatalf("readDiscordBotIdentity() error = %v", err)
-	}
-	if got.BotUserID != "123456789012345678" {
-		t.Fatalf("BotUserID = %q, want %q", got.BotUserID, "123456789012345678")
-	}
-	if got.Username != "frankbot" {
-		t.Fatalf("Username = %q, want %q", got.Username, "frankbot")
-	}
-	if got.GlobalName != "Frank" {
-		t.Fatalf("GlobalName = %q, want %q", got.GlobalName, "Frank")
-	}
-	if got.Discriminator != "1234" {
-		t.Fatalf("Discriminator = %q, want %q", got.Discriminator, "1234")
-	}
-}
-
-func TestReadDiscordBotIdentityRejectsEmptyBotUserID(t *testing.T) {
-	t.Parallel()
-
-	_, err := readDiscordBotIdentity(stubDiscordIdentityReader{
-		user: &discordgo.User{
-			ID:       "   ",
-			Username: "frankbot",
-		},
-	})
-	if err == nil {
-		t.Fatal("readDiscordBotIdentity() error = nil, want empty bot user id rejection")
-	}
-	if !strings.Contains(err.Error(), "empty bot user id") {
-		t.Fatalf("readDiscordBotIdentity() error = %q, want empty bot user id rejection", err.Error())
-	}
-}
-
-func TestReadDiscordBotIdentityPropagatesProviderFailure(t *testing.T) {
-	t.Parallel()
-
-	_, err := readDiscordBotIdentity(stubDiscordIdentityReader{
-		err: context.DeadlineExceeded,
-	})
-	if err == nil {
-		t.Fatal("readDiscordBotIdentity() error = nil, want provider failure")
-	}
-	if !strings.Contains(err.Error(), "failed to get bot user") {
-		t.Fatalf("readDiscordBotIdentity() error = %q, want bot user provider failure", err.Error())
 	}
 }
