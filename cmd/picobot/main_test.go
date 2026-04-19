@@ -2384,51 +2384,6 @@ func TestMissionInspectCommandGoogleOnboardingStepSurfacesResolvedPreflight(t *t
 	}
 }
 
-func TestMissionInspectCommandMicrosoftOnboardingStepSurfacesResolvedPreflight(t *testing.T) {
-	root, identity, account := writeMissionInspectMicrosoftFixtures(t)
-	job := testMissionBootstrapJob()
-	job.Plan.Steps[0].IdentityMode = missioncontrol.IdentityModeAgentAlias
-	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
-		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
-		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
-	}
-	path := writeMissionBootstrapJobFile(t, job)
-
-	cmd := NewRootCmd()
-	out := &bytes.Buffer{}
-	cmd.SetOut(out)
-	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	var got missionInspectSummary
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-
-	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
-		t.Fatalf("Steps = %#v, want one build step", got.Steps)
-	}
-	if got.Steps[0].FrankMicrosoftOnboardingPreflight == nil {
-		t.Fatal("FrankMicrosoftOnboardingPreflight = nil, want resolved onboarding bundle")
-	}
-	if got.Steps[0].FrankMicrosoftOnboardingPreflight.Identity == nil || !reflect.DeepEqual(*got.Steps[0].FrankMicrosoftOnboardingPreflight.Identity, identity) {
-		t.Fatalf("FrankMicrosoftOnboardingPreflight.Identity = %#v, want %#v", got.Steps[0].FrankMicrosoftOnboardingPreflight.Identity, identity)
-	}
-	if got.Steps[0].FrankMicrosoftOnboardingPreflight.Account == nil || !reflect.DeepEqual(*got.Steps[0].FrankMicrosoftOnboardingPreflight.Account, account) {
-		t.Fatalf("FrankMicrosoftOnboardingPreflight.Account = %#v, want %#v", got.Steps[0].FrankMicrosoftOnboardingPreflight.Account, account)
-	}
-	if got.Steps[0].CampaignPreflight != nil {
-		t.Fatalf("CampaignPreflight = %#v, want nil on microsoft onboarding-only path", got.Steps[0].CampaignPreflight)
-	}
-	if got.Steps[0].TreasuryPreflight != nil {
-		t.Fatalf("TreasuryPreflight = %#v, want nil on microsoft onboarding-only path", got.Steps[0].TreasuryPreflight)
-	}
-}
-
 func TestMissionInspectCommandLinkedInOnboardingStepSurfacesResolvedPreflight(t *testing.T) {
 	root, identity, account := writeMissionInspectLinkedInFixtures(t)
 	job := testMissionBootstrapJob()
@@ -11507,63 +11462,6 @@ func writeMissionInspectGoogleFixtures(t *testing.T) (string, missioncontrol.Fra
 		ProviderOrPlatformID: providerTarget.RegistryID,
 		Google: &missioncontrol.FrankGoogleAccount{
 			OAuthAccessTokenEnvVarRef: "PICOBOT_GOOGLE_ACCESS_TOKEN",
-		},
-		IdentityID:           identity.IdentityID,
-		ControlModel:         "agent_managed",
-		RecoveryModel:        "env_ref_recoverable",
-		State:                "candidate",
-		EligibilityTargetRef: accountTarget,
-		CreatedAt:            now.Add(2 * time.Minute).UTC(),
-		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
-	}
-	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
-		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
-	}
-
-	return root, identity, account
-}
-
-func writeMissionInspectMicrosoftFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
-	t.Helper()
-
-	root := t.TempDir()
-	now := time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC)
-	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
-		Kind:       missioncontrol.EligibilityTargetKindProvider,
-		RegistryID: "provider-microsoft",
-	}
-	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
-		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
-		RegistryID: "account-class-microsoft",
-	}
-	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "microsoft", "check-provider-microsoft", now)
-	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "microsoft account", "check-account-class-microsoft", now.Add(time.Minute))
-
-	identity := missioncontrol.FrankIdentityRecord{
-		RecordVersion:        missioncontrol.StoreRecordVersion,
-		IdentityID:           "identity-microsoft",
-		IdentityKind:         "platform_identity",
-		DisplayName:          "Frank Microsoft",
-		ProviderOrPlatformID: providerTarget.RegistryID,
-		Microsoft:            &missioncontrol.FrankMicrosoftIdentity{},
-		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
-		State:                "candidate",
-		EligibilityTargetRef: providerTarget,
-		CreatedAt:            now.UTC(),
-		UpdatedAt:            now.Add(time.Minute).UTC(),
-	}
-	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
-		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
-	}
-
-	account := missioncontrol.FrankAccountRecord{
-		RecordVersion:        missioncontrol.StoreRecordVersion,
-		AccountID:            "account-microsoft",
-		AccountKind:          "platform_account",
-		Label:                "Microsoft Account",
-		ProviderOrPlatformID: providerTarget.RegistryID,
-		Microsoft: &missioncontrol.FrankMicrosoftAccount{
-			OAuthAccessTokenEnvVarRef: "PICOBOT_MICROSOFT_ACCESS_TOKEN",
 		},
 		IdentityID:           identity.IdentityID,
 		ControlModel:         "agent_managed",
