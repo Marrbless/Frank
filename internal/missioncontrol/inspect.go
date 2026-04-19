@@ -28,7 +28,6 @@ type InspectStep struct {
 	FrankGitHubOnboardingPreflight               *ResolvedExecutionContextFrankGitHubOnboardingPreflight               `json:"frank_github_onboarding_preflight,omitempty"`
 	FrankStripeOnboardingPreflight               *ResolvedExecutionContextFrankStripeOnboardingPreflight               `json:"frank_stripe_onboarding_preflight,omitempty"`
 	FrankPayPalOnboardingPreflight               *ResolvedExecutionContextFrankPayPalOnboardingPreflight               `json:"frank_paypal_onboarding_preflight,omitempty"`
-	FrankGoogleOnboardingPreflight               *ResolvedExecutionContextFrankGoogleOnboardingPreflight               `json:"frank_google_onboarding_preflight,omitempty"`
 	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
 
@@ -116,13 +115,6 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if payPalPreflight.Identity != nil && payPalPreflight.Account != nil {
 			summary.FrankPayPalOnboardingPreflight = &payPalPreflight
-		}
-		googlePreflight, err := ResolveExecutionContextFrankGoogleOnboardingPreflight(ec)
-		if err != nil {
-			return InspectStep{}, err
-		}
-		if googlePreflight.Identity != nil && googlePreflight.Account != nil {
-			summary.FrankGoogleOnboardingPreflight = &googlePreflight
 		}
 		capabilityPreflight, err := ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec)
 		if err != nil {
