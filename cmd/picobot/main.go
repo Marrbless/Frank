@@ -34,7 +34,7 @@ import (
 	"github.com/local/picobot/internal/providers"
 )
 
-const version = "0.1.10"
+const version = "0.2.1"
 
 var gatewayLogNow = time.Now
 var newGatewayLogTicker = func(interval time.Duration) *time.Ticker {
@@ -534,7 +534,11 @@ func NewRootCmd() *cobra.Command {
 			if maxIter <= 0 {
 				maxIter = 100
 			}
-			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil)
+			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil, cfg.MCPServers)
+			defer ag.Close()
+			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
+				ag.SetToolActivityIndicator(false)
+			}
 			installMissionRuntimeChangeHook(cmd, ag)
 			bootstrappedJob, err := configureMissionBootstrapJob(cmd, ag)
 			if err != nil {
@@ -606,7 +610,11 @@ func NewRootCmd() *cobra.Command {
 			if maxIter <= 0 {
 				maxIter = 100
 			}
-			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler)
+			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler, cfg.MCPServers)
+			defer ag.Close()
+			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
+				ag.SetToolActivityIndicator(false)
+			}
 			installMissionRuntimeChangeHookWithExtension(cmd, ag, func() {
 				if err := deferredScheduledTriggers.drainReady(ag, hub); err != nil {
 					log.Printf("cron governed deferred trigger drain failed: %v", err)

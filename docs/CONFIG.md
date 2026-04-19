@@ -14,7 +14,8 @@ Picobot is configured via `~/.picobot/config.json`. Run `picobot onboard` to gen
       "temperature": 0.7,
       "maxToolIterations": 100,
       "heartbeatIntervalS": 60,
-      "requestTimeoutS": 60
+      "requestTimeoutS": 60,
+      "enableToolActivityIndicator": true
     }
   },
   "mcpServers": {},
@@ -83,6 +84,7 @@ Agent behavior settings.
 | `maxToolIterations` | int | `100` | Maximum number of tool-calling iterations per request. Prevents infinite loops. |
 | `heartbeatIntervalS` | int | `60` | How often (in seconds) the heartbeat checks `HEARTBEAT.md` for periodic tasks. Only used in gateway mode. |
 | `requestTimeoutS` | int | `60` | HTTP timeout in seconds for each LLM API request. Increase for slow models or poor network conditions. |
+| `enableToolActivityIndicator` | bool | `true` | When `true`, sends interim `🤖 Running` / `📢 done` messages to the chat channel as tools are called. Set to `false` for IoT or headless deployments where only the final response should be delivered. |
 
 ### Model Priority
 
@@ -103,7 +105,8 @@ The model is resolved in this order:
       "temperature": 0.5,
       "maxToolIterations": 200,
       "heartbeatIntervalS": 120,
-      "requestTimeoutS": 120
+      "requestTimeoutS": 120,
+      "enableToolActivityIndicator": false
     }
   }
 }
@@ -162,6 +165,99 @@ Connect to any OpenAI-compatible API service (OpenAI, OpenRouter, Ollama, etc.).
 ### Provider Fallback
 
 If no valid provider is configured, Picobot uses a **Stub** provider (echoes back your message, for testing).
+
+---
+
+## mcpServers
+
+Connect external [MCP (Model Context Protocol)](https://modelcontextprotocol.io) servers to give the agent additional tools. Each entry is a named server that exposes one or more tools, which are registered automatically at startup under the name `mcp_{server}_{tool}`.
+
+Two transports are supported:
+
+| Transport | When to use | Required fields |
+|-----------|-------------|------------------|
+| **Stdio** | Local process (npx, uvx, binary, docker) | `command` + `args` |
+| **HTTP** | Remote or hosted MCP server | `url` (+ optional `headers`) |
+
+### Stdio transport (command + args)
+
+Picobot spawns the process and communicates over stdin/stdout. This works with any MCP server that supports the stdio transport.
+
+```json
+{
+  "mcpServers": {
+    "via-npx": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"]
+    }
+  }
+}
+```
+
+**Common patterns:**
+
+```json
+{
+  "mcpServers": {
+    "via-npx": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"]
+    },
+    "via-uvx": {
+      "command": "uvx",
+      "args": ["some-mcp-server"]
+    },
+    "via-binary": {
+      "command": "/usr/local/bin/my-mcp-server",
+      "args": ["--some-flag"]
+    },
+    "via-docker": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "mcp/some-image"]
+    }
+  }
+}
+```
+
+> **Docker note:** Always include `-i` (interactive) in the `args`. Without it, Docker closes stdin immediately and the MCP handshake fails.
+
+### HTTP transport (url + headers)
+
+For MCP servers accessible over HTTP (Streamable HTTP or SSE). Supports bearer tokens and custom headers.
+
+```json
+{
+  "mcpServers": {
+    "via-remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}
+```
+
+### MCPServerConfig fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `command` | string | Executable to spawn (for stdio transport). Can be a name on `$PATH` or an absolute path. |
+| `args` | string[] | Arguments passed to the command. |
+| `url` | string | HTTP endpoint for the MCP server (for HTTP transport). |
+| `headers` | object | HTTP headers to attach to every request (e.g. `Authorization`). |
+
+Only one transport is used per server: if both `command` and `url` are set, `command` takes precedence.
+
+### Tool naming
+
+Each MCP tool is registered in the agent's tool registry as `mcp_{server}_{tool}`. For example, a server named `via-npx` exposing a tool `some-action` becomes `mcp_via-npx_some-action`. The agent sees and calls it like any built-in tool.
+
+### Startup behaviour
+
+- Servers are connected when the agent starts (`gateway` or `agent` command).
+- If a server fails to connect (process not found, network error, handshake failure), picobot **logs the error and continues** — other servers and built-in tools are unaffected.
+- All MCP connections are cleanly shut down when the gateway exits.
 
 ---
 
@@ -352,6 +448,12 @@ The workspace directory (default `~/.picobot/workspace`) contains files that sha
       "temperature": 0.7,
       "maxToolIterations": 200,
       "heartbeatIntervalS": 60
+    }
+  },
+  "mcpServers": {
+    "via-npx": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"]
     }
   },
   "channels": {
