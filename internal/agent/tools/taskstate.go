@@ -44,6 +44,7 @@ type TaskState struct {
 	gitHubOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankGitHubOnboardingBundle, time.Time) error
 	stripeOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankStripeOnboardingBundle, time.Time) error
 	payPalOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankPayPalOnboardingBundle, time.Time) error
+	googleOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankGoogleOnboardingBundle, time.Time) error
 	treasuryFirstAcquisitionHook       func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook      func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryPostActiveSuspendHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
@@ -79,6 +80,7 @@ func NewTaskState() *TaskState {
 		gitHubOnboardingHook:               missioncontrol.ProduceFrankGitHubOnboarding,
 		stripeOnboardingHook:               missioncontrol.ProduceFrankStripeOnboarding,
 		payPalOnboardingHook:               missioncontrol.ProduceFrankPayPalOnboarding,
+		googleOnboardingHook:               missioncontrol.ProduceFrankGoogleOnboarding,
 		treasuryFirstAcquisitionHook:       missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:      missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryPostActiveSuspendHook:      missioncontrol.ProducePostActiveTreasurySuspend,
@@ -349,6 +351,9 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyPayPalOnboardingForStep(job, stepID, now); err != nil {
+		return err
+	}
+	if err := s.applyGoogleOnboardingForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
@@ -1445,6 +1450,36 @@ func (s *TaskState) applyPayPalOnboardingForStep(job missioncontrol.Job, stepID 
 	ec.MissionStoreRoot = root
 
 	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankPayPalOnboardingBundle(ec)
+	if err != nil {
+		return err
+	}
+	if !ok || hook == nil {
+		return nil
+	}
+	return hook(ec.MissionStoreRoot, bundle, now)
+}
+
+func (s *TaskState) applyGoogleOnboardingForStep(job missioncontrol.Job, stepID string, now time.Time) error {
+	if s == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	root := strings.TrimSpace(s.missionStoreRoot)
+	hook := s.googleOnboardingHook
+	s.mu.Unlock()
+	job.MissionStoreRoot = root
+
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || !missioncontrol.DeclaresFrankGoogleOnboarding(*ec.Step) {
+		return nil
+	}
+	ec.MissionStoreRoot = root
+
+	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankGoogleOnboardingBundle(ec)
 	if err != nil {
 		return err
 	}
