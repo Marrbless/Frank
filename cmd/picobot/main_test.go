@@ -2249,6 +2249,51 @@ func TestMissionInspectCommandGitHubOnboardingStepSurfacesResolvedPreflight(t *t
 	}
 }
 
+func TestMissionInspectCommandStripeOnboardingStepSurfacesResolvedPreflight(t *testing.T) {
+	root, identity, account := writeMissionInspectStripeFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].IdentityMode = missioncontrol.IdentityModeAgentAlias
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].FrankStripeOnboardingPreflight == nil {
+		t.Fatal("FrankStripeOnboardingPreflight = nil, want resolved onboarding bundle")
+	}
+	if got.Steps[0].FrankStripeOnboardingPreflight.Identity == nil || !reflect.DeepEqual(*got.Steps[0].FrankStripeOnboardingPreflight.Identity, identity) {
+		t.Fatalf("FrankStripeOnboardingPreflight.Identity = %#v, want %#v", got.Steps[0].FrankStripeOnboardingPreflight.Identity, identity)
+	}
+	if got.Steps[0].FrankStripeOnboardingPreflight.Account == nil || !reflect.DeepEqual(*got.Steps[0].FrankStripeOnboardingPreflight.Account, account) {
+		t.Fatalf("FrankStripeOnboardingPreflight.Account = %#v, want %#v", got.Steps[0].FrankStripeOnboardingPreflight.Account, account)
+	}
+	if got.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on stripe onboarding-only path", got.Steps[0].CampaignPreflight)
+	}
+	if got.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on stripe onboarding-only path", got.Steps[0].TreasuryPreflight)
+	}
+}
+
 func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
@@ -11109,6 +11154,63 @@ func writeMissionInspectGitHubFixtures(t *testing.T) (string, missioncontrol.Fra
 		ProviderOrPlatformID: providerTarget.RegistryID,
 		GitHub: &missioncontrol.FrankGitHubAccount{
 			TokenEnvVarRef: "PICOBOT_GITHUB_TOKEN",
+		},
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "env_ref_recoverable",
+		State:                "candidate",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	return root, identity, account
+}
+
+func writeMissionInspectStripeFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 20, 0, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-stripe",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-stripe",
+	}
+	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "stripe", "check-provider-stripe", now)
+	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "stripe account", "check-account-class-stripe", now.Add(time.Minute))
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-stripe",
+		IdentityKind:         "platform_identity",
+		DisplayName:          "Frank Stripe",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		Stripe:               &missioncontrol.FrankStripeIdentity{},
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "candidate",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-stripe",
+		AccountKind:          "platform_account",
+		Label:                "Stripe Account",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		Stripe: &missioncontrol.FrankStripeAccount{
+			SecretKeyEnvVarRef: "PICOBOT_STRIPE_SECRET_KEY",
 		},
 		IdentityID:           identity.IdentityID,
 		ControlModel:         "agent_managed",
