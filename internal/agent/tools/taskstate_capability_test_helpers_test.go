@@ -213,6 +213,12 @@ func writeTaskStateContactsCapabilityConfigFixture(t *testing.T) string {
 	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
 }
 
+func writeTaskStateSharedStorageCapabilityConfigFixture(t *testing.T) string {
+	t.Helper()
+
+	return writeTaskStateWorkspaceCapabilityConfigFixture(t)
+}
+
 func writeTaskStateLocationCapabilityConfigFixture(t *testing.T) string {
 	t.Helper()
 

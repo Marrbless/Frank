@@ -5358,18 +5358,7 @@ func TestTaskStateActivateStepSharedStorageCapabilityPathCallsHookOnce(t *testin
 
 func TestTaskStateActivateStepSharedStorageCapabilityPathInvokesRealMutation(t *testing.T) {
 	root := writeTaskStateSharedStorageCapabilityProposalFixture(t, missioncontrol.CapabilityOnboardingProposalStateApproved)
-	home := t.TempDir()
-	configDir := filepath.Join(home, ".picobot")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	workspace := filepath.Join(home, "workspace-root")
-	configPath := filepath.Join(configDir, "config.json")
-	configJSON := fmt.Sprintf(`{"agents":{"defaults":{"workspace":%q}}}`, workspace)
-	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
-		t.Fatalf("WriteFile(config.json) error = %v", err)
-	}
-	t.Setenv("HOME", home)
+	workspace := writeTaskStateSharedStorageCapabilityConfigFixture(t)
 
 	job := testTaskStateJob()
 	job.Plan.Steps[0].RequiredCapabilities = []string{missioncontrol.SharedStorageCapabilityName}
