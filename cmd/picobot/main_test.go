@@ -2294,6 +2294,51 @@ func TestMissionInspectCommandStripeOnboardingStepSurfacesResolvedPreflight(t *t
 	}
 }
 
+func TestMissionInspectCommandPayPalOnboardingStepSurfacesResolvedPreflight(t *testing.T) {
+	root, identity, account := writeMissionInspectPayPalFixtures(t)
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].IdentityMode = missioncontrol.IdentityModeAgentAlias
+	job.Plan.Steps[0].FrankObjectRefs = []missioncontrol.FrankRegistryObjectRef{
+		{Kind: missioncontrol.FrankRegistryObjectKindIdentity, ObjectID: identity.IdentityID},
+		{Kind: missioncontrol.FrankRegistryObjectKindAccount, ObjectID: account.AccountID},
+	}
+	path := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mission", "inspect", "--mission-store-root", root, "--mission-file", path, "--step-id", "build"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var got missionInspectSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if len(got.Steps) != 1 || got.Steps[0].StepID != "build" {
+		t.Fatalf("Steps = %#v, want one build step", got.Steps)
+	}
+	if got.Steps[0].FrankPayPalOnboardingPreflight == nil {
+		t.Fatal("FrankPayPalOnboardingPreflight = nil, want resolved onboarding bundle")
+	}
+	if got.Steps[0].FrankPayPalOnboardingPreflight.Identity == nil || !reflect.DeepEqual(*got.Steps[0].FrankPayPalOnboardingPreflight.Identity, identity) {
+		t.Fatalf("FrankPayPalOnboardingPreflight.Identity = %#v, want %#v", got.Steps[0].FrankPayPalOnboardingPreflight.Identity, identity)
+	}
+	if got.Steps[0].FrankPayPalOnboardingPreflight.Account == nil || !reflect.DeepEqual(*got.Steps[0].FrankPayPalOnboardingPreflight.Account, account) {
+		t.Fatalf("FrankPayPalOnboardingPreflight.Account = %#v, want %#v", got.Steps[0].FrankPayPalOnboardingPreflight.Account, account)
+	}
+	if got.Steps[0].CampaignPreflight != nil {
+		t.Fatalf("CampaignPreflight = %#v, want nil on paypal onboarding-only path", got.Steps[0].CampaignPreflight)
+	}
+	if got.Steps[0].TreasuryPreflight != nil {
+		t.Fatalf("TreasuryPreflight = %#v, want nil on paypal onboarding-only path", got.Steps[0].TreasuryPreflight)
+	}
+}
+
 func TestMissionInspectCommandTreasuryPreflightInvalidContainerStateFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 8, 21, 15, 0, 0, time.UTC)
@@ -11211,6 +11256,65 @@ func writeMissionInspectStripeFixtures(t *testing.T) (string, missioncontrol.Fra
 		ProviderOrPlatformID: providerTarget.RegistryID,
 		Stripe: &missioncontrol.FrankStripeAccount{
 			SecretKeyEnvVarRef: "PICOBOT_STRIPE_SECRET_KEY",
+		},
+		IdentityID:           identity.IdentityID,
+		ControlModel:         "agent_managed",
+		RecoveryModel:        "env_ref_recoverable",
+		State:                "candidate",
+		EligibilityTargetRef: accountTarget,
+		CreatedAt:            now.Add(2 * time.Minute).UTC(),
+		UpdatedAt:            now.Add(3 * time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankAccountRecord(root, account); err != nil {
+		t.Fatalf("StoreFrankAccountRecord() error = %v", err)
+	}
+
+	return root, identity, account
+}
+
+func writeMissionInspectPayPalFixtures(t *testing.T) (string, missioncontrol.FrankIdentityRecord, missioncontrol.FrankAccountRecord) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 18, 22, 0, 0, 0, time.UTC)
+	providerTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindProvider,
+		RegistryID: "provider-paypal",
+	}
+	accountTarget := missioncontrol.AutonomyEligibilityTargetRef{
+		Kind:       missioncontrol.EligibilityTargetKindAccountClass,
+		RegistryID: "account-class-paypal",
+	}
+	writeMissionInspectEligibilityFixture(t, root, providerTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "paypal", "check-provider-paypal", now)
+	writeMissionInspectEligibilityFixture(t, root, accountTarget, missioncontrol.EligibilityLabelAutonomyCompatible, "paypal account", "check-account-class-paypal", now.Add(time.Minute))
+
+	identity := missioncontrol.FrankIdentityRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		IdentityID:           "identity-paypal",
+		IdentityKind:         "platform_identity",
+		DisplayName:          "Frank PayPal",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		PayPal:               &missioncontrol.FrankPayPalIdentity{},
+		IdentityMode:         missioncontrol.IdentityModeAgentAlias,
+		State:                "candidate",
+		EligibilityTargetRef: providerTarget,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.Add(time.Minute).UTC(),
+	}
+	if err := missioncontrol.StoreFrankIdentityRecord(root, identity); err != nil {
+		t.Fatalf("StoreFrankIdentityRecord() error = %v", err)
+	}
+
+	account := missioncontrol.FrankAccountRecord{
+		RecordVersion:        missioncontrol.StoreRecordVersion,
+		AccountID:            "account-paypal",
+		AccountKind:          "platform_account",
+		Label:                "PayPal Account",
+		ProviderOrPlatformID: providerTarget.RegistryID,
+		PayPal: &missioncontrol.FrankPayPalAccount{
+			ClientIDEnvVarRef:     "PICOBOT_PAYPAL_CLIENT_ID",
+			ClientSecretEnvVarRef: "PICOBOT_PAYPAL_CLIENT_SECRET",
+			Environment:           "sandbox",
 		},
 		IdentityID:           identity.IdentityID,
 		ControlModel:         "agent_managed",

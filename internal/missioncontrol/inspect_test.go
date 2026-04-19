@@ -1425,3 +1425,56 @@ func TestFormatInspectSummarySurfacesFrankStripeOnboardingPreflight(t *testing.T
 		t.Fatalf("treasury_preflight = %#v, want omitted on stripe onboarding path", step["treasury_preflight"])
 	}
 }
+
+func TestFormatInspectSummarySurfacesFrankPayPalOnboardingPreflight(t *testing.T) {
+	t.Parallel()
+
+	fixtures := writePayPalOnboardingFixtures(t)
+	job := Job{
+		ID:           "job-1",
+		MaxAuthority: AuthorityTierHigh,
+		AllowedTools: []string{"read"},
+		Plan: Plan{
+			ID: "plan-1",
+			Steps: []Step{
+				{
+					ID:                "build",
+					Type:              StepTypeOneShotCode,
+					RequiredAuthority: AuthorityTierLow,
+					AllowedTools:      []string{"read"},
+					SuccessCriteria:   []string{"confirm paypal onboarding"},
+					IdentityMode:      IdentityModeAgentAlias,
+					FrankObjectRefs: []FrankRegistryObjectRef{
+						{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+						{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+					},
+				},
+				{
+					ID:        "final",
+					Type:      StepTypeFinalResponse,
+					DependsOn: []string{"build"},
+				},
+			},
+		},
+	}
+
+	summary, err := NewInspectSummaryWithCampaignAndTreasuryPreflight(job, "build", fixtures.root)
+	if err != nil {
+		t.Fatalf("NewInspectSummaryWithCampaignAndTreasuryPreflight() error = %v", err)
+	}
+	formatted, err := FormatInspectSummary(summary)
+	if err != nil {
+		t.Fatalf("FormatInspectSummary() error = %v", err)
+	}
+
+	got := mustOperatorReadoutJSONObject(t, formatted)
+	steps := mustJSONArray(t, got["steps"], "inspect.steps")
+	step := steps[0].(map[string]any)
+	assertResolvedFrankPayPalOnboardingPreflightJSONEnvelope(t, step["frank_paypal_onboarding_preflight"])
+	if _, ok := step["campaign_preflight"]; ok {
+		t.Fatalf("campaign_preflight = %#v, want omitted on paypal onboarding path", step["campaign_preflight"])
+	}
+	if _, ok := step["treasury_preflight"]; ok {
+		t.Fatalf("treasury_preflight = %#v, want omitted on paypal onboarding path", step["treasury_preflight"])
+	}
+}
