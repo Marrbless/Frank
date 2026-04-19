@@ -469,32 +469,6 @@ func assertResolvedFrankWhatsAppOwnerControlOnboardingPreflightJSONEnvelope(t *t
 	assertOptionalJSONObjectKeys(t, account["whatsapp_owner_control"], "authenticated_device_jid", "auth_store_ref", "confirmed_authenticated")
 }
 
-func assertResolvedFrankGitHubOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
-	t.Helper()
-
-	preflight, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("frank_github_onboarding_preflight = %#v, want object", value)
-	}
-	assertJSONObjectKeys(t, preflight, "account", "identity")
-
-	identity, ok := preflight["identity"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_github_onboarding_preflight.identity = %#v, want object", preflight["identity"])
-	}
-	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "github", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "updated_at")
-	assertJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
-	assertJSONObjectKeysSubset(t, identity["github"], "github_user_id", "login", "node_id", "primary_verified_email")
-
-	account, ok := preflight["account"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_github_onboarding_preflight.account = %#v, want object", preflight["account"])
-	}
-	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "github", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at")
-	assertJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
-	assertJSONObjectKeysSubset(t, account["github"], "token_env_var_ref", "confirmed_authenticated")
-}
-
 func assertOptionalJSONObjectKeys(t *testing.T, value any, optional ...string) {
 	t.Helper()
 
@@ -506,31 +480,4 @@ func assertOptionalJSONObjectKeys(t *testing.T, value any, optional ...string) {
 		return
 	}
 	assertJSONObjectKeys(t, object, optional...)
-}
-
-func assertJSONObjectKeysSubset(t *testing.T, value any, allowed ...string) {
-	t.Helper()
-
-	object, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("JSON value = %#v, want object", value)
-	}
-	if len(object) == 0 {
-		return
-	}
-
-	allowedSet := make(map[string]struct{}, len(allowed))
-	for _, key := range allowed {
-		allowedSet[key] = struct{}{}
-	}
-	got := make([]string, 0, len(object))
-	for key := range object {
-		got = append(got, key)
-	}
-	sort.Strings(got)
-	for _, key := range got {
-		if _, ok := allowedSet[key]; !ok {
-			t.Fatalf("JSON key %q not allowed; got keys %v, allowed %v", key, got, allowed)
-		}
-	}
 }

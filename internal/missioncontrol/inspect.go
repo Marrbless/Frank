@@ -25,7 +25,6 @@ type InspectStep struct {
 	FrankSlackOwnerControlOnboardingPreflight    *ResolvedExecutionContextFrankSlackOwnerControlOnboardingPreflight    `json:"frank_slack_owner_control_onboarding_preflight,omitempty"`
 	FrankDiscordOwnerControlOnboardingPreflight  *ResolvedExecutionContextFrankDiscordOwnerControlOnboardingPreflight  `json:"frank_discord_owner_control_onboarding_preflight,omitempty"`
 	FrankWhatsAppOwnerControlOnboardingPreflight *ResolvedExecutionContextFrankWhatsAppOwnerControlOnboardingPreflight `json:"frank_whatsapp_owner_control_onboarding_preflight,omitempty"`
-	FrankGitHubOnboardingPreflight               *ResolvedExecutionContextFrankGitHubOnboardingPreflight               `json:"frank_github_onboarding_preflight,omitempty"`
 	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
 
@@ -92,13 +91,6 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if whatsAppOwnerControlPreflight.Identity != nil && whatsAppOwnerControlPreflight.Account != nil {
 			summary.FrankWhatsAppOwnerControlOnboardingPreflight = &whatsAppOwnerControlPreflight
-		}
-		gitHubPreflight, err := ResolveExecutionContextFrankGitHubOnboardingPreflight(ec)
-		if err != nil {
-			return InspectStep{}, err
-		}
-		if gitHubPreflight.Identity != nil && gitHubPreflight.Account != nil {
-			summary.FrankGitHubOnboardingPreflight = &gitHubPreflight
 		}
 		capabilityPreflight, err := ResolveExecutionContextCapabilityOnboardingProposalPreflight(ec)
 		if err != nil {
