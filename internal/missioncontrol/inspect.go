@@ -29,6 +29,7 @@ type InspectStep struct {
 	FrankStripeOnboardingPreflight               *ResolvedExecutionContextFrankStripeOnboardingPreflight               `json:"frank_stripe_onboarding_preflight,omitempty"`
 	FrankPayPalOnboardingPreflight               *ResolvedExecutionContextFrankPayPalOnboardingPreflight               `json:"frank_paypal_onboarding_preflight,omitempty"`
 	FrankGoogleOnboardingPreflight               *ResolvedExecutionContextFrankGoogleOnboardingPreflight               `json:"frank_google_onboarding_preflight,omitempty"`
+	FrankMicrosoftOnboardingPreflight            *ResolvedExecutionContextFrankMicrosoftOnboardingPreflight            `json:"frank_microsoft_onboarding_preflight,omitempty"`
 	FrankLinkedInOnboardingPreflight             *ResolvedExecutionContextFrankLinkedInOnboardingPreflight             `json:"frank_linkedin_onboarding_preflight,omitempty"`
 	CapabilityOnboardingProposalPreflight        *ResolvedExecutionContextCapabilityOnboardingProposalPreflight        `json:"capability_onboarding_proposal_preflight,omitempty"`
 }
@@ -124,6 +125,13 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 		}
 		if googlePreflight.Identity != nil && googlePreflight.Account != nil {
 			summary.FrankGoogleOnboardingPreflight = &googlePreflight
+		}
+		microsoftPreflight, err := ResolveExecutionContextFrankMicrosoftOnboardingPreflight(ec)
+		if err != nil {
+			return InspectStep{}, err
+		}
+		if microsoftPreflight.Identity != nil && microsoftPreflight.Account != nil {
+			summary.FrankMicrosoftOnboardingPreflight = &microsoftPreflight
 		}
 		linkedInPreflight, err := ResolveExecutionContextFrankLinkedInOnboardingPreflight(ec)
 		if err != nil {

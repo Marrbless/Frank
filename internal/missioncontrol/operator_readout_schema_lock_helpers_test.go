@@ -573,6 +573,32 @@ func assertResolvedFrankGoogleOnboardingPreflightJSONEnvelope(t *testing.T, valu
 	assertJSONObjectKeysSubset(t, account["google"], "oauth_client_id_env_var_ref", "oauth_access_token_env_var_ref", "confirmed_authenticated")
 }
 
+func assertResolvedFrankMicrosoftOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
+	t.Helper()
+
+	preflight, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("frank_microsoft_onboarding_preflight = %#v, want object", value)
+	}
+	assertJSONObjectKeys(t, preflight, "account", "identity")
+
+	identity, ok := preflight["identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("frank_microsoft_onboarding_preflight.identity = %#v, want object", preflight["identity"])
+	}
+	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "microsoft", "provider_or_platform_id", "record_version", "state", "updated_at")
+	assertJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
+	assertJSONObjectKeysSubset(t, identity["microsoft"], "microsoft_sub", "microsoft_oid", "tenant_id", "email", "preferred_username", "email_verified", "display_name")
+
+	account, ok := preflight["account"].(map[string]any)
+	if !ok {
+		t.Fatalf("frank_microsoft_onboarding_preflight.account = %#v, want object", preflight["account"])
+	}
+	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "microsoft", "provider_or_platform_id", "record_version", "recovery_model", "state", "updated_at")
+	assertJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
+	assertJSONObjectKeysSubset(t, account["microsoft"], "oauth_client_id_env_var_ref", "oauth_access_token_env_var_ref", "oauth_refresh_token_env_var_ref", "confirmed_authenticated")
+}
+
 func assertResolvedFrankLinkedInOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
 	t.Helper()
 

@@ -25,6 +25,7 @@ type FrankIdentityRecord struct {
 	Stripe               *FrankStripeIdentity               `json:"stripe,omitempty"`
 	PayPal               *FrankPayPalIdentity               `json:"paypal,omitempty"`
 	Google               *FrankGoogleIdentity               `json:"google,omitempty"`
+	Microsoft            *FrankMicrosoftIdentity            `json:"microsoft,omitempty"`
 	LinkedIn             *FrankLinkedInIdentity             `json:"linkedin,omitempty"`
 	IdentityMode         IdentityMode                       `json:"identity_mode"`
 	State                string                             `json:"state"`
@@ -91,6 +92,16 @@ type FrankGoogleIdentity struct {
 	PictureURL    string `json:"picture_url,omitempty"`
 }
 
+type FrankMicrosoftIdentity struct {
+	MicrosoftSub      string `json:"microsoft_sub,omitempty"`
+	MicrosoftOID      string `json:"microsoft_oid,omitempty"`
+	TenantID          string `json:"tenant_id,omitempty"`
+	Email             string `json:"email,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	EmailVerified     *bool  `json:"email_verified,omitempty"`
+	DisplayName       string `json:"display_name,omitempty"`
+}
+
 type FrankLinkedInIdentity struct {
 	LinkedInSub   string `json:"linkedin_sub,omitempty"`
 	Name          string `json:"name,omitempty"`
@@ -128,6 +139,7 @@ type FrankAccountRecord struct {
 	Stripe               *FrankStripeAccount               `json:"stripe,omitempty"`
 	PayPal               *FrankPayPalAccount               `json:"paypal,omitempty"`
 	Google               *FrankGoogleAccount               `json:"google,omitempty"`
+	Microsoft            *FrankMicrosoftAccount            `json:"microsoft,omitempty"`
 	LinkedIn             *FrankLinkedInAccount             `json:"linkedin,omitempty"`
 	IdentityID           string                            `json:"identity_id"`
 	ControlModel         string                            `json:"control_model"`
@@ -192,6 +204,13 @@ type FrankGoogleAccount struct {
 	ConfirmedAuthenticated    bool   `json:"confirmed_authenticated,omitempty"`
 }
 
+type FrankMicrosoftAccount struct {
+	OAuthClientIDEnvVarRef     string `json:"oauth_client_id_env_var_ref,omitempty"`
+	OAuthAccessTokenEnvVarRef  string `json:"oauth_access_token_env_var_ref,omitempty"`
+	OAuthRefreshTokenEnvVarRef string `json:"oauth_refresh_token_env_var_ref,omitempty"`
+	ConfirmedAuthenticated     bool   `json:"confirmed_authenticated,omitempty"`
+}
+
 type FrankLinkedInAccount struct {
 	OAuthClientIDEnvVarRef    string `json:"oauth_client_id_env_var_ref,omitempty"`
 	OAuthAccessTokenEnvVarRef string `json:"oauth_access_token_env_var_ref,omitempty"`
@@ -216,6 +235,48 @@ func validateFrankLinkedInIdentity(config FrankLinkedInIdentity) error {
 		if err != nil || parsed == nil || parsed.Name != "" || parsed.Address != email {
 			return fmt.Errorf("mission store Frank identity linkedin.email must be a bare email address when present")
 		}
+	}
+	return nil
+}
+
+func normalizeFrankMicrosoftIdentity(config *FrankMicrosoftIdentity) *FrankMicrosoftIdentity {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.MicrosoftSub = strings.TrimSpace(normalized.MicrosoftSub)
+	normalized.MicrosoftOID = strings.TrimSpace(normalized.MicrosoftOID)
+	normalized.TenantID = strings.TrimSpace(normalized.TenantID)
+	normalized.Email = strings.TrimSpace(normalized.Email)
+	normalized.PreferredUsername = strings.TrimSpace(normalized.PreferredUsername)
+	normalized.DisplayName = strings.TrimSpace(normalized.DisplayName)
+	return &normalized
+}
+
+func validateFrankMicrosoftIdentity(config FrankMicrosoftIdentity) error {
+	if email := strings.TrimSpace(config.Email); email != "" {
+		parsed, err := mail.ParseAddress(email)
+		if err != nil || parsed == nil || parsed.Name != "" || parsed.Address != email {
+			return fmt.Errorf("mission store Frank identity microsoft.email must be a bare email address when present")
+		}
+	}
+	return nil
+}
+
+func normalizeFrankMicrosoftAccount(config *FrankMicrosoftAccount) *FrankMicrosoftAccount {
+	if config == nil {
+		return nil
+	}
+	normalized := *config
+	normalized.OAuthClientIDEnvVarRef = strings.TrimSpace(normalized.OAuthClientIDEnvVarRef)
+	normalized.OAuthAccessTokenEnvVarRef = strings.TrimSpace(normalized.OAuthAccessTokenEnvVarRef)
+	normalized.OAuthRefreshTokenEnvVarRef = strings.TrimSpace(normalized.OAuthRefreshTokenEnvVarRef)
+	return &normalized
+}
+
+func validateFrankMicrosoftAccount(config FrankMicrosoftAccount) error {
+	if config.ConfirmedAuthenticated && strings.TrimSpace(config.OAuthAccessTokenEnvVarRef) == "" {
+		return fmt.Errorf("mission store Frank account microsoft.confirmed_authenticated requires microsoft.oauth_access_token_env_var_ref")
 	}
 	return nil
 }
@@ -435,6 +496,11 @@ func ValidateFrankIdentityRecord(record FrankIdentityRecord) error {
 			return err
 		}
 	}
+	if record.Microsoft != nil {
+		if err := validateFrankMicrosoftIdentity(*record.Microsoft); err != nil {
+			return err
+		}
+	}
 	if record.LinkedIn != nil {
 		if err := validateFrankLinkedInIdentity(*record.LinkedIn); err != nil {
 			return err
@@ -519,6 +585,11 @@ func ValidateFrankAccountRecord(record FrankAccountRecord) error {
 	}
 	if record.Google != nil {
 		if err := validateFrankGoogleAccount(*record.Google); err != nil {
+			return err
+		}
+	}
+	if record.Microsoft != nil {
+		if err := validateFrankMicrosoftAccount(*record.Microsoft); err != nil {
 			return err
 		}
 	}
@@ -993,6 +1064,7 @@ func StoreFrankIdentityRecord(root string, record FrankIdentityRecord) error {
 	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
 	record.PayPal = normalizeFrankPayPalIdentity(record.PayPal)
 	record.Google = normalizeFrankGoogleIdentity(record.Google)
+	record.Microsoft = normalizeFrankMicrosoftIdentity(record.Microsoft)
 	record.LinkedIn = normalizeFrankLinkedInIdentity(record.LinkedIn)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
@@ -1046,6 +1118,7 @@ func StoreFrankAccountRecord(root string, record FrankAccountRecord) error {
 	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
 	record.PayPal = normalizeFrankPayPalAccount(record.PayPal)
 	record.Google = normalizeFrankGoogleAccount(record.Google)
+	record.Microsoft = normalizeFrankMicrosoftAccount(record.Microsoft)
 	record.LinkedIn = normalizeFrankLinkedInAccount(record.LinkedIn)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
@@ -1143,6 +1216,7 @@ func loadFrankIdentityRecordFile(root, path string) (FrankIdentityRecord, error)
 	record.Stripe = normalizeFrankStripeIdentity(record.Stripe)
 	record.PayPal = normalizeFrankPayPalIdentity(record.PayPal)
 	record.Google = normalizeFrankGoogleIdentity(record.Google)
+	record.Microsoft = normalizeFrankMicrosoftIdentity(record.Microsoft)
 	record.LinkedIn = normalizeFrankLinkedInIdentity(record.LinkedIn)
 	record.IdentityMode = NormalizeIdentityMode(record.IdentityMode)
 	record.CreatedAt = record.CreatedAt.UTC()
@@ -1170,6 +1244,7 @@ func loadFrankAccountRecordFile(root, path string) (FrankAccountRecord, error) {
 	record.Stripe = normalizeFrankStripeAccount(record.Stripe)
 	record.PayPal = normalizeFrankPayPalAccount(record.PayPal)
 	record.Google = normalizeFrankGoogleAccount(record.Google)
+	record.Microsoft = normalizeFrankMicrosoftAccount(record.Microsoft)
 	record.LinkedIn = normalizeFrankLinkedInAccount(record.LinkedIn)
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.UpdatedAt = record.UpdatedAt.UTC()
