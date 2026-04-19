@@ -495,32 +495,6 @@ func assertResolvedFrankGitHubOnboardingPreflightJSONEnvelope(t *testing.T, valu
 	assertJSONObjectKeysSubset(t, account["github"], "token_env_var_ref", "confirmed_authenticated")
 }
 
-func assertResolvedFrankStripeOnboardingPreflightJSONEnvelope(t *testing.T, value any) {
-	t.Helper()
-
-	preflight, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("frank_stripe_onboarding_preflight = %#v, want object", value)
-	}
-	assertJSONObjectKeys(t, preflight, "account", "identity")
-
-	identity, ok := preflight["identity"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_stripe_onboarding_preflight.identity = %#v, want object", preflight["identity"])
-	}
-	assertJSONObjectKeys(t, identity, "created_at", "display_name", "eligibility_target_ref", "identity_id", "identity_kind", "identity_mode", "provider_or_platform_id", "record_version", "state", "stripe", "updated_at")
-	assertJSONObjectKeys(t, identity["eligibility_target_ref"], "kind", "registry_id")
-	assertJSONObjectKeysSubset(t, identity["stripe"], "stripe_account_id", "business_profile_name", "dashboard_display_name", "country", "default_currency")
-
-	account, ok := preflight["account"].(map[string]any)
-	if !ok {
-		t.Fatalf("frank_stripe_onboarding_preflight.account = %#v, want object", preflight["account"])
-	}
-	assertJSONObjectKeys(t, account, "account_id", "account_kind", "control_model", "created_at", "eligibility_target_ref", "identity_id", "label", "provider_or_platform_id", "record_version", "recovery_model", "state", "stripe", "updated_at")
-	assertJSONObjectKeys(t, account["eligibility_target_ref"], "kind", "registry_id")
-	assertJSONObjectKeysSubset(t, account["stripe"], "secret_key_env_var_ref", "confirmed_authenticated", "charges_enabled", "payouts_enabled", "details_submitted", "requirements_disabled_reason", "livemode")
-}
-
 func assertOptionalJSONObjectKeys(t *testing.T, value any, optional ...string) {
 	t.Helper()
 

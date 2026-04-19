@@ -42,7 +42,6 @@ type TaskState struct {
 	discordOwnerControlOnboardingHook  func(string, missioncontrol.ResolvedExecutionContextFrankDiscordOwnerControlOnboardingBundle, time.Time) error
 	whatsAppOwnerControlOnboardingHook func(string, missioncontrol.ResolvedExecutionContextFrankWhatsAppOwnerControlOnboardingBundle, time.Time) error
 	gitHubOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankGitHubOnboardingBundle, time.Time) error
-	stripeOnboardingHook               func(string, missioncontrol.ResolvedExecutionContextFrankStripeOnboardingBundle, time.Time) error
 	treasuryFirstAcquisitionHook       func(string, missioncontrol.WriterLockLease, missioncontrol.FirstTreasuryAcquisitionInput, time.Time) error
 	treasuryBootstrapProducerHook      func(string, missioncontrol.WriterLockLease, missioncontrol.FirstValueTreasuryBootstrapInput, time.Time) error
 	treasuryPostActiveSuspendHook      func(string, missioncontrol.WriterLockLease, missioncontrol.PostActiveTreasurySuspendInput, time.Time) error
@@ -76,7 +75,6 @@ func NewTaskState() *TaskState {
 		discordOwnerControlOnboardingHook:  missioncontrol.ProduceFrankDiscordOwnerControlOnboarding,
 		whatsAppOwnerControlOnboardingHook: missioncontrol.ProduceFrankWhatsAppOwnerControlOnboarding,
 		gitHubOnboardingHook:               missioncontrol.ProduceFrankGitHubOnboarding,
-		stripeOnboardingHook:               missioncontrol.ProduceFrankStripeOnboarding,
 		treasuryFirstAcquisitionHook:       missioncontrol.RecordFirstTreasuryAcquisition,
 		treasuryBootstrapProducerHook:      missioncontrol.ProduceFirstValueTreasuryBootstrap,
 		treasuryPostActiveSuspendHook:      missioncontrol.ProducePostActiveTreasurySuspend,
@@ -341,9 +339,6 @@ func (s *TaskState) ActivateStep(job missioncontrol.Job, stepID string) error {
 		return err
 	}
 	if err := s.applyGitHubOnboardingForStep(job, stepID, now); err != nil {
-		return err
-	}
-	if err := s.applyStripeOnboardingForStep(job, stepID, now); err != nil {
 		return err
 	}
 	if err := s.applyTreasuryExecutionForStep(job, stepID, now); err != nil {
@@ -1380,36 +1375,6 @@ func (s *TaskState) applyGitHubOnboardingForStep(job missioncontrol.Job, stepID 
 	ec.MissionStoreRoot = root
 
 	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankGitHubOnboardingBundle(ec)
-	if err != nil {
-		return err
-	}
-	if !ok || hook == nil {
-		return nil
-	}
-	return hook(ec.MissionStoreRoot, bundle, now)
-}
-
-func (s *TaskState) applyStripeOnboardingForStep(job missioncontrol.Job, stepID string, now time.Time) error {
-	if s == nil {
-		return nil
-	}
-
-	s.mu.Lock()
-	root := strings.TrimSpace(s.missionStoreRoot)
-	hook := s.stripeOnboardingHook
-	s.mu.Unlock()
-	job.MissionStoreRoot = root
-
-	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
-	if err != nil {
-		return err
-	}
-	if ec.Step == nil || !missioncontrol.DeclaresFrankStripeOnboarding(*ec.Step) {
-		return nil
-	}
-	ec.MissionStoreRoot = root
-
-	bundle, ok, err := missioncontrol.ResolveExecutionContextFrankStripeOnboardingBundle(ec)
 	if err != nil {
 		return err
 	}
