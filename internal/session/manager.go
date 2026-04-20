@@ -1,9 +1,12 @@
 package session
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -26,8 +29,50 @@ type SessionManager struct {
 	workspace string
 }
 
+type loadedSession struct {
+	session  *Session
+	filename string
+}
+
 func NewSessionManager(workspace string) *SessionManager {
 	return &SessionManager{sessions: make(map[string]*Session), workspace: workspace}
+}
+
+func (sm *SessionManager) sessionsDir() string {
+	return filepath.Join(sm.workspace, "sessions")
+}
+
+func encodedSessionFilename(key string) (string, error) {
+	if key == "" {
+		return "", fmt.Errorf("session key cannot be empty")
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(key)) + ".json", nil
+}
+
+func ensurePathInsideDir(root, path string) error {
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	rel, err := filepath.Rel(cleanRoot, cleanPath)
+	if err != nil {
+		return fmt.Errorf("resolve session path relative to %q: %w", cleanRoot, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("session path %q escapes sessions directory %q", cleanPath, cleanRoot)
+	}
+	return nil
+}
+
+func (sm *SessionManager) sessionFilePath(key string) (string, error) {
+	filename, err := encodedSessionFilename(key)
+	if err != nil {
+		return "", err
+	}
+	dir := sm.sessionsDir()
+	path := filepath.Join(dir, filename)
+	if err := ensurePathInsideDir(dir, path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (sm *SessionManager) GetOrCreate(key string) *Session {
@@ -44,13 +89,19 @@ func (sm *SessionManager) GetOrCreate(key string) *Session {
 func (sm *SessionManager) Save(s *Session) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("session is nil")
+	}
 	// Trim history to the most recent messages
 	s.trim()
-	path := filepath.Join(sm.workspace, "sessions")
+	path := sm.sessionsDir()
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return err
 	}
-	fpath := filepath.Join(path, s.Key+".json")
+	fpath, err := sm.sessionFilePath(s.Key)
+	if err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -61,25 +112,55 @@ func (sm *SessionManager) Save(s *Session) error {
 func (sm *SessionManager) LoadAll() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	path := filepath.Join(sm.workspace, "sessions")
-	_ = os.MkdirAll(path, 0755)
+	path := sm.sessionsDir()
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return err
 	}
+	loaded := make(map[string]loadedSession, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(path, e.Name()))
+		filePath := filepath.Join(path, e.Name())
+		if err := ensurePathInsideDir(path, filePath); err != nil {
+			return fmt.Errorf("load session %q: %w", e.Name(), err)
+		}
+		b, err := os.ReadFile(filePath)
 		if err != nil {
-			continue
+			return fmt.Errorf("read session %q: %w", e.Name(), err)
 		}
 		var s Session
 		if err := json.Unmarshal(b, &s); err != nil {
+			return fmt.Errorf("decode session %q: %w", e.Name(), err)
+		}
+		if s.Key == "" {
+			return fmt.Errorf("decode session %q: missing session key", e.Name())
+		}
+		expectedFilename, err := encodedSessionFilename(s.Key)
+		if err != nil {
+			return fmt.Errorf("decode session %q: %w", e.Name(), err)
+		}
+		existing, ok := loaded[s.Key]
+		if !ok {
+			loaded[s.Key] = loadedSession{session: &s, filename: e.Name()}
 			continue
 		}
-		sm.sessions[s.Key] = &s
+		switch {
+		case existing.filename == expectedFilename && e.Name() != expectedFilename:
+			continue
+		case existing.filename != expectedFilename && e.Name() == expectedFilename:
+			loaded[s.Key] = loadedSession{session: &s, filename: e.Name()}
+		default:
+			return fmt.Errorf("duplicate session records for key %q: %q and %q", s.Key, existing.filename, e.Name())
+		}
+	}
+	sm.sessions = make(map[string]*Session, len(loaded))
+	for key, loadedSession := range loaded {
+		sm.sessions[key] = loadedSession.session
 	}
 	return nil
 }

@@ -1094,6 +1094,9 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	}
 
 	sm := session.NewSessionManager(workspace)
+	if err := sm.LoadAll(); err != nil {
+		log.Fatalf("failed to load sessions: %v", err)
+	}
 	ctx := NewContextBuilder(workspace, memory.NewLLMRanker(provider, model), 5)
 	mem := memory.NewMemoryStoreWithWorkspace(workspace, 100)
 
