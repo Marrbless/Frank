@@ -1,6 +1,9 @@
 package memory
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -48,5 +51,116 @@ func TestQueryByKeyword(t *testing.T) {
 	}
 	if res[0].Text != "Remember the apple" || res[1].Text != "apple pie recipe" {
 		t.Fatalf("unexpected query order: %v", res)
+	}
+}
+
+func TestWriteLongTermUsesAtomicWriter(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	original := memoryWriteFileAtomic
+	t.Cleanup(func() { memoryWriteFileAtomic = original })
+
+	var calledPath string
+	var calledData []byte
+	memoryWriteFileAtomic = func(path string, data []byte) error {
+		calledPath = path
+		calledData = append([]byte(nil), data...)
+		return os.WriteFile(path, data, 0o644)
+	}
+
+	if err := s.WriteLongTerm("hello"); err != nil {
+		t.Fatalf("WriteLongTerm() error = %v", err)
+	}
+
+	wantPath := filepath.Join(tmp, "memory", "MEMORY.md")
+	if calledPath != wantPath {
+		t.Fatalf("atomic writer path = %q, want %q", calledPath, wantPath)
+	}
+	if string(calledData) != "hello" {
+		t.Fatalf("atomic writer data = %q, want %q", string(calledData), "hello")
+	}
+}
+
+func TestWriteFileUsesAtomicWriter(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	original := memoryWriteFileAtomic
+	t.Cleanup(func() { memoryWriteFileAtomic = original })
+
+	var calledPath string
+	memoryWriteFileAtomic = func(path string, data []byte) error {
+		calledPath = path
+		return os.WriteFile(path, data, 0o644)
+	}
+
+	if err := s.WriteFile("2026-01-15.md", "hello"); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	wantPath := filepath.Join(tmp, "memory", "2026-01-15.md")
+	if calledPath != wantPath {
+		t.Fatalf("atomic writer path = %q, want %q", calledPath, wantPath)
+	}
+}
+
+func TestWriteLongTermAtomicFailurePreservesExistingContent(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	if err := s.WriteLongTerm("before"); err != nil {
+		t.Fatalf("WriteLongTerm(initial) error = %v", err)
+	}
+
+	original := memoryWriteFileAtomic
+	t.Cleanup(func() { memoryWriteFileAtomic = original })
+
+	wantErr := errors.New("atomic write failed")
+	memoryWriteFileAtomic = func(path string, data []byte) error {
+		return wantErr
+	}
+
+	err := s.WriteLongTerm("after")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("WriteLongTerm() error = %v, want %v", err, wantErr)
+	}
+
+	got, err := s.ReadLongTerm()
+	if err != nil {
+		t.Fatalf("ReadLongTerm() error = %v", err)
+	}
+	if got != "before" {
+		t.Fatalf("ReadLongTerm() = %q, want %q", got, "before")
+	}
+}
+
+func TestWriteFileAtomicFailurePreservesExistingContent(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	if err := s.WriteFile("2026-01-15.md", "before"); err != nil {
+		t.Fatalf("WriteFile(initial) error = %v", err)
+	}
+
+	original := memoryWriteFileAtomic
+	t.Cleanup(func() { memoryWriteFileAtomic = original })
+
+	wantErr := errors.New("atomic write failed")
+	memoryWriteFileAtomic = func(path string, data []byte) error {
+		return wantErr
+	}
+
+	err := s.WriteFile("2026-01-15.md", "after")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("WriteFile() error = %v, want %v", err, wantErr)
+	}
+
+	got, err := s.ReadFile("2026-01-15.md")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got != "before" {
+		t.Fatalf("ReadFile() = %q, want %q", got, "before")
 	}
 }

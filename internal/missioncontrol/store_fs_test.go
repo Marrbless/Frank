@@ -54,3 +54,20 @@ func TestWriteStoreFileAtomicFailsClosedWhenParentDirSyncFails(t *testing.T) {
 		t.Fatalf("WriteStoreFileAtomic() error = %v, want %v", err, wantErr)
 	}
 }
+
+func TestWriteStoreFileAtomicModePreservesRequestedFileMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "record.json")
+
+	if err := WriteStoreFileAtomicMode(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteStoreFileAtomicMode() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("file mode = %#o, want %#o", got, 0o644)
+	}
+}

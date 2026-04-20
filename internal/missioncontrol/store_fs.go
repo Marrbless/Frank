@@ -24,6 +24,14 @@ func WriteStoreJSONAtomic(path string, value any) error {
 }
 
 func WriteStoreFileAtomic(path string, data []byte) (err error) {
+	return writeStoreFileAtomic(path, data, 0, false)
+}
+
+func WriteStoreFileAtomicMode(path string, data []byte, mode os.FileMode) (err error) {
+	return writeStoreFileAtomic(path, data, mode, true)
+}
+
+func writeStoreFileAtomic(path string, data []byte, mode os.FileMode, setMode bool) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -46,6 +54,11 @@ func WriteStoreFileAtomic(path string, data []byte) (err error) {
 		}
 	}()
 
+	if setMode {
+		if err = tempFile.Chmod(mode); err != nil {
+			return err
+		}
+	}
 	if _, err = tempFile.Write(data); err != nil {
 		return err
 	}

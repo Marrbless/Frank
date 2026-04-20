@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/local/picobot/internal/missioncontrol"
 )
 
 // MaxHistorySize is the maximum number of messages kept in a session.
@@ -34,6 +36,10 @@ type loadedSession struct {
 	filename string
 }
 
+var sessionWriteFileAtomic = func(path string, data []byte) error {
+	return missioncontrol.WriteStoreFileAtomicMode(path, data, 0o644)
+}
+
 func NewSessionManager(workspace string) *SessionManager {
 	return &SessionManager{sessions: make(map[string]*Session), workspace: workspace}
 }
@@ -47,6 +53,10 @@ func encodedSessionFilename(key string) (string, error) {
 		return "", fmt.Errorf("session key cannot be empty")
 	}
 	return base64.RawURLEncoding.EncodeToString([]byte(key)) + ".json", nil
+}
+
+func isAtomicTempSessionFile(name string) bool {
+	return strings.Contains(name, ".json.tmp-")
 }
 
 func ensurePathInsideDir(root, path string) error {
@@ -106,7 +116,7 @@ func (sm *SessionManager) Save(s *Session) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(fpath, b, 0644)
+	return sessionWriteFileAtomic(fpath, b)
 }
 
 func (sm *SessionManager) LoadAll() error {
@@ -123,6 +133,9 @@ func (sm *SessionManager) LoadAll() error {
 	loaded := make(map[string]loadedSession, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
+			continue
+		}
+		if isAtomicTempSessionFile(e.Name()) {
 			continue
 		}
 		filePath := filepath.Join(path, e.Name())

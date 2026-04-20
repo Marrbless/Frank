@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,6 +193,22 @@ func TestSessionManagerLoadAllCorruptedFileReturnsExplicitError(t *testing.T) {
 	}
 }
 
+func TestSessionManagerLoadAllIgnoresAtomicTempFiles(t *testing.T) {
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "encoded.json.tmp-123"), []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile(temp) error = %v", err)
+	}
+
+	sm := NewSessionManager(tmp)
+	if err := sm.LoadAll(); err != nil {
+		t.Fatalf("LoadAll() error = %v, want temp artifact ignored", err)
+	}
+}
+
 func TestSessionManagerLoadAllReadsLegacyFileInsideSessionsDir(t *testing.T) {
 	tmp := t.TempDir()
 	sessionsDir := filepath.Join(tmp, "sessions")
@@ -260,5 +277,80 @@ func TestSessionManagerLoadAllPrefersEncodedFileWhenLegacyAndEncodedExist(t *tes
 	got := sm.GetOrCreate(key)
 	if len(got.History) != 1 || got.History[0] != "user: encoded" {
 		t.Fatalf("got.History = %#v, want encoded file to win", got.History)
+	}
+}
+
+func TestSessionManagerSaveUsesAtomicWriter(t *testing.T) {
+	tmp := t.TempDir()
+	sm := NewSessionManager(tmp)
+
+	original := sessionWriteFileAtomic
+	t.Cleanup(func() { sessionWriteFileAtomic = original })
+
+	var calledPath string
+	var calledData []byte
+	sessionWriteFileAtomic = func(path string, data []byte) error {
+		calledPath = path
+		calledData = append([]byte(nil), data...)
+		return os.WriteFile(path, data, 0o644)
+	}
+
+	sess := sm.GetOrCreate("telegram-chat-42")
+	sess.AddMessage("user", "hello")
+	if err := sm.Save(sess); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	filename, err := encodedSessionFilename(sess.Key)
+	if err != nil {
+		t.Fatalf("encodedSessionFilename() error = %v", err)
+	}
+	wantPath := filepath.Join(tmp, "sessions", filename)
+	if calledPath != wantPath {
+		t.Fatalf("atomic writer path = %q, want %q", calledPath, wantPath)
+	}
+	if len(calledData) == 0 {
+		t.Fatal("atomic writer data = empty, want marshaled session bytes")
+	}
+}
+
+func TestSessionManagerSaveAtomicFailurePreservesExistingFile(t *testing.T) {
+	tmp := t.TempDir()
+	sm := NewSessionManager(tmp)
+
+	sess := sm.GetOrCreate("telegram-chat-42")
+	sess.AddMessage("user", "before")
+	if err := sm.Save(sess); err != nil {
+		t.Fatalf("initial Save() error = %v", err)
+	}
+
+	original := sessionWriteFileAtomic
+	t.Cleanup(func() { sessionWriteFileAtomic = original })
+
+	wantErr := errors.New("atomic write failed")
+	sessionWriteFileAtomic = func(path string, data []byte) error {
+		return wantErr
+	}
+
+	sess.History = []string{"user: after"}
+	err := sm.Save(sess)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Save() error = %v, want %v", err, wantErr)
+	}
+
+	filename, err := encodedSessionFilename(sess.Key)
+	if err != nil {
+		t.Fatalf("encodedSessionFilename() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "sessions", filename))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var persisted Session
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if len(persisted.History) != 1 || persisted.History[0] != "user: before" {
+		t.Fatalf("persisted.History = %#v, want original content preserved", persisted.History)
 	}
 }

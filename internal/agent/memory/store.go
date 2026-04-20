@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/local/picobot/internal/missioncontrol"
 )
 
 // MemoryItem is a stored memory entry.
@@ -28,6 +30,10 @@ type MemoryStore struct {
 	long      []MemoryItem
 	short     []MemoryItem
 	mu        sync.RWMutex
+}
+
+var memoryWriteFileAtomic = func(path string, data []byte) error {
+	return missioncontrol.WriteStoreFileAtomicMode(path, data, 0o644)
 }
 
 // NewMemoryStore creates an in-memory store with short-term limit (e.g., 100).
@@ -137,7 +143,7 @@ func (s *MemoryStore) WriteLongTerm(content string) error {
 		return err
 	}
 	path := filepath.Join(s.memoryDir, "MEMORY.md")
-	return os.WriteFile(path, []byte(content), 0o644)
+	return memoryWriteFileAtomic(path, []byte(content))
 }
 
 // ReadToday reads today's memory note file (YYYY-MM-DD.md)
@@ -250,7 +256,7 @@ func (s *MemoryStore) WriteFile(name, content string) error {
 	if err := os.MkdirAll(s.memoryDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.memoryDir, name), []byte(content), 0o644)
+	return memoryWriteFileAtomic(filepath.Join(s.memoryDir, name), []byte(content))
 }
 
 // DeleteFile deletes a dated memory file (YYYY-MM-DD.md only).
