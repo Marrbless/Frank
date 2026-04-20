@@ -106,12 +106,7 @@ func (w *WriteMemoryTool) Execute(ctx context.Context, args map[string]interface
 		return "appended to today", nil
 	case "long":
 		if appendFlag {
-			prev, err := w.mem.ReadLongTerm()
-			if err != nil {
-				return "", err
-			}
-			new := prev + "\n" + content
-			if err := w.mem.WriteLongTerm(new); err != nil {
+			if err := w.mem.AppendLongTerm(content); err != nil {
 				return "", err
 			}
 			return "appended to long-term memory", nil
@@ -124,4 +119,3 @@ func (w *WriteMemoryTool) Execute(ctx context.Context, args map[string]interface
 		return "", fmt.Errorf("write_memory: unknown target '%s'", target)
 	}
 }
-

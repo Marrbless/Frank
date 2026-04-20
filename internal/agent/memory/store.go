@@ -150,6 +150,32 @@ func (s *MemoryStore) WriteLongTerm(content string) error {
 	return memoryWriteFileAtomic(path, []byte(content))
 }
 
+// AppendLongTerm appends content to MEMORY.md while serializing concurrent
+// appends through the store mutex. A retried append with the same trailing
+// content is treated as idempotent and does not append a duplicate tail line.
+func (s *MemoryStore) AppendLongTerm(content string) error {
+	if err := os.MkdirAll(s.memoryDir, 0o755); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.memoryDir, "MEMORY.md")
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	prev := string(b)
+	addition := "\n" + content
+	if strings.HasSuffix(prev, addition) {
+		return nil
+	}
+
+	return memoryWriteFileAtomic(path, []byte(prev+addition))
+}
+
 // ReadToday reads today's memory note file (YYYY-MM-DD.md)
 func (s *MemoryStore) ReadToday() (string, error) {
 	name := time.Now().UTC().Format("2006-01-02") + ".md"

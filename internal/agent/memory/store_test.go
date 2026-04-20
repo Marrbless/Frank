@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -180,5 +182,59 @@ func TestAppendTodaySyncFailureReturnsError(t *testing.T) {
 	err := s.AppendToday("note 1")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("AppendToday() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestAppendLongTermRetryIsIdempotentAtTail(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	if err := s.AppendLongTerm("LT1"); err != nil {
+		t.Fatalf("AppendLongTerm(first) error = %v", err)
+	}
+	if err := s.AppendLongTerm("LT1"); err != nil {
+		t.Fatalf("AppendLongTerm(retry) error = %v", err)
+	}
+
+	got, err := s.ReadLongTerm()
+	if err != nil {
+		t.Fatalf("ReadLongTerm() error = %v", err)
+	}
+	if strings.Count(got, "LT1") != 1 {
+		t.Fatalf("ReadLongTerm() = %q, want LT1 appended once", got)
+	}
+}
+
+func TestAppendLongTermConcurrentAppendsPreserveBothValues(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	values := []string{"alpha", "beta"}
+	errCh := make(chan error, len(values))
+	var wg sync.WaitGroup
+	for _, value := range values {
+		value := value
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- s.AppendLongTerm(value)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("AppendLongTerm() error = %v", err)
+		}
+	}
+
+	got, err := s.ReadLongTerm()
+	if err != nil {
+		t.Fatalf("ReadLongTerm() error = %v", err)
+	}
+	for _, value := range values {
+		if !strings.Contains(got, value) {
+			t.Fatalf("ReadLongTerm() = %q, want value %q preserved", got, value)
+		}
 	}
 }

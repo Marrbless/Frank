@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/local/picobot/internal/agent/memory"
@@ -68,5 +69,67 @@ func TestWriteMemoryTool_RejectsHeartbeatContent(t *testing.T) {
 	_, err := w.Execute(context.Background(), map[string]interface{}{"target": "today", "content": "user prefers dark mode"})
 	if err != nil {
 		t.Fatalf("expected legitimate content to be accepted, got: %v", err)
+	}
+}
+
+func TestWriteMemoryTool_LongAppendRetryIsIdempotentAtTail(t *testing.T) {
+	tmp := t.TempDir()
+	mem := memory.NewMemoryStoreWithWorkspace(tmp, 10)
+	w := NewWriteMemoryTool(mem)
+
+	args := map[string]interface{}{"target": "long", "content": "LT1", "append": true}
+	if _, err := w.Execute(context.Background(), args); err != nil {
+		t.Fatalf("first Execute() error = %v", err)
+	}
+	if _, err := w.Execute(context.Background(), args); err != nil {
+		t.Fatalf("retry Execute() error = %v", err)
+	}
+
+	lt, err := mem.ReadLongTerm()
+	if err != nil {
+		t.Fatalf("ReadLongTerm() error = %v", err)
+	}
+	if strings.Count(lt, "LT1") != 1 {
+		t.Fatalf("ReadLongTerm() = %q, want LT1 appended once", lt)
+	}
+}
+
+func TestWriteMemoryTool_LongAppendConcurrentCallsPreserveBothValues(t *testing.T) {
+	tmp := t.TempDir()
+	mem := memory.NewMemoryStoreWithWorkspace(tmp, 10)
+	w := NewWriteMemoryTool(mem)
+
+	values := []string{"alpha", "beta"}
+	errCh := make(chan error, len(values))
+	var wg sync.WaitGroup
+	for _, value := range values {
+		value := value
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := w.Execute(context.Background(), map[string]interface{}{
+				"target":  "long",
+				"content": value,
+				"append":  true,
+			})
+			errCh <- err
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+	}
+
+	lt, err := mem.ReadLongTerm()
+	if err != nil {
+		t.Fatalf("ReadLongTerm() error = %v", err)
+	}
+	for _, value := range values {
+		if !strings.Contains(lt, value) {
+			t.Fatalf("ReadLongTerm() = %q, want value %q preserved", lt, value)
+		}
 	}
 }
