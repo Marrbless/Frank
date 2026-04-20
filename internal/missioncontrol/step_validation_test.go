@@ -610,6 +610,22 @@ func TestCompleteRuntimeStepDiscussionRejectsSideEffects(t *testing.T) {
 	}
 }
 
+func TestHasDiscussionSideEffectsIgnoresSpawn(t *testing.T) {
+	t.Parallel()
+
+	if hasDiscussionSideEffects([]RuntimeToolCallEvidence{{ToolName: "spawn"}}) {
+		t.Fatal("hasDiscussionSideEffects() = true, want false for non-exposed spawn")
+	}
+}
+
+func TestHasDiscussionSideEffectsStillTreatsCronAsEffectful(t *testing.T) {
+	t.Parallel()
+
+	if !hasDiscussionSideEffects([]RuntimeToolCallEvidence{{ToolName: "cron"}}) {
+		t.Fatal("hasDiscussionSideEffects() = false, want true for exposed cron")
+	}
+}
+
 func TestCompleteRuntimeStepOneShotCodePausesAndRecordsCompletion(t *testing.T) {
 	t.Parallel()
 

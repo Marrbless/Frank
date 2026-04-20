@@ -551,7 +551,7 @@ func stepValidatorKind(ec ExecutionContext) StepValidatorKind {
 func hasDiscussionSideEffects(tools []RuntimeToolCallEvidence) bool {
 	for _, tool := range tools {
 		switch tool.ToolName {
-		case "exec", "message", "write_memory", "edit_memory", "delete_memory", "cron", "spawn", "create_skill", "delete_skill":
+		case "exec", "message", "write_memory", "edit_memory", "delete_memory", "cron", "create_skill", "delete_skill":
 			return true
 		case "filesystem":
 			if toolArgString(tool.Arguments, "action") == "write" {
