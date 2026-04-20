@@ -31,7 +31,7 @@ func DefaultConfig() Config {
 		},
 		MCPServers: map[string]MCPServerConfig{},
 		Providers: ProvidersConfig{
-			OpenAI: &ProviderConfig{APIKey: "sk-or-v1-REPLACE_ME", APIBase: "https://openrouter.ai/api/v1"},
+			OpenAI: &ProviderConfig{APIKey: "REPLACE_WITH_REAL_API_KEY", APIBase: "https://openrouter.ai/api/v1"},
 		},
 	}
 }

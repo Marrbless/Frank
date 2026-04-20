@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,11 +62,14 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("workspace mismatch: got %s want %s", parsed.Agents.Defaults.Workspace, d)
 	}
 	// verify provider defaults: OpenAI present with placeholder
-	if parsed.Providers.OpenAI == nil || parsed.Providers.OpenAI.APIKey != "sk-or-v1-REPLACE_ME" {
+	if parsed.Providers.OpenAI == nil || parsed.Providers.OpenAI.APIKey != "REPLACE_WITH_REAL_API_KEY" {
 		t.Fatalf("expected default OpenAI API key placeholder, got %v", parsed.Providers.OpenAI)
 	}
 	if parsed.Providers.OpenAI.APIBase != "https://openrouter.ai/api/v1" {
 		t.Fatalf("expected default OpenAI API base, got %q", parsed.Providers.OpenAI.APIBase)
+	}
+	if strings.Contains(parsed.Providers.OpenAI.APIKey, "sk-") {
+		t.Fatalf("expected non-token-shaped placeholder, got %q", parsed.Providers.OpenAI.APIKey)
 	}
 }
 

@@ -2,6 +2,8 @@
 
 Picobot is configured via `~/.picobot/config.json`. Run `picobot onboard` to generate the default config.
 
+`config.json` stores provider credentials and channel tokens in plaintext. Keep it local, restrict filesystem access appropriately, and do not paste live secrets into logs, screenshots, issue reports, or chat transcripts.
+
 ## Full Default Config
 
 ```json
@@ -45,7 +47,7 @@ Picobot is configured via `~/.picobot/config.json`. Run `picobot onboard` to gen
   },
   "providers": {
     "openai": {
-      "apiKey": "sk-or-v1-REPLACE_ME",
+      "apiKey": "REPLACE_WITH_REAL_API_KEY",
       "apiBase": "https://openrouter.ai/api/v1"
     }
   }
@@ -131,7 +133,7 @@ Connect to any OpenAI-compatible API service (OpenAI, OpenRouter, Ollama, etc.).
 {
   "providers": {
     "openai": {
-      "apiKey": "sk-or-v1-your-key-here",
+      "apiKey": "<REPLACE_WITH_REAL_PROVIDER_API_KEY>",
       "apiBase": "https://openrouter.ai/api/v1"
     }
   }
@@ -145,7 +147,7 @@ Connect to any OpenAI-compatible API service (OpenAI, OpenRouter, Ollama, etc.).
 {
   "providers": {
     "openai": {
-      "apiKey": "sk-proj-...",
+      "apiKey": "<REPLACE_WITH_OPENAI_API_KEY>",
       "apiBase": "https://api.openai.com/v1"
     }
   }
@@ -231,12 +233,14 @@ For MCP servers accessible over HTTP (Streamable HTTP or SSE). Supports bearer t
     "via-remote": {
       "url": "https://mcp.example.com/mcp",
       "headers": {
-        "Authorization": "Bearer YOUR_TOKEN"
+        "Authorization": "Bearer <REPLACE_WITH_MCP_TOKEN>"
       }
     }
   }
 }
 ```
+
+Keep real header values out of pasted logs and screenshots. If you need to share a config snippet, replace secrets with placeholders like the example above.
 
 ### MCPServerConfig fields
 
@@ -278,7 +282,7 @@ Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+      "token": "<REPLACE_WITH_TELEGRAM_BOT_TOKEN>",
       "allowFrom": ["8881234567"]
     }
   }
@@ -298,7 +302,7 @@ Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
   "channels": {
     "discord": {
       "enabled": true,
-      "token": "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.XXXXXX.XXXXXXXXXXXXXXXXXXXXXXXX",
+      "token": "<REPLACE_WITH_DISCORD_BOT_TOKEN>",
       "allowFrom": ["123456789012345678"]
     }
   }
@@ -329,8 +333,8 @@ The Discord bot uses the Gateway WebSocket API for receiving messages and the RE
   "channels": {
     "slack": {
       "enabled": true,
-      "appToken": "xapp-1-AAAAAAAAAAAAAAAAAAAA",
-      "botToken": "xoxb-AAAAAAAAAA-AAAAAAAAAA-AAAAAAAAAAAAAAAAAAAAAA",
+      "appToken": "<REPLACE_WITH_SLACK_APP_TOKEN>",
+      "botToken": "<REPLACE_WITH_SLACK_BOT_TOKEN>",
       "allowUsers": ["U0123456789"],
       "allowChannels": ["C0123456789"]
     }
@@ -415,7 +419,7 @@ When running with Docker, Picobot reads `~/.picobot/config.json` and then applie
 | `PICOBOT_MAX_TOKENS` | `agents.defaults.maxTokens` | Maximum tokens for LLM responses |
 | `PICOBOT_MAX_TOOL_ITERATIONS` | `agents.defaults.maxToolIterations` | Maximum tool iterations per request |
 
-Provider credentials and channel tokens must be set in `~/.picobot/config.json` or through the relevant interactive onboarding/login flows.
+Provider credentials and channel tokens must be set in `~/.picobot/config.json` or through the relevant interactive onboarding/login flows. `picobot channels login` hides token entry on supported terminals.
 
 ---
 
@@ -459,18 +463,18 @@ The workspace directory (default `~/.picobot/workspace`) contains files that sha
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "YOUR_TELEGRAM_BOT_TOKEN",
+      "token": "<REPLACE_WITH_TELEGRAM_BOT_TOKEN>",
       "allowFrom": ["YOUR_TELEGRAM_USER_ID"]
     },
     "discord": {
       "enabled": true,
-      "token": "YOUR_DISCORD_BOT_TOKEN",
+      "token": "<REPLACE_WITH_DISCORD_BOT_TOKEN>",
       "allowFrom": ["YOUR_DISCORD_USER_ID"]
     }
   },
   "providers": {
     "openai": {
-      "apiKey": "sk-or-v1-YOUR_KEY",
+      "apiKey": "<REPLACE_WITH_REAL_PROVIDER_API_KEY>",
       "apiBase": "https://openrouter.ai/api/v1"
     }
   }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -132,6 +133,43 @@ func writeMissionInspectNotificationsCapabilityFixtures(t *testing.T) string {
 		t.Fatalf("StoreTelegramNotificationsCapabilityExposure() error = %v", err)
 	}
 	return root
+}
+
+func TestPromptSecretFallsBackToReaderWhenNotTerminal(t *testing.T) {
+	previousIsTerminal := promptSecretIsTerminal
+	previousReadPassword := promptSecretReadPassword
+	promptSecretIsTerminal = func(fd int) bool { return false }
+	promptSecretReadPassword = func(fd int) ([]byte, error) {
+		t.Fatal("promptSecretReadPassword should not be called when stdin is not a terminal")
+		return nil, nil
+	}
+	defer func() {
+		promptSecretIsTerminal = previousIsTerminal
+		promptSecretReadPassword = previousReadPassword
+	}()
+
+	reader := bufio.NewReader(strings.NewReader(" visible-secret \n"))
+	if got, want := promptSecret(reader, "Bot token: "), "visible-secret"; got != want {
+		t.Fatalf("promptSecret() = %q, want %q", got, want)
+	}
+}
+
+func TestPromptSecretUsesHiddenInputWhenTerminalAvailable(t *testing.T) {
+	previousIsTerminal := promptSecretIsTerminal
+	previousReadPassword := promptSecretReadPassword
+	promptSecretIsTerminal = func(fd int) bool { return true }
+	promptSecretReadPassword = func(fd int) ([]byte, error) {
+		return []byte(" hidden-secret \n"), nil
+	}
+	defer func() {
+		promptSecretIsTerminal = previousIsTerminal
+		promptSecretReadPassword = previousReadPassword
+	}()
+
+	reader := bufio.NewReader(strings.NewReader("should-not-be-used\n"))
+	if got, want := promptSecret(reader, "Bot token: "), "hidden-secret"; got != want {
+		t.Fatalf("promptSecret() = %q, want %q", got, want)
+	}
 }
 
 func writeMissionInspectSharedStorageCapabilityFixtures(t *testing.T) string {

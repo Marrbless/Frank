@@ -36,18 +36,19 @@ Picobot runs happily on a **$5/mo VPS**, a Raspberry Pi, or even an old Android 
 
 ```sh
 docker run -d --name picobot \
-  -e OPENAI_API_KEY="your-key" \
+  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
   -e OPENAI_API_BASE="https://openrouter.ai/api/v1" \
   -e PICOBOT_MODEL="openrouter/free" \
   -e PICOBOT_MAX_TOKENS=8192 \
   -e PICOBOT_MAX_TOOL_ITERATIONS=100 \
-  -e TELEGRAM_BOT_TOKEN="your-telegram-token" \
+  -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
   -v ./picobot-data:/home/picobot/.picobot \
   --restart unless-stopped \
   louisho5/picobot:latest
 ```
 
 All config, memory, and skills are persisted in `./picobot-data` on your host.
+Export secrets in your shell or inject them from your secret store first. Avoid pasting live keys or tokens directly into recorded shell commands, screenshots, issue reports, or chat transcripts.
 
 ### Docker Compose
 
@@ -60,12 +61,12 @@ services:
     container_name: picobot
     restart: unless-stopped
     environment:
-      - OPENAI_API_KEY=your-key
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=https://openrouter.ai/api/v1
       - PICOBOT_MODEL=openrouter/free
       - PICOBOT_MAX_TOKENS=8192
       - PICOBOT_MAX_TOOL_ITERATIONS=100
-      - TELEGRAM_BOT_TOKEN=your-telegram-token
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_ALLOW_FROM=your-user-id
     volumes:
       - ./picobot-data:/home/picobot/.picobot
@@ -153,7 +154,7 @@ Skills are just markdown files in `~/.picobot/workspace/skills/`. Create them vi
 Chat with your agent from your phone. Set up in 2 minutes:
 
 1. Message [@BotFather](https://t.me/BotFather) — `/newbot` — copy the token
-2. Add the token to config or pass as `TELEGRAM_BOT_TOKEN` env var
+2. Add the token to config or pass as `TELEGRAM_BOT_TOKEN` env var without pasting the live value into shared logs or transcripts
 3. Start the communication gateway
 
 See [HOW_TO_START.md](docs/HOW_TO_START.md) for a detailed BotFather walkthrough.
@@ -166,7 +167,7 @@ Connect your agent to Discord servers:
 2. Create a new application and bot
 3. Enable **Message Content Intent** in Bot settings
 4. Copy the bot token
-5. Add to config under `channels.discord` in your `config.json`
+5. Add it to config under `channels.discord` in your `config.json` without sharing the live token in logs or screenshots
 
 The bot will respond when mentioned in servers, or to all messages in DMs.
 
@@ -181,7 +182,7 @@ Connect your agent to Slack via Socket Mode:
 3. Add Bot Token scopes: `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `files:read`
 4. Enable Event Subscriptions and subscribe to: `app_mention`, `message.im`
 5. Install the app to your workspace and copy the Bot Token (`xoxb-...`)
-6. Add to config under `channels.slack` in your `config.json`
+6. Add both tokens to `channels.slack` in your `config.json` without pasting the live values into recorded commands or screenshots
 
 The bot responds when mentioned in channels, and responds to all DMs from allowed users (DMs ignore the channel allowlist).
 
@@ -192,6 +193,8 @@ A configurable periodic check (default: 60s) that reads `HEARTBEAT.md` for sched
 ## Configuration
 
 Picobot uses a single JSON config at `~/.picobot/config.json`:
+
+This file stores provider credentials and channel tokens in plaintext. Keep it local, restrict filesystem access appropriately, and do not paste live values into logs, screenshots, issue reports, or chat transcripts.
 
 ```json
 {
@@ -205,26 +208,26 @@ Picobot uses a single JSON config at `~/.picobot/config.json`:
   },
   "providers": {
     "openai": {
-      "apiKey": "sk-or-v1-YOUR_KEY",
+      "apiKey": "<REPLACE_WITH_REAL_PROVIDER_API_KEY>",
       "apiBase": "https://openrouter.ai/api/v1"
     }
   },
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "YOUR_TELEGRAM_BOT_TOKEN",
+      "token": "<REPLACE_WITH_TELEGRAM_BOT_TOKEN>",
       "allowFrom": ["YOUR_TELEGRAM_USER_ID"]
     },
     "discord": {
       "enabled": true,
-      "token": "YOUR_DISCORD_BOT_TOKEN",
+      "token": "<REPLACE_WITH_DISCORD_BOT_TOKEN>",
       "allowFrom": ["YOUR_DISCORD_USER_ID"]
     }
   }
 }
 ```
 
-Supports any **OpenAI-compatible API** (OpenAI, OpenRouter, Ollama, etc.). See [CONFIG.md](docs/CONFIG.md) for more details.
+Supports any **OpenAI-compatible API** (OpenAI, OpenRouter, Ollama, etc.). The interactive `picobot channels login` flow now hides token input on supported terminals. See [CONFIG.md](docs/CONFIG.md) for more details.
 
 ## CLI Reference
 

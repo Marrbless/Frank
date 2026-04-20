@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/agent/memory"
@@ -43,6 +44,8 @@ var newGatewayLogTicker = func(interval time.Duration) *time.Ticker {
 var newStoreLogWriter = missioncontrol.NewStoreLogWriter
 var packageCurrentLogSegmentOnGatewayStartup = missioncontrol.PackageCurrentLogSegmentOnGatewayStartup
 var packageCurrentLogSegmentOnUTCDayRollover = missioncontrol.PackageCurrentLogSegmentOnUTCDayRollover
+var promptSecretIsTerminal = term.IsTerminal
+var promptSecretReadPassword = term.ReadPassword
 
 const missionStoreWriterLeaseHolderAnnotation = "picobot/mission-store-writer-lease-holder"
 const scheduledTriggerStepID = "scheduled_trigger"
@@ -2999,6 +3002,26 @@ func promptLine(reader *bufio.Reader, prompt string) string {
 	return strings.TrimSpace(line)
 }
 
+// promptSecret prints a prompt and reads secret input without terminal echo when
+// stdin is an interactive terminal. In non-terminal environments, it falls back
+// to the existing line-based reader path so scripted use and tests still work.
+func promptSecret(reader *bufio.Reader, prompt string) string {
+	fmt.Print(prompt)
+
+	fd := int(os.Stdin.Fd())
+	if promptSecretIsTerminal(fd) {
+		line, err := promptSecretReadPassword(fd)
+		fmt.Println()
+		if err == nil {
+			return strings.TrimSpace(string(line))
+		}
+		fmt.Fprintln(os.Stderr, "warning: could not disable terminal echo for secret input; falling back to visible input")
+	}
+
+	line, _ := reader.ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
 // parseAllowFrom splits a comma-separated string into a trimmed slice.
 // Returns an empty slice (not nil) if the input is blank.
 func parseAllowFrom(s string) []string {
@@ -3024,8 +3047,10 @@ func setupTelegramInteractive(reader *bufio.Reader, cfg config.Config, cfgPath s
 	fmt.Println("  2. Send /newbot and follow the prompts")
 	fmt.Println("  3. Copy the token it gives you")
 	fmt.Println()
+	fmt.Println("Token input is hidden on supported terminals.")
+	fmt.Println()
 
-	token := promptLine(reader, "Bot token: ")
+	token := promptSecret(reader, "Bot token: ")
 	if token == "" {
 		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
 		return
@@ -3064,8 +3089,10 @@ func setupDiscordInteractive(reader *bufio.Reader, cfg config.Config, cfgPath st
 	fmt.Println("  4. Invite the bot to your server via OAuth2 → URL Generator")
 	fmt.Println("  5. Copy the token and paste it below")
 	fmt.Println()
+	fmt.Println("Token input is hidden on supported terminals.")
+	fmt.Println()
 
-	token := promptLine(reader, "Bot token: ")
+	token := promptSecret(reader, "Bot token: ")
 	if token == "" {
 		fmt.Fprintln(os.Stderr, "error: token cannot be empty")
 		return
@@ -3116,13 +3143,15 @@ func setupSlackInteractive(reader *bufio.Reader, cfg config.Config, cfgPath stri
 	fmt.Println("     - message.im")
 	fmt.Println("  8. Click Install to Workspace and save the Bot User OAuth Token (xoxb-...) first")
 	fmt.Println()
+	fmt.Println("Token input is hidden on supported terminals.")
+	fmt.Println()
 
-	appToken := promptLine(reader, "App token (xapp-...): ")
+	appToken := promptSecret(reader, "App token (xapp-...): ")
 	if appToken == "" {
 		fmt.Fprintln(os.Stderr, "error: app token cannot be empty")
 		return
 	}
-	botToken := promptLine(reader, "Bot token (xoxb-...): ")
+	botToken := promptSecret(reader, "Bot token (xoxb-...): ")
 	if botToken == "" {
 		fmt.Fprintln(os.Stderr, "error: bot token cannot be empty")
 		return

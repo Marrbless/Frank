@@ -86,14 +86,14 @@ This creates:
 
 ## Step 3: Configure API Key
 
-Edit `~/.picobot/config.json` and replace the placeholder API key:
+Edit `~/.picobot/config.json` and replace the placeholder value with a real provider key. Keep the file local: it stores credentials in plaintext, so do not paste live keys into terminal transcripts, screenshots, issue reports, or chat logs.
 
 ```sh
 # Open in your editor
 nano ~/.picobot/config.json
 ```
 
-Change `"sk-or-v1-REPLACE_ME"` to your actual API key.
+Change `"REPLACE_WITH_REAL_API_KEY"` to a real provider key that you keep local.
 
 Also set your preferred model (e.g., `google/gemini-2.5-flash` for OpenRouter, `gpt-4o-mini` for OpenAI):
 
@@ -106,7 +106,7 @@ Also set your preferred model (e.g., `google/gemini-2.5-flash` for OpenRouter, `
   },
   "providers": {
     "openai": {
-      "apiKey": "sk-or-v1-YOUR_ACTUAL_KEY",
+      "apiKey": "<REPLACE_WITH_REAL_PROVIDER_API_KEY>",
       "apiBase": "https://openrouter.ai/api/v1"
     }
   }
@@ -267,10 +267,10 @@ After creation, BotFather will reply with a message like:
 ```
 Done! Congratulations on your new bot. You will find it at t.me/my_picobot_bot.
 Use this token to access the HTTP API:
-123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+<telegram-bot-token-from-botfather>
 ```
 
-Copy the token — you'll need it in the next step.
+Copy the token locally — you'll need it in the next step. Do not paste the live token into screenshots, issue reports, or chat transcripts.
 
 ### 4. Get Your Telegram User ID
 
@@ -289,17 +289,18 @@ Run the interactive channel login wizard:
 ```
 
 Select **1) Telegram**, then follow the prompts — it will ask for your bot token and your user ID, enable the channel, and save the config automatically.
+On supported terminals, token entry is hidden while you type.
 
 #### Option 2
 
-Edit `~/.picobot/config.json` and add your Telegram settings:
+Edit `~/.picobot/config.json` and add your Telegram settings. The example below uses placeholders only:
 
 ```json
 {
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+      "token": "<REPLACE_WITH_TELEGRAM_BOT_TOKEN>",
       "allowFrom": ["8881234567"]
     }
   }
@@ -367,7 +368,7 @@ In the **Bot** tab, scroll down to **Privileged Gateway Intents** and enable:
 
 ### 4. Copy the Bot Token
 
-In the **Bot** tab, click **"Reset Token"** to generate a new token. Copy it — you'll need it in the next step.
+In the **Bot** tab, click **"Reset Token"** to generate a new token. Copy it locally — you'll need it in the next step.
 
 > ⚠️ Keep your bot token secret! Anyone with the token can control your bot.
 
@@ -394,17 +395,18 @@ Run the interactive channel login wizard:
 ```
 
 Select **2) Discord**, then follow the prompts — it will ask for your bot token and your user ID, enable the channel, and save the config automatically.
+On supported terminals, token entry is hidden while you type.
 
 #### Option 2
 
-Edit `~/.picobot/config.json` and add your Discord settings:
+Edit `~/.picobot/config.json` and add your Discord settings. The example below uses placeholders only:
 
 ```json
 {
   "channels": {
     "discord": {
       "enabled": true,
-      "token": "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.XXXXXX.XXXXXXXXXXXXXXXXXXXXXXXX",
+      "token": "<REPLACE_WITH_DISCORD_BOT_TOKEN>",
       "allowFrom": ["123456789012345678"]
     }
   }
@@ -439,7 +441,7 @@ Go to **Settings → Socket Mode → App Level Token**.
 
 ![slack_02](slack_02.png)
 
- Generate a token with the `connections:write` scope. Copy it — it starts with `xapp-`.
+ Generate a token with the `connections:write` scope. Copy it locally — it starts with `xapp-`.
 
 > Save this token now, you will need it shortly.
 
@@ -474,7 +476,7 @@ Go to **Features → Event Subscriptions** and enable Events. Then go to **Subsc
 
 ### 6. Install the App
 
-Go back to **Features → OAuth & Permissions**. Click **Install to Workspace** and copy the **Bot User OAuth Token** (starts with `xoxb-`).
+Go back to **Features → OAuth & Permissions**. Click **Install to Workspace** and copy the **Bot User OAuth Token** (starts with `xoxb-`) locally.
 
 > Save this token as well before continuing.
 
@@ -491,18 +493,19 @@ Run the interactive channel login wizard:
 ```
 
 Select **3) Slack**, then follow the prompts — it will ask for your App Token, Bot Token, and allowlists, enable the channel, and save the config automatically.
+On supported terminals, token entry is hidden while you type.
 
 #### Option 2
 
-Edit `~/.picobot/config.json` and add your Slack settings:
+Edit `~/.picobot/config.json` and add your Slack settings. The example below uses placeholders only:
 
 ```json
 {
   "channels": {
     "slack": {
       "enabled": true,
-      "appToken": "xapp-1-AAAAAAAAAAAAAAAAAAAA",
-      "botToken": "xoxb-AAAAAAAAAA-AAAAAAAAAA-AAAAAAAAAAAAAAAAAAAAAA",
+      "appToken": "<REPLACE_WITH_SLACK_APP_TOKEN>",
+      "botToken": "<REPLACE_WITH_SLACK_BOT_TOKEN>",
       "allowUsers": ["U0123456789"],
       "allowChannels": ["C0123456789"]
     }
