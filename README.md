@@ -307,6 +307,7 @@ Want to contribute? **Open an issue** or **PR** with your ideas!
 
 ## Docs
 
+- [CANONICAL_RUNTIME_TRUTH.md](docs/CANONICAL_RUNTIME_TRUTH.md) — current canonical runtime/repo truth and routing for Frank work
 - [HOW_TO_START.md](docs/HOW_TO_START.md) — step-by-step getting started guide
 - [CONFIG.md](docs/CONFIG.md) — full configuration reference
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — development, testing, and Docker publishing

@@ -149,6 +149,8 @@ This starts the agent loop, heartbeat, and any enabled channels (e.g., Telegram,
 
 Frank's mission-control surface is driven by gateway flags, not by `config.json`.
 
+If you are doing repo work or need the current canonical runtime/repo truth before changing anything, start with [CANONICAL_RUNTIME_TRUTH.md](./CANONICAL_RUNTIME_TRUTH.md).
+
 Use these paths as the operator-facing runtime surfaces:
 
 - `--mission-file` and `--mission-step` to bootstrap the active job and step

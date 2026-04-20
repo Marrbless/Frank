@@ -1,5 +1,7 @@
 # Frank Dev Workflow
 
+> Historical workflow note: this document describes an older desktop-centric handoff model and is not the current canonical runtime-truth document for this repo. Start with [CANONICAL_RUNTIME_TRUTH.md](./CANONICAL_RUNTIME_TRUTH.md) for current implementation truth, authority routing, and the distinction between current runtime behavior and future V4 target truth.
+
 ## Purpose
 
 Define the repo workflow for Frank-focused development when work moves between the desktop lab and a laptop.
