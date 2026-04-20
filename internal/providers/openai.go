@@ -441,12 +441,19 @@ func (p *OpenAIProvider) doJSON(ctx context.Context, url string, body []byte) ([
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyText := strings.TrimSpace(string(respBody))
-		log.Printf("OpenAI API non-2xx: %s body=%q", resp.Status, bodyText)
-		if bodyText == "" {
+		requestID := strings.TrimSpace(resp.Header.Get("X-Request-Id"))
+		if requestID == "" {
+			requestID = strings.TrimSpace(resp.Header.Get("Request-Id"))
+		}
+		if requestID == "" {
+			log.Printf("OpenAI API non-2xx: status=%s body_bytes=%d", resp.Status, len(respBody))
+		} else {
+			log.Printf("OpenAI API non-2xx: status=%s request_id=%s body_bytes=%d", resp.Status, requestID, len(respBody))
+		}
+		if requestID == "" {
 			return nil, fmt.Errorf("OpenAI API error: %s", resp.Status)
 		}
-		return nil, fmt.Errorf("OpenAI API error: %s - %s", resp.Status, bodyText)
+		return nil, fmt.Errorf("OpenAI API error: %s (request id: %s)", resp.Status, requestID)
 	}
 	return respBody, nil
 }

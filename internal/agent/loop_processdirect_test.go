@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,6 +70,23 @@ func TestProcessDirectExecutesToolCall(t *testing.T) {
 	}
 }
 
+func TestProcessDirectRedactsProviderErrors(t *testing.T) {
+	b := chat.NewHub(10)
+	prov := &providerErrorProvider{}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 5, "", nil, nil)
+
+	_, err := ag.ProcessDirect("hello", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect() error = nil, want provider error")
+	}
+	if got, want := err.Error(), "OpenAI API error: 401 Unauthorized"; got != want {
+		t.Fatalf("ProcessDirect() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "sk-secret") || strings.Contains(err.Error(), "private note") {
+		t.Fatalf("expected ProcessDirect() error to redact provider payload, got %q", err)
+	}
+}
+
 type deniedMessageToolProvider struct {
 	calls int
 }
@@ -101,6 +119,14 @@ func (p *finalResponseProvider) Chat(ctx context.Context, messages []providers.M
 }
 
 func (p *finalResponseProvider) GetDefaultModel() string { return "test" }
+
+type providerErrorProvider struct{}
+
+func (p *providerErrorProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	return providers.LLMResponse{}, fmt.Errorf("OpenAI API error: 401 Unauthorized - {\"token\":\"sk-secret\",\"prompt\":\"private note\"}")
+}
+
+func (p *providerErrorProvider) GetDefaultModel() string { return "test" }
 
 type filesystemArtifactProvider struct {
 	calls int

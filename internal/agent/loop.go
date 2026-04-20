@@ -28,6 +28,8 @@ var revokeApprovalCommandRE = regexp.MustCompile(`(?i)^\s*(revoke_approval)\s+(\
 var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
 var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
+var mcpHTTPStatusRE = regexp.MustCompile(`\bHTTP\s+(\d{3})\b`)
+var mcpJSONRPCErrorRE = regexp.MustCompile(`jsonrpc error\s+(-?\d+)`)
 
 const (
 	missionCheckInInterval      = 30 * time.Minute
@@ -152,7 +154,7 @@ func recordFailedToolAction(taskState *tools.TaskState, toolName string, toolErr
 		return "", false
 	}
 
-	exhausted, err := taskState.RecordFailedToolAction(toolName, toolErr.Error())
+	exhausted, err := taskState.RecordFailedToolAction(toolName, tools.SurfaceToolExecutionError(toolName, toolErr))
 	if err != nil {
 		log.Printf("mission runtime failed-action accounting failed: %v", err)
 		return "", false
@@ -232,6 +234,67 @@ func recordOperatorPauseAcknowledgement(taskState *tools.TaskState) (string, boo
 		return "Mission paused: budget exhausted.", true
 	}
 	return formatBudgetBlockedResponse(ec, runtime), true
+}
+
+func summarizeProviderError(err error) string {
+	if err == nil {
+		return "provider request failed"
+	}
+
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "provider request failed"
+	}
+	if strings.HasPrefix(msg, "OpenAI API error:") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(msg, "OpenAI API error:"))
+		if idx := strings.Index(trimmed, " - "); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:idx])
+		}
+		if trimmed == "" {
+			return "OpenAI API error"
+		}
+		return "OpenAI API error: " + trimmed
+	}
+
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "context deadline exceeded"):
+		return "provider request timed out"
+	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"):
+		return "provider connection failed"
+	default:
+		return "provider request failed"
+	}
+}
+
+func summarizeMCPConnectError(err error) string {
+	if err == nil {
+		return "connection failed"
+	}
+
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "connection failed"
+	}
+	if matches := mcpHTTPStatusRE.FindStringSubmatch(msg); len(matches) == 2 {
+		return fmt.Sprintf("connection failed (HTTP %s)", matches[1])
+	}
+	if matches := mcpJSONRPCErrorRE.FindStringSubmatch(msg); len(matches) == 2 {
+		return fmt.Sprintf("connection failed (jsonrpc error %s)", matches[1])
+	}
+
+	switch {
+	case strings.Contains(msg, "initialize:"):
+		return "initialize failed"
+	case strings.Contains(msg, "tools/list:"):
+		return "tools/list failed"
+	case strings.Contains(msg, "unexpected EOF"):
+		return "unexpected EOF"
+	case strings.Contains(msg, "no response in SSE stream"):
+		return "no response in SSE stream"
+	default:
+		return "connection failed"
+	}
 }
 
 func recordOperatorSetStepAcknowledgement(taskState *tools.TaskState) (string, bool) {
@@ -1130,7 +1193,7 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 			continue
 		}
 		if err != nil {
-			log.Printf("MCP server %q: failed to connect: %v", name, err)
+			log.Printf("MCP server %q: failed to connect: %s", name, summarizeMCPConnectError(err))
 			continue
 		}
 		mcpClients = append(mcpClients, client)
@@ -1408,7 +1471,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 				resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 				if err != nil {
-					log.Printf("provider error: %v", err)
+					log.Printf("provider error: %s", summarizeProviderError(err))
 					finalContent = "Sorry, I encountered an error while processing your request."
 					break
 				}
@@ -1426,10 +1489,9 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							break
 						}
 
-						argsJSON, _ := json.Marshal(tc.Arguments)
 						if a.enableToolActivity {
 							sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
-								fmt.Sprintf("🤖 Running: %s %s", tc.Name, argsJSON))
+								fmt.Sprintf("🤖 Running: %s (%s)", tc.Name, tools.SummarizeToolArguments(tc.Arguments)))
 						}
 
 						start := time.Now()
@@ -1469,11 +1531,12 @@ func (a *AgentLoop) Run(ctx context.Context) {
 								finalContent = budgetResponse
 								break
 							}
+							surfacedToolErr := tools.SurfaceToolExecutionError(tc.Name, err)
 							if a.enableToolActivity {
 								sendChannelNotification(a.hub, msg.Channel, msg.ChatID,
-									fmt.Sprintf("📢 %s failed (%s): %v", tc.Name, elapsed, err))
+									fmt.Sprintf("📢 %s failed (%s): %s", tc.Name, elapsed, surfacedToolErr))
 							}
-							res = "(tool error) " + err.Error()
+							res = "(tool error) " + surfacedToolErr
 						} else {
 							successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
 								ToolName:  tc.Name,
@@ -1584,7 +1647,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	for iteration := 0; iteration < a.maxIterations; iteration++ {
 		resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("%s", summarizeProviderError(err))
 		}
 
 		if !resp.HasToolCalls {
@@ -1641,7 +1704,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 				if budgetResponse, blocked := recordFailedToolAction(a.taskState, tc.Name, err); blocked {
 					return budgetResponse, nil
 				}
-				result = "(tool error) " + err.Error()
+				result = "(tool error) " + tools.SurfaceToolExecutionError(tc.Name, err)
 			} else {
 				successfulTools = append(successfulTools, missioncontrol.RuntimeToolCallEvidence{
 					ToolName:  tc.Name,

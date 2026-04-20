@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"reflect"
 	"strings"
@@ -345,6 +346,34 @@ func TestRegistryExecuteWithoutExecutionContextPreservesAuditBehavior(t *testing
 
 	if strings.Contains(logs, "[tool] audit") {
 		t.Fatalf("expected no audit log without execution context, got %q", logs)
+	}
+}
+
+func TestRegistryExecuteRedactsSensitiveArgsAndRemoteErrorsInLogs(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&stubTool{
+		name: "mcp_demo_lookup",
+		err:  fmt.Errorf("HTTP 401: {\"token\":\"sk-secret\",\"query\":\"private note\"}"),
+	})
+
+	logs := captureRegistryLogs(t, func() {
+		_, err := reg.Execute(context.Background(), "mcp_demo_lookup", map[string]interface{}{
+			"authorization": "Bearer sk-secret",
+			"query":         "private note",
+		})
+		if err == nil {
+			t.Fatal("Execute() error = nil, want tool failure")
+		}
+	})
+
+	if !strings.Contains(logs, "[tool] → mcp_demo_lookup arg_keys=[authorization query] arg_count=2") {
+		t.Fatalf("expected redacted arg summary, got %q", logs)
+	}
+	if !strings.Contains(logs, "[tool] ✗ mcp_demo_lookup failed after ") || !strings.Contains(logs, "MCP tool failed (HTTP 401)") {
+		t.Fatalf("expected redacted MCP failure summary, got %q", logs)
+	}
+	if strings.Contains(logs, "sk-secret") || strings.Contains(logs, "private note") || strings.Contains(logs, "{\"token\"") {
+		t.Fatalf("expected logs to exclude raw args and payloads, got %q", logs)
 	}
 }
 

@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +38,55 @@ func (f *FakeProvider) Chat(ctx context.Context, messages []providers.Message, t
 	return providers.LLMResponse{Content: "All done!"}, nil
 }
 func (f *FakeProvider) GetDefaultModel() string { return "fake" }
+
+type failingMCPTool struct{}
+
+func (t *failingMCPTool) Name() string { return "mcp_demo_lookup" }
+
+func (t *failingMCPTool) Description() string { return "failing MCP tool" }
+
+func (t *failingMCPTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{"type": "object"}
+}
+
+func (t *failingMCPTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+	return "", fmt.Errorf("HTTP 401: {\"token\":\"sk-secret\",\"detail\":\"private note\"}")
+}
+
+type failingMCPToolProvider struct {
+	calls           int
+	lastToolMessage string
+}
+
+func (p *failingMCPToolProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return providers.LLMResponse{
+			HasToolCalls: true,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "1",
+					Name: "mcp_demo_lookup",
+					Arguments: map[string]interface{}{
+						"authorization": "Bearer sk-secret",
+						"query":         "private note",
+					},
+				},
+			},
+		}, nil
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			p.lastToolMessage = messages[i].Content
+			break
+		}
+	}
+
+	return providers.LLMResponse{Content: "Done"}, nil
+}
+
+func (p *failingMCPToolProvider) GetDefaultModel() string { return "fake" }
 
 func TestAgentExecutesToolCall(t *testing.T) {
 	b := chat.NewHub(10)
@@ -77,6 +128,51 @@ func TestAgentExecutesToolCall(t *testing.T) {
 			// otherwise continue waiting until timeout
 		case <-deadline:
 			t.Fatalf("timeout waiting for final outbound message")
+		}
+	}
+}
+
+func TestAgentLoopRedactsToolActivityAndToolMessageErrors(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &failingMCPToolProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil, nil)
+	ag.tools.Register(&failingMCPTool{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go ag.Run(ctx)
+
+	in := chat.Inbound{Channel: "cli", SenderID: "user", ChatID: "one", Content: "trigger"}
+	select {
+	case b.In <- in:
+	default:
+		t.Fatalf("couldn't send inbound")
+	}
+
+	deadline := time.After(1 * time.Second)
+	var outputs []string
+	for {
+		select {
+		case out := <-b.Out:
+			outputs = append(outputs, out.Content)
+			if out.Content == "Done" {
+				joined := strings.Join(outputs, "\n")
+				if !strings.Contains(joined, "🤖 Running: mcp_demo_lookup (arg_keys=[authorization query] arg_count=2)") {
+					t.Fatalf("expected redacted running notification, got %q", joined)
+				}
+				if !strings.Contains(joined, "📢 mcp_demo_lookup failed (") || !strings.Contains(joined, "MCP tool failed (HTTP 401)") {
+					t.Fatalf("expected redacted failure notification, got %q", joined)
+				}
+				if strings.Contains(joined, "sk-secret") || strings.Contains(joined, "private note") {
+					t.Fatalf("expected outbound notifications to redact secrets, got %q", joined)
+				}
+				if got, want := p.lastToolMessage, "(tool error) MCP tool failed (HTTP 401)"; got != want {
+					t.Fatalf("provider saw tool message %q, want %q", got, want)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for final outbound message; outputs=%q", outputs)
 		}
 	}
 }

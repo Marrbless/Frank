@@ -2,10 +2,10 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +33,11 @@ type Registry struct {
 	auditEmitter    missioncontrol.AuditEmitter
 	missionRequired bool
 }
+
+var (
+	httpStatusInErrorRE = regexp.MustCompile(`\bHTTP\s+(\d{3})\b`)
+	jsonRPCErrorCodeRE  = regexp.MustCompile(`jsonrpc error\s+(-?\d+)`)
+)
 
 // NewRegistry constructs a new tool registry.
 func NewRegistry() *Registry {
@@ -181,16 +186,14 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 		}
 	}
 
-	// Log tool execution start
-	argsJSON, _ := json.Marshal(args)
-	log.Printf("[tool] → %s %s", name, argsJSON)
+	log.Printf("[tool] → %s %s", name, SummarizeToolArguments(args))
 	start := time.Now()
 
 	result, err := t.Execute(ctx, args)
 	elapsed := time.Since(start).Round(time.Millisecond)
 
 	if err != nil {
-		log.Printf("[tool] ✗ %s failed after %s: %v", name, elapsed, err)
+		log.Printf("[tool] ✗ %s failed after %s: %s", name, elapsed, SurfaceToolExecutionError(name, err))
 		return "", err
 	}
 
@@ -254,4 +257,92 @@ func surfacedToolRejectionCode(code missioncontrol.RejectionCode, reason string)
 	default:
 		return code
 	}
+}
+
+func SummarizeToolArguments(args map[string]interface{}) string {
+	if len(args) == 0 {
+		return "arg_keys=[] arg_count=0"
+	}
+
+	keys := make([]string, 0, len(args))
+	for key := range args {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return fmt.Sprintf("arg_keys=%v arg_count=%d", keys, len(keys))
+}
+
+func SurfaceToolExecutionError(name string, err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "tool execution failed"
+	}
+	if strings.HasPrefix(msg, "tool rejected:") {
+		return msg
+	}
+	if strings.HasPrefix(msg, "OpenAI API error:") {
+		return summarizeOpenAIProviderError(msg)
+	}
+	if strings.HasPrefix(name, "mcp_") {
+		if status := extractHTTPStatus(msg); status != "" {
+			return fmt.Sprintf("MCP tool failed (%s)", status)
+		}
+		if code := extractJSONRPCErrorCode(msg); code != "" {
+			return fmt.Sprintf("MCP tool failed (%s)", code)
+		}
+		return "MCP tool failed"
+	}
+	if isRemoteSensitiveTool(name, msg) {
+		if status := extractHTTPStatus(msg); status != "" {
+			return fmt.Sprintf("remote tool error (%s)", status)
+		}
+		if code := extractJSONRPCErrorCode(msg); code != "" {
+			return fmt.Sprintf("remote tool error (%s)", code)
+		}
+		return "remote tool error"
+	}
+	return msg
+}
+
+func isRemoteSensitiveTool(name, msg string) bool {
+	switch name {
+	case "web", "web_search", FrankZohoSendEmailToolName, FrankZohoManageReplyWorkItemToolName:
+		return true
+	}
+
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "http ") ||
+		strings.Contains(lower, "jsonrpc error") ||
+		strings.HasPrefix(lower, "tool error:")
+}
+
+func summarizeOpenAIProviderError(msg string) string {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(msg, "OpenAI API error:"))
+	if idx := strings.Index(trimmed, " - "); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	if trimmed == "" {
+		return "OpenAI API error"
+	}
+	return "OpenAI API error: " + trimmed
+}
+
+func extractHTTPStatus(msg string) string {
+	matches := httpStatusInErrorRE.FindStringSubmatch(msg)
+	if len(matches) != 2 {
+		return ""
+	}
+	return "HTTP " + matches[1]
+}
+
+func extractJSONRPCErrorCode(msg string) string {
+	matches := jsonRPCErrorCodeRE.FindStringSubmatch(msg)
+	if len(matches) != 2 {
+		return ""
+	}
+	return "jsonrpc error " + matches[1]
 }
