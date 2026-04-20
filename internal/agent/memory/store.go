@@ -36,6 +36,10 @@ var memoryWriteFileAtomic = func(path string, data []byte) error {
 	return missioncontrol.WriteStoreFileAtomicMode(path, data, 0o644)
 }
 
+var memorySyncFile = func(f *os.File) error {
+	return f.Sync()
+}
+
 // NewMemoryStore creates an in-memory store with short-term limit (e.g., 100).
 // Kept for tests and simple use-cases.
 func NewMemoryStore(limit int) *MemoryStore {
@@ -171,9 +175,18 @@ func (s *MemoryStore) AppendToday(text string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	_, err = fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), text)
-	return err
+	if _, err = fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), text); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = memorySyncFile(f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GetRecentMemories reads last N days' files and joins them with separators.

@@ -164,3 +164,21 @@ func TestWriteFileAtomicFailurePreservesExistingContent(t *testing.T) {
 		t.Fatalf("ReadFile() = %q, want %q", got, "before")
 	}
 }
+
+func TestAppendTodaySyncFailureReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	s := NewMemoryStoreWithWorkspace(tmp, 10)
+
+	original := memorySyncFile
+	t.Cleanup(func() { memorySyncFile = original })
+
+	wantErr := errors.New("sync failed")
+	memorySyncFile = func(f *os.File) error {
+		return wantErr
+	}
+
+	err := s.AppendToday("note 1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("AppendToday() error = %v, want %v", err, wantErr)
+	}
+}

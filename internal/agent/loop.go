@@ -1346,10 +1346,12 @@ func (a *AgentLoop) Run(ctx context.Context) {
 			rememberRe := rememberRE
 			if matches := rememberRe.FindStringSubmatch(trimmed); len(matches) == 2 {
 				note := matches[1]
+				response := "OK, I've remembered that."
 				if err := a.memory.AppendToday(note); err != nil {
 					log.Printf("error appending to memory: %v", err)
+					response = "I couldn't remember that because saving memory failed."
 				}
-				out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: "OK, I've remembered that."}
+				out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: response}
 				select {
 				case a.hub.Out <- out:
 				default:
@@ -1359,7 +1361,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				if !isSystemChannel(msg.Channel) {
 					sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
 					sess.AddMessage("user", msg.Content)
-					sess.AddMessage("assistant", "OK, I've remembered that.")
+					sess.AddMessage("assistant", response)
 					if err := a.sessions.Save(sess); err != nil {
 						log.Printf("error saving session: %v", err)
 					}
