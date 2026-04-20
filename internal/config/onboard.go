@@ -272,9 +272,6 @@ Delete a skill from skills/.
 
 ## Background Tasks
 
-### spawn
-Spawn a background subagent process.
-
 ### cron
 Schedule or manage cron jobs.
 `,

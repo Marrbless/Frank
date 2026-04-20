@@ -27,6 +27,15 @@ func TestInitializeWorkspaceCreatesFiles(t *testing.T) {
 		}
 	}
 
+	toolsPath := filepath.Join(d, "TOOLS.md")
+	toolsContent, err := os.ReadFile(toolsPath)
+	if err != nil {
+		t.Fatalf("reading %s failed: %v", toolsPath, err)
+	}
+	if strings.Contains(string(toolsContent), "### spawn") {
+		t.Fatalf("expected generated TOOLS.md to omit spawn, got:\n%s", toolsContent)
+	}
+
 	// Verify embedded skills were extracted
 	embeddedSkills := []string{"example", "weather", "cron"}
 	for _, skill := range embeddedSkills {
