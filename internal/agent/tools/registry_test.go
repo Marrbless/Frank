@@ -366,14 +366,34 @@ func TestRegistryExecuteRedactsSensitiveArgsAndRemoteErrorsInLogs(t *testing.T) 
 		}
 	})
 
-	if !strings.Contains(logs, "[tool] → mcp_demo_lookup arg_keys=[authorization query] arg_count=2") {
+	if !strings.Contains(logs, "[tool] → mcp_demo_lookup arg_count=2 arg_types=string:2") {
 		t.Fatalf("expected redacted arg summary, got %q", logs)
 	}
 	if !strings.Contains(logs, "[tool] ✗ mcp_demo_lookup failed after ") || !strings.Contains(logs, "MCP tool failed (HTTP 401)") {
 		t.Fatalf("expected redacted MCP failure summary, got %q", logs)
 	}
-	if strings.Contains(logs, "sk-secret") || strings.Contains(logs, "private note") || strings.Contains(logs, "{\"token\"") {
+	if strings.Contains(logs, "authorization") || strings.Contains(logs, "query") || strings.Contains(logs, "sk-secret") || strings.Contains(logs, "private note") || strings.Contains(logs, "{\"token\"") {
 		t.Fatalf("expected logs to exclude raw args and payloads, got %q", logs)
+	}
+}
+
+func TestSummarizeToolArgumentsOmitsKeyNamesAndValues(t *testing.T) {
+	summary := SummarizeToolArguments(map[string]interface{}{
+		"authorization": "Bearer sk-secret",
+		"body":          "private message body",
+		"retries":       3,
+		"dry_run":       true,
+		"metadata": map[string]interface{}{
+			"query": "private note",
+		},
+		"targets": []string{"one@example.com"},
+	})
+
+	if got, want := summary, "arg_count=6 arg_types=array:1,bool:1,number:1,object:1,string:2"; got != want {
+		t.Fatalf("SummarizeToolArguments() = %q, want %q", got, want)
+	}
+	if strings.Contains(summary, "authorization") || strings.Contains(summary, "body") || strings.Contains(summary, "private") {
+		t.Fatalf("expected summary to omit raw keys and values, got %q", summary)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -261,15 +262,53 @@ func surfacedToolRejectionCode(code missioncontrol.RejectionCode, reason string)
 
 func SummarizeToolArguments(args map[string]interface{}) string {
 	if len(args) == 0 {
-		return "arg_keys=[] arg_count=0"
+		return "arg_count=0"
 	}
 
-	keys := make([]string, 0, len(args))
-	for key := range args {
-		keys = append(keys, key)
+	typeCounts := make(map[string]int)
+	for _, value := range args {
+		typeCounts[summarizeToolArgumentType(value)]++
 	}
-	sort.Strings(keys)
-	return fmt.Sprintf("arg_keys=%v arg_count=%d", keys, len(keys))
+
+	typeNames := make([]string, 0, len(typeCounts))
+	for typeName := range typeCounts {
+		typeNames = append(typeNames, typeName)
+	}
+	sort.Strings(typeNames)
+
+	parts := make([]string, 0, len(typeNames))
+	for _, typeName := range typeNames {
+		parts = append(parts, fmt.Sprintf("%s:%d", typeName, typeCounts[typeName]))
+	}
+
+	return fmt.Sprintf("arg_count=%d arg_types=%s", len(args), strings.Join(parts, ","))
+}
+
+func summarizeToolArgumentType(value interface{}) string {
+	if value == nil {
+		return "null"
+	}
+
+	switch value.(type) {
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	}
+
+	kind := reflect.TypeOf(value).Kind()
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Array, reflect.Slice:
+		return "array"
+	case reflect.Map, reflect.Struct:
+		return "object"
+	default:
+		return "other"
+	}
 }
 
 func SurfaceToolExecutionError(name string, err error) string {

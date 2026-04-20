@@ -161,7 +161,7 @@ func (c *slackClient) handleMention(ev *slackevents.AppMentionEvent) {
 	chatID := formatSlackChatID(ev.Channel, threadTS)
 	teamID := firstNonEmpty(ev.SourceTeam, ev.UserTeam)
 
-	log.Printf("slack: mention from %s in %s: %s", ev.User, ev.Channel, truncate(content, 50))
+	log.Printf("slack: mention from %s in %s (%s)", ev.User, ev.Channel, summarizeInboundContent(content, 0))
 
 	c.hub.In <- chat.Inbound{
 		Channel:   "slack",
@@ -207,7 +207,7 @@ func (c *slackClient) handleMessage(ev *slackevents.MessageEvent) {
 	chatID := formatSlackChatID(ev.Channel, threadTS)
 	teamID := firstNonEmpty(ev.SourceTeam, ev.UserTeam)
 
-	log.Printf("slack: message from %s in %s: %s", ev.User, ev.Channel, truncate(content, 50))
+	log.Printf("slack: message from %s in %s (%s)", ev.User, ev.Channel, summarizeInboundContent(content, len(ev.Files)))
 
 	c.hub.In <- chat.Inbound{
 		Channel:   "slack",

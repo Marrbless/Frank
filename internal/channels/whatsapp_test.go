@@ -3,7 +3,9 @@
 package channels
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +92,18 @@ func makeWhatsAppMsg(senderUser string, isFromMe, isGroup bool, text string) *ev
 	}
 }
 
+func captureWhatsAppLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previousWriter)
+
+	fn()
+	return buf.String()
+}
+
 /*** StartWhatsApp / SetupWhatsApp guard tests ***/
 
 func TestStartWhatsApp_EmptyDBPath(t *testing.T) {
@@ -139,6 +153,31 @@ func TestWhatsAppClient_HandleMessage_Inbound(t *testing.T) {
 	mock.mu.Unlock()
 	if readCount == 0 {
 		t.Error("expected MarkRead to be called for read receipts")
+	}
+}
+
+func TestWhatsAppClient_HandleMessage_LogOmitsRawContent(t *testing.T) {
+	hub := chat.NewHub(10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mock := &mockWhatsAppSender{}
+	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+
+	logs := captureWhatsAppLogs(t, func() {
+		c.handleMessage(makeWhatsAppMsg("15551234567", false, false, "private token sk-secret"))
+		time.Sleep(10 * time.Millisecond)
+		c.stopAllTyping()
+	})
+
+	if !strings.Contains(logs, "whatsapp: message from 15551234567@s.whatsapp.net in chat 15551234567@s.whatsapp.net (chars=") {
+		t.Fatalf("expected summarized WhatsApp log, got %q", logs)
+	}
+	if !strings.Contains(logs, "attachments=0") {
+		t.Fatalf("expected attachment count in WhatsApp log, got %q", logs)
+	}
+	if strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") {
+		t.Fatalf("expected WhatsApp log to omit raw content, got %q", logs)
 	}
 }
 

@@ -319,7 +319,7 @@ func (c *whatsappClient) handleMessage(msg *events.Message) {
 	content = strings.TrimSpace(content)
 	chatID := msg.Info.Chat.String()
 
-	log.Printf("whatsapp: message from %s in chat %s: %s", senderJID, chatID, truncate(content, 50))
+	log.Printf("whatsapp: message from %s in chat %s (%s)", senderJID, chatID, summarizeInboundContent(content, 0))
 
 	c.startTyping(msg.Info.Chat)
 

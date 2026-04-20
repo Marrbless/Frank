@@ -157,13 +157,13 @@ func TestAgentLoopRedactsToolActivityAndToolMessageErrors(t *testing.T) {
 			outputs = append(outputs, out.Content)
 			if out.Content == "Done" {
 				joined := strings.Join(outputs, "\n")
-				if !strings.Contains(joined, "🤖 Running: mcp_demo_lookup (arg_keys=[authorization query] arg_count=2)") {
+				if !strings.Contains(joined, "🤖 Running: mcp_demo_lookup (arg_count=2 arg_types=string:2)") {
 					t.Fatalf("expected redacted running notification, got %q", joined)
 				}
 				if !strings.Contains(joined, "📢 mcp_demo_lookup failed (") || !strings.Contains(joined, "MCP tool failed (HTTP 401)") {
 					t.Fatalf("expected redacted failure notification, got %q", joined)
 				}
-				if strings.Contains(joined, "sk-secret") || strings.Contains(joined, "private note") {
+				if strings.Contains(joined, "authorization") || strings.Contains(joined, "query") || strings.Contains(joined, "sk-secret") || strings.Contains(joined, "private note") {
 					t.Fatalf("expected outbound notifications to redact secrets, got %q", joined)
 				}
 				if got, want := p.lastToolMessage, "(tool error) MCP tool failed (HTTP 401)"; got != want {

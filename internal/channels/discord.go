@@ -147,7 +147,7 @@ func (c *discordClient) handleMessage(_ *discordgo.Session, m *discordgo.Message
 	}
 
 	senderName := senderDisplayName(m.Author)
-	log.Printf("discord: message from %s (%s) in %s: %s", senderName, m.Author.ID, m.ChannelID, truncate(content, 50))
+	log.Printf("discord: message from %s (%s) in %s (%s)", senderName, m.Author.ID, m.ChannelID, summarizeInboundContent(content, len(m.Attachments)))
 
 	c.startTyping(m.ChannelID)
 
