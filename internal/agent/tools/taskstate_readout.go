@@ -138,6 +138,7 @@ func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, mi
 		return "", err
 	}
 	statusSummary = missioncontrol.WithRuntimePackIdentity(statusSummary, missionStoreRoot)
+	statusSummary = missioncontrol.WithImprovementCandidateIdentity(statusSummary, missionStoreRoot)
 
 	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
 	if err == nil && len(deferred) > 0 {

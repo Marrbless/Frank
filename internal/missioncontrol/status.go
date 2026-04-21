@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type OperatorStatusSummary struct {
 	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
 	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
+	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -62,6 +64,25 @@ type OperatorDeferredSchedulerTriggerStatus struct {
 type OperatorRuntimePackIdentityStatus struct {
 	Active        OperatorActiveRuntimePackStatus        `json:"active"`
 	LastKnownGood OperatorLastKnownGoodRuntimePackStatus `json:"last_known_good"`
+}
+
+type OperatorImprovementCandidateIdentityStatus struct {
+	State      string                               `json:"state"`
+	Candidates []OperatorImprovementCandidateStatus `json:"candidates,omitempty"`
+}
+
+type OperatorImprovementCandidateStatus struct {
+	State               string   `json:"state"`
+	CandidateID         string   `json:"candidate_id,omitempty"`
+	BaselinePackID      string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID     string   `json:"candidate_pack_id,omitempty"`
+	SourceWorkspaceRef  string   `json:"source_workspace_ref,omitempty"`
+	SourceSummary       string   `json:"source_summary,omitempty"`
+	ValidationBasisRefs []string `json:"validation_basis_refs,omitempty"`
+	HotUpdateID         string   `json:"hot_update_id,omitempty"`
+	CreatedAt           *string  `json:"created_at,omitempty"`
+	CreatedBy           string   `json:"created_by,omitempty"`
+	Error               string   `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -278,10 +299,38 @@ func WithRuntimePackIdentity(summary OperatorStatusSummary, root string) Operato
 	return summary
 }
 
+func WithImprovementCandidateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorImprovementCandidateIdentityStatus(root)
+	summary.ImprovementCandidateIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
 		LastKnownGood: loadOperatorLastKnownGoodRuntimePackStatus(root),
+	}
+}
+
+func LoadOperatorImprovementCandidateIdentityStatus(root string) OperatorImprovementCandidateIdentityStatus {
+	candidates, found, invalid, err := loadOperatorImprovementCandidateStatuses(root)
+	if !found {
+		return OperatorImprovementCandidateIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorImprovementCandidateIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorImprovementCandidateIdentityStatus{
+		State:      state,
+		Candidates: candidates,
 	}
 }
 
@@ -576,6 +625,85 @@ type operatorRuntimePackIdentityPointerError struct {
 
 func (e *operatorRuntimePackIdentityPointerError) Error() string {
 	return e.surface + " " + e.fieldName + ` "` + e.value + `": ` + e.err.Error()
+}
+
+func loadOperatorImprovementCandidateStatuses(root string) ([]OperatorImprovementCandidateStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreImprovementCandidatesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	candidates := make([]OperatorImprovementCandidateStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorImprovementCandidateStatus(root, filepath.Join(StoreImprovementCandidatesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		candidates = append(candidates, status)
+	}
+	return candidates, true, invalid, nil
+}
+
+func loadOperatorImprovementCandidateStatus(root, path string) OperatorImprovementCandidateStatus {
+	status := OperatorImprovementCandidateStatus{
+		State:       "invalid",
+		CandidateID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record ImprovementCandidateRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeImprovementCandidateRecord(record)
+	status = operatorImprovementCandidateStatusFromRecord(record)
+	if err := ValidateImprovementCandidateRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateImprovementCandidateLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorImprovementCandidateStatusFromRecord(record ImprovementCandidateRecord) OperatorImprovementCandidateStatus {
+	return OperatorImprovementCandidateStatus{
+		CandidateID:         record.CandidateID,
+		BaselinePackID:      record.BaselinePackID,
+		CandidatePackID:     record.CandidatePackID,
+		SourceWorkspaceRef:  record.SourceWorkspaceRef,
+		SourceSummary:       record.SourceSummary,
+		ValidationBasisRefs: append([]string(nil), record.ValidationBasisRefs...),
+		HotUpdateID:         record.HotUpdateID,
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
+	}
 }
 
 func selectOperatorStatusApprovalRequest(runtime JobRuntimeState) (ApprovalRequest, bool) {

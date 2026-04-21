@@ -227,6 +227,96 @@ func TestTaskStateOperatorStatusSurfacesRuntimePackIdentity(t *testing.T) {
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesImprovementCandidateIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 22, 0, 0, 0, time.UTC)
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-base",
+		CreatedAt:                now.Add(-2 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-base",
+		SkillPackRef:             "skill-pack-base",
+		ManifestRef:              "manifest-base",
+		ExtensionPackRef:         "extension-base",
+		PolicyRef:                "policy-base",
+		SourceSummary:            "baseline pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-candidate",
+		ParentPackID:             "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		CreatedAt:                now.Add(-time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-candidate",
+		SkillPackRef:             "skill-pack-candidate",
+		ManifestRef:              "manifest-candidate",
+		ExtensionPackRef:         "extension-candidate",
+		PolicyRef:                "policy-candidate",
+		SourceSummary:            "candidate pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
+	}
+	if err := missioncontrol.StoreImprovementCandidateRecord(root, missioncontrol.ImprovementCandidateRecord{
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		SourceWorkspaceRef:  "workspace/runs/run-1",
+		SourceSummary:       "candidate from taskstate status",
+		ValidationBasisRefs: []string{"eval/baseline", "eval/train"},
+		CreatedAt:           now,
+		CreatedBy:           "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.ImprovementCandidateIdentity == nil {
+		t.Fatal("ImprovementCandidateIdentity = nil, want read-only candidate identity block")
+	}
+	if got.ImprovementCandidateIdentity.State != "configured" {
+		t.Fatalf("ImprovementCandidateIdentity.State = %q, want configured", got.ImprovementCandidateIdentity.State)
+	}
+	if len(got.ImprovementCandidateIdentity.Candidates) != 1 {
+		t.Fatalf("ImprovementCandidateIdentity.Candidates len = %d, want 1", len(got.ImprovementCandidateIdentity.Candidates))
+	}
+	candidate := got.ImprovementCandidateIdentity.Candidates[0]
+	if candidate.CandidateID != "candidate-1" {
+		t.Fatalf("ImprovementCandidateIdentity.Candidates[0].CandidateID = %q, want candidate-1", candidate.CandidateID)
+	}
+	if candidate.BaselinePackID != "pack-base" {
+		t.Fatalf("ImprovementCandidateIdentity.Candidates[0].BaselinePackID = %q, want pack-base", candidate.BaselinePackID)
+	}
+	if candidate.CandidatePackID != "pack-candidate" {
+		t.Fatalf("ImprovementCandidateIdentity.Candidates[0].CandidatePackID = %q, want pack-candidate", candidate.CandidatePackID)
+	}
+	if candidate.SourceWorkspaceRef != "workspace/runs/run-1" {
+		t.Fatalf("ImprovementCandidateIdentity.Candidates[0].SourceWorkspaceRef = %q, want workspace/runs/run-1", candidate.SourceWorkspaceRef)
+	}
+}
+
 func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBootstrapPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -254,7 +344,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "job_id", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "improvement_candidate_identity", "job_id", "runtime_pack_identity", "state")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -414,7 +504,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "job_id", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "improvement_candidate_identity", "job_id", "runtime_pack_identity", "state")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -786,7 +876,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "runtime_pack_identity", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "improvement_candidate_identity", "job_id", "runtime_pack_identity", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
