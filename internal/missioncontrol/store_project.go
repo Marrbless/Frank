@@ -92,6 +92,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	summary = WithRuntimePackIdentity(summary, root)
 	summary = WithImprovementCandidateIdentity(summary, root)
 	summary = WithImprovementRunIdentity(summary, root)
+	summary = WithCandidateResultIdentity(summary, root)
 	snapshot.RuntimeSummary = &summary
 
 	return snapshot, nil

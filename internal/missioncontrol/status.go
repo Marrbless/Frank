@@ -22,6 +22,7 @@ type OperatorStatusSummary struct {
 	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
+	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -103,6 +104,34 @@ type OperatorImprovementRunStatus struct {
 	CompletedAt     *string `json:"completed_at,omitempty"`
 	CreatedBy       string  `json:"created_by,omitempty"`
 	Error           string  `json:"error,omitempty"`
+}
+
+type OperatorCandidateResultIdentityStatus struct {
+	State   string                          `json:"state"`
+	Results []OperatorCandidateResultStatus `json:"results,omitempty"`
+}
+
+type OperatorCandidateResultStatus struct {
+	State              string   `json:"state"`
+	ResultID           string   `json:"result_id,omitempty"`
+	RunID              string   `json:"run_id,omitempty"`
+	CandidateID        string   `json:"candidate_id,omitempty"`
+	EvalSuiteID        string   `json:"eval_suite_id,omitempty"`
+	BaselinePackID     string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID    string   `json:"candidate_pack_id,omitempty"`
+	HotUpdateID        string   `json:"hot_update_id,omitempty"`
+	BaselineScore      float64  `json:"baseline_score"`
+	TrainScore         float64  `json:"train_score"`
+	HoldoutScore       float64  `json:"holdout_score"`
+	ComplexityScore    float64  `json:"complexity_score"`
+	CompatibilityScore float64  `json:"compatibility_score"`
+	ResourceScore      float64  `json:"resource_score"`
+	RegressionFlags    []string `json:"regression_flags,omitempty"`
+	Decision           string   `json:"decision,omitempty"`
+	Notes              string   `json:"notes,omitempty"`
+	CreatedAt          *string  `json:"created_at,omitempty"`
+	CreatedBy          string   `json:"created_by,omitempty"`
+	Error              string   `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -339,6 +368,16 @@ func WithImprovementRunIdentity(summary OperatorStatusSummary, root string) Oper
 	return summary
 }
 
+func WithCandidateResultIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorCandidateResultIdentityStatus(root)
+	summary.CandidateResultIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
@@ -379,6 +418,24 @@ func LoadOperatorImprovementRunIdentityStatus(root string) OperatorImprovementRu
 	return OperatorImprovementRunIdentityStatus{
 		State: state,
 		Runs:  runs,
+	}
+}
+
+func LoadOperatorCandidateResultIdentityStatus(root string) OperatorCandidateResultIdentityStatus {
+	results, found, invalid, err := loadOperatorCandidateResultStatuses(root)
+	if !found {
+		return OperatorCandidateResultIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorCandidateResultIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorCandidateResultIdentityStatus{
+		State:   state,
+		Results: results,
 	}
 }
 
@@ -830,6 +887,94 @@ func operatorImprovementRunStatusFromRecord(record ImprovementRunRecord) Operato
 		CreatedAt:       formatOperatorStatusTime(record.CreatedAt),
 		CompletedAt:     formatOperatorStatusTime(record.CompletedAt),
 		CreatedBy:       record.CreatedBy,
+	}
+}
+
+func loadOperatorCandidateResultStatuses(root string) ([]OperatorCandidateResultStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreCandidateResultsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	results := make([]OperatorCandidateResultStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorCandidateResultStatus(root, filepath.Join(StoreCandidateResultsDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		results = append(results, status)
+	}
+	return results, true, invalid, nil
+}
+
+func loadOperatorCandidateResultStatus(root, path string) OperatorCandidateResultStatus {
+	status := OperatorCandidateResultStatus{
+		State:    "invalid",
+		ResultID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record CandidateResultRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeCandidateResultRecord(record)
+	status = operatorCandidateResultStatusFromRecord(record)
+	if err := ValidateCandidateResultRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateCandidateResultLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorCandidateResultStatusFromRecord(record CandidateResultRecord) OperatorCandidateResultStatus {
+	return OperatorCandidateResultStatus{
+		ResultID:           record.ResultID,
+		RunID:              record.RunID,
+		CandidateID:        record.CandidateID,
+		EvalSuiteID:        record.EvalSuiteID,
+		BaselinePackID:     record.BaselinePackID,
+		CandidatePackID:    record.CandidatePackID,
+		HotUpdateID:        record.HotUpdateID,
+		BaselineScore:      record.BaselineScore,
+		TrainScore:         record.TrainScore,
+		HoldoutScore:       record.HoldoutScore,
+		ComplexityScore:    record.ComplexityScore,
+		CompatibilityScore: record.CompatibilityScore,
+		ResourceScore:      record.ResourceScore,
+		RegressionFlags:    append([]string(nil), record.RegressionFlags...),
+		Decision:           string(record.Decision),
+		Notes:              record.Notes,
+		CreatedAt:          formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:          record.CreatedBy,
 	}
 }
 
