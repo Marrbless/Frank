@@ -1,0 +1,410 @@
+package missioncontrol
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode"
+)
+
+type HotUpdateReloadMode string
+
+const (
+	HotUpdateReloadModeSoftReload         HotUpdateReloadMode = "soft_reload"
+	HotUpdateReloadModeSkillReload        HotUpdateReloadMode = "skill_reload"
+	HotUpdateReloadModeExtensionReload    HotUpdateReloadMode = "extension_reload"
+	HotUpdateReloadModePackReload         HotUpdateReloadMode = "pack_reload"
+	HotUpdateReloadModeCanaryReload       HotUpdateReloadMode = "canary_reload"
+	HotUpdateReloadModeProcessRestartSwap HotUpdateReloadMode = "process_restart_hot_swap"
+	HotUpdateReloadModeColdRestart        HotUpdateReloadMode = "cold_restart_required"
+)
+
+type HotUpdateGateState string
+
+const (
+	HotUpdateGateStateDraft        HotUpdateGateState = "draft"
+	HotUpdateGateStatePrepared     HotUpdateGateState = "prepared"
+	HotUpdateGateStateValidated    HotUpdateGateState = "validated"
+	HotUpdateGateStateStaged       HotUpdateGateState = "staged"
+	HotUpdateGateStateQuiescing    HotUpdateGateState = "quiescing"
+	HotUpdateGateStateReloading    HotUpdateGateState = "reloading"
+	HotUpdateGateStateSmokeTesting HotUpdateGateState = "smoke_testing"
+	HotUpdateGateStateCanarying    HotUpdateGateState = "canarying"
+	HotUpdateGateStateCommitted    HotUpdateGateState = "committed"
+	HotUpdateGateStateRolledBack   HotUpdateGateState = "rolled_back"
+	HotUpdateGateStateRejected     HotUpdateGateState = "rejected"
+	HotUpdateGateStateFailed       HotUpdateGateState = "failed"
+	HotUpdateGateStateAborted      HotUpdateGateState = "aborted"
+)
+
+type HotUpdateGateDecision string
+
+const (
+	HotUpdateGateDecisionKeepStaged         HotUpdateGateDecision = "keep_staged"
+	HotUpdateGateDecisionDiscard            HotUpdateGateDecision = "discard"
+	HotUpdateGateDecisionBlock              HotUpdateGateDecision = "block"
+	HotUpdateGateDecisionApplyHotUpdate     HotUpdateGateDecision = "apply_hot_update"
+	HotUpdateGateDecisionApplyCanary        HotUpdateGateDecision = "apply_canary"
+	HotUpdateGateDecisionRequireApproval    HotUpdateGateDecision = "require_approval"
+	HotUpdateGateDecisionRequireColdRestart HotUpdateGateDecision = "require_cold_restart"
+	HotUpdateGateDecisionRollback           HotUpdateGateDecision = "rollback"
+)
+
+type HotUpdateGateRef struct {
+	HotUpdateID string `json:"hot_update_id"`
+}
+
+type CandidateRuntimePackPointer struct {
+	RecordVersion   int       `json:"record_version"`
+	HotUpdateID     string    `json:"hot_update_id"`
+	CandidatePackID string    `json:"candidate_pack_id"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	UpdatedBy       string    `json:"updated_by"`
+}
+
+type HotUpdateGateRecord struct {
+	RecordVersion            int                   `json:"record_version"`
+	HotUpdateID              string                `json:"hot_update_id"`
+	Objective                string                `json:"objective"`
+	CandidatePackID          string                `json:"candidate_pack_id"`
+	PreviousActivePackID     string                `json:"previous_active_pack_id"`
+	RollbackTargetPackID     string                `json:"rollback_target_pack_id"`
+	TargetSurfaces           []string              `json:"target_surfaces"`
+	SurfaceClasses           []string              `json:"surface_classes"`
+	ReloadMode               HotUpdateReloadMode   `json:"reload_mode"`
+	CompatibilityContractRef string                `json:"compatibility_contract_ref"`
+	EvalEvidenceRefs         []string              `json:"eval_evidence_refs,omitempty"`
+	SmokeCheckRefs           []string              `json:"smoke_check_refs,omitempty"`
+	CanaryRef                string                `json:"canary_ref,omitempty"`
+	ApprovalRef              string                `json:"approval_ref,omitempty"`
+	BudgetRef                string                `json:"budget_ref,omitempty"`
+	PreparedAt               time.Time             `json:"prepared_at"`
+	State                    HotUpdateGateState    `json:"state"`
+	Decision                 HotUpdateGateDecision `json:"decision"`
+	FailureReason            string                `json:"failure_reason,omitempty"`
+}
+
+var (
+	ErrHotUpdateGateRecordNotFound         = errors.New("mission store hot-update gate record not found")
+	ErrCandidateRuntimePackPointerNotFound = errors.New("mission store candidate runtime pack pointer not found")
+)
+
+func StoreHotUpdateGatesDir(root string) string {
+	return filepath.Join(root, "runtime_packs", "hot_update_gates")
+}
+
+func StoreHotUpdateGatePath(root, hotUpdateID string) string {
+	return filepath.Join(StoreHotUpdateGatesDir(root), strings.TrimSpace(hotUpdateID)+".json")
+}
+
+func StoreCandidateRuntimePackPointerPath(root string) string {
+	return filepath.Join(root, "runtime_packs", "candidate_pointer.json")
+}
+
+func NormalizeHotUpdateGateRef(ref HotUpdateGateRef) HotUpdateGateRef {
+	ref.HotUpdateID = strings.TrimSpace(ref.HotUpdateID)
+	return ref
+}
+
+func NormalizeCandidateRuntimePackPointer(pointer CandidateRuntimePackPointer) CandidateRuntimePackPointer {
+	pointer.HotUpdateID = strings.TrimSpace(pointer.HotUpdateID)
+	pointer.CandidatePackID = strings.TrimSpace(pointer.CandidatePackID)
+	pointer.UpdatedAt = pointer.UpdatedAt.UTC()
+	pointer.UpdatedBy = strings.TrimSpace(pointer.UpdatedBy)
+	return pointer
+}
+
+func NormalizeHotUpdateGateRecord(record HotUpdateGateRecord) HotUpdateGateRecord {
+	record.HotUpdateID = strings.TrimSpace(record.HotUpdateID)
+	record.Objective = strings.TrimSpace(record.Objective)
+	record.CandidatePackID = strings.TrimSpace(record.CandidatePackID)
+	record.PreviousActivePackID = strings.TrimSpace(record.PreviousActivePackID)
+	record.RollbackTargetPackID = strings.TrimSpace(record.RollbackTargetPackID)
+	record.TargetSurfaces = normalizeHotUpdateStrings(record.TargetSurfaces)
+	record.SurfaceClasses = normalizeHotUpdateStrings(record.SurfaceClasses)
+	record.CompatibilityContractRef = strings.TrimSpace(record.CompatibilityContractRef)
+	record.EvalEvidenceRefs = normalizeHotUpdateStrings(record.EvalEvidenceRefs)
+	record.SmokeCheckRefs = normalizeHotUpdateStrings(record.SmokeCheckRefs)
+	record.CanaryRef = strings.TrimSpace(record.CanaryRef)
+	record.ApprovalRef = strings.TrimSpace(record.ApprovalRef)
+	record.BudgetRef = strings.TrimSpace(record.BudgetRef)
+	record.PreparedAt = record.PreparedAt.UTC()
+	record.FailureReason = strings.TrimSpace(record.FailureReason)
+	return record
+}
+
+func ValidateHotUpdateGateRef(ref HotUpdateGateRef) error {
+	return validateHotUpdateIdentifierField("hot-update gate ref", "hot_update_id", ref.HotUpdateID)
+}
+
+func ValidateCandidateRuntimePackPointer(pointer CandidateRuntimePackPointer) error {
+	if pointer.RecordVersion <= 0 {
+		return fmt.Errorf("mission store candidate runtime pack pointer record_version must be positive")
+	}
+	if err := validateHotUpdateIdentifierField("mission store candidate runtime pack pointer", "hot_update_id", pointer.HotUpdateID); err != nil {
+		return err
+	}
+	if err := validateRuntimePackIDField("mission store candidate runtime pack pointer", "candidate_pack_id", pointer.CandidatePackID); err != nil {
+		return err
+	}
+	if pointer.UpdatedAt.IsZero() {
+		return fmt.Errorf("mission store candidate runtime pack pointer updated_at is required")
+	}
+	if pointer.UpdatedBy == "" {
+		return fmt.Errorf("mission store candidate runtime pack pointer updated_by is required")
+	}
+	return nil
+}
+
+func ValidateHotUpdateGateRecord(record HotUpdateGateRecord) error {
+	if record.RecordVersion <= 0 {
+		return fmt.Errorf("mission store hot-update gate record_version must be positive")
+	}
+	if err := validateHotUpdateIdentifierField("mission store hot-update gate", "hot_update_id", record.HotUpdateID); err != nil {
+		return err
+	}
+	if record.Objective == "" {
+		return fmt.Errorf("mission store hot-update gate objective is required")
+	}
+	if err := validateRuntimePackIDField("mission store hot-update gate", "candidate_pack_id", record.CandidatePackID); err != nil {
+		return err
+	}
+	if err := validateRuntimePackIDField("mission store hot-update gate", "previous_active_pack_id", record.PreviousActivePackID); err != nil {
+		return err
+	}
+	if err := validateRuntimePackIDField("mission store hot-update gate", "rollback_target_pack_id", record.RollbackTargetPackID); err != nil {
+		return err
+	}
+	if len(record.TargetSurfaces) == 0 {
+		return fmt.Errorf("mission store hot-update gate target_surfaces are required")
+	}
+	if len(record.SurfaceClasses) == 0 {
+		return fmt.Errorf("mission store hot-update gate surface_classes are required")
+	}
+	if !isValidHotUpdateReloadMode(record.ReloadMode) {
+		return fmt.Errorf("mission store hot-update gate reload_mode %q is invalid", record.ReloadMode)
+	}
+	if record.CompatibilityContractRef == "" {
+		return fmt.Errorf("mission store hot-update gate compatibility_contract_ref is required")
+	}
+	if record.PreparedAt.IsZero() {
+		return fmt.Errorf("mission store hot-update gate prepared_at is required")
+	}
+	if !isValidHotUpdateGateState(record.State) {
+		return fmt.Errorf("mission store hot-update gate state %q is invalid", record.State)
+	}
+	if !isValidHotUpdateGateDecision(record.Decision) {
+		return fmt.Errorf("mission store hot-update gate decision %q is invalid", record.Decision)
+	}
+	return nil
+}
+
+func StoreHotUpdateGateRecord(root string, record HotUpdateGateRecord) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	record = NormalizeHotUpdateGateRecord(record)
+	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return err
+	}
+	if _, err := LoadRuntimePackRecord(root, record.CandidatePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate candidate_pack_id %q: %w", record.CandidatePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.PreviousActivePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate previous_active_pack_id %q: %w", record.PreviousActivePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
+	}
+	return WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record)
+}
+
+func LoadHotUpdateGateRecord(root, hotUpdateID string) (HotUpdateGateRecord, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	if err := validateHotUpdateIdentifierField("mission store hot-update gate", "hot_update_id", hotUpdateID); err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	record, err := loadHotUpdateGateRecordFile(StoreHotUpdateGatePath(root, strings.TrimSpace(hotUpdateID)))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return HotUpdateGateRecord{}, ErrHotUpdateGateRecordNotFound
+		}
+		return HotUpdateGateRecord{}, err
+	}
+	return record, nil
+}
+
+func ListHotUpdateGateRecords(root string) ([]HotUpdateGateRecord, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, err
+	}
+	return listStoreJSONRecords(StoreHotUpdateGatesDir(root), loadHotUpdateGateRecordFile)
+}
+
+func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
+	if err := ValidateStoreRoot(root); err != nil {
+		return err
+	}
+	pointer = NormalizeCandidateRuntimePackPointer(pointer)
+	pointer.RecordVersion = normalizeRecordVersion(pointer.RecordVersion)
+	if err := ValidateCandidateRuntimePackPointer(pointer); err != nil {
+		return err
+	}
+	gate, err := LoadHotUpdateGateRecord(root, pointer.HotUpdateID)
+	if err != nil {
+		return fmt.Errorf("mission store candidate runtime pack pointer hot_update_id %q: %w", pointer.HotUpdateID, err)
+	}
+	if gate.CandidatePackID != pointer.CandidatePackID {
+		return fmt.Errorf("mission store candidate runtime pack pointer candidate_pack_id %q does not match hot-update gate candidate_pack_id %q", pointer.CandidatePackID, gate.CandidatePackID)
+	}
+	if _, err := LoadRuntimePackRecord(root, pointer.CandidatePackID); err != nil {
+		return fmt.Errorf("mission store candidate runtime pack pointer candidate_pack_id %q: %w", pointer.CandidatePackID, err)
+	}
+	return WriteStoreJSONAtomic(StoreCandidateRuntimePackPointerPath(root), pointer)
+}
+
+func LoadCandidateRuntimePackPointer(root string) (CandidateRuntimePackPointer, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return CandidateRuntimePackPointer{}, err
+	}
+	var pointer CandidateRuntimePackPointer
+	if err := LoadStoreJSON(StoreCandidateRuntimePackPointerPath(root), &pointer); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CandidateRuntimePackPointer{}, ErrCandidateRuntimePackPointerNotFound
+		}
+		return CandidateRuntimePackPointer{}, err
+	}
+	pointer = NormalizeCandidateRuntimePackPointer(pointer)
+	if err := ValidateCandidateRuntimePackPointer(pointer); err != nil {
+		return CandidateRuntimePackPointer{}, err
+	}
+	gate, err := LoadHotUpdateGateRecord(root, pointer.HotUpdateID)
+	if err != nil {
+		return CandidateRuntimePackPointer{}, fmt.Errorf("mission store candidate runtime pack pointer hot_update_id %q: %w", pointer.HotUpdateID, err)
+	}
+	if gate.CandidatePackID != pointer.CandidatePackID {
+		return CandidateRuntimePackPointer{}, fmt.Errorf("mission store candidate runtime pack pointer candidate_pack_id %q does not match hot-update gate candidate_pack_id %q", pointer.CandidatePackID, gate.CandidatePackID)
+	}
+	if _, err := LoadRuntimePackRecord(root, pointer.CandidatePackID); err != nil {
+		return CandidateRuntimePackPointer{}, fmt.Errorf("mission store candidate runtime pack pointer candidate_pack_id %q: %w", pointer.CandidatePackID, err)
+	}
+	return pointer, nil
+}
+
+func ResolveCandidateRuntimePackRecord(root string) (RuntimePackRecord, error) {
+	pointer, err := LoadCandidateRuntimePackPointer(root)
+	if err != nil {
+		return RuntimePackRecord{}, err
+	}
+	return LoadRuntimePackRecord(root, pointer.CandidatePackID)
+}
+
+func loadHotUpdateGateRecordFile(path string) (HotUpdateGateRecord, error) {
+	var record HotUpdateGateRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	record = NormalizeHotUpdateGateRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	return record, nil
+}
+
+func normalizeHotUpdateStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func validateHotUpdateIdentifierField(surface, fieldName, value string) error {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return fmt.Errorf("%s %s is required", surface, fieldName)
+	}
+	if strings.HasPrefix(normalized, ".") || strings.HasSuffix(normalized, ".") {
+		return fmt.Errorf("%s %s %q is invalid", surface, fieldName, normalized)
+	}
+	for _, r := range normalized {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		default:
+			return fmt.Errorf("%s %s %q is invalid", surface, fieldName, normalized)
+		}
+	}
+	return nil
+}
+
+func isValidHotUpdateReloadMode(mode HotUpdateReloadMode) bool {
+	switch mode {
+	case HotUpdateReloadModeSoftReload,
+		HotUpdateReloadModeSkillReload,
+		HotUpdateReloadModeExtensionReload,
+		HotUpdateReloadModePackReload,
+		HotUpdateReloadModeCanaryReload,
+		HotUpdateReloadModeProcessRestartSwap,
+		HotUpdateReloadModeColdRestart:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHotUpdateGateState(state HotUpdateGateState) bool {
+	switch state {
+	case HotUpdateGateStateDraft,
+		HotUpdateGateStatePrepared,
+		HotUpdateGateStateValidated,
+		HotUpdateGateStateStaged,
+		HotUpdateGateStateQuiescing,
+		HotUpdateGateStateReloading,
+		HotUpdateGateStateSmokeTesting,
+		HotUpdateGateStateCanarying,
+		HotUpdateGateStateCommitted,
+		HotUpdateGateStateRolledBack,
+		HotUpdateGateStateRejected,
+		HotUpdateGateStateFailed,
+		HotUpdateGateStateAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHotUpdateGateDecision(decision HotUpdateGateDecision) bool {
+	switch decision {
+	case HotUpdateGateDecisionKeepStaged,
+		HotUpdateGateDecisionDiscard,
+		HotUpdateGateDecisionBlock,
+		HotUpdateGateDecisionApplyHotUpdate,
+		HotUpdateGateDecisionApplyCanary,
+		HotUpdateGateDecisionRequireApproval,
+		HotUpdateGateDecisionRequireColdRestart,
+		HotUpdateGateDecisionRollback:
+		return true
+	default:
+		return false
+	}
+}
