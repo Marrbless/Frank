@@ -62,6 +62,10 @@ type TaskState struct {
 
 const taskStateTreasuryExecutionLeaseHolderID = "taskstate-activate-step-treasury"
 
+var taskStateNowUTC = func() time.Time {
+	return time.Now().UTC()
+}
+
 func NewTaskState() *TaskState {
 	return &TaskState{
 		campaignReadinessGuardHook:         missioncontrol.RequireExecutionContextCampaignReadiness,
@@ -1463,9 +1467,14 @@ func (s *TaskState) RecordFrankZohoSendReceipt(result string) error {
 }
 
 func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
+	return s.syncFrankZohoCampaignInboundRepliesAt(taskStateTransitionTimestamp(taskStateNowUTC()))
+}
+
+func (s *TaskState) syncFrankZohoCampaignInboundRepliesAt(now time.Time) (int, error) {
 	if s == nil {
 		return 0, nil
 	}
+	now = taskStateTransitionTimestamp(now)
 
 	s.mu.Lock()
 	ec := missioncontrol.CloneExecutionContext(s.executionContext)
@@ -1574,7 +1583,7 @@ func (s *TaskState) SyncFrankZohoCampaignInboundReplies() (int, error) {
 		nextRuntime = *missioncontrol.CloneJobRuntimeState(ec.Runtime)
 	}
 
-	workItems, err := missioncontrol.LoadMissingCommittedCampaignZohoEmailReplyWorkItems(ec.MissionStoreRoot, preflight.Campaign.CampaignID, time.Now().UTC())
+	workItems, err := missioncontrol.LoadMissingCommittedCampaignZohoEmailReplyWorkItems(ec.MissionStoreRoot, preflight.Campaign.CampaignID, now)
 	if err != nil {
 		return 0, err
 	}
@@ -1618,6 +1627,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
 		return "", false, nil
 	}
+	operationNow := taskStateTransitionTimestamp(taskStateNowUTC())
 
 	preflight, err := missioncontrol.ResolveExecutionContextCampaignPreflight(ec)
 	if err != nil {
@@ -1628,7 +1638,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 		return "", false, err
 	}
 	if hasInboundReplyID || (preflight.Campaign != nil && missioncontrol.CampaignZohoEmailStopConditionsRequireInboundReplies(preflight.Campaign.StopConditions)) {
-		if _, err := s.SyncFrankZohoCampaignInboundReplies(); err != nil {
+		if _, err := s.syncFrankZohoCampaignInboundRepliesAt(operationNow); err != nil {
 			return "", false, err
 		}
 		s.mu.Lock()
@@ -1640,8 +1650,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 		}
 	}
 
-	now := time.Now().UTC()
-	intent, err := buildFrankZohoCampaignSendIntent(ec, args, now)
+	intent, err := buildFrankZohoCampaignSendIntent(ec, args, operationNow)
 	if err != nil {
 		return "", false, err
 	}
@@ -1649,7 +1658,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 	if existing, ok := missioncontrol.FindCampaignZohoEmailOutboundAction(*ec.Runtime, action.ActionID); ok {
 		switch existing.State {
 		case missioncontrol.CampaignZohoEmailOutboundActionStateVerified:
-			nextRuntime, runtimeChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(*ec.Runtime, existing, now)
+			nextRuntime, runtimeChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(*ec.Runtime, existing, operationNow)
 			if err != nil {
 				return "", true, err
 			}
@@ -1676,7 +1685,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			if len(verifiedProof) != 1 {
 				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize returns exactly one proof record", frankZohoSendEmailToolName, existing.ActionID)
 			}
-			finalized, err := finalizeFrankZohoCampaignActionFromProof(existing, verifiedProof[0], now)
+			finalized, err := finalizeFrankZohoCampaignActionFromProof(existing, verifiedProof[0], taskStateTransitionTimestamp(operationNow, existing.SentAt))
 			if err != nil {
 				return "", true, fmt.Errorf("%s: campaign outbound action %q remains blocked until provider-mailbox verification/finalize reconciles it: %w", frankZohoSendEmailToolName, existing.ActionID, err)
 			}
@@ -1684,7 +1693,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 			if err != nil {
 				return "", true, err
 			}
-			nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(nextRuntime, finalized, now)
+			nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemResponded(nextRuntime, finalized, operationNow)
 			if err != nil {
 				return "", true, err
 			}
@@ -1712,7 +1721,7 @@ func (s *TaskState) PrepareFrankZohoCampaignSend(args map[string]interface{}) (s
 		}
 	}
 	if action.ReplyToInboundReplyID != "" {
-		nextRuntime, err := claimFrankZohoCampaignReplyWorkItem(ec, *ec.Runtime, action, now)
+		nextRuntime, err := claimFrankZohoCampaignReplyWorkItem(ec, *ec.Runtime, action, operationNow)
 		if err != nil {
 			return "", false, err
 		}
@@ -1761,8 +1770,9 @@ func (s *TaskState) RecordFrankZohoCampaignSend(args map[string]interface{}, res
 	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
 		return nil
 	}
+	operationNow := taskStateTransitionTimestamp(taskStateNowUTC())
 
-	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, operationNow)
 	if err != nil {
 		return err
 	}
@@ -1777,7 +1787,7 @@ func (s *TaskState) RecordFrankZohoCampaignSend(args map[string]interface{}, res
 	if err := missioncontrol.ValidateFrankZohoSendReceipt(receipt); err != nil {
 		return err
 	}
-	sent, err := missioncontrol.BuildCampaignZohoEmailOutboundSentAction(prepared, receipt, time.Now().UTC())
+	sent, err := missioncontrol.BuildCampaignZohoEmailOutboundSentAction(prepared, receipt, taskStateTransitionTimestamp(operationNow, prepared.PreparedAt))
 	if err != nil {
 		return err
 	}
@@ -1819,8 +1829,9 @@ func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface
 	if !hasExecutionContext || ec.Job == nil || ec.Step == nil || ec.Runtime == nil || ec.Runtime.State != missioncontrol.JobStateRunning {
 		return nil
 	}
+	operationNow := taskStateTransitionTimestamp(taskStateNowUTC())
 
-	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, time.Now().UTC())
+	prepared, err := buildFrankZohoPreparedCampaignAction(ec, args, operationNow)
 	if err != nil {
 		return err
 	}
@@ -1830,7 +1841,7 @@ func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface
 	if prepared.State != missioncontrol.CampaignZohoEmailOutboundActionStatePrepared {
 		return nil
 	}
-	failed, err := missioncontrol.BuildCampaignZohoEmailOutboundFailedAction(prepared, terminalFailure.Failure(), time.Now().UTC())
+	failed, err := missioncontrol.BuildCampaignZohoEmailOutboundFailedAction(prepared, terminalFailure.Failure(), taskStateTransitionTimestamp(operationNow, prepared.PreparedAt))
 	if err != nil {
 		return err
 	}
@@ -1838,7 +1849,7 @@ func (s *TaskState) RecordFrankZohoCampaignSendFailure(args map[string]interface
 	if err != nil || !changed {
 		return err
 	}
-	nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemOnFailure(ec, nextRuntime, failed, time.Now().UTC())
+	nextRuntime, workItemChanged, err := transitionFrankZohoCampaignReplyWorkItemOnFailure(ec, nextRuntime, failed, operationNow)
 	if err != nil {
 		return err
 	}
@@ -1962,7 +1973,7 @@ func claimFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, run
 		if item.DeferredUntil.After(now.UTC()) {
 			return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q is deferred until %s", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.DeferredUntil.Format(time.RFC3339))
 		}
-		reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, now)
+		reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, taskStateTransitionTimestamp(now, item.CreatedAt, item.UpdatedAt))
 		if err != nil {
 			return missioncontrol.JobRuntimeState{}, err
 		}
@@ -1977,7 +1988,7 @@ func claimFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, run
 	default:
 		return missioncontrol.JobRuntimeState{}, fmt.Errorf("%s: inbound_reply_id %q has unsupported reply work item state %q", frankZohoSendEmailToolName, action.ReplyToInboundReplyID, item.State)
 	}
-	claimed, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemClaimed(item, action.ActionID, now)
+	claimed, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemClaimed(item, action.ActionID, taskStateTransitionTimestamp(now, item.CreatedAt, item.UpdatedAt, action.PreparedAt))
 	if err != nil {
 		return missioncontrol.JobRuntimeState{}, err
 	}
@@ -2002,7 +2013,7 @@ func transitionFrankZohoCampaignReplyWorkItemResponded(runtime missioncontrol.Jo
 	if item.State != missioncontrol.CampaignZohoEmailReplyWorkItemStateClaimed || strings.TrimSpace(item.ClaimedFollowUpActionID) != action.ActionID {
 		return runtime, false, nil
 	}
-	responded, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemResponded(item, now)
+	responded, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemResponded(item, taskStateTransitionTimestamp(now, item.CreatedAt, item.UpdatedAt, action.SentAt, action.VerifiedAt))
 	if err != nil {
 		return missioncontrol.JobRuntimeState{}, false, err
 	}
@@ -2035,7 +2046,7 @@ func transitionFrankZohoCampaignReplyWorkItemOnFailure(ec missioncontrol.Executi
 	if !decision.Allowed {
 		return runtime, false, nil
 	}
-	reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, now)
+	reopened, err := missioncontrol.BuildCampaignZohoEmailReplyWorkItemReopened(item, taskStateTransitionTimestamp(now, item.CreatedAt, item.UpdatedAt, action.FailedAt))
 	if err != nil {
 		return missioncontrol.JobRuntimeState{}, false, err
 	}
@@ -2081,6 +2092,23 @@ func ensureFrankZohoCampaignReplyWorkItem(ec missioncontrol.ExecutionContext, ru
 		return missioncontrol.JobRuntimeState{}, missioncontrol.CampaignZohoEmailReplyWorkItem{}, err
 	}
 	return nextRuntime, loaded, nil
+}
+
+func taskStateTransitionTimestamp(now time.Time, lowerBounds ...time.Time) time.Time {
+	stable := now.UTC()
+	if stable.IsZero() {
+		stable = taskStateNowUTC()
+	}
+	for _, lowerBound := range lowerBounds {
+		lowerBound = lowerBound.UTC()
+		if lowerBound.IsZero() {
+			continue
+		}
+		if lowerBound.After(stable) {
+			stable = lowerBound
+		}
+	}
+	return stable
 }
 
 func formatTaskStateRFC3339(value time.Time) string {
