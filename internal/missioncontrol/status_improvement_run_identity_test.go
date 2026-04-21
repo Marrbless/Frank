@@ -114,7 +114,7 @@ func TestBuildCommittedMissionStatusSnapshotIncludesImprovementRunIdentity(t *te
 	t.Parallel()
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 23, 21, 0, 0, 0, time.UTC)
+	now := testLeaseSafeNow()
 	job := testProjectedRuntimeJob()
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {

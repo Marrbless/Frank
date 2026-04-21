@@ -145,7 +145,7 @@ func TestBuildCommittedMissionStatusSnapshotIncludesRuntimePackIdentity(t *testi
 	t.Parallel()
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 21, 21, 0, 0, 0, time.UTC)
+	now := testLeaseSafeNow()
 	job := testProjectedRuntimeJob()
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {
@@ -207,5 +207,13 @@ func TestBuildCommittedMissionStatusSnapshotIncludesRuntimePackIdentity(t *testi
 	}
 	if snapshot.RuntimeSummary.RuntimePackIdentity.LastKnownGood.PackID != "pack-prev" {
 		t.Fatalf("RuntimeSummary.RuntimePackIdentity.LastKnownGood.PackID = %q, want pack-prev", snapshot.RuntimeSummary.RuntimePackIdentity.LastKnownGood.PackID)
+	}
+	wantActiveUpdatedAt := now.Add(-30 * time.Second).Format(time.RFC3339Nano)
+	if got := snapshot.RuntimeSummary.RuntimePackIdentity.Active.UpdatedAt; got == nil || *got != wantActiveUpdatedAt {
+		t.Fatalf("RuntimeSummary.RuntimePackIdentity.Active.UpdatedAt = %#v, want %q", got, wantActiveUpdatedAt)
+	}
+	wantLastKnownGoodVerifiedAt := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	if got := snapshot.RuntimeSummary.RuntimePackIdentity.LastKnownGood.VerifiedAt; got == nil || *got != wantLastKnownGoodVerifiedAt {
+		t.Fatalf("RuntimeSummary.RuntimePackIdentity.LastKnownGood.VerifiedAt = %#v, want %q", got, wantLastKnownGoodVerifiedAt)
 	}
 }

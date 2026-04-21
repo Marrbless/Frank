@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+func testLeaseSafeNow() time.Time {
+	return time.Now().UTC().Truncate(time.Second)
+}
+
 func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +64,7 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 			Timestamp: time.Date(2026, 3, 24, 13, i, 0, 0, time.UTC),
 		})
 	}
-	now := time.Now().UTC().Truncate(time.Second)
+	now := testLeaseSafeNow()
 	requestBase := now.Add(-8 * time.Hour)
 	auditBase := now.Add(-7 * time.Hour)
 	pausedAt := now.Add(-6 * time.Hour)
