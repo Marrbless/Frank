@@ -89,6 +89,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 		return MissionStatusSnapshot{}, err
 	}
 	summary = WithDeferredSchedulerTriggers(summary, deferredSchedulerTriggers)
+	summary = WithRuntimePackIdentity(summary, root)
 	snapshot.RuntimeSummary = &summary
 
 	return snapshot, nil

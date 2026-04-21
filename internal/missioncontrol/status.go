@@ -2,6 +2,8 @@ package missioncontrol
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ type OperatorStatusSummary struct {
 	State                              JobState                                                    `json:"state"`
 	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
+	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -54,6 +57,28 @@ type OperatorDeferredSchedulerTriggerStatus struct {
 	Message        string `json:"message,omitempty"`
 	FireAt         string `json:"fire_at"`
 	DeferredAt     string `json:"deferred_at"`
+}
+
+type OperatorRuntimePackIdentityStatus struct {
+	Active        OperatorActiveRuntimePackStatus        `json:"active"`
+	LastKnownGood OperatorLastKnownGoodRuntimePackStatus `json:"last_known_good"`
+}
+
+type OperatorActiveRuntimePackStatus struct {
+	State                string  `json:"state"`
+	ActivePackID         string  `json:"active_pack_id,omitempty"`
+	PreviousActivePackID string  `json:"previous_active_pack_id,omitempty"`
+	LastKnownGoodPackID  string  `json:"last_known_good_pack_id,omitempty"`
+	UpdatedAt            *string `json:"updated_at,omitempty"`
+	Error                string  `json:"error,omitempty"`
+}
+
+type OperatorLastKnownGoodRuntimePackStatus struct {
+	State      string  `json:"state"`
+	PackID     string  `json:"pack_id,omitempty"`
+	Basis      string  `json:"basis,omitempty"`
+	VerifiedAt *string `json:"verified_at,omitempty"`
+	Error      string  `json:"error,omitempty"`
 }
 
 type OperatorArtifactStatus struct {
@@ -243,6 +268,23 @@ func WithDeferredSchedulerTriggers(summary OperatorStatusSummary, deferred []Ope
 	return summary
 }
 
+func WithRuntimePackIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorRuntimePackIdentityStatus(root)
+	summary.RuntimePackIdentity = &status
+	return summary
+}
+
+func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
+	return OperatorRuntimePackIdentityStatus{
+		Active:        loadOperatorActiveRuntimePackStatus(root),
+		LastKnownGood: loadOperatorLastKnownGoodRuntimePackStatus(root),
+	}
+}
+
 func EffectiveAllowedTools(job *Job, step *Step) []string {
 	if job == nil {
 		return nil
@@ -414,6 +456,126 @@ func formatOperatorStatusSummary(summary OperatorStatusSummary) (string, error) 
 		return "", err
 	}
 	return string(append(data, '\n')), nil
+}
+
+func loadOperatorActiveRuntimePackStatus(root string) OperatorActiveRuntimePackStatus {
+	pointer, found, err := loadOperatorActiveRuntimePackPointerReadModel(root)
+	if !found {
+		return OperatorActiveRuntimePackStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorActiveRuntimePackStatus{
+			State:                "invalid",
+			ActivePackID:         pointer.ActivePackID,
+			PreviousActivePackID: pointer.PreviousActivePackID,
+			LastKnownGoodPackID:  pointer.LastKnownGoodPackID,
+			UpdatedAt:            formatOperatorStatusTime(pointer.UpdatedAt),
+			Error:                err.Error(),
+		}
+	}
+	return OperatorActiveRuntimePackStatus{
+		State:                "configured",
+		ActivePackID:         pointer.ActivePackID,
+		PreviousActivePackID: pointer.PreviousActivePackID,
+		LastKnownGoodPackID:  pointer.LastKnownGoodPackID,
+		UpdatedAt:            formatOperatorStatusTime(pointer.UpdatedAt),
+	}
+}
+
+func loadOperatorLastKnownGoodRuntimePackStatus(root string) OperatorLastKnownGoodRuntimePackStatus {
+	pointer, found, err := loadOperatorLastKnownGoodRuntimePackPointerReadModel(root)
+	if !found {
+		return OperatorLastKnownGoodRuntimePackStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorLastKnownGoodRuntimePackStatus{
+			State:      "invalid",
+			PackID:     pointer.PackID,
+			Basis:      pointer.Basis,
+			VerifiedAt: formatOperatorStatusTime(pointer.VerifiedAt),
+			Error:      err.Error(),
+		}
+	}
+	return OperatorLastKnownGoodRuntimePackStatus{
+		State:      "configured",
+		PackID:     pointer.PackID,
+		Basis:      pointer.Basis,
+		VerifiedAt: formatOperatorStatusTime(pointer.VerifiedAt),
+	}
+}
+
+func loadOperatorActiveRuntimePackPointerReadModel(root string) (ActiveRuntimePackPointer, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return ActiveRuntimePackPointer{}, true, err
+	}
+
+	var pointer ActiveRuntimePackPointer
+	if err := LoadStoreJSON(StoreActiveRuntimePackPointerPath(root), &pointer); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ActiveRuntimePackPointer{}, false, nil
+		}
+		return ActiveRuntimePackPointer{}, true, err
+	}
+	pointer = NormalizeActiveRuntimePackPointer(pointer)
+	if err := ValidateActiveRuntimePackPointer(pointer); err != nil {
+		return pointer, true, err
+	}
+	if _, err := LoadRuntimePackRecord(root, pointer.ActivePackID); err != nil {
+		return pointer, true, fmtOperatorRuntimePackIdentityPointerError("mission store active runtime pack pointer", "active_pack_id", pointer.ActivePackID, err)
+	}
+	if pointer.PreviousActivePackID != "" {
+		if _, err := LoadRuntimePackRecord(root, pointer.PreviousActivePackID); err != nil {
+			return pointer, true, fmtOperatorRuntimePackIdentityPointerError("mission store active runtime pack pointer", "previous_active_pack_id", pointer.PreviousActivePackID, err)
+		}
+	}
+	if pointer.LastKnownGoodPackID != "" {
+		if _, err := LoadRuntimePackRecord(root, pointer.LastKnownGoodPackID); err != nil {
+			return pointer, true, fmtOperatorRuntimePackIdentityPointerError("mission store active runtime pack pointer", "last_known_good_pack_id", pointer.LastKnownGoodPackID, err)
+		}
+	}
+	return pointer, true, nil
+}
+
+func loadOperatorLastKnownGoodRuntimePackPointerReadModel(root string) (LastKnownGoodRuntimePackPointer, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, true, err
+	}
+
+	var pointer LastKnownGoodRuntimePackPointer
+	if err := LoadStoreJSON(StoreLastKnownGoodRuntimePackPointerPath(root), &pointer); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return LastKnownGoodRuntimePackPointer{}, false, nil
+		}
+		return LastKnownGoodRuntimePackPointer{}, true, err
+	}
+	pointer = NormalizeLastKnownGoodRuntimePackPointer(pointer)
+	if err := ValidateLastKnownGoodRuntimePackPointer(pointer); err != nil {
+		return pointer, true, err
+	}
+	if _, err := LoadRuntimePackRecord(root, pointer.PackID); err != nil {
+		return pointer, true, fmtOperatorRuntimePackIdentityPointerError("mission store last-known-good runtime pack pointer", "pack_id", pointer.PackID, err)
+	}
+	return pointer, true, nil
+}
+
+func fmtOperatorRuntimePackIdentityPointerError(surface, fieldName, value string, err error) error {
+	return &operatorRuntimePackIdentityPointerError{
+		surface:   surface,
+		fieldName: fieldName,
+		value:     value,
+		err:       err,
+	}
+}
+
+type operatorRuntimePackIdentityPointerError struct {
+	surface   string
+	fieldName string
+	value     string
+	err       error
+}
+
+func (e *operatorRuntimePackIdentityPointerError) Error() string {
+	return e.surface + " " + e.fieldName + ` "` + e.value + `": ` + e.err.Error()
 }
 
 func selectOperatorStatusApprovalRequest(runtime JobRuntimeState) (ApprovalRequest, bool) {

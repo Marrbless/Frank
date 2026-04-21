@@ -133,16 +133,16 @@ func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, mi
 		return summary, nil
 	}
 
-	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
-	if err != nil || len(deferred) == 0 {
-		return summary, nil
-	}
-
 	var statusSummary missioncontrol.OperatorStatusSummary
 	if err := json.Unmarshal([]byte(summary), &statusSummary); err != nil {
 		return "", err
 	}
-	statusSummary = missioncontrol.WithDeferredSchedulerTriggers(statusSummary, deferred)
+	statusSummary = missioncontrol.WithRuntimePackIdentity(statusSummary, missionStoreRoot)
+
+	deferred, err := missioncontrol.LoadDeferredSchedulerTriggerStatuses(missionStoreRoot)
+	if err == nil && len(deferred) > 0 {
+		statusSummary = missioncontrol.WithDeferredSchedulerTriggers(statusSummary, deferred)
+	}
 
 	data, err := json.MarshalIndent(statusSummary, "", "  ")
 	if err != nil {

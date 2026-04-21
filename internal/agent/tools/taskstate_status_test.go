@@ -134,6 +134,99 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesResolvedCampaignPr
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesRuntimePackIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 21, 22, 0, 0, 0, time.UTC)
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-prev",
+		CreatedAt:                now.Add(-2 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-prev",
+		SkillPackRef:             "skill-pack-prev",
+		ManifestRef:              "manifest-prev",
+		ExtensionPackRef:         "extension-prev",
+		PolicyRef:                "policy-prev",
+		SourceSummary:            "previous pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-prev) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-active",
+		RollbackTargetPackID:     "pack-prev",
+		CreatedAt:                now.Add(-time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-active",
+		SkillPackRef:             "skill-pack-active",
+		ManifestRef:              "manifest-active",
+		ExtensionPackRef:         "extension-active",
+		PolicyRef:                "policy-active",
+		SourceSummary:            "active pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-active) error = %v", err)
+	}
+	if err := missioncontrol.StoreActiveRuntimePackPointer(root, missioncontrol.ActiveRuntimePackPointer{
+		ActivePackID:         "pack-active",
+		PreviousActivePackID: "pack-prev",
+		LastKnownGoodPackID:  "pack-prev",
+		UpdatedAt:            now,
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "bootstrap",
+		ReloadGeneration:     3,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-prev",
+		Basis:             "smoke_check",
+		VerifiedAt:        now.Add(30 * time.Second),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.RuntimePackIdentity == nil {
+		t.Fatal("RuntimePackIdentity = nil, want read-only runtime pack identity block")
+	}
+	if got.RuntimePackIdentity.Active.State != "configured" {
+		t.Fatalf("RuntimePackIdentity.Active.State = %q, want configured", got.RuntimePackIdentity.Active.State)
+	}
+	if got.RuntimePackIdentity.Active.ActivePackID != "pack-active" {
+		t.Fatalf("RuntimePackIdentity.Active.ActivePackID = %q, want pack-active", got.RuntimePackIdentity.Active.ActivePackID)
+	}
+	if got.RuntimePackIdentity.Active.PreviousActivePackID != "pack-prev" {
+		t.Fatalf("RuntimePackIdentity.Active.PreviousActivePackID = %q, want pack-prev", got.RuntimePackIdentity.Active.PreviousActivePackID)
+	}
+	if got.RuntimePackIdentity.LastKnownGood.State != "configured" {
+		t.Fatalf("RuntimePackIdentity.LastKnownGood.State = %q, want configured", got.RuntimePackIdentity.LastKnownGood.State)
+	}
+	if got.RuntimePackIdentity.LastKnownGood.PackID != "pack-prev" {
+		t.Fatalf("RuntimePackIdentity.LastKnownGood.PackID = %q, want pack-prev", got.RuntimePackIdentity.LastKnownGood.PackID)
+	}
+}
+
 func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBootstrapPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -161,7 +254,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "job_id", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "frank_zoho_mailbox_bootstrap_preflight", "job_id", "runtime_pack_identity", "state")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -321,7 +414,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "job_id", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "job_id", "runtime_pack_identity", "state")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -693,7 +786,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "job_id", "runtime_pack_identity", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
