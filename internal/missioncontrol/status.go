@@ -21,6 +21,7 @@ type OperatorStatusSummary struct {
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
 	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
+	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -83,6 +84,25 @@ type OperatorImprovementCandidateStatus struct {
 	CreatedAt           *string  `json:"created_at,omitempty"`
 	CreatedBy           string   `json:"created_by,omitempty"`
 	Error               string   `json:"error,omitempty"`
+}
+
+type OperatorImprovementRunIdentityStatus struct {
+	State string                         `json:"state"`
+	Runs  []OperatorImprovementRunStatus `json:"runs,omitempty"`
+}
+
+type OperatorImprovementRunStatus struct {
+	State           string  `json:"state"`
+	RunID           string  `json:"run_id,omitempty"`
+	CandidateID     string  `json:"candidate_id,omitempty"`
+	EvalSuiteID     string  `json:"eval_suite_id,omitempty"`
+	BaselinePackID  string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID string  `json:"candidate_pack_id,omitempty"`
+	HotUpdateID     string  `json:"hot_update_id,omitempty"`
+	CreatedAt       *string `json:"created_at,omitempty"`
+	CompletedAt     *string `json:"completed_at,omitempty"`
+	CreatedBy       string  `json:"created_by,omitempty"`
+	Error           string  `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -309,6 +329,16 @@ func WithImprovementCandidateIdentity(summary OperatorStatusSummary, root string
 	return summary
 }
 
+func WithImprovementRunIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorImprovementRunIdentityStatus(root)
+	summary.ImprovementRunIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
@@ -331,6 +361,24 @@ func LoadOperatorImprovementCandidateIdentityStatus(root string) OperatorImprove
 	return OperatorImprovementCandidateIdentityStatus{
 		State:      state,
 		Candidates: candidates,
+	}
+}
+
+func LoadOperatorImprovementRunIdentityStatus(root string) OperatorImprovementRunIdentityStatus {
+	runs, found, invalid, err := loadOperatorImprovementRunStatuses(root)
+	if !found {
+		return OperatorImprovementRunIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorImprovementRunIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorImprovementRunIdentityStatus{
+		State: state,
+		Runs:  runs,
 	}
 }
 
@@ -703,6 +751,85 @@ func operatorImprovementCandidateStatusFromRecord(record ImprovementCandidateRec
 		HotUpdateID:         record.HotUpdateID,
 		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorImprovementRunStatuses(root string) ([]OperatorImprovementRunStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreImprovementRunsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	runs := make([]OperatorImprovementRunStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorImprovementRunStatus(root, filepath.Join(StoreImprovementRunsDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		runs = append(runs, status)
+	}
+	return runs, true, invalid, nil
+}
+
+func loadOperatorImprovementRunStatus(root, path string) OperatorImprovementRunStatus {
+	status := OperatorImprovementRunStatus{
+		State: "invalid",
+		RunID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record ImprovementRunRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeImprovementRunRecord(record)
+	status = operatorImprovementRunStatusFromRecord(record)
+	if err := ValidateImprovementRunRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateImprovementRunLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorImprovementRunStatusFromRecord(record ImprovementRunRecord) OperatorImprovementRunStatus {
+	return OperatorImprovementRunStatus{
+		RunID:           record.RunID,
+		CandidateID:     record.CandidateID,
+		EvalSuiteID:     record.EvalSuiteID,
+		BaselinePackID:  record.BaselinePackID,
+		CandidatePackID: record.CandidatePackID,
+		HotUpdateID:     record.HotUpdateID,
+		CreatedAt:       formatOperatorStatusTime(record.CreatedAt),
+		CompletedAt:     formatOperatorStatusTime(record.CompletedAt),
+		CreatedBy:       record.CreatedBy,
 	}
 }
 
