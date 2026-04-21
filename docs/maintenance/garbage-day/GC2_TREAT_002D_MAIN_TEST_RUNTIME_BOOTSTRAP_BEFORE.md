@@ -1,0 +1,155 @@
+## GC2-TREAT-002D Before
+
+- Branch: `frank-v3-foundation`
+- HEAD: `cd5bc46b5e186a7d156af9162e1ed4d841c9f198`
+- Tags at HEAD: none
+- Ahead/behind upstream: `388 ahead / 0 behind`
+- `git status --short --branch`:
+  - `## frank-v3-foundation`
+- Baseline `go test -count=1 ./...`: passed
+
+### Exact Tests Selected For Movement
+
+#### `cmd/picobot/main_runtime_bootstrap_test.go`
+- `TestConfigureMissionBootstrapDefaultUnchanged`
+- `TestConfigureMissionBootstrapMissionRequiredEnablesMode`
+- `TestConfigureMissionBootstrapMissionFileActivatesStep`
+- `TestConfigureMissionBootstrapInvalidMissionFileFailsStartup`
+- `TestConfigureMissionBootstrapMissionFileRequiresMissionStep`
+- `TestConfigureMissionBootstrapMissionStepRequiresMissionFile`
+- `TestConfigureMissionBootstrapMissionStepControlFileRequiresMissionFile`
+- `TestWriteMissionStatusSnapshotFromCommandDefaultPathUnchanged`
+- `TestWriteMissionStatusSnapshotNoActiveMissionWritesInactiveSnapshot`
+- `TestWriteMissionStatusSnapshotActiveMissionWritesExpectedFields`
+- `TestWriteMissionStatusSnapshotFromCommandUsesCommittedDurableProjectionWhenPresent`
+- `TestStartupAndRuntimeChangeDurableProjectionUseSameSharedBuilder`
+- `TestWriteMissionStatusSnapshotFromCommandFallsBackToLiveWhenDurableStoreEmptyForJob`
+- `TestWriteMissionStatusSnapshotIncludesRuntimeSummaryTruncationForPersistedRuntime`
+- `TestWriteProjectedMissionStatusSnapshotIncludesCommittedRuntimeSummaryTruncation`
+- `TestMissionStatusSnapshotWritePersistsAuditHistory`
+- `TestMissionStatusBootstrapRehydratesAuditHistoryWithoutDuplication`
+- `TestMissionStatusRuntimeChangeHookPersistsApprovalLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsNaturalApprovalLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsRehydratedApprovalLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsRehydratedNaturalApprovalLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsApprovalExpiryLifecycle`
+- `TestMissionStatusBootstrapRehydratedYesDoesNotBindExpiredApproval`
+- `TestMissionStatusBootstrapRehydratedApproveDoesNotBindExpiredApproval`
+- `TestMissionStatusBootstrapRehydratedApproveUsesLatestNonSupersededApproval`
+- `TestMissionStatusRuntimeChangeHookPersistsSupersededApprovalLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsPauseResumeAbortLifecycle`
+- `TestMissionStatusRuntimeChangeHookPersistsDurableAbortFromWaitingUserAfterTeardown`
+- `TestWriteMissionStatusSnapshotLeavesNoTempFileOnSuccess`
+- `TestWriteMissionStatusSnapshotAllowedToolsIntersectedAndSorted`
+- `TestWriteMissionStatusSnapshotInvalidOutputPathReturnsError`
+- `TestMissionStatusBootstrapRequiresResumeApprovalAfterReboot`
+- `TestMissionStatusBootstrapRejectsInconsistentPersistedRuntimeStepEnvelope`
+- `TestMissionStatusBootstrapRejectsInconsistentPersistedRuntimeControlStep`
+- `TestMissionStatusBootstrapRejectsPersistedRuntimeWithActiveCompletedStepRecord`
+- `TestMissionStatusBootstrapRejectsPersistedRuntimeWithActiveFailedStepRecord`
+- `TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeStep`
+- `TestMissionStatusBootstrapApprovedResumeUsesPersistedRuntimeControlWhenMissionFileChanges`
+- `TestMissionStatusBootstrapRehydratesPausedRuntimeControlAfterReboot`
+- `TestMissionStatusBootstrapRehydratesPausedRuntimeControlUsesFallbackWithoutPersistedControl`
+- `TestMissionStatusBootstrapRehydratedApproveFromWaitingUserUsesPersistedRuntimeControlWhenMissionFileChanges`
+- `TestMissionStatusBootstrapRehydratedApproveUsesFallbackWithoutPersistedControl`
+- `TestMissionStatusBootstrapRehydratedDenyBlocksLaterFreeFormCompletion`
+- `TestMissionStatusBootstrapRehydratedWrongJobDoesNotBind`
+- `TestMissionStatusBootstrapNormalizesLegacyRevokedApprovalRequestAndPersistsSnapshot`
+- `TestMissionStatusBootstrapRehydratedWrongStepDoesNotBind`
+- `TestMissionStatusBootstrapRehydratedAbortUsesPersistedRuntimeControlWhenMissionFileChanges`
+- `TestMissionStatusBootstrapRehydratedAbortFromWaitingUserPersistsLifecycle`
+- `TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsOperatorControl`
+- `TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsApprovalDecisions`
+- `TestMissionStatusBootstrapRehydratedTerminalRuntimeRejectsNaturalApprovalDecisions`
+- `TestResolveMissionStoreRootPrefersExplicitFlag`
+- `TestResolveMissionStoreRootFallsBackToStatusFile`
+- `TestResolveMissionStoreRootReturnsEmptyWithoutInputs`
+- `TestMissionStatusBootstrapUsesCommittedDurableRuntimeWhenPresent`
+- `TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreAbsent`
+- `TestLoadPersistedMissionRuntimeUsesSnapshotWhenStoreRootUnconfigured`
+- `TestLoadPersistedMissionRuntimeSnapshotUsesSharedLegacyHelper`
+- `TestLoadPersistedMissionRuntimeUsesSharedFallbackWhenStoreRootUnconfigured`
+- `TestMissionStatusBootstrapFallsBackToSnapshotWhenDurableStoreEmptyForJob`
+- `TestLoadPersistedMissionRuntimeUsesSharedFallbackWhenDurableStoreEmptyForJob`
+- `TestMissionStatusBootstrapPrefersDurableRuntimeOverConflictingSnapshot`
+- `TestLoadPersistedMissionRuntimeDoesNotFallbackWhenDurableHydrationFails`
+- `TestMissionStatusBootstrapFailsClosedWhenDurableHydrationFails`
+- `TestMissionStatusBootstrapDurableTerminalStateDoesNotRestoreActiveControl`
+- `TestMissionStatusBootstrapDurableRuntimeStillRequiresResumeApproval`
+- `TestMissionStatusRuntimePersistenceUpdatesDurableStoreAndSnapshotTogether`
+- `TestMissionStatusRuntimePersistenceDurableWriteFailureLeavesSnapshotUnchanged`
+- `TestMissionStatusRuntimePersistenceProjectionFailureLeavesSnapshotUnchanged`
+- `TestMissionStatusBootstrapPrefersLatestDurableStateAfterMutation`
+- `TestConfigureMissionBootstrapJobAcceptsV2LongRunningCodeMissionFile`
+
+- `TestMissionSetStepCommandInvalidControlPathReturnsClearError`
+- `TestMissionSetStepCommandWithoutStatusFilePreservesCurrentBehavior`
+- `TestMissionSetStepCommandLeavesNoTempFileOnSuccess`
+- `TestMissionSetStepCommandWritesUpdatedAt`
+- `TestMissionSetStepCommandWithStatusFileWaitsWhenMatchingSnapshotUpdatedAtIsUnchanged`
+- `TestMissionSetStepCommandWithStatusFileWithoutMissionFilePreservesCurrentBehavior`
+- `TestMissionSetStepCommandWithStatusFileSucceedsWhenSnapshotChangesBeforeTimeout`
+- `TestMissionSetStepCommandWithMissionFileAndStatusFileSucceedsWhenFreshSnapshotMatchesStepAndJob`
+- `TestMissionSetStepCommandWithMissionFileAndStatusFileWaitsWhenStepMatchesButJobDoesNot`
+- `TestMissionSetStepCommandWithMissionFileAndStatusFileTimesOutWhenJobIDNeverMatches`
+- `TestMissionSetStepCommandWithStatusFileTimesOutWhenStepNeverMatches`
+- `TestMissionSetStepCommandWithStatusFileTimesOutWhenMatchingSnapshotIsNotFresh`
+- `TestMissionSetStepCommandWithInvalidStatusJSONReturnsError`
+- `TestMissionSetStepCommandWithNoPriorValidStatusSnapshotSucceedsWhenMatchingSnapshotAppears`
+- `TestMissionSetStepCommandConfirmationUsesSharedObservationReader`
+- `TestMissionSetStepCommandWithMissingStatusFileReturnsErrorAfterWaiting`
+- `TestMissionSetStepCommandWithMissionFileWritesControlFile`
+- `TestMissionSetStepCommandWithMissingMissionFileReturnsError`
+- `TestMissionSetStepCommandWithInvalidMissionJSONReturnsError`
+- `TestMissionSetStepCommandWithInvalidMissionReturnsError`
+- `TestMissionSetStepCommandWithUnknownMissionStepReturnsError`
+- `TestMissionSetStepCommandWithoutRequiredFlagsReturnsError`
+- `TestApplyMissionStepControlFileSwitchesActiveStep`
+- `TestApplyMissionStepControlFileInvalidStepPreservesActiveStep`
+- `TestApplyMissionStepControlFileRewritesStatusSnapshotOnSuccess`
+- `TestApplyMissionStepControlFileAbsentFileIsNoOp`
+- `TestRestoreMissionStepControlFileOnStartupAbsentFileIsNoOp`
+- `TestRestoreMissionStepControlFileOnStartupAbsentFileLeavesWatcherBaselineAsNoOp`
+- `TestRestoreMissionStepControlFileOnStartupValidFileOverridesBootstrappedStep`
+- `TestRestoreMissionStepControlFileOnStartupRejectsPreviouslyCompletedStepReplay`
+- `TestRestoreMissionStepControlFileOnStartupRejectsPreviouslyFailedStepReplay`
+- `TestRestoreMissionStepControlFileOnStartupThenWatcherDoesNotDuplicateUnchangedApply`
+- `TestWatchMissionStepControlFileRejectsPreviouslyCompletedStepReplay`
+- `TestWatchMissionStepControlFileRejectsPreviouslyFailedStepReplay`
+- `TestRestoreMissionStepControlFileOnStartupInvalidFilePreservesBootstrappedStep`
+- `TestRestoreMissionStepControlFileOnStartupInitialSnapshotReflectsRestoredStep`
+- `TestMissionOperatorSetStepCommandActiveJobSucceedsThroughConfirmationPath`
+- `TestMissionOperatorSetStepCommandWrongJobDoesNotBind`
+- `TestMissionOperatorSetStepCommandInvalidStepRejectsDeterministically`
+- `TestMissionOperatorSetStepCommandStaleMatchingStatusSnapshotDoesNotConfirmSuccess`
+- `TestMissionOperatorSetStepCommandFreshStatusWithWrongStepTypeDoesNotConfirmSuccess`
+- `TestMissionOperatorSetStepCommandFreshStatusWithWrongAllowedToolsDoesNotConfirmSuccess`
+- `TestMissionOperatorSetStepCommandFreshMatchingStatusSnapshotConfirmsSuccess`
+- `TestMissionOperatorSetStepCommandRehydratedRuntimeSucceedsWhenAppropriate`
+- `TestMissionOperatorSetStepCommandRehydratedRuntimeRejectsPreviouslyCompletedStepReplay`
+- `TestMissionOperatorSetStepCommandRehydratedRuntimeRejectsPreviouslyFailedStepReplay`
+- `TestWatchMissionStepControlFileChangedFileAppliesOnceAfterStartup`
+
+### Exact Helpers Selected For Movement
+
+- None.
+- Shared helpers will remain in `cmd/picobot/main_test.go` to avoid broad helper churn across the remaining package/prune/gateway-logging family and both moved subfamilies.
+
+### Exact Non-Goals
+
+- No production code changes.
+- No test semantic changes, assertion changes, or weakening.
+- No edits to already split families (`memory`, `scheduled-trigger`, `mission inspect`, `mission status/assertion`).
+- No broad helper relocation outside what is required to keep this split compiling.
+- No V4 work.
+
+### Expected Destination Files
+
+- `cmd/picobot/main_runtime_bootstrap_test.go`
+
+### Entanglement Risks
+
+- `captureStandardLogger` is shared by the moved operator-control tests and the remaining package/gateway logging tests, so moving it would drag an unrelated family.
+- `writeMissionBootstrapJobFile`, `writeMissionStatusSnapshotFile`, `readMissionStatusSnapshotFile`, `writeMissionStepControlFile`, `readMissionStepControlFile`, `assertNoAtomicTempFiles`, `testMissionBootstrapJob`, `runtimeControlForBootstrapStep`, and `missionStatusFixedResponseProvider` are reused across both moved subfamilies.
+- Bootstrap/runtime and operator-control tests both depend on the same bootstrap fixture surface, so the safe move is tests-first, helpers-stationary.
