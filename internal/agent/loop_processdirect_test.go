@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -1119,6 +1120,162 @@ func TestProcessDirectRollbackRecordCommandFailsClosedWhenPromotionIsMissing(t *
 	}
 	if _, err := missioncontrol.LoadRollbackRecord(root, "rollback-missing"); err != missioncontrol.ErrRollbackRecordNotFound {
 		t.Fatalf("LoadRollbackRecord() error = %v, want %v", err, missioncontrol.ErrRollbackRecordNotFound)
+	}
+}
+
+func TestProcessDirectRollbackApplyRecordCommandCreatesOrSelectsWorkflowAndPreservesActiveRuntimePackPointer(t *testing.T) {
+	t.Parallel()
+
+	root, wantPointer := writeLoopRollbackPromotionFixtures(t)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ecBefore, ok := ag.ActiveMissionStep()
+	if !ok || ecBefore.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() before = %#v, want active runtime", ecBefore)
+	}
+
+	if _, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 promotion-1 rollback-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 rollback-1 apply-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD first) error = %v", err)
+	}
+	if resp != "Recorded rollback-apply workflow job=job-1 rollback=rollback-1 apply=apply-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD first) response = %q, want create acknowledgement", resp)
+	}
+
+	record, err := missioncontrol.LoadRollbackApplyRecord(root, "apply-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackApplyRecord() error = %v", err)
+	}
+	if record.RollbackID != "rollback-1" {
+		t.Fatalf("RollbackApplyRecord.RollbackID = %q, want rollback-1", record.RollbackID)
+	}
+	if record.Phase != missioncontrol.RollbackApplyPhaseRecorded {
+		t.Fatalf("RollbackApplyRecord.Phase = %q, want recorded", record.Phase)
+	}
+	if record.ActivationState != missioncontrol.RollbackApplyActivationStateUnchanged {
+		t.Fatalf("RollbackApplyRecord.ActivationState = %q, want unchanged", record.ActivationState)
+	}
+	if record.CreatedBy != "operator" {
+		t.Fatalf("RollbackApplyRecord.CreatedBy = %q, want operator", record.CreatedBy)
+	}
+	if !record.RequestedAt.Equal(record.CreatedAt) {
+		t.Fatalf("RollbackApplyRecord timestamps = (%v, %v), want equal requested_at and created_at", record.RequestedAt, record.CreatedAt)
+	}
+
+	firstBytes, err := os.ReadFile(missioncontrol.StoreRollbackApplyPath(root, "apply-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(first apply) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 rollback-1 apply-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD second) error = %v", err)
+	}
+	if resp != "Selected rollback-apply workflow job=job-1 rollback=rollback-1 apply=apply-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD second) response = %q, want select acknowledgement", resp)
+	}
+
+	secondBytes, err := os.ReadFile(missioncontrol.StoreRollbackApplyPath(root, "apply-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(second apply) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("rollback-apply file changed on select path\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+
+	ecAfter, ok := ag.ActiveMissionStep()
+	if !ok || ecAfter.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() after = %#v, want active runtime", ecAfter)
+	}
+	if ecAfter.Runtime.State != ecBefore.Runtime.State {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ecAfter.Runtime.State, ecBefore.Runtime.State)
+	}
+	if ecAfter.Runtime.ActiveStepID != ecBefore.Runtime.ActiveStepID {
+		t.Fatalf("ActiveMissionStep().Runtime.ActiveStepID = %q, want %q", ecAfter.Runtime.ActiveStepID, ecBefore.Runtime.ActiveStepID)
+	}
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.RollbackIdentity == nil {
+		t.Fatal("RollbackIdentity = nil, want rollback identity block")
+	}
+	if summary.RollbackApplyIdentity == nil {
+		t.Fatal("RollbackApplyIdentity = nil, want rollback-apply identity block")
+	}
+	if summary.RollbackIdentity.State != "configured" {
+		t.Fatalf("RollbackIdentity.State = %q, want configured", summary.RollbackIdentity.State)
+	}
+	if summary.RollbackApplyIdentity.State != "configured" {
+		t.Fatalf("RollbackApplyIdentity.State = %q, want configured", summary.RollbackApplyIdentity.State)
+	}
+	if len(summary.RollbackIdentity.Rollbacks) != 1 {
+		t.Fatalf("RollbackIdentity.Rollbacks len = %d, want 1", len(summary.RollbackIdentity.Rollbacks))
+	}
+	if len(summary.RollbackApplyIdentity.Applies) != 1 {
+		t.Fatalf("RollbackApplyIdentity.Applies len = %d, want 1", len(summary.RollbackApplyIdentity.Applies))
+	}
+	if summary.RollbackIdentity.Rollbacks[0].RollbackID != "rollback-1" {
+		t.Fatalf("RollbackIdentity.Rollbacks[0].RollbackID = %q, want rollback-1", summary.RollbackIdentity.Rollbacks[0].RollbackID)
+	}
+	if summary.RollbackApplyIdentity.Applies[0].RollbackApplyID != "apply-1" {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].RollbackApplyID = %q, want apply-1", summary.RollbackApplyIdentity.Applies[0].RollbackApplyID)
+	}
+	if summary.RollbackApplyIdentity.Applies[0].RollbackID != "rollback-1" {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].RollbackID = %q, want rollback-1", summary.RollbackApplyIdentity.Applies[0].RollbackID)
+	}
+}
+
+func TestProcessDirectRollbackApplyRecordCommandFailsClosedWhenRollbackIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 missing-rollback apply-missing", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(ROLLBACK_APPLY_RECORD) error = nil, want missing rollback rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrRollbackRecordNotFound.Error()) {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD) error = %q, want missing rollback rejection", err)
+	}
+	if _, err := missioncontrol.LoadRollbackApplyRecord(root, "apply-missing"); err != missioncontrol.ErrRollbackApplyRecordNotFound {
+		t.Fatalf("LoadRollbackApplyRecord() error = %v, want %v", err, missioncontrol.ErrRollbackApplyRecordNotFound)
 	}
 }
 

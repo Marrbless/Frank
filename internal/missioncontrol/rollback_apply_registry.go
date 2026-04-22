@@ -157,6 +157,42 @@ func CreateRollbackApplyRecordFromRollback(root string, applyID string, rollback
 	return LoadRollbackApplyRecord(root, record.ApplyID)
 }
 
+func EnsureRollbackApplyRecordFromRollback(root string, applyID string, rollbackID string, createdBy string, requestedAt time.Time) (RollbackApplyRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	applyRef := NormalizeRollbackApplyRef(RollbackApplyRef{ApplyID: applyID})
+	if err := ValidateRollbackApplyRef(applyRef); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	rollbackRef := NormalizeRollbackRef(RollbackRef{RollbackID: rollbackID})
+	if err := ValidateRollbackRef(rollbackRef); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	existing, err := LoadRollbackApplyRecord(root, applyRef.ApplyID)
+	if err == nil {
+		if existing.RollbackID != rollbackRef.RollbackID {
+			return RollbackApplyRecord{}, false, fmt.Errorf(
+				"mission store rollback apply %q rollback_id %q does not match requested rollback_id %q",
+				applyRef.ApplyID,
+				existing.RollbackID,
+				rollbackRef.RollbackID,
+			)
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, ErrRollbackApplyRecordNotFound) {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	record, err := CreateRollbackApplyRecordFromRollback(root, applyRef.ApplyID, rollbackRef.RollbackID, createdBy, requestedAt)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func LoadRollbackApplyRecord(root, applyID string) (RollbackApplyRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return RollbackApplyRecord{}, err

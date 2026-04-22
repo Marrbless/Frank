@@ -196,6 +196,86 @@ func TestRollbackApplyReplayIsIdempotentAndImmutable(t *testing.T) {
 	}
 }
 
+func TestEnsureRollbackApplyRecordFromRollbackCreatesOrSelectsExistingMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 12, 30, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-select"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord() error = %v", err)
+	}
+
+	first, created, err := EnsureRollbackApplyRecordFromRollback(root, "apply-select", "rollback-select", "operator", now.Add(13*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureRollbackApplyRecordFromRollback(first) error = %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureRollbackApplyRecordFromRollback(first) created = false, want true")
+	}
+
+	firstBytes, err := os.ReadFile(StoreRollbackApplyPath(root, "apply-select"))
+	if err != nil {
+		t.Fatalf("ReadFile(first) error = %v", err)
+	}
+
+	second, created, err := EnsureRollbackApplyRecordFromRollback(root, "apply-select", "rollback-select", "other-operator", now.Add(17*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureRollbackApplyRecordFromRollback(second) error = %v", err)
+	}
+	if created {
+		t.Fatal("EnsureRollbackApplyRecordFromRollback(second) created = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("EnsureRollbackApplyRecordFromRollback(second) = %#v, want %#v", second, first)
+	}
+
+	secondBytes, err := os.ReadFile(StoreRollbackApplyPath(root, "apply-select"))
+	if err != nil {
+		t.Fatalf("ReadFile(second) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("rollback apply file changed on select path\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+}
+
+func TestEnsureRollbackApplyRecordFromRollbackRejectsMismatchedExistingRollback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 12, 45, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-a"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord(rollback-a) error = %v", err)
+	}
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(13*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-b"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord(rollback-b) error = %v", err)
+	}
+	if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-mismatch", "rollback-a", "operator", now.Add(14*time.Minute)); err != nil {
+		t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+	}
+
+	_, created, err := EnsureRollbackApplyRecordFromRollback(root, "apply-mismatch", "rollback-b", "operator", now.Add(15*time.Minute))
+	if err == nil {
+		t.Fatal("EnsureRollbackApplyRecordFromRollback() error = nil, want mismatched rollback rejection")
+	}
+	if created {
+		t.Fatal("EnsureRollbackApplyRecordFromRollback() created = true, want false")
+	}
+	if !strings.Contains(err.Error(), `rollback_id "rollback-a" does not match requested rollback_id "rollback-b"`) {
+		t.Fatalf("EnsureRollbackApplyRecordFromRollback() error = %q, want mismatched rollback context", err.Error())
+	}
+}
+
 func TestLoadRollbackApplyRecordNotFound(t *testing.T) {
 	t.Parallel()
 

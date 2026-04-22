@@ -26,6 +26,7 @@ var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
 var revokeApprovalCommandRE = regexp.MustCompile(`(?i)^\s*(revoke_approval)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
+var rollbackApplyRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
 var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
@@ -1781,6 +1782,21 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Recorded rollback proposal job=%s promotion=%s rollback=%s.", jobID, promotionID, rollbackID), nil
+	}
+
+	rollbackApplyMatches := rollbackApplyRecordCommandRE.FindStringSubmatch(trimmed)
+	if len(rollbackApplyMatches) == 5 {
+		jobID := rollbackApplyMatches[2]
+		rollbackID := rollbackApplyMatches[3]
+		applyID := rollbackApplyMatches[4]
+		created, err := a.taskState.EnsureRollbackApplyRecord(jobID, rollbackID, applyID)
+		if err != nil {
+			return true, "", err
+		}
+		if created {
+			return true, fmt.Sprintf("Recorded rollback-apply workflow job=%s rollback=%s apply=%s.", jobID, rollbackID, applyID), nil
+		}
+		return true, fmt.Sprintf("Selected rollback-apply workflow job=%s rollback=%s apply=%s.", jobID, rollbackID, applyID), nil
 	}
 
 	matches := approvalCommandRE.FindStringSubmatch(trimmed)
