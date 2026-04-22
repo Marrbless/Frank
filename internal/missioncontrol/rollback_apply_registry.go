@@ -23,6 +23,7 @@ const (
 	RollbackApplyPhaseReadyToApply                 RollbackApplyPhase = "ready_to_apply"
 	RollbackApplyPhasePointerSwitchedReloadPending RollbackApplyPhase = "pointer_switched_reload_pending"
 	RollbackApplyPhaseReloadApplyInProgress        RollbackApplyPhase = "reload_apply_in_progress"
+	RollbackApplyPhaseReloadApplyRecoveryNeeded    RollbackApplyPhase = "reload_apply_recovery_needed"
 	RollbackApplyPhaseReloadApplySucceeded         RollbackApplyPhase = "reload_apply_succeeded"
 	RollbackApplyPhaseReloadApplyFailed            RollbackApplyPhase = "reload_apply_failed"
 )
@@ -106,6 +107,7 @@ func ValidateRollbackApplyRecord(record RollbackApplyRecord) error {
 		RollbackApplyPhaseReadyToApply,
 		RollbackApplyPhasePointerSwitchedReloadPending,
 		RollbackApplyPhaseReloadApplyInProgress,
+		RollbackApplyPhaseReloadApplyRecoveryNeeded,
 		RollbackApplyPhaseReloadApplySucceeded,
 		RollbackApplyPhaseReloadApplyFailed:
 	default:
@@ -418,6 +420,68 @@ func ExecuteRollbackApplyReloadApply(root string, applyID string, updatedBy stri
 	return executeRollbackApplyReloadApplyWithConvergence(root, applyID, updatedBy, updatedAt, rollbackApplyRestartStyleConvergence)
 }
 
+func ReconcileRollbackApplyRecoveryNeeded(root string, applyID string, updatedBy string, updatedAt time.Time) (RollbackApplyRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	ref := NormalizeRollbackApplyRef(RollbackApplyRef{ApplyID: applyID})
+	if err := ValidateRollbackApplyRef(ref); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_at is required")
+	}
+
+	record, err := LoadRollbackApplyRecord(root, ref.ApplyID)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	switch record.Phase {
+	case RollbackApplyPhaseReloadApplyRecoveryNeeded:
+		if _, err := validateRollbackApplyExecutionLinkage(root, record); err != nil {
+			return RollbackApplyRecord{}, false, err
+		}
+		return record, false, nil
+	case RollbackApplyPhaseReloadApplyInProgress:
+	default:
+		return RollbackApplyRecord{}, false, fmt.Errorf(
+			"mission store rollback apply %q phase %q does not permit recovery-needed normalization",
+			ref.ApplyID,
+			record.Phase,
+		)
+	}
+
+	if _, err := validateRollbackApplyExecutionLinkage(root, record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	record.Phase = RollbackApplyPhaseReloadApplyRecoveryNeeded
+	record.ExecutionError = ""
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeRollbackApplyRecord(record)
+	if err := ValidateRollbackApplyRecord(record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := validateRollbackApplyLinkage(root, record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreRollbackApplyPath(root, record.ApplyID), record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	record, err = LoadRollbackApplyRecord(root, ref.ApplyID)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func LoadRollbackApplyRecord(root, applyID string) (RollbackApplyRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return RollbackApplyRecord{}, err
@@ -539,41 +603,9 @@ func executeRollbackApplyReloadApplyWithConvergence(root string, applyID string,
 		)
 	}
 
-	rollback, err := LoadRollbackRecord(root, record.RollbackID)
-	if err != nil {
-		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply rollback_id %q: %w", record.RollbackID, err)
-	}
-	activePointer, err := LoadActiveRuntimePackPointer(root)
+	rollback, err := validateRollbackApplyExecutionLinkage(root, record)
 	if err != nil {
 		return RollbackApplyRecord{}, false, err
-	}
-	updateRecordRef := rollbackApplyPointerUpdateRecordRef(ref.ApplyID)
-	if activePointer.ActivePackID != rollback.TargetPackID {
-		return RollbackApplyRecord{}, false, fmt.Errorf(
-			"mission store rollback apply %q requires active runtime pack pointer active_pack_id %q before reload/apply, found %q",
-			ref.ApplyID,
-			rollback.TargetPackID,
-			activePointer.ActivePackID,
-		)
-	}
-	if activePointer.UpdateRecordRef != updateRecordRef {
-		return RollbackApplyRecord{}, false, fmt.Errorf(
-			"mission store rollback apply %q requires active runtime pack pointer update_record_ref %q before reload/apply, found %q",
-			ref.ApplyID,
-			updateRecordRef,
-			activePointer.UpdateRecordRef,
-		)
-	}
-	if activePointer.PreviousActivePackID != rollback.FromPackID {
-		return RollbackApplyRecord{}, false, fmt.Errorf(
-			"mission store rollback apply %q requires active runtime pack pointer previous_active_pack_id %q before reload/apply, found %q",
-			ref.ApplyID,
-			rollback.FromPackID,
-			activePointer.PreviousActivePackID,
-		)
-	}
-	if _, err := LoadRuntimePackRecord(root, rollback.TargetPackID); err != nil {
-		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply target_pack_id %q: %w", rollback.TargetPackID, err)
 	}
 
 	record.Phase = RollbackApplyPhaseReloadApplyInProgress
@@ -632,6 +664,46 @@ func executeRollbackApplyReloadApplyWithConvergence(root string, applyID string,
 		return RollbackApplyRecord{}, false, err
 	}
 	return record, true, nil
+}
+
+func validateRollbackApplyExecutionLinkage(root string, record RollbackApplyRecord) (RollbackRecord, error) {
+	rollback, err := LoadRollbackRecord(root, record.RollbackID)
+	if err != nil {
+		return RollbackRecord{}, fmt.Errorf("mission store rollback apply rollback_id %q: %w", record.RollbackID, err)
+	}
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return RollbackRecord{}, err
+	}
+	updateRecordRef := rollbackApplyPointerUpdateRecordRef(record.ApplyID)
+	if activePointer.ActivePackID != rollback.TargetPackID {
+		return RollbackRecord{}, fmt.Errorf(
+			"mission store rollback apply %q requires active runtime pack pointer active_pack_id %q before reload/apply, found %q",
+			record.ApplyID,
+			rollback.TargetPackID,
+			activePointer.ActivePackID,
+		)
+	}
+	if activePointer.UpdateRecordRef != updateRecordRef {
+		return RollbackRecord{}, fmt.Errorf(
+			"mission store rollback apply %q requires active runtime pack pointer update_record_ref %q before reload/apply, found %q",
+			record.ApplyID,
+			updateRecordRef,
+			activePointer.UpdateRecordRef,
+		)
+	}
+	if activePointer.PreviousActivePackID != rollback.FromPackID {
+		return RollbackRecord{}, fmt.Errorf(
+			"mission store rollback apply %q requires active runtime pack pointer previous_active_pack_id %q before reload/apply, found %q",
+			record.ApplyID,
+			rollback.FromPackID,
+			activePointer.PreviousActivePackID,
+		)
+	}
+	if _, err := LoadRuntimePackRecord(root, rollback.TargetPackID); err != nil {
+		return RollbackRecord{}, fmt.Errorf("mission store rollback apply target_pack_id %q: %w", rollback.TargetPackID, err)
+	}
+	return rollback, nil
 }
 
 func rollbackApplyPhaseOrder(phase RollbackApplyPhase) int {
