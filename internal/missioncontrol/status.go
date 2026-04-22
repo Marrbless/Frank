@@ -27,6 +27,7 @@ type OperatorStatusSummary struct {
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
 	PromotionIdentity                  *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
 	RollbackIdentity                   *OperatorRollbackIdentityStatus                             `json:"rollback_identity,omitempty"`
+	RollbackApplyIdentity              *OperatorRollbackApplyIdentityStatus                        `json:"rollback_apply_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -151,6 +152,11 @@ type OperatorRollbackIdentityStatus struct {
 	Rollbacks []OperatorRollbackStatus `json:"rollbacks,omitempty"`
 }
 
+type OperatorRollbackApplyIdentityStatus struct {
+	State   string                        `json:"state"`
+	Applies []OperatorRollbackApplyStatus `json:"applies,omitempty"`
+}
+
 type OperatorHotUpdateOutcomeStatus struct {
 	State             string  `json:"state"`
 	OutcomeID         string  `json:"outcome_id,omitempty"`
@@ -203,6 +209,17 @@ type OperatorRollbackStatus struct {
 	CreatedAt           *string `json:"created_at,omitempty"`
 	CreatedBy           string  `json:"created_by,omitempty"`
 	Error               string  `json:"error,omitempty"`
+}
+
+type OperatorRollbackApplyStatus struct {
+	State           string  `json:"state"`
+	RollbackApplyID string  `json:"rollback_apply_id,omitempty"`
+	RollbackID      string  `json:"rollback_id,omitempty"`
+	Phase           string  `json:"phase,omitempty"`
+	ActivationState string  `json:"activation_state,omitempty"`
+	CreatedAt       *string `json:"created_at,omitempty"`
+	CreatedBy       string  `json:"created_by,omitempty"`
+	Error           string  `json:"error,omitempty"`
 }
 
 type OperatorCandidateResultStatus struct {
@@ -512,6 +529,16 @@ func WithRollbackIdentity(summary OperatorStatusSummary, root string) OperatorSt
 	return summary
 }
 
+func WithRollbackApplyIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorRollbackApplyIdentityStatus(root)
+	summary.RollbackApplyIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
@@ -642,6 +669,24 @@ func LoadOperatorRollbackIdentityStatus(root string) OperatorRollbackIdentitySta
 	return OperatorRollbackIdentityStatus{
 		State:     state,
 		Rollbacks: rollbacks,
+	}
+}
+
+func LoadOperatorRollbackApplyIdentityStatus(root string) OperatorRollbackApplyIdentityStatus {
+	applies, found, invalid, err := loadOperatorRollbackApplyStatuses(root)
+	if !found {
+		return OperatorRollbackApplyIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorRollbackApplyIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorRollbackApplyIdentityStatus{
+		State:   state,
+		Applies: applies,
 	}
 }
 
@@ -1497,6 +1542,36 @@ func loadOperatorRollbackStatus(root, path string) OperatorRollbackStatus {
 	return status
 }
 
+func loadOperatorRollbackApplyStatuses(root string) ([]OperatorRollbackApplyStatus, bool, bool, error) {
+	entries, err := os.ReadDir(StoreRollbackAppliesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+
+	applies := make([]OperatorRollbackApplyStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorRollbackApplyStatus(root, filepath.Join(StoreRollbackAppliesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		applies = append(applies, status)
+	}
+	return applies, true, invalid, nil
+}
+
 func operatorRollbackStatusFromRecord(record RollbackRecord) OperatorRollbackStatus {
 	return OperatorRollbackStatus{
 		RollbackID:          record.RollbackID,
@@ -1511,6 +1586,45 @@ func operatorRollbackStatusFromRecord(record RollbackRecord) OperatorRollbackSta
 		RollbackAt:          formatOperatorStatusTime(record.RollbackAt),
 		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorRollbackApplyStatus(root, path string) OperatorRollbackApplyStatus {
+	status := OperatorRollbackApplyStatus{
+		State:           "invalid",
+		RollbackApplyID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record RollbackApplyRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeRollbackApplyRecord(record)
+	status = operatorRollbackApplyStatusFromRecord(record)
+	if err := ValidateRollbackApplyRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateRollbackApplyLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorRollbackApplyStatusFromRecord(record RollbackApplyRecord) OperatorRollbackApplyStatus {
+	return OperatorRollbackApplyStatus{
+		RollbackApplyID: record.ApplyID,
+		RollbackID:      record.RollbackID,
+		Phase:           string(record.Phase),
+		ActivationState: string(record.ActivationState),
+		CreatedAt:       formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:       record.CreatedBy,
 	}
 }
 

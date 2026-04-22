@@ -1434,6 +1434,17 @@ func TestTaskStateOperatorStatusSurfacesRollbackIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRollbackRecord() error = %v", err)
 	}
+	if err := missioncontrol.StoreRollbackApplyRecord(root, missioncontrol.RollbackApplyRecord{
+		ApplyID:         "apply-1",
+		RollbackID:      "rollback-1",
+		Phase:           missioncontrol.RollbackApplyPhaseRecorded,
+		ActivationState: missioncontrol.RollbackApplyActivationStateUnchanged,
+		RequestedAt:     now.Add(-10 * time.Second),
+		CreatedAt:       now.Add(-5 * time.Second),
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreRollbackApplyRecord() error = %v", err)
+	}
 
 	state := NewTaskState()
 	state.SetMissionStoreRoot(root)
@@ -1450,15 +1461,37 @@ func TestTaskStateOperatorStatusSurfacesRollbackIdentity(t *testing.T) {
 	if got.RollbackIdentity == nil {
 		t.Fatal("RollbackIdentity = nil, want read-only rollback identity block")
 	}
+	if got.RollbackApplyIdentity == nil {
+		t.Fatal("RollbackApplyIdentity = nil, want read-only rollback-apply identity block")
+	}
 	if got.RollbackIdentity.State != "configured" {
 		t.Fatalf("RollbackIdentity.State = %q, want configured", got.RollbackIdentity.State)
+	}
+	if got.RollbackApplyIdentity.State != "configured" {
+		t.Fatalf("RollbackApplyIdentity.State = %q, want configured", got.RollbackApplyIdentity.State)
 	}
 	if len(got.RollbackIdentity.Rollbacks) != 1 {
 		t.Fatalf("RollbackIdentity.Rollbacks len = %d, want 1", len(got.RollbackIdentity.Rollbacks))
 	}
+	if len(got.RollbackApplyIdentity.Applies) != 1 {
+		t.Fatalf("RollbackApplyIdentity.Applies len = %d, want 1", len(got.RollbackApplyIdentity.Applies))
+	}
 	rollback := got.RollbackIdentity.Rollbacks[0]
+	apply := got.RollbackApplyIdentity.Applies[0]
 	if rollback.RollbackID != "rollback-1" {
 		t.Fatalf("RollbackIdentity.Rollbacks[0].RollbackID = %q, want rollback-1", rollback.RollbackID)
+	}
+	if apply.RollbackApplyID != "apply-1" {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].RollbackApplyID = %q, want apply-1", apply.RollbackApplyID)
+	}
+	if apply.RollbackID != "rollback-1" {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].RollbackID = %q, want rollback-1", apply.RollbackID)
+	}
+	if apply.Phase != string(missioncontrol.RollbackApplyPhaseRecorded) {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].Phase = %q, want recorded", apply.Phase)
+	}
+	if apply.ActivationState != string(missioncontrol.RollbackApplyActivationStateUnchanged) {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].ActivationState = %q, want unchanged", apply.ActivationState)
 	}
 	if rollback.PromotionID != "promotion-1" {
 		t.Fatalf("RollbackIdentity.Rollbacks[0].PromotionID = %q, want promotion-1", rollback.PromotionID)
@@ -1486,6 +1519,9 @@ func TestTaskStateOperatorStatusSurfacesRollbackIdentity(t *testing.T) {
 	}
 	if rollback.CreatedBy != "operator" {
 		t.Fatalf("RollbackIdentity.Rollbacks[0].CreatedBy = %q, want operator", rollback.CreatedBy)
+	}
+	if apply.CreatedBy != "operator" {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].CreatedBy = %q, want operator", apply.CreatedBy)
 	}
 }
 
@@ -1516,7 +1552,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -1676,7 +1712,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -2048,7 +2084,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
