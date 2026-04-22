@@ -1,0 +1,47 @@
+## V4-015 Promotion Read-Model Before
+
+- branch: `frank-v4-015-promotion-read-model`
+- HEAD: `8eb04904e31696c443e5457f5003b630882619c9`
+- baseline status:
+  - `git status --short --branch` => `## frank-v4-015-promotion-read-model`
+  - `git rev-list --left-right --count HEAD...upstream/main` => `413 0`
+  - `go test -count=1 ./...` => `PASS`
+- narrowest existing read-only hook:
+  - `internal/missioncontrol/status.go` via `OperatorStatusSummary`
+  - projected through `internal/missioncontrol/store_project.go`
+  - mirrored into taskstate readout by `internal/agent/tools/taskstate_readout.go`
+- planned files:
+  - `internal/missioncontrol/status.go`
+  - `internal/missioncontrol/store_project.go`
+  - `internal/agent/tools/taskstate_readout.go`
+  - `internal/missioncontrol/status_promotion_identity_test.go`
+  - `internal/agent/tools/taskstate_status_test.go`
+  - `docs/maintenance/V4_015_PROMOTION_READ_MODEL_AFTER.md`
+- planned exposure:
+  - `promotion_identity`
+  - per-record fields:
+    - `promotion_id`
+    - `promoted_pack_id`
+    - `previous_active_pack_id`
+    - optional `last_known_good_pack_id`
+    - optional `last_known_good_basis`
+    - `hot_update_id`
+    - optional `outcome_id`
+    - optional `candidate_id`
+    - optional `run_id`
+    - optional `candidate_result_id`
+    - `reason`
+    - `notes`
+    - `promoted_at`
+    - `created_at`
+    - `created_by`
+    - safe `error`
+- non-goals:
+  - no apply or reload behavior
+  - no rollback workflow
+  - no evaluator execution
+  - no scoring calculation behavior
+  - no autonomy changes
+  - no provider or channel behavior changes
+  - no dependency changes
+  - no cleanup outside this read-model slice

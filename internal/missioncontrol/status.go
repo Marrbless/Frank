@@ -25,6 +25,7 @@ type OperatorStatusSummary struct {
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
+	PromotionIdentity                  *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -139,6 +140,11 @@ type OperatorHotUpdateOutcomeIdentityStatus struct {
 	Outcomes []OperatorHotUpdateOutcomeStatus `json:"outcomes,omitempty"`
 }
 
+type OperatorPromotionIdentityStatus struct {
+	State      string                    `json:"state"`
+	Promotions []OperatorPromotionStatus `json:"promotions,omitempty"`
+}
+
 type OperatorHotUpdateOutcomeStatus struct {
 	State             string  `json:"state"`
 	OutcomeID         string  `json:"outcome_id,omitempty"`
@@ -154,6 +160,26 @@ type OperatorHotUpdateOutcomeStatus struct {
 	CreatedAt         *string `json:"created_at,omitempty"`
 	CreatedBy         string  `json:"created_by,omitempty"`
 	Error             string  `json:"error,omitempty"`
+}
+
+type OperatorPromotionStatus struct {
+	State                string  `json:"state"`
+	PromotionID          string  `json:"promotion_id,omitempty"`
+	PromotedPackID       string  `json:"promoted_pack_id,omitempty"`
+	PreviousActivePackID string  `json:"previous_active_pack_id,omitempty"`
+	LastKnownGoodPackID  string  `json:"last_known_good_pack_id,omitempty"`
+	LastKnownGoodBasis   string  `json:"last_known_good_basis,omitempty"`
+	HotUpdateID          string  `json:"hot_update_id,omitempty"`
+	OutcomeID            string  `json:"outcome_id,omitempty"`
+	CandidateID          string  `json:"candidate_id,omitempty"`
+	RunID                string  `json:"run_id,omitempty"`
+	CandidateResultID    string  `json:"candidate_result_id,omitempty"`
+	Reason               string  `json:"reason,omitempty"`
+	Notes                string  `json:"notes,omitempty"`
+	PromotedAt           *string `json:"promoted_at,omitempty"`
+	CreatedAt            *string `json:"created_at,omitempty"`
+	CreatedBy            string  `json:"created_by,omitempty"`
+	Error                string  `json:"error,omitempty"`
 }
 
 type OperatorCandidateResultStatus struct {
@@ -443,6 +469,16 @@ func WithHotUpdateOutcomeIdentity(summary OperatorStatusSummary, root string) Op
 	return summary
 }
 
+func WithPromotionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorPromotionIdentityStatus(root)
+	summary.PromotionIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
@@ -537,6 +573,24 @@ func LoadOperatorHotUpdateOutcomeIdentityStatus(root string) OperatorHotUpdateOu
 	return OperatorHotUpdateOutcomeIdentityStatus{
 		State:    state,
 		Outcomes: outcomes,
+	}
+}
+
+func LoadOperatorPromotionIdentityStatus(root string) OperatorPromotionIdentityStatus {
+	promotions, found, invalid, err := loadOperatorPromotionStatuses(root)
+	if !found {
+		return OperatorPromotionIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorPromotionIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorPromotionIdentityStatus{
+		State:      state,
+		Promotions: promotions,
 	}
 }
 
@@ -1239,6 +1293,91 @@ func operatorHotUpdateOutcomeStatusFromRecord(record HotUpdateOutcomeRecord) Ope
 		OutcomeAt:         formatOperatorStatusTime(record.OutcomeAt),
 		CreatedAt:         formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:         record.CreatedBy,
+	}
+}
+
+func loadOperatorPromotionStatuses(root string) ([]OperatorPromotionStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StorePromotionsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	promotions := make([]OperatorPromotionStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorPromotionStatus(root, filepath.Join(StorePromotionsDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		promotions = append(promotions, status)
+	}
+	return promotions, true, invalid, nil
+}
+
+func loadOperatorPromotionStatus(root, path string) OperatorPromotionStatus {
+	status := OperatorPromotionStatus{
+		State:       "invalid",
+		PromotionID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record PromotionRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizePromotionRecord(record)
+	status = operatorPromotionStatusFromRecord(record)
+	if err := ValidatePromotionRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validatePromotionLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorPromotionStatusFromRecord(record PromotionRecord) OperatorPromotionStatus {
+	return OperatorPromotionStatus{
+		PromotionID:          record.PromotionID,
+		PromotedPackID:       record.PromotedPackID,
+		PreviousActivePackID: record.PreviousActivePackID,
+		LastKnownGoodPackID:  record.LastKnownGoodPackID,
+		LastKnownGoodBasis:   record.LastKnownGoodBasis,
+		HotUpdateID:          record.HotUpdateID,
+		OutcomeID:            record.OutcomeID,
+		CandidateID:          record.CandidateID,
+		RunID:                record.RunID,
+		CandidateResultID:    record.CandidateResultID,
+		Reason:               record.Reason,
+		Notes:                record.Notes,
+		PromotedAt:           formatOperatorStatusTime(record.PromotedAt),
+		CreatedAt:            formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:            record.CreatedBy,
 	}
 }
 
