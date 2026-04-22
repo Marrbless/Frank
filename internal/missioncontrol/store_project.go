@@ -91,6 +91,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	summary = WithDeferredSchedulerTriggers(summary, deferredSchedulerTriggers)
 	summary = WithRuntimePackIdentity(summary, root)
 	summary = WithImprovementCandidateIdentity(summary, root)
+	summary = WithEvalSuiteIdentity(summary, root)
 	summary = WithImprovementRunIdentity(summary, root)
 	summary = WithCandidateResultIdentity(summary, root)
 	snapshot.RuntimeSummary = &summary

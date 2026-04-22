@@ -21,6 +21,7 @@ type OperatorStatusSummary struct {
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
 	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
+	EvalSuiteIdentity                  *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
@@ -85,6 +86,27 @@ type OperatorImprovementCandidateStatus struct {
 	CreatedAt           *string  `json:"created_at,omitempty"`
 	CreatedBy           string   `json:"created_by,omitempty"`
 	Error               string   `json:"error,omitempty"`
+}
+
+type OperatorEvalSuiteIdentityStatus struct {
+	State  string                    `json:"state"`
+	Suites []OperatorEvalSuiteStatus `json:"suites,omitempty"`
+}
+
+type OperatorEvalSuiteStatus struct {
+	State            string  `json:"state"`
+	EvalSuiteID      string  `json:"eval_suite_id,omitempty"`
+	CandidateID      string  `json:"candidate_id,omitempty"`
+	BaselinePackID   string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID  string  `json:"candidate_pack_id,omitempty"`
+	RubricRef        string  `json:"rubric_ref,omitempty"`
+	TrainCorpusRef   string  `json:"train_corpus_ref,omitempty"`
+	HoldoutCorpusRef string  `json:"holdout_corpus_ref,omitempty"`
+	EvaluatorRef     string  `json:"evaluator_ref,omitempty"`
+	FrozenForRun     bool    `json:"frozen_for_run,omitempty"`
+	CreatedAt        *string `json:"created_at,omitempty"`
+	CreatedBy        string  `json:"created_by,omitempty"`
+	Error            string  `json:"error,omitempty"`
 }
 
 type OperatorImprovementRunIdentityStatus struct {
@@ -358,6 +380,16 @@ func WithImprovementCandidateIdentity(summary OperatorStatusSummary, root string
 	return summary
 }
 
+func WithEvalSuiteIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorEvalSuiteIdentityStatus(root)
+	summary.EvalSuiteIdentity = &status
+	return summary
+}
+
 func WithImprovementRunIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -400,6 +432,24 @@ func LoadOperatorImprovementCandidateIdentityStatus(root string) OperatorImprove
 	return OperatorImprovementCandidateIdentityStatus{
 		State:      state,
 		Candidates: candidates,
+	}
+}
+
+func LoadOperatorEvalSuiteIdentityStatus(root string) OperatorEvalSuiteIdentityStatus {
+	suites, found, invalid, err := loadOperatorEvalSuiteStatuses(root)
+	if !found {
+		return OperatorEvalSuiteIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorEvalSuiteIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorEvalSuiteIdentityStatus{
+		State:  state,
+		Suites: suites,
 	}
 }
 
@@ -808,6 +858,87 @@ func operatorImprovementCandidateStatusFromRecord(record ImprovementCandidateRec
 		HotUpdateID:         record.HotUpdateID,
 		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorEvalSuiteStatuses(root string) ([]OperatorEvalSuiteStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreEvalSuitesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	suites := make([]OperatorEvalSuiteStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorEvalSuiteStatus(root, filepath.Join(StoreEvalSuitesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		suites = append(suites, status)
+	}
+	return suites, true, invalid, nil
+}
+
+func loadOperatorEvalSuiteStatus(root, path string) OperatorEvalSuiteStatus {
+	status := OperatorEvalSuiteStatus{
+		State:       "invalid",
+		EvalSuiteID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record EvalSuiteRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeEvalSuiteRecord(record)
+	status = operatorEvalSuiteStatusFromRecord(record)
+	if err := ValidateEvalSuiteRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateEvalSuiteLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorEvalSuiteStatusFromRecord(record EvalSuiteRecord) OperatorEvalSuiteStatus {
+	return OperatorEvalSuiteStatus{
+		EvalSuiteID:      record.EvalSuiteID,
+		CandidateID:      record.CandidateID,
+		BaselinePackID:   record.BaselinePackID,
+		CandidatePackID:  record.CandidatePackID,
+		RubricRef:        record.RubricRef,
+		TrainCorpusRef:   record.TrainCorpusRef,
+		HoldoutCorpusRef: record.HoldoutCorpusRef,
+		EvaluatorRef:     record.EvaluatorRef,
+		FrozenForRun:     record.FrozenForRun,
+		CreatedAt:        formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:        record.CreatedBy,
 	}
 }
 
