@@ -1,0 +1,44 @@
+## V4-017 Rollback Read-Model Before
+
+- branch: `frank-v4-017-rollback-read-model`
+- HEAD: `f6d39db1f42269f09e5591cc5899783a978567da`
+- baseline status:
+  - `git status --short --branch` => `## frank-v4-017-rollback-read-model`
+  - `git rev-list --left-right --count HEAD...upstream/main` => `415 0`
+  - `go test -count=1 ./...` => `PASS`
+- narrowest existing read-only hook:
+  - `internal/missioncontrol/status.go` via `OperatorStatusSummary`
+  - projected through `internal/missioncontrol/store_project.go`
+  - mirrored into taskstate readout by `internal/agent/tools/taskstate_readout.go`
+- planned files:
+  - `internal/missioncontrol/status.go`
+  - `internal/missioncontrol/store_project.go`
+  - `internal/agent/tools/taskstate_readout.go`
+  - `internal/missioncontrol/status_rollback_identity_test.go`
+  - `internal/agent/tools/taskstate_status_test.go`
+  - `docs/maintenance/V4_017_ROLLBACK_READ_MODEL_AFTER.md`
+- planned exposure:
+  - `rollback_identity`
+  - per-record fields:
+    - `rollback_id`
+    - optional `promotion_id`
+    - optional `hot_update_id`
+    - optional `outcome_id`
+    - `from_pack_id`
+    - `target_pack_id`
+    - optional `last_known_good_pack_id`
+    - `reason`
+    - `notes`
+    - `rollback_at`
+    - `created_at`
+    - `created_by`
+    - safe `error`
+- non-goals:
+  - no rollback apply behavior
+  - no promotion behavior changes
+  - no evaluator execution
+  - no scoring behavior
+  - no autonomy changes
+  - no provider or channel behavior changes
+  - no dependency changes
+  - no cleanup outside this read-model slice
