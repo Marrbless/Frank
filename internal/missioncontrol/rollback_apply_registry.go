@@ -38,6 +38,8 @@ type RollbackApplyRecord struct {
 	RequestedAt     time.Time                    `json:"requested_at"`
 	CreatedAt       time.Time                    `json:"created_at"`
 	CreatedBy       string                       `json:"created_by"`
+	PhaseUpdatedAt  time.Time                    `json:"phase_updated_at,omitempty"`
+	PhaseUpdatedBy  string                       `json:"phase_updated_by,omitempty"`
 }
 
 var ErrRollbackApplyRecordNotFound = errors.New("mission store rollback apply record not found")
@@ -63,6 +65,14 @@ func NormalizeRollbackApplyRecord(record RollbackApplyRecord) RollbackApplyRecor
 	record.RequestedAt = record.RequestedAt.UTC()
 	record.CreatedAt = record.CreatedAt.UTC()
 	record.CreatedBy = strings.TrimSpace(record.CreatedBy)
+	record.PhaseUpdatedAt = record.PhaseUpdatedAt.UTC()
+	record.PhaseUpdatedBy = strings.TrimSpace(record.PhaseUpdatedBy)
+	if record.PhaseUpdatedAt.IsZero() {
+		record.PhaseUpdatedAt = record.CreatedAt
+	}
+	if record.PhaseUpdatedBy == "" {
+		record.PhaseUpdatedBy = record.CreatedBy
+	}
 	return record
 }
 
@@ -100,6 +110,15 @@ func ValidateRollbackApplyRecord(record RollbackApplyRecord) error {
 	}
 	if record.CreatedBy == "" {
 		return fmt.Errorf("mission store rollback apply created_by is required")
+	}
+	if record.PhaseUpdatedAt.IsZero() {
+		return fmt.Errorf("mission store rollback apply phase_updated_at is required")
+	}
+	if record.PhaseUpdatedBy == "" {
+		return fmt.Errorf("mission store rollback apply phase_updated_by is required")
+	}
+	if record.PhaseUpdatedAt.Before(record.CreatedAt) {
+		return fmt.Errorf("mission store rollback apply phase_updated_at must not precede created_at")
 	}
 	return nil
 }
@@ -150,6 +169,8 @@ func CreateRollbackApplyRecordFromRollback(root string, applyID string, rollback
 		RequestedAt:     requestedAt,
 		CreatedAt:       requestedAt,
 		CreatedBy:       createdBy,
+		PhaseUpdatedAt:  requestedAt,
+		PhaseUpdatedBy:  createdBy,
 	}
 	if err := StoreRollbackApplyRecord(root, record); err != nil {
 		return RollbackApplyRecord{}, err
@@ -187,6 +208,66 @@ func EnsureRollbackApplyRecordFromRollback(root string, applyID string, rollback
 	}
 
 	record, err := CreateRollbackApplyRecordFromRollback(root, applyRef.ApplyID, rollbackRef.RollbackID, createdBy, requestedAt)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func AdvanceRollbackApplyPhase(root string, applyID string, nextPhase RollbackApplyPhase, updatedBy string, updatedAt time.Time) (RollbackApplyRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	ref := NormalizeRollbackApplyRef(RollbackApplyRef{ApplyID: applyID})
+	if err := ValidateRollbackApplyRef(ref); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_at is required")
+	}
+	nextPhase = RollbackApplyPhase(strings.TrimSpace(string(nextPhase)))
+
+	record, err := LoadRollbackApplyRecord(root, ref.ApplyID)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	currentOrder := rollbackApplyPhaseOrder(record.Phase)
+	nextOrder := rollbackApplyPhaseOrder(nextPhase)
+	if nextOrder == 0 {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase %q is invalid", nextPhase)
+	}
+	if nextOrder == currentOrder {
+		return record, false, nil
+	}
+	if nextOrder != currentOrder+1 {
+		return RollbackApplyRecord{}, false, fmt.Errorf(
+			"mission store rollback apply %q phase transition %q -> %q is invalid",
+			ref.ApplyID,
+			record.Phase,
+			nextPhase,
+		)
+	}
+
+	record.Phase = nextPhase
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeRollbackApplyRecord(record)
+	if err := ValidateRollbackApplyRecord(record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := validateRollbackApplyLinkage(root, record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreRollbackApplyPath(root, record.ApplyID), record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	record, err = LoadRollbackApplyRecord(root, ref.ApplyID)
 	if err != nil {
 		return RollbackApplyRecord{}, false, err
 	}
@@ -263,4 +344,17 @@ func validateRollbackApplyIdentifierField(surface, fieldName, value string) erro
 		}
 	}
 	return nil
+}
+
+func rollbackApplyPhaseOrder(phase RollbackApplyPhase) int {
+	switch phase {
+	case RollbackApplyPhaseRecorded:
+		return 1
+	case RollbackApplyPhaseValidated:
+		return 2
+	case RollbackApplyPhaseReadyToApply:
+		return 3
+	default:
+		return 0
+	}
 }
