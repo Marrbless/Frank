@@ -24,6 +24,7 @@ type OperatorStatusSummary struct {
 	EvalSuiteIdentity                  *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
+	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
 	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -131,6 +132,28 @@ type OperatorImprovementRunStatus struct {
 type OperatorCandidateResultIdentityStatus struct {
 	State   string                          `json:"state"`
 	Results []OperatorCandidateResultStatus `json:"results,omitempty"`
+}
+
+type OperatorHotUpdateOutcomeIdentityStatus struct {
+	State    string                           `json:"state"`
+	Outcomes []OperatorHotUpdateOutcomeStatus `json:"outcomes,omitempty"`
+}
+
+type OperatorHotUpdateOutcomeStatus struct {
+	State             string  `json:"state"`
+	OutcomeID         string  `json:"outcome_id,omitempty"`
+	HotUpdateID       string  `json:"hot_update_id,omitempty"`
+	CandidateID       string  `json:"candidate_id,omitempty"`
+	RunID             string  `json:"run_id,omitempty"`
+	CandidateResultID string  `json:"candidate_result_id,omitempty"`
+	CandidatePackID   string  `json:"candidate_pack_id,omitempty"`
+	OutcomeKind       string  `json:"outcome_kind,omitempty"`
+	Reason            string  `json:"reason,omitempty"`
+	Notes             string  `json:"notes,omitempty"`
+	OutcomeAt         *string `json:"outcome_at,omitempty"`
+	CreatedAt         *string `json:"created_at,omitempty"`
+	CreatedBy         string  `json:"created_by,omitempty"`
+	Error             string  `json:"error,omitempty"`
 }
 
 type OperatorCandidateResultStatus struct {
@@ -410,6 +433,16 @@ func WithCandidateResultIdentity(summary OperatorStatusSummary, root string) Ope
 	return summary
 }
 
+func WithHotUpdateOutcomeIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateOutcomeIdentityStatus(root)
+	summary.HotUpdateOutcomeIdentity = &status
+	return summary
+}
+
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
 	return OperatorRuntimePackIdentityStatus{
 		Active:        loadOperatorActiveRuntimePackStatus(root),
@@ -486,6 +519,24 @@ func LoadOperatorCandidateResultIdentityStatus(root string) OperatorCandidateRes
 	return OperatorCandidateResultIdentityStatus{
 		State:   state,
 		Results: results,
+	}
+}
+
+func LoadOperatorHotUpdateOutcomeIdentityStatus(root string) OperatorHotUpdateOutcomeIdentityStatus {
+	outcomes, found, invalid, err := loadOperatorHotUpdateOutcomeStatuses(root)
+	if !found {
+		return OperatorHotUpdateOutcomeIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateOutcomeIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateOutcomeIdentityStatus{
+		State:    state,
+		Outcomes: outcomes,
 	}
 }
 
@@ -1106,6 +1157,88 @@ func operatorCandidateResultStatusFromRecord(record CandidateResultRecord) Opera
 		Notes:              record.Notes,
 		CreatedAt:          formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:          record.CreatedBy,
+	}
+}
+
+func loadOperatorHotUpdateOutcomeStatuses(root string) ([]OperatorHotUpdateOutcomeStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateOutcomesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	outcomes := make([]OperatorHotUpdateOutcomeStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorHotUpdateOutcomeStatus(root, filepath.Join(StoreHotUpdateOutcomesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		outcomes = append(outcomes, status)
+	}
+	return outcomes, true, invalid, nil
+}
+
+func loadOperatorHotUpdateOutcomeStatus(root, path string) OperatorHotUpdateOutcomeStatus {
+	status := OperatorHotUpdateOutcomeStatus{
+		State:     "invalid",
+		OutcomeID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record HotUpdateOutcomeRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeHotUpdateOutcomeRecord(record)
+	status = operatorHotUpdateOutcomeStatusFromRecord(record)
+	if err := ValidateHotUpdateOutcomeRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateHotUpdateOutcomeLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorHotUpdateOutcomeStatusFromRecord(record HotUpdateOutcomeRecord) OperatorHotUpdateOutcomeStatus {
+	return OperatorHotUpdateOutcomeStatus{
+		OutcomeID:         record.OutcomeID,
+		HotUpdateID:       record.HotUpdateID,
+		CandidateID:       record.CandidateID,
+		RunID:             record.RunID,
+		CandidateResultID: record.CandidateResultID,
+		CandidatePackID:   record.CandidatePackID,
+		OutcomeKind:       string(record.OutcomeKind),
+		Reason:            record.Reason,
+		Notes:             record.Notes,
+		OutcomeAt:         formatOperatorStatusTime(record.OutcomeAt),
+		CreatedAt:         formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:         record.CreatedBy,
 	}
 }
 

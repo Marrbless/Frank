@@ -805,6 +805,211 @@ func TestTaskStateOperatorStatusSurfacesCandidateResultIdentity(t *testing.T) {
 	}
 }
 
+func TestTaskStateOperatorStatusSurfacesHotUpdateOutcomeIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 27, 22, 30, 0, 0, time.UTC)
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-base",
+		CreatedAt:                now.Add(-4 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-base",
+		SkillPackRef:             "skill-pack-base",
+		ManifestRef:              "manifest-base",
+		ExtensionPackRef:         "extension-base",
+		PolicyRef:                "policy-base",
+		SourceSummary:            "baseline pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-candidate",
+		ParentPackID:             "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		CreatedAt:                now.Add(-3 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-candidate",
+		SkillPackRef:             "skill-pack-candidate",
+		ManifestRef:              "manifest-candidate",
+		ExtensionPackRef:         "extension-candidate",
+		PolicyRef:                "policy-candidate",
+		SourceSummary:            "candidate pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
+	}
+	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
+		HotUpdateID:              "hot-update-1",
+		Objective:                "stage candidate for read-only status",
+		CandidatePackID:          "pack-candidate",
+		PreviousActivePackID:     "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		TargetSurfaces:           []string{"skills"},
+		SurfaceClasses:           []string{"class_1"},
+		ReloadMode:               missioncontrol.HotUpdateReloadModeSkillReload,
+		CompatibilityContractRef: "compat-v1",
+		EvalEvidenceRefs:         []string{"eval/train"},
+		SmokeCheckRefs:           []string{"smoke/run-1"},
+		PreparedAt:               now.Add(-2 * time.Minute),
+		State:                    missioncontrol.HotUpdateGateStatePrepared,
+		Decision:                 missioncontrol.HotUpdateGateDecisionKeepStaged,
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreImprovementCandidateRecord(root, missioncontrol.ImprovementCandidateRecord{
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		SourceWorkspaceRef:  "workspace/runs/run-1",
+		SourceSummary:       "candidate for outcome identity",
+		ValidationBasisRefs: []string{"eval/baseline", "eval/holdout"},
+		HotUpdateID:         "hot-update-1",
+		CreatedAt:           now.Add(-90 * time.Second),
+		CreatedBy:           "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
+		EvalSuiteID:       "eval-suite-1",
+		RubricRef:         "rubric://default",
+		TrainCorpusRef:    "corpus://train",
+		HoldoutCorpusRef:  "corpus://holdout",
+		EvaluatorRef:      "evaluator://default",
+		NegativeCaseCount: 2,
+		BoundaryCaseCount: 1,
+		FrozenForRun:      true,
+		CandidateID:       "candidate-1",
+		BaselinePackID:    "pack-base",
+		CandidatePackID:   "pack-candidate",
+		CreatedAt:         now.Add(-time.Minute),
+		CreatedBy:         "operator",
+	}); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreImprovementRunRecord(root, missioncontrol.ImprovementRunRecord{
+		RunID:           "run-1",
+		Objective:       "improve runtime pack",
+		ExecutionPlane:  "improvement_workspace",
+		ExecutionHost:   "phone",
+		MissionFamily:   "evaluate_candidate",
+		TargetType:      "prompt_pack",
+		TargetRef:       "prompt-pack://default",
+		SurfaceClass:    "hot_reloadable",
+		CandidateID:     "candidate-1",
+		EvalSuiteID:     "eval-suite-1",
+		BaselinePackID:  "pack-base",
+		CandidatePackID: "pack-candidate",
+		HotUpdateID:     "hot-update-1",
+		State:           missioncontrol.ImprovementRunStateCandidateReady,
+		Decision:        missioncontrol.ImprovementRunDecisionKeep,
+		CreatedAt:       now,
+		CompletedAt:     now.Add(time.Minute),
+		StopReason:      "read-only exposure fixture",
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreCandidateResultRecord(root, missioncontrol.CandidateResultRecord{
+		ResultID:           "result-1",
+		RunID:              "run-1",
+		CandidateID:        "candidate-1",
+		EvalSuiteID:        "eval-suite-1",
+		BaselinePackID:     "pack-base",
+		CandidatePackID:    "pack-candidate",
+		HotUpdateID:        "hot-update-1",
+		BaselineScore:      0.51,
+		TrainScore:         0.77,
+		HoldoutScore:       0.73,
+		ComplexityScore:    0.20,
+		CompatibilityScore: 0.94,
+		ResourceScore:      0.66,
+		RegressionFlags:    []string{"holdout_warning"},
+		Decision:           missioncontrol.ImprovementRunDecisionKeep,
+		Notes:              "candidate recorded for policy evaluation",
+		CreatedAt:          now.Add(2 * time.Minute),
+		CreatedBy:          "operator",
+	}); err != nil {
+		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreHotUpdateOutcomeRecord(root, missioncontrol.HotUpdateOutcomeRecord{
+		OutcomeID:         "outcome-1",
+		HotUpdateID:       "hot-update-1",
+		CandidateID:       "candidate-1",
+		RunID:             "run-1",
+		CandidateResultID: "result-1",
+		CandidatePackID:   "pack-candidate",
+		OutcomeKind:       missioncontrol.HotUpdateOutcomeKindKeptStaged,
+		Reason:            "operator kept staged",
+		Notes:             "outcome recorded for later control",
+		OutcomeAt:         now.Add(3 * time.Minute),
+		CreatedAt:         now.Add(4 * time.Minute),
+		CreatedBy:         "operator",
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord() error = %v", err)
+	}
+
+	state := NewTaskState()
+	state.SetMissionStoreRoot(root)
+	if err := state.ActivateStep(testTaskStateJob(), "build"); err != nil {
+		t.Fatalf("ActivateStep() error = %v", err)
+	}
+
+	summary, err := state.OperatorStatus("job-1")
+	if err != nil {
+		t.Fatalf("OperatorStatus() error = %v", err)
+	}
+
+	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
+	if got.HotUpdateOutcomeIdentity == nil {
+		t.Fatal("HotUpdateOutcomeIdentity = nil, want read-only hot-update outcome identity block")
+	}
+	if got.HotUpdateOutcomeIdentity.State != "configured" {
+		t.Fatalf("HotUpdateOutcomeIdentity.State = %q, want configured", got.HotUpdateOutcomeIdentity.State)
+	}
+	if len(got.HotUpdateOutcomeIdentity.Outcomes) != 1 {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes len = %d, want 1", len(got.HotUpdateOutcomeIdentity.Outcomes))
+	}
+	outcome := got.HotUpdateOutcomeIdentity.Outcomes[0]
+	if outcome.OutcomeID != "outcome-1" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].OutcomeID = %q, want outcome-1", outcome.OutcomeID)
+	}
+	if outcome.HotUpdateID != "hot-update-1" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].HotUpdateID = %q, want hot-update-1", outcome.HotUpdateID)
+	}
+	if outcome.CandidateID != "candidate-1" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].CandidateID = %q, want candidate-1", outcome.CandidateID)
+	}
+	if outcome.RunID != "run-1" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].RunID = %q, want run-1", outcome.RunID)
+	}
+	if outcome.CandidateResultID != "result-1" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].CandidateResultID = %q, want result-1", outcome.CandidateResultID)
+	}
+	if outcome.CandidatePackID != "pack-candidate" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].CandidatePackID = %q, want pack-candidate", outcome.CandidatePackID)
+	}
+	if outcome.OutcomeKind != string(missioncontrol.HotUpdateOutcomeKindKeptStaged) {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].OutcomeKind = %q, want kept_staged", outcome.OutcomeKind)
+	}
+	if outcome.Reason != "operator kept staged" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].Reason = %q, want operator kept staged", outcome.Reason)
+	}
+	if outcome.Notes != "outcome recorded for later control" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].Notes = %q, want outcome notes", outcome.Notes)
+	}
+	if outcome.CreatedBy != "operator" {
+		t.Fatalf("HotUpdateOutcomeIdentity.Outcomes[0].CreatedBy = %q, want operator", outcome.CreatedBy)
+	}
+}
+
 func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBootstrapPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -832,7 +1037,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -992,7 +1197,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -1364,7 +1569,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "runtime_pack_identity", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
