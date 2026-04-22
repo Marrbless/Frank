@@ -499,6 +499,313 @@ func TestAdvanceRollbackApplyPhaseIsIdempotentForSamePhase(t *testing.T) {
 	}
 }
 
+func TestExecuteRollbackApplyPointerSwitchHappyPathPreservesLastKnownGood(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 15, 0, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-execute"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord() error = %v", err)
+	}
+	if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-execute", "rollback-execute", "operator", now.Add(13*time.Minute)); err != nil {
+		t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-execute", RollbackApplyPhaseValidated, "operator", now.Add(14*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-execute", RollbackApplyPhaseReadyToApply, "operator", now.Add(15*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(ready_to_apply) error = %v", err)
+	}
+
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(16 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "promotion:promotion-1",
+		ReloadGeneration:     9,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(17 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "rollback-execute",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	record, changed, err := ExecuteRollbackApplyPointerSwitch(root, "apply-execute", "operator", now.Add(18*time.Minute))
+	if err != nil {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ExecuteRollbackApplyPointerSwitch() changed = false, want true")
+	}
+	if record.Phase != RollbackApplyPhasePointerSwitchedReloadPending {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch().Phase = %q, want pointer_switched_reload_pending", record.Phase)
+	}
+	if record.ActivationState != RollbackApplyActivationStateUnchanged {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch().ActivationState = %q, want unchanged", record.ActivationState)
+	}
+	if record.PhaseUpdatedBy != "operator" {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch().PhaseUpdatedBy = %q, want operator", record.PhaseUpdatedBy)
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ActivePackID != "pack-base" {
+		t.Fatalf("LoadActiveRuntimePackPointer().ActivePackID = %q, want pack-base", gotPointer.ActivePackID)
+	}
+	if gotPointer.PreviousActivePackID != "pack-candidate" {
+		t.Fatalf("LoadActiveRuntimePackPointer().PreviousActivePackID = %q, want pack-candidate", gotPointer.PreviousActivePackID)
+	}
+	if gotPointer.LastKnownGoodPackID != "pack-base" {
+		t.Fatalf("LoadActiveRuntimePackPointer().LastKnownGoodPackID = %q, want pack-base", gotPointer.LastKnownGoodPackID)
+	}
+	if gotPointer.UpdateRecordRef != "rollback_apply:apply-execute" {
+		t.Fatalf("LoadActiveRuntimePackPointer().UpdateRecordRef = %q, want rollback_apply:apply-execute", gotPointer.UpdateRecordRef)
+	}
+	if gotPointer.ReloadGeneration != 10 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 10", gotPointer.ReloadGeneration)
+	}
+
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+}
+
+func TestExecuteRollbackApplyPointerSwitchReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 15, 30, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-replay-execute"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord() error = %v", err)
+	}
+	if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-replay-execute", "rollback-replay-execute", "operator", now.Add(13*time.Minute)); err != nil {
+		t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-replay-execute", RollbackApplyPhaseValidated, "operator", now.Add(14*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-replay-execute", RollbackApplyPhaseReadyToApply, "operator", now.Add(15*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(ready_to_apply) error = %v", err)
+	}
+
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(16 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "promotion:promotion-1",
+		ReloadGeneration:     4,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(17 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "rollback-replay-execute",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	if _, changed, err := ExecuteRollbackApplyPointerSwitch(root, "apply-replay-execute", "operator", now.Add(18*time.Minute)); err != nil {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch(first) error = %v", err)
+	} else if !changed {
+		t.Fatal("ExecuteRollbackApplyPointerSwitch(first) changed = false, want true")
+	}
+
+	firstPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer first) error = %v", err)
+	}
+	firstLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good first) error = %v", err)
+	}
+
+	record, changed, err := ExecuteRollbackApplyPointerSwitch(root, "apply-replay-execute", "operator", now.Add(19*time.Minute))
+	if err != nil {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch(second) error = %v", err)
+	}
+	if changed {
+		t.Fatal("ExecuteRollbackApplyPointerSwitch(second) changed = true, want false")
+	}
+	if record.Phase != RollbackApplyPhasePointerSwitchedReloadPending {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch(second).Phase = %q, want pointer_switched_reload_pending", record.Phase)
+	}
+
+	secondPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer second) error = %v", err)
+	}
+	if string(firstPointerBytes) != string(secondPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed on idempotent replay\nfirst:\n%s\nsecond:\n%s", string(firstPointerBytes), string(secondPointerBytes))
+	}
+	secondLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good second) error = %v", err)
+	}
+	if string(firstLastKnownGoodBytes) != string(secondLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed on idempotent replay\nfirst:\n%s\nsecond:\n%s", string(firstLastKnownGoodBytes), string(secondLastKnownGoodBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 5 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 5", gotPointer.ReloadGeneration)
+	}
+}
+
+func TestExecuteRollbackApplyPointerSwitchRejectsInvalidPhaseAndMissingRollbackWithoutPointerMutation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 30, 16, 0, 0, 0, time.UTC)
+
+	t.Run("invalid phase", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		storeRollbackFixtures(t, root, now)
+		if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+			record.RollbackID = "rollback-invalid-execute"
+		})); err != nil {
+			t.Fatalf("StoreRollbackRecord() error = %v", err)
+		}
+		if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-invalid-execute", "rollback-invalid-execute", "operator", now.Add(13*time.Minute)); err != nil {
+			t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+		}
+		if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+			ActivePackID:         "pack-candidate",
+			PreviousActivePackID: "pack-base",
+			LastKnownGoodPackID:  "pack-base",
+			UpdatedAt:            now.Add(14 * time.Minute),
+			UpdatedBy:            "operator",
+			UpdateRecordRef:      "promotion:promotion-1",
+			ReloadGeneration:     4,
+		}); err != nil {
+			t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+		}
+
+		beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+		if err != nil {
+			t.Fatalf("ReadFile(active pointer before) error = %v", err)
+		}
+
+		got, changed, err := ExecuteRollbackApplyPointerSwitch(root, "apply-invalid-execute", "operator", now.Add(15*time.Minute))
+		if err == nil {
+			t.Fatal("ExecuteRollbackApplyPointerSwitch() error = nil, want invalid phase rejection")
+		}
+		if changed {
+			t.Fatal("ExecuteRollbackApplyPointerSwitch() changed = true, want false")
+		}
+		if got != (RollbackApplyRecord{}) {
+			t.Fatalf("ExecuteRollbackApplyPointerSwitch() record = %#v, want zero value", got)
+		}
+		if !strings.Contains(err.Error(), `phase "recorded" does not permit pointer switch execution`) {
+			t.Fatalf("ExecuteRollbackApplyPointerSwitch() error = %q, want invalid phase context", err.Error())
+		}
+
+		afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+		if err != nil {
+			t.Fatalf("ReadFile(active pointer after) error = %v", err)
+		}
+		if string(beforePointerBytes) != string(afterPointerBytes) {
+			t.Fatalf("active runtime pack pointer file changed on invalid phase rejection\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+		}
+	})
+
+	t.Run("missing rollback", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		storeRollbackFixtures(t, root, now)
+		if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+			record.RollbackID = "rollback-missing-execute"
+		})); err != nil {
+			t.Fatalf("StoreRollbackRecord() error = %v", err)
+		}
+		if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-missing-execute", "rollback-missing-execute", "operator", now.Add(13*time.Minute)); err != nil {
+			t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+		}
+		if _, _, err := AdvanceRollbackApplyPhase(root, "apply-missing-execute", RollbackApplyPhaseValidated, "operator", now.Add(14*time.Minute)); err != nil {
+			t.Fatalf("AdvanceRollbackApplyPhase(validated) error = %v", err)
+		}
+		if _, _, err := AdvanceRollbackApplyPhase(root, "apply-missing-execute", RollbackApplyPhaseReadyToApply, "operator", now.Add(15*time.Minute)); err != nil {
+			t.Fatalf("AdvanceRollbackApplyPhase(ready_to_apply) error = %v", err)
+		}
+		if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+			ActivePackID:         "pack-candidate",
+			PreviousActivePackID: "pack-base",
+			LastKnownGoodPackID:  "pack-base",
+			UpdatedAt:            now.Add(16 * time.Minute),
+			UpdatedBy:            "operator",
+			UpdateRecordRef:      "promotion:promotion-1",
+			ReloadGeneration:     7,
+		}); err != nil {
+			t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+		}
+
+		beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+		if err != nil {
+			t.Fatalf("ReadFile(active pointer before) error = %v", err)
+		}
+		if err := os.Remove(StoreRollbackPath(root, "rollback-missing-execute")); err != nil {
+			t.Fatalf("Remove(rollback) error = %v", err)
+		}
+
+		got, changed, err := ExecuteRollbackApplyPointerSwitch(root, "apply-missing-execute", "operator", now.Add(17*time.Minute))
+		if err == nil {
+			t.Fatal("ExecuteRollbackApplyPointerSwitch() error = nil, want missing rollback rejection")
+		}
+		if changed {
+			t.Fatal("ExecuteRollbackApplyPointerSwitch() changed = true, want false")
+		}
+		if got != (RollbackApplyRecord{}) {
+			t.Fatalf("ExecuteRollbackApplyPointerSwitch() record = %#v, want zero value", got)
+		}
+		if !strings.Contains(err.Error(), ErrRollbackRecordNotFound.Error()) {
+			t.Fatalf("ExecuteRollbackApplyPointerSwitch() error = %q, want missing rollback rejection", err.Error())
+		}
+
+		afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+		if err != nil {
+			t.Fatalf("ReadFile(active pointer after) error = %v", err)
+		}
+		if string(beforePointerBytes) != string(afterPointerBytes) {
+			t.Fatalf("active runtime pack pointer file changed on missing rollback rejection\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+		}
+	})
+}
+
 func TestLoadRollbackApplyRecordNotFound(t *testing.T) {
 	t.Parallel()
 

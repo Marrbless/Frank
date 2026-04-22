@@ -1442,6 +1442,204 @@ func TestProcessDirectRollbackApplyPhaseCommandRejectsInvalidTransition(t *testi
 	}
 }
 
+func TestProcessDirectRollbackApplyExecuteCommandSwitchesPointerAndIsReplaySafe(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopRollbackPromotionFixtures(t)
+	now := time.Date(2026, 4, 21, 12, 5, 0, 0, time.UTC)
+	if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now,
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "promotion:promotion-1",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 promotion-1 rollback-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 rollback-1 apply-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_PHASE job-1 apply-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_PHASE job-1 apply-1 ready_to_apply", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_PHASE ready_to_apply) error = %v", err)
+	}
+
+	beforeLastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_APPLY_EXECUTE job-1 apply-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE first) error = %v", err)
+	}
+	if resp != "Executed rollback-apply pointer switch job=job-1 apply=apply-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE first) response = %q, want execute acknowledgement", resp)
+	}
+
+	record, err := missioncontrol.LoadRollbackApplyRecord(root, "apply-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackApplyRecord() error = %v", err)
+	}
+	if record.Phase != missioncontrol.RollbackApplyPhasePointerSwitchedReloadPending {
+		t.Fatalf("RollbackApplyRecord.Phase = %q, want pointer_switched_reload_pending", record.Phase)
+	}
+	if record.ActivationState != missioncontrol.RollbackApplyActivationStateUnchanged {
+		t.Fatalf("RollbackApplyRecord.ActivationState = %q, want unchanged", record.ActivationState)
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ActivePackID != "pack-base" {
+		t.Fatalf("LoadActiveRuntimePackPointer().ActivePackID = %q, want pack-base", gotPointer.ActivePackID)
+	}
+	if gotPointer.PreviousActivePackID != "pack-candidate" {
+		t.Fatalf("LoadActiveRuntimePackPointer().PreviousActivePackID = %q, want pack-candidate", gotPointer.PreviousActivePackID)
+	}
+	if gotPointer.LastKnownGoodPackID != "pack-base" {
+		t.Fatalf("LoadActiveRuntimePackPointer().LastKnownGoodPackID = %q, want pack-base", gotPointer.LastKnownGoodPackID)
+	}
+	if gotPointer.UpdateRecordRef != "rollback_apply:apply-1" {
+		t.Fatalf("LoadActiveRuntimePackPointer().UpdateRecordRef = %q, want rollback_apply:apply-1", gotPointer.UpdateRecordRef)
+	}
+	if gotPointer.ReloadGeneration != 8 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 8", gotPointer.ReloadGeneration)
+	}
+
+	firstPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer first) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("ROLLBACK_APPLY_EXECUTE job-1 apply-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE second) error = %v", err)
+	}
+	if resp != "Selected rollback-apply pointer switch job=job-1 apply=apply-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE second) response = %q, want replay acknowledgement", resp)
+	}
+
+	secondPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer second) error = %v", err)
+	}
+	if string(firstPointerBytes) != string(secondPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed on replay\nfirst:\n%s\nsecond:\n%s", string(firstPointerBytes), string(secondPointerBytes))
+	}
+
+	afterLastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.RuntimePackIdentity == nil {
+		t.Fatal("RuntimePackIdentity = nil, want runtime pack identity block")
+	}
+	if summary.RollbackApplyIdentity == nil {
+		t.Fatal("RollbackApplyIdentity = nil, want rollback-apply identity block")
+	}
+	if summary.RuntimePackIdentity.Active.ActivePackID != "pack-base" {
+		t.Fatalf("RuntimePackIdentity.Active.ActivePackID = %q, want pack-base", summary.RuntimePackIdentity.Active.ActivePackID)
+	}
+	if summary.RuntimePackIdentity.Active.PreviousActivePackID != "pack-candidate" {
+		t.Fatalf("RuntimePackIdentity.Active.PreviousActivePackID = %q, want pack-candidate", summary.RuntimePackIdentity.Active.PreviousActivePackID)
+	}
+	if summary.RollbackApplyIdentity.Applies[0].Phase != string(missioncontrol.RollbackApplyPhasePointerSwitchedReloadPending) {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].Phase = %q, want pointer_switched_reload_pending", summary.RollbackApplyIdentity.Applies[0].Phase)
+	}
+	if summary.RollbackApplyIdentity.Applies[0].ActivationState != string(missioncontrol.RollbackApplyActivationStateUnchanged) {
+		t.Fatalf("RollbackApplyIdentity.Applies[0].ActivationState = %q, want unchanged", summary.RollbackApplyIdentity.Applies[0].ActivationState)
+	}
+}
+
+func TestProcessDirectRollbackApplyExecuteCommandRejectsInvalidPhaseWithoutPointerMutation(t *testing.T) {
+	t.Parallel()
+
+	root, wantPointer := writeLoopRollbackPromotionFixtures(t)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 promotion-1 rollback-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 rollback-1 apply-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD) error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_APPLY_EXECUTE job-1 apply-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(ROLLBACK_APPLY_EXECUTE) error = nil, want invalid phase rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), `phase "recorded" does not permit pointer switch execution`) {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE) error = %q, want invalid phase rejection", err)
+	}
+
+	record, err := missioncontrol.LoadRollbackApplyRecord(root, "apply-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackApplyRecord() error = %v", err)
+	}
+	if record.Phase != missioncontrol.RollbackApplyPhaseRecorded {
+		t.Fatalf("LoadRollbackApplyRecord().Phase = %q, want recorded after rejection", record.Phase)
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+}
+
 func TestProcessDirectInspectCommandReturnsDeterministicSummaryForActiveJob(t *testing.T) {
 	t.Parallel()
 
