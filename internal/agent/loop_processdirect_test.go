@@ -991,6 +991,137 @@ func TestProcessDirectStatusCommandWrongJobDoesNotBind(t *testing.T) {
 	}
 }
 
+func TestProcessDirectRollbackRecordCommandCreatesProposalAndPreservesActiveRuntimePackPointer(t *testing.T) {
+	t.Parallel()
+
+	root, wantPointer := writeLoopRollbackPromotionFixtures(t)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	ecBefore, ok := ag.ActiveMissionStep()
+	if !ok || ecBefore.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() before = %#v, want active runtime", ecBefore)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 promotion-1 rollback-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %v", err)
+	}
+	if resp != "Recorded rollback proposal job=job-1 promotion=promotion-1 rollback=rollback-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) response = %q, want rollback proposal acknowledgement", resp)
+	}
+
+	record, err := missioncontrol.LoadRollbackRecord(root, "rollback-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackRecord() error = %v", err)
+	}
+	if record.PromotionID != "promotion-1" {
+		t.Fatalf("RollbackRecord.PromotionID = %q, want promotion-1", record.PromotionID)
+	}
+	if record.HotUpdateID != "hot-update-1" {
+		t.Fatalf("RollbackRecord.HotUpdateID = %q, want hot-update-1", record.HotUpdateID)
+	}
+	if record.OutcomeID != "outcome-1" {
+		t.Fatalf("RollbackRecord.OutcomeID = %q, want outcome-1", record.OutcomeID)
+	}
+	if record.FromPackID != "pack-candidate" {
+		t.Fatalf("RollbackRecord.FromPackID = %q, want pack-candidate", record.FromPackID)
+	}
+	if record.TargetPackID != "pack-base" {
+		t.Fatalf("RollbackRecord.TargetPackID = %q, want pack-base", record.TargetPackID)
+	}
+	if record.LastKnownGoodPackID != "pack-base" {
+		t.Fatalf("RollbackRecord.LastKnownGoodPackID = %q, want pack-base", record.LastKnownGoodPackID)
+	}
+	if record.Reason != "operator requested rollback proposal" {
+		t.Fatalf("RollbackRecord.Reason = %q, want operator requested rollback proposal", record.Reason)
+	}
+	if record.Notes != "derived from promotion promotion-1" {
+		t.Fatalf("RollbackRecord.Notes = %q, want derived note", record.Notes)
+	}
+	if record.CreatedBy != "operator" {
+		t.Fatalf("RollbackRecord.CreatedBy = %q, want operator", record.CreatedBy)
+	}
+	if !record.RollbackAt.Equal(record.CreatedAt) {
+		t.Fatalf("RollbackRecord timestamps = (%v, %v), want equal rollback_at and created_at", record.RollbackAt, record.CreatedAt)
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+
+	ecAfter, ok := ag.ActiveMissionStep()
+	if !ok || ecAfter.Runtime == nil {
+		t.Fatalf("ActiveMissionStep() after = %#v, want active runtime", ecAfter)
+	}
+	if ecAfter.Runtime.State != ecBefore.Runtime.State {
+		t.Fatalf("ActiveMissionStep().Runtime.State = %q, want %q", ecAfter.Runtime.State, ecBefore.Runtime.State)
+	}
+	if ecAfter.Runtime.ActiveStepID != ecBefore.Runtime.ActiveStepID {
+		t.Fatalf("ActiveMissionStep().Runtime.ActiveStepID = %q, want %q", ecAfter.Runtime.ActiveStepID, ecBefore.Runtime.ActiveStepID)
+	}
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.RollbackIdentity == nil {
+		t.Fatal("RollbackIdentity = nil, want rollback identity block")
+	}
+	if summary.RollbackIdentity.State != "configured" {
+		t.Fatalf("RollbackIdentity.State = %q, want configured", summary.RollbackIdentity.State)
+	}
+	if len(summary.RollbackIdentity.Rollbacks) != 1 {
+		t.Fatalf("RollbackIdentity.Rollbacks len = %d, want 1", len(summary.RollbackIdentity.Rollbacks))
+	}
+	if summary.RollbackIdentity.Rollbacks[0].RollbackID != "rollback-1" {
+		t.Fatalf("RollbackIdentity.Rollbacks[0].RollbackID = %q, want rollback-1", summary.RollbackIdentity.Rollbacks[0].RollbackID)
+	}
+}
+
+func TestProcessDirectRollbackRecordCommandFailsClosedWhenPromotionIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 missing-promotion rollback-missing", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(ROLLBACK_RECORD) error = nil, want missing promotion rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), missioncontrol.ErrPromotionRecordNotFound.Error()) {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %q, want missing promotion rejection", err)
+	}
+	if _, err := missioncontrol.LoadRollbackRecord(root, "rollback-missing"); err != missioncontrol.ErrRollbackRecordNotFound {
+		t.Fatalf("LoadRollbackRecord() error = %v, want %v", err, missioncontrol.ErrRollbackRecordNotFound)
+	}
+}
+
 func TestProcessDirectInspectCommandReturnsDeterministicSummaryForActiveJob(t *testing.T) {
 	t.Parallel()
 
@@ -2504,6 +2635,112 @@ func TestClearMissionStepRestoresNoContextBehavior(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+func writeLoopRollbackPromotionFixtures(t *testing.T) (string, missioncontrol.ActiveRuntimePackPointer) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-base",
+		CreatedAt:                now.Add(-4 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-base",
+		SkillPackRef:             "skill-pack-base",
+		ManifestRef:              "manifest-base",
+		ExtensionPackRef:         "extension-base",
+		PolicyRef:                "policy-base",
+		SourceSummary:            "baseline pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-candidate",
+		ParentPackID:             "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		CreatedAt:                now.Add(-3 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-candidate",
+		SkillPackRef:             "skill-pack-candidate",
+		ManifestRef:              "manifest-candidate",
+		ExtensionPackRef:         "extension-candidate",
+		PolicyRef:                "policy-candidate",
+		SourceSummary:            "candidate pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
+	}
+
+	wantPointer := missioncontrol.ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(-30 * time.Second),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "promotion:promotion-1",
+		ReloadGeneration:     7,
+	}
+	if err := missioncontrol.StoreActiveRuntimePackPointer(root, wantPointer); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	wantPointer.RecordVersion = 1
+
+	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
+		HotUpdateID:              "hot-update-1",
+		Objective:                "promote candidate pack",
+		CandidatePackID:          "pack-candidate",
+		PreviousActivePackID:     "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		TargetSurfaces:           []string{"prompts", "skills"},
+		SurfaceClasses:           []string{"class_1"},
+		ReloadMode:               missioncontrol.HotUpdateReloadModeSoftReload,
+		CompatibilityContractRef: "compat-v1",
+		PreparedAt:               now.Add(-150 * time.Second),
+		State:                    missioncontrol.HotUpdateGateStateStaged,
+		Decision:                 missioncontrol.HotUpdateGateDecisionKeepStaged,
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreHotUpdateOutcomeRecord(root, missioncontrol.HotUpdateOutcomeRecord{
+		OutcomeID:       "outcome-1",
+		HotUpdateID:     "hot-update-1",
+		CandidatePackID: "pack-candidate",
+		OutcomeKind:     missioncontrol.HotUpdateOutcomeKindPromoted,
+		Reason:          "operator promoted candidate",
+		Notes:           "promotion linkage",
+		OutcomeAt:       now.Add(-90 * time.Second),
+		CreatedAt:       now.Add(-80 * time.Second),
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord(outcome-1) error = %v", err)
+	}
+	if err := missioncontrol.StorePromotionRecord(root, missioncontrol.PromotionRecord{
+		PromotionID:          "promotion-1",
+		PromotedPackID:       "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		LastKnownGoodBasis:   "holdout_pass",
+		HotUpdateID:          "hot-update-1",
+		OutcomeID:            "outcome-1",
+		Reason:               "operator approved promotion",
+		Notes:                "promotion notes",
+		PromotedAt:           now.Add(-70 * time.Second),
+		CreatedAt:            now.Add(-60 * time.Second),
+		CreatedBy:            "operator",
+	}); err != nil {
+		t.Fatalf("StorePromotionRecord() error = %v", err)
+	}
+
+	return root, wantPointer
+}
 
 func testMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.Job {
 	return missioncontrol.Job{

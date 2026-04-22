@@ -1882,6 +1882,114 @@ func (s *TaskState) AbortRuntime(jobID string) error {
 	return s.applyRuntimeControl(jobID, "abort", missioncontrol.AbortJobRuntime, true)
 }
 
+func (s *TaskState) RecordRollbackFromPromotion(jobID string, promotionID string, rollbackID string) error {
+	if s == nil {
+		return nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+		return err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+			return err
+		}
+	}
+
+	promotion, err := missioncontrol.LoadPromotionRecord(root, promotionID)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+		return err
+	}
+
+	record := missioncontrol.RollbackRecord{
+		RollbackID:          rollbackID,
+		PromotionID:         promotion.PromotionID,
+		HotUpdateID:         promotion.HotUpdateID,
+		OutcomeID:           promotion.OutcomeID,
+		FromPackID:          promotion.PromotedPackID,
+		TargetPackID:        promotion.PreviousActivePackID,
+		LastKnownGoodPackID: promotion.LastKnownGoodPackID,
+		Reason:              "operator requested rollback proposal",
+		Notes:               fmt.Sprintf("derived from promotion %s", promotion.PromotionID),
+		RollbackAt:          now,
+		CreatedAt:           now,
+		CreatedBy:           "operator",
+	}
+	if err := missioncontrol.StoreRollbackRecord(root, record); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", err)
+		return err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, "rollback_record", nil)
+	return nil
+}
+
 func resolveNaturalApprovalRequestFromExecutionContext(ec missioncontrol.ExecutionContext) (missioncontrol.ApprovalRequest, bool, error) {
 	if ec.Runtime == nil {
 		return missioncontrol.ApprovalRequest{}, false, nil
