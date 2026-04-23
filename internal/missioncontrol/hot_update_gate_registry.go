@@ -367,6 +367,109 @@ func AdvanceHotUpdateGatePhase(root string, hotUpdateID string, nextState HotUpd
 	return stored, true, nil
 }
 
+func ExecuteHotUpdateGatePointerSwitch(root string, hotUpdateID string, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	activePointer, err := validateHotUpdateGateExecutionLinkage(root, record)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	updateRecordRef := hotUpdateGatePointerUpdateRecordRef(ref.HotUpdateID)
+	switch record.State {
+	case HotUpdateGateStateReloading:
+		if activePointer.ActivePackID != record.CandidatePackID {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q state %q requires active runtime pack pointer active_pack_id %q, found %q",
+				ref.HotUpdateID,
+				record.State,
+				record.CandidatePackID,
+				activePointer.ActivePackID,
+			)
+		}
+		if activePointer.UpdateRecordRef != updateRecordRef {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q state %q requires active runtime pack pointer update_record_ref %q, found %q",
+				ref.HotUpdateID,
+				record.State,
+				updateRecordRef,
+				activePointer.UpdateRecordRef,
+			)
+		}
+		return record, false, nil
+	case HotUpdateGateStateStaged:
+	default:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit pointer switch execution",
+			ref.HotUpdateID,
+			record.State,
+		)
+	}
+
+	if activePointer.ActivePackID == record.CandidatePackID && activePointer.UpdateRecordRef == updateRecordRef {
+		record.State = HotUpdateGateStateReloading
+		record.PhaseUpdatedAt = updatedAt
+		record.PhaseUpdatedBy = updatedBy
+		if err := StoreHotUpdateGateRecord(root, record); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+		stored, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+		if err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+		return stored, true, nil
+	}
+
+	if activePointer.ActivePackID != record.PreviousActivePackID {
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q requires active runtime pack pointer active_pack_id %q before switch, found %q",
+			ref.HotUpdateID,
+			record.PreviousActivePackID,
+			activePointer.ActivePackID,
+		)
+	}
+
+	activePointer.ActivePackID = record.CandidatePackID
+	activePointer.PreviousActivePackID = record.PreviousActivePackID
+	activePointer.UpdatedAt = updatedAt
+	activePointer.UpdatedBy = updatedBy
+	activePointer.UpdateRecordRef = updateRecordRef
+	activePointer.ReloadGeneration++
+	if err := StoreActiveRuntimePackPointer(root, activePointer); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	record.State = HotUpdateGateStateReloading
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -561,6 +664,10 @@ func isValidHotUpdateGateDecision(decision HotUpdateGateDecision) bool {
 	}
 }
 
+func hotUpdateGatePointerUpdateRecordRef(hotUpdateID string) string {
+	return "hot_update:" + strings.TrimSpace(hotUpdateID)
+}
+
 func isValidHotUpdateGatePhaseStartState(state HotUpdateGateState) bool {
 	switch state {
 	case HotUpdateGateStatePrepared, HotUpdateGateStateValidated, HotUpdateGateStateStaged:
@@ -607,4 +714,30 @@ func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord
 		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
 	}
 	return nil
+}
+
+func validateHotUpdateGateExecutionLinkage(root string, record HotUpdateGateRecord) (ActiveRuntimePackPointer, error) {
+	candidate, err := LoadRuntimePackRecord(root, record.CandidatePackID)
+	if err != nil {
+		return ActiveRuntimePackPointer{}, fmt.Errorf("mission store hot-update gate candidate_pack_id %q: %w", record.CandidatePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.PreviousActivePackID); err != nil {
+		return ActiveRuntimePackPointer{}, fmt.Errorf("mission store hot-update gate previous_active_pack_id %q: %w", record.PreviousActivePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
+		return ActiveRuntimePackPointer{}, fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
+	}
+	if candidate.RollbackTargetPackID != record.RollbackTargetPackID {
+		return ActiveRuntimePackPointer{}, fmt.Errorf(
+			"mission store hot-update gate %q rollback_target_pack_id %q does not match candidate rollback_target_pack_id %q",
+			record.HotUpdateID,
+			record.RollbackTargetPackID,
+			candidate.RollbackTargetPackID,
+		)
+	}
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return ActiveRuntimePackPointer{}, err
+	}
+	return activePointer, nil
 }
