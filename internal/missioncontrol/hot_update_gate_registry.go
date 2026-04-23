@@ -25,19 +25,22 @@ const (
 type HotUpdateGateState string
 
 const (
-	HotUpdateGateStateDraft        HotUpdateGateState = "draft"
-	HotUpdateGateStatePrepared     HotUpdateGateState = "prepared"
-	HotUpdateGateStateValidated    HotUpdateGateState = "validated"
-	HotUpdateGateStateStaged       HotUpdateGateState = "staged"
-	HotUpdateGateStateQuiescing    HotUpdateGateState = "quiescing"
-	HotUpdateGateStateReloading    HotUpdateGateState = "reloading"
-	HotUpdateGateStateSmokeTesting HotUpdateGateState = "smoke_testing"
-	HotUpdateGateStateCanarying    HotUpdateGateState = "canarying"
-	HotUpdateGateStateCommitted    HotUpdateGateState = "committed"
-	HotUpdateGateStateRolledBack   HotUpdateGateState = "rolled_back"
-	HotUpdateGateStateRejected     HotUpdateGateState = "rejected"
-	HotUpdateGateStateFailed       HotUpdateGateState = "failed"
-	HotUpdateGateStateAborted      HotUpdateGateState = "aborted"
+	HotUpdateGateStateDraft                 HotUpdateGateState = "draft"
+	HotUpdateGateStatePrepared              HotUpdateGateState = "prepared"
+	HotUpdateGateStateValidated             HotUpdateGateState = "validated"
+	HotUpdateGateStateStaged                HotUpdateGateState = "staged"
+	HotUpdateGateStateQuiescing             HotUpdateGateState = "quiescing"
+	HotUpdateGateStateReloading             HotUpdateGateState = "reloading"
+	HotUpdateGateStateReloadApplyInProgress HotUpdateGateState = "reload_apply_in_progress"
+	HotUpdateGateStateReloadApplySucceeded  HotUpdateGateState = "reload_apply_succeeded"
+	HotUpdateGateStateReloadApplyFailed     HotUpdateGateState = "reload_apply_failed"
+	HotUpdateGateStateSmokeTesting          HotUpdateGateState = "smoke_testing"
+	HotUpdateGateStateCanarying             HotUpdateGateState = "canarying"
+	HotUpdateGateStateCommitted             HotUpdateGateState = "committed"
+	HotUpdateGateStateRolledBack            HotUpdateGateState = "rolled_back"
+	HotUpdateGateStateRejected              HotUpdateGateState = "rejected"
+	HotUpdateGateStateFailed                HotUpdateGateState = "failed"
+	HotUpdateGateStateAborted               HotUpdateGateState = "aborted"
 )
 
 type HotUpdateGateDecision string
@@ -470,6 +473,10 @@ func ExecuteHotUpdateGatePointerSwitch(root string, hotUpdateID string, updatedB
 	return stored, true, nil
 }
 
+func ExecuteHotUpdateGateReloadApply(root string, hotUpdateID string, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	return executeHotUpdateGateReloadApplyWithConvergence(root, hotUpdateID, updatedBy, updatedAt, hotUpdateGateRestartStyleConvergence)
+}
+
 func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -635,6 +642,9 @@ func isValidHotUpdateGateState(state HotUpdateGateState) bool {
 		HotUpdateGateStateStaged,
 		HotUpdateGateStateQuiescing,
 		HotUpdateGateStateReloading,
+		HotUpdateGateStateReloadApplyInProgress,
+		HotUpdateGateStateReloadApplySucceeded,
+		HotUpdateGateStateReloadApplyFailed,
 		HotUpdateGateStateSmokeTesting,
 		HotUpdateGateStateCanarying,
 		HotUpdateGateStateCommitted,
@@ -740,4 +750,190 @@ func validateHotUpdateGateExecutionLinkage(root string, record HotUpdateGateReco
 		return ActiveRuntimePackPointer{}, err
 	}
 	return activePointer, nil
+}
+
+func executeHotUpdateGateReloadApplyWithConvergence(root string, hotUpdateID string, updatedBy string, updatedAt time.Time, converge func(string, HotUpdateGateRecord) error) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+	if converge == nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate convergence function is required")
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	switch record.State {
+	case HotUpdateGateStateReloadApplySucceeded:
+		if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+		return record, false, nil
+	case HotUpdateGateStateReloadApplyFailed:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit reload/apply retry",
+			ref.HotUpdateID,
+			record.State,
+		)
+	case HotUpdateGateStateReloadApplyInProgress:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q requires recovery before retry",
+			ref.HotUpdateID,
+			record.State,
+		)
+	case HotUpdateGateStateReloading:
+	default:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit reload/apply execution",
+			ref.HotUpdateID,
+			record.State,
+		)
+	}
+
+	if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	record.State = HotUpdateGateStateReloadApplyInProgress
+	record.FailureReason = ""
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeHotUpdateGateRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	if err := converge(root, record); err != nil {
+		record.State = HotUpdateGateStateReloadApplyFailed
+		record.FailureReason = err.Error()
+		record.PhaseUpdatedAt = updatedAt
+		record.PhaseUpdatedBy = updatedBy
+		record = NormalizeHotUpdateGateRecord(record)
+		if validationErr := ValidateHotUpdateGateRecord(record); validationErr != nil {
+			return HotUpdateGateRecord{}, false, validationErr
+		}
+		if linkageErr := validateHotUpdateGateDerivedLinkage(root, record); linkageErr != nil {
+			return HotUpdateGateRecord{}, false, linkageErr
+		}
+		if writeErr := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); writeErr != nil {
+			return HotUpdateGateRecord{}, false, writeErr
+		}
+		record, loadErr := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+		if loadErr != nil {
+			return HotUpdateGateRecord{}, false, loadErr
+		}
+		return record, true, err
+	}
+
+	record.State = HotUpdateGateStateReloadApplySucceeded
+	record.FailureReason = ""
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeHotUpdateGateRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	record, err = LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func validateHotUpdateGateReloadApplyLinkage(root string, record HotUpdateGateRecord) error {
+	activePointer, err := validateHotUpdateGateExecutionLinkage(root, record)
+	if err != nil {
+		return err
+	}
+	updateRecordRef := hotUpdateGatePointerUpdateRecordRef(record.HotUpdateID)
+	if activePointer.ActivePackID != record.CandidatePackID {
+		return fmt.Errorf(
+			"mission store hot-update gate %q requires active runtime pack pointer active_pack_id %q before reload/apply, found %q",
+			record.HotUpdateID,
+			record.CandidatePackID,
+			activePointer.ActivePackID,
+		)
+	}
+	if activePointer.UpdateRecordRef != updateRecordRef {
+		return fmt.Errorf(
+			"mission store hot-update gate %q requires active runtime pack pointer update_record_ref %q before reload/apply, found %q",
+			record.HotUpdateID,
+			updateRecordRef,
+			activePointer.UpdateRecordRef,
+		)
+	}
+	if activePointer.PreviousActivePackID != record.PreviousActivePackID {
+		return fmt.Errorf(
+			"mission store hot-update gate %q requires active runtime pack pointer previous_active_pack_id %q before reload/apply, found %q",
+			record.HotUpdateID,
+			record.PreviousActivePackID,
+			activePointer.PreviousActivePackID,
+		)
+	}
+	return nil
+}
+
+// hotUpdateGateRestartStyleConvergence models the smallest bounded reload/apply
+// convergence step available today: re-resolve the already-switched active
+// runtime-pack pointer and verify that the candidate pack is still active.
+func hotUpdateGateRestartStyleConvergence(root string, record HotUpdateGateRecord) error {
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return err
+	}
+	if activePointer.ActivePackID != record.CandidatePackID {
+		return fmt.Errorf(
+			"mission store hot-update gate %q convergence requires active runtime pack pointer active_pack_id %q, found %q",
+			record.HotUpdateID,
+			record.CandidatePackID,
+			activePointer.ActivePackID,
+		)
+	}
+	if activePointer.UpdateRecordRef != hotUpdateGatePointerUpdateRecordRef(record.HotUpdateID) {
+		return fmt.Errorf(
+			"mission store hot-update gate %q convergence requires active runtime pack pointer update_record_ref %q, found %q",
+			record.HotUpdateID,
+			hotUpdateGatePointerUpdateRecordRef(record.HotUpdateID),
+			activePointer.UpdateRecordRef,
+		)
+	}
+	resolved, err := ResolveActiveRuntimePackRecord(root)
+	if err != nil {
+		return err
+	}
+	if resolved.PackID != record.CandidatePackID {
+		return fmt.Errorf(
+			"mission store hot-update gate %q convergence resolved active pack %q, want %q",
+			record.HotUpdateID,
+			resolved.PackID,
+			record.CandidatePackID,
+		)
+	}
+	return nil
 }

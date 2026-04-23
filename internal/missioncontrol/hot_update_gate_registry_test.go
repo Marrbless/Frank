@@ -742,6 +742,318 @@ func TestExecuteHotUpdateGatePointerSwitchRejectsInvalidStateAndBrokenLinkageWit
 	}
 }
 
+func TestExecuteHotUpdateGateReloadApplyHappyPathPreservesPointerAndLastKnownGood(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 15, 0, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.MutableSurfaces = []string{"skills"}
+		record.SurfaceClasses = []string{"class_1"}
+		record.CompatibilityContractRef = "compat-v1"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(2 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(2 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	if _, _, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-reload-success", "pack-candidate", "operator", now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-success", HotUpdateGateStateValidated, "operator", now.Add(4*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-success", HotUpdateGateStateStaged, "operator", now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(staged) error = %v", err)
+	}
+	if _, _, err := ExecuteHotUpdateGatePointerSwitch(root, "hot-update-reload-success", "operator", now.Add(6*time.Minute)); err != nil {
+		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good before) error = %v", err)
+	}
+
+	record, changed, err := ExecuteHotUpdateGateReloadApply(root, "hot-update-reload-success", "operator", now.Add(7*time.Minute))
+	if err != nil {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply() changed = false, want true")
+	}
+	if record.State != HotUpdateGateStateReloadApplySucceeded {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().State = %q, want reload_apply_succeeded", record.State)
+	}
+	if record.FailureReason != "" {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().FailureReason = %q, want empty", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during hot-update reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good after) error = %v", err)
+	}
+	if string(beforeLKGBytes) != string(afterLKGBytes) {
+		t.Fatalf("last-known-good pointer file changed during hot-update reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ActivePackID != "pack-candidate" {
+		t.Fatalf("LoadActiveRuntimePackPointer().ActivePackID = %q, want pack-candidate", gotPointer.ActivePackID)
+	}
+	if gotPointer.ReloadGeneration != 3 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 3", gotPointer.ReloadGeneration)
+	}
+
+	second, changed, err := ExecuteHotUpdateGateReloadApply(root, "hot-update-reload-success", "operator", now.Add(8*time.Minute))
+	if err != nil {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, record) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(replay) = %#v, want %#v", second, record)
+	}
+
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+}
+
+func TestExecuteHotUpdateGateReloadApplyRecordsFailureWithoutMutatingPointer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 15, 30, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(2 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(2 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	if _, _, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-reload-failed", "pack-candidate", "operator", now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-failed", HotUpdateGateStateValidated, "operator", now.Add(4*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-failed", HotUpdateGateStateStaged, "operator", now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(staged) error = %v", err)
+	}
+	if _, _, err := ExecuteHotUpdateGatePointerSwitch(root, "hot-update-reload-failed", "operator", now.Add(6*time.Minute)); err != nil {
+		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good before) error = %v", err)
+	}
+
+	record, changed, err := executeHotUpdateGateReloadApplyWithConvergence(root, "hot-update-reload-failed", "operator", now.Add(7*time.Minute), func(root string, record HotUpdateGateRecord) error {
+		return errors.New("simulated hot-update convergence failure")
+	})
+	if err == nil {
+		t.Fatal("executeHotUpdateGateReloadApplyWithConvergence() error = nil, want failure")
+	}
+	if !changed {
+		t.Fatal("executeHotUpdateGateReloadApplyWithConvergence() changed = false, want true")
+	}
+	if record.State != HotUpdateGateStateReloadApplyFailed {
+		t.Fatalf("executeHotUpdateGateReloadApplyWithConvergence().State = %q, want reload_apply_failed", record.State)
+	}
+	if record.FailureReason != "simulated hot-update convergence failure" {
+		t.Fatalf("executeHotUpdateGateReloadApplyWithConvergence().FailureReason = %q, want simulated failure", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed on hot-update convergence failure\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good after) error = %v", err)
+	}
+	if string(beforeLKGBytes) != string(afterLKGBytes) {
+		t.Fatalf("last-known-good pointer file changed on hot-update convergence failure\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+	}
+}
+
+func TestExecuteHotUpdateGateReloadApplyRejectsInvalidStateAndBadAttribution(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 16, 0, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(2 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "hot_update:hot-update-good",
+		ReloadGeneration:     3,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(2 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(3*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = "hot-update-not-reloading"
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.State = HotUpdateGateStateStaged
+		record.PhaseUpdatedAt = now.Add(3 * time.Minute)
+		record.PhaseUpdatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord(staged) error = %v", err)
+	}
+
+	got, changed, err := ExecuteHotUpdateGateReloadApply(root, "hot-update-not-reloading", "operator", now.Add(4*time.Minute))
+	if err == nil {
+		t.Fatal("ExecuteHotUpdateGateReloadApply(staged) error = nil, want invalid state rejection")
+	}
+	if changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply(staged) changed = true, want false")
+	}
+	if !reflect.DeepEqual(got, HotUpdateGateRecord{}) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(staged) record = %#v, want zero value", got)
+	}
+	if !strings.Contains(err.Error(), `state "staged" does not permit reload/apply execution`) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(staged) error = %q, want invalid state context", err.Error())
+	}
+
+	if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(5*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = "hot-update-bad-attribution"
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.State = HotUpdateGateStateReloading
+		record.PhaseUpdatedAt = now.Add(5 * time.Minute)
+		record.PhaseUpdatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord(reloading) error = %v", err)
+	}
+
+	got, changed, err = ExecuteHotUpdateGateReloadApply(root, "hot-update-bad-attribution", "operator", now.Add(6*time.Minute))
+	if err == nil {
+		t.Fatal("ExecuteHotUpdateGateReloadApply(bad attribution) error = nil, want attribution rejection")
+	}
+	if changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply(bad attribution) changed = true, want false")
+	}
+	if !reflect.DeepEqual(got, HotUpdateGateRecord{}) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(bad attribution) record = %#v, want zero value", got)
+	}
+	if !strings.Contains(err.Error(), `update_record_ref "hot_update:hot-update-bad-attribution"`) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply(bad attribution) error = %q, want update_record_ref context", err.Error())
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed after rejected reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+}
+
 func TestHotUpdateGateValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
