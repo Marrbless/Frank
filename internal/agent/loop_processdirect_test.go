@@ -1123,6 +1123,221 @@ func TestProcessDirectRollbackRecordCommandFailsClosedWhenPromotionIsMissing(t *
 	}
 }
 
+func TestProcessDirectHotUpdateGateRecordCommandCreatesOrSelectsGateAndPreservesActiveRuntimePackPointer(t *testing.T) {
+	t.Parallel()
+
+	root, wantPointer := writeLoopHotUpdateGateControlFixtures(t)
+
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD first) error = %v", err)
+	}
+	if resp != "Recorded hot-update gate job=job-1 hot_update=hot-update-1 candidate_pack=pack-candidate." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD first) response = %q, want create acknowledgement", resp)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+	}
+	if record.CandidatePackID != "pack-candidate" {
+		t.Fatalf("HotUpdateGateRecord.CandidatePackID = %q, want pack-candidate", record.CandidatePackID)
+	}
+	if record.PreviousActivePackID != "pack-base" {
+		t.Fatalf("HotUpdateGateRecord.PreviousActivePackID = %q, want pack-base", record.PreviousActivePackID)
+	}
+	if record.RollbackTargetPackID != "pack-base" {
+		t.Fatalf("HotUpdateGateRecord.RollbackTargetPackID = %q, want pack-base", record.RollbackTargetPackID)
+	}
+	if !reflect.DeepEqual(record.TargetSurfaces, []string{"skills"}) {
+		t.Fatalf("HotUpdateGateRecord.TargetSurfaces = %#v, want [skills]", record.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(record.SurfaceClasses, []string{"class_1"}) {
+		t.Fatalf("HotUpdateGateRecord.SurfaceClasses = %#v, want [class_1]", record.SurfaceClasses)
+	}
+	if record.ReloadMode != missioncontrol.HotUpdateReloadModeSkillReload {
+		t.Fatalf("HotUpdateGateRecord.ReloadMode = %q, want skill_reload", record.ReloadMode)
+	}
+	if record.CompatibilityContractRef != "compat-v1" {
+		t.Fatalf("HotUpdateGateRecord.CompatibilityContractRef = %q, want compat-v1", record.CompatibilityContractRef)
+	}
+	if record.State != missioncontrol.HotUpdateGateStatePrepared {
+		t.Fatalf("HotUpdateGateRecord.State = %q, want prepared", record.State)
+	}
+	if record.Decision != missioncontrol.HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("HotUpdateGateRecord.Decision = %q, want keep_staged", record.Decision)
+	}
+
+	firstGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(first gate) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD second) error = %v", err)
+	}
+	if resp != "Selected hot-update gate job=job-1 hot_update=hot-update-1 candidate_pack=pack-candidate." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD second) response = %q, want select acknowledgement", resp)
+	}
+
+	secondGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(second gate) error = %v", err)
+	}
+	if string(firstGateBytes) != string(secondGateBytes) {
+		t.Fatalf("hot-update gate file changed on select path\nfirst:\n%s\nsecond:\n%s", string(firstGateBytes), string(secondGateBytes))
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active pointer changed on hot-update gate record path\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateGateIdentity == nil {
+		t.Fatal("HotUpdateGateIdentity = nil, want hot-update gate identity block")
+	}
+	if summary.HotUpdateGateIdentity.State != "configured" {
+		t.Fatalf("HotUpdateGateIdentity.State = %q, want configured", summary.HotUpdateGateIdentity.State)
+	}
+	if len(summary.HotUpdateGateIdentity.Gates) != 1 {
+		t.Fatalf("HotUpdateGateIdentity.Gates len = %d, want 1", len(summary.HotUpdateGateIdentity.Gates))
+	}
+	if summary.HotUpdateGateIdentity.Gates[0].HotUpdateID != "hot-update-1" {
+		t.Fatalf("HotUpdateGateIdentity.Gates[0].HotUpdateID = %q, want hot-update-1", summary.HotUpdateGateIdentity.Gates[0].HotUpdateID)
+	}
+	if summary.HotUpdateGateIdentity.Gates[0].CandidatePackID != "pack-candidate" {
+		t.Fatalf("HotUpdateGateIdentity.Gates[0].CandidatePackID = %q, want pack-candidate", summary.HotUpdateGateIdentity.Gates[0].CandidatePackID)
+	}
+}
+
+func TestProcessDirectHotUpdateGateRecordCommandFailsClosedWhenRollbackTargetLinkageIsMissing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 13, 0, 0, 0, time.UTC)
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-base",
+		CreatedAt:                now.Add(-2 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-base",
+		SkillPackRef:             "skill-pack-base",
+		ManifestRef:              "manifest-base",
+		ExtensionPackRef:         "extension-base",
+		PolicyRef:                "policy-base",
+		SourceSummary:            "baseline pack",
+		MutableSurfaces:          []string{"skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-candidate-bad",
+		ParentPackID:             "pack-base",
+		CreatedAt:                now.Add(-time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-candidate",
+		SkillPackRef:             "skill-pack-candidate",
+		ManifestRef:              "manifest-candidate",
+		ExtensionPackRef:         "extension-candidate",
+		PolicyRef:                "policy-candidate",
+		SourceSummary:            "candidate pack",
+		MutableSurfaces:          []string{"skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-candidate-bad) error = %v", err)
+	}
+	wantPointer := missioncontrol.ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now,
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}
+	if err := missioncontrol.StoreActiveRuntimePackPointer(root, wantPointer); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	wantPointer.RecordVersion = 1
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-bad pack-candidate-bad", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = nil, want missing rollback target rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), "rollback_target_pack_id is required") {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %q, want missing rollback_target rejection", err)
+	}
+	if _, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-bad"); err != missioncontrol.ErrHotUpdateGateRecordNotFound {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v, want %v", err, missioncontrol.ErrHotUpdateGateRecordNotFound)
+	}
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active pointer changed on rejected hot-update gate path\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+}
+
 func TestProcessDirectRollbackApplyRecordCommandCreatesOrSelectsWorkflowAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 
@@ -3738,6 +3953,65 @@ func writeLoopRollbackPromotionFixtures(t *testing.T) (string, missioncontrol.Ac
 	}); err != nil {
 		t.Fatalf("StorePromotionRecord() error = %v", err)
 	}
+
+	return root, wantPointer
+}
+
+func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol.ActiveRuntimePackPointer) {
+	t.Helper()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-base",
+		CreatedAt:                now.Add(-4 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-base",
+		SkillPackRef:             "skill-pack-base",
+		ManifestRef:              "manifest-base",
+		ExtensionPackRef:         "extension-base",
+		PolicyRef:                "policy-base",
+		SourceSummary:            "baseline pack",
+		MutableSurfaces:          []string{"prompts", "skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   "pack-candidate",
+		ParentPackID:             "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		CreatedAt:                now.Add(-3 * time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-candidate",
+		SkillPackRef:             "skill-pack-candidate",
+		ManifestRef:              "manifest-candidate",
+		ExtensionPackRef:         "extension-candidate",
+		PolicyRef:                "policy-candidate",
+		SourceSummary:            "candidate pack",
+		MutableSurfaces:          []string{"skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
+	}
+
+	wantPointer := missioncontrol.ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(-30 * time.Second),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}
+	if err := missioncontrol.StoreActiveRuntimePackPointer(root, wantPointer); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	wantPointer.RecordVersion = 1
 
 	return root, wantPointer
 }

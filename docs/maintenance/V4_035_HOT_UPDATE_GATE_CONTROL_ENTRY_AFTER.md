@@ -1,0 +1,61 @@
+## V4-035 Hot-Update Gate Control Entry AFTER
+
+- git diff --stat:
+  - `internal/agent/loop.go                             |  16 ++`
+  - `internal/agent/loop_processdirect_test.go          | 274 +++++++++++++++++++++`
+  - `internal/agent/tools/taskstate.go                  |  89 +++++++`
+  - `internal/missioncontrol/hot_update_gate_registry.go     | 104 ++++++++`
+  - `internal/missioncontrol/hot_update_gate_registry_test.go | 121 +++++++++`
+  - `5 files changed, 604 insertions(+)`
+- git diff --numstat:
+  - `16   0   internal/agent/loop.go`
+  - `274  0   internal/agent/loop_processdirect_test.go`
+  - `89   0   internal/agent/tools/taskstate.go`
+  - `104  0   internal/missioncontrol/hot_update_gate_registry.go`
+  - `121  0   internal/missioncontrol/hot_update_gate_registry_test.go`
+- files changed:
+  - `internal/missioncontrol/hot_update_gate_registry.go`
+  - `internal/missioncontrol/hot_update_gate_registry_test.go`
+  - `internal/agent/tools/taskstate.go`
+  - `internal/agent/loop.go`
+  - `internal/agent/loop_processdirect_test.go`
+  - `docs/maintenance/V4_035_HOT_UPDATE_GATE_CONTROL_ENTRY_BEFORE.md`
+  - `docs/maintenance/V4_035_HOT_UPDATE_GATE_CONTROL_ENTRY_AFTER.md`
+- exact control-entry fields/helpers added:
+  - direct command: `HOT_UPDATE_GATE_RECORD <job_id> <hot_update_id> <candidate_pack_id>`
+  - `TaskState` wrapper:
+    - `EnsureHotUpdateGateRecord(jobID, hotUpdateID, candidatePackID)`
+  - durable helper:
+    - `EnsureHotUpdateGateRecordFromCandidate(root, hotUpdateID, candidatePackID, createdBy, requestedAt)`
+  - supporting helper logic:
+    - `buildHotUpdateGateRecordFromCandidate(...)`
+    - `deriveHotUpdateReloadMode(...)`
+    - `validateHotUpdateGateDerivedLinkage(...)`
+- exact tests added:
+  - `internal/missioncontrol/hot_update_gate_registry_test.go`
+    - `TestEnsureHotUpdateGateRecordFromCandidateCreatesOrSelectsExistingMatch`
+    - `TestEnsureHotUpdateGateRecordFromCandidateRejectsMismatchedExistingCandidate`
+  - `internal/agent/loop_processdirect_test.go`
+    - `TestProcessDirectHotUpdateGateRecordCommandCreatesOrSelectsGateAndPreservesActiveRuntimePackPointer`
+    - `TestProcessDirectHotUpdateGateRecordCommandFailsClosedWhenRollbackTargetLinkageIsMissing`
+- validation commands and results:
+  - `gofmt -w internal/missioncontrol/hot_update_gate_registry.go internal/missioncontrol/hot_update_gate_registry_test.go internal/agent/tools/taskstate.go internal/agent/loop.go internal/agent/loop_processdirect_test.go`
+    - passed
+  - `git diff --check`
+    - passed
+  - `go test -count=1 ./internal/agent`
+    - passed
+  - `go test -count=1 ./internal/agent/tools`
+    - passed
+  - `go test -count=1 ./internal/missioncontrol`
+    - passed
+  - `go test -count=1 ./...`
+    - passed
+  - `git status --short --branch`
+    - showed only expected V4-035 edits and report files
+- explicit statement that no apply behavior was implemented:
+  - this slice only creates or selects committed hot-update gate records and does not implement apply or reload behavior
+- deferred next V4 candidates:
+  - bounded hot-update gate phase progression, if later checkpoints need durable non-applying transitions beyond prepared/selected
+  - a later apply or reload execution slice only if explicitly selected
+  - optional read-only exposure of more gate-adjacent metadata only if a later checkpoint requires it

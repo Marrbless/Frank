@@ -1,0 +1,31 @@
+## V4-035 Hot-Update Gate Control Entry BEFORE
+
+- branch: `frank-v4-035-hot-update-gate-control-entry`
+- HEAD: `518fd2f671b53ed4ea20084693116ea60ce0d332`
+- tags at HEAD:
+  - `frank-v4-034-hot-update-gate-read-model`
+- ahead/behind upstream:
+  - `433 0`
+- git status --short --branch:
+  - `## frank-v4-035-hot-update-gate-control-entry`
+- baseline `go test -count=1 ./...` result:
+  - passed
+- exact files planned:
+  - `internal/missioncontrol/hot_update_gate_registry.go`
+  - `internal/missioncontrol/hot_update_gate_registry_test.go`
+  - `internal/agent/tools/taskstate.go`
+  - `internal/agent/loop.go`
+  - `internal/agent/loop_processdirect_test.go`
+  - `docs/maintenance/V4_035_HOT_UPDATE_GATE_CONTROL_ENTRY_AFTER.md`
+- exact control surface chosen:
+  - existing operator direct-command path in `AgentLoop.ProcessDirect(...)`, with a matching `TaskState` wrapper and a durable `missioncontrol` ensure-helper
+- exact non-goals:
+  - no apply or reload behavior
+  - no promotion changes
+  - no rollback changes
+  - no evaluator execution
+  - no scoring changes
+  - no autonomy changes
+  - no provider or channel changes
+  - no dependency changes
+  - no commit

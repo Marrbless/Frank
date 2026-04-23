@@ -190,6 +190,127 @@ func TestHotUpdateGateReplayIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnsureHotUpdateGateRecordFromCandidateCreatesOrSelectsExistingMatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 12, 30, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.MutableSurfaces = []string{"skills"}
+		record.SurfaceClasses = []string{"class_1"}
+		record.CompatibilityContractRef = "compat-v1"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-base",
+		PreviousActivePackID: "",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(2 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "bootstrap",
+		ReloadGeneration:     2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	first, created, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-select", "pack-candidate", "operator", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate(first) error = %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate(first) created = false, want true")
+	}
+	if first.CandidatePackID != "pack-candidate" {
+		t.Fatalf("first.CandidatePackID = %q, want pack-candidate", first.CandidatePackID)
+	}
+	if first.PreviousActivePackID != "pack-base" {
+		t.Fatalf("first.PreviousActivePackID = %q, want pack-base", first.PreviousActivePackID)
+	}
+	if first.RollbackTargetPackID != "pack-base" {
+		t.Fatalf("first.RollbackTargetPackID = %q, want pack-base", first.RollbackTargetPackID)
+	}
+	if got := strings.Join(first.TargetSurfaces, ","); got != "skills" {
+		t.Fatalf("first.TargetSurfaces = %#v, want [skills]", first.TargetSurfaces)
+	}
+	if first.ReloadMode != HotUpdateReloadModeSkillReload {
+		t.Fatalf("first.ReloadMode = %q, want skill_reload", first.ReloadMode)
+	}
+	if first.State != HotUpdateGateStatePrepared {
+		t.Fatalf("first.State = %q, want prepared", first.State)
+	}
+	if first.Decision != HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("first.Decision = %q, want keep_staged", first.Decision)
+	}
+
+	second, created, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-select", "pack-candidate", "other-operator", now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate(second) error = %v", err)
+	}
+	if created {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate(second) created = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate(second) = %#v, want %#v", second, first)
+	}
+}
+
+func TestEnsureHotUpdateGateRecordFromCandidateRejectsMismatchedExistingCandidate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 22, 12, 45, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate-a"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(2*time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate-b"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(3 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	first, created, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-mismatch", "pack-candidate-a", "operator", now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate(first) error = %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate(first) created = false, want true")
+	}
+	if first.CandidatePackID != "pack-candidate-a" {
+		t.Fatalf("first.CandidatePackID = %q, want pack-candidate-a", first.CandidatePackID)
+	}
+
+	_, created, err = EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-mismatch", "pack-candidate-b", "operator", now.Add(5*time.Minute))
+	if err == nil {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate() error = nil, want mismatched candidate rejection")
+	}
+	if created {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate() created = true, want false")
+	}
+	if !strings.Contains(err.Error(), `candidate_pack_id "pack-candidate-a" does not match requested candidate_pack_id "pack-candidate-b"`) {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() error = %q, want mismatched candidate context", err.Error())
+	}
+}
+
 func TestHotUpdateGateValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 

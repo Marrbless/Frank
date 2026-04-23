@@ -247,6 +247,52 @@ func ListHotUpdateGateRecords(root string) ([]HotUpdateGateRecord, error) {
 	return listStoreJSONRecords(StoreHotUpdateGatesDir(root), loadHotUpdateGateRecordFile)
 }
 
+func EnsureHotUpdateGateRecordFromCandidate(root string, hotUpdateID string, candidatePackID string, createdBy string, requestedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	candidateRef := NormalizeRuntimePackRef(RuntimePackRef{PackID: candidatePackID})
+	if err := ValidateRuntimePackRef(candidateRef); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	existing, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err == nil {
+		if existing.CandidatePackID != candidateRef.PackID {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q candidate_pack_id %q does not match requested candidate_pack_id %q",
+				ref.HotUpdateID,
+				existing.CandidatePackID,
+				candidateRef.PackID,
+			)
+		}
+		if err := validateHotUpdateGateDerivedLinkage(root, existing); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	record, err := buildHotUpdateGateRecordFromCandidate(root, ref.HotUpdateID, candidateRef.PackID, createdBy, requestedAt)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -303,6 +349,36 @@ func ResolveCandidateRuntimePackRecord(root string) (RuntimePackRecord, error) {
 		return RuntimePackRecord{}, err
 	}
 	return LoadRuntimePackRecord(root, pointer.CandidatePackID)
+}
+
+func buildHotUpdateGateRecordFromCandidate(root string, hotUpdateID string, candidatePackID string, createdBy string, requestedAt time.Time) (HotUpdateGateRecord, error) {
+	candidate, err := LoadRuntimePackRecord(root, candidatePackID)
+	if err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	record := HotUpdateGateRecord{
+		HotUpdateID:              hotUpdateID,
+		Objective:                fmt.Sprintf("operator requested hot-update gate for candidate %s", candidate.PackID),
+		CandidatePackID:          candidate.PackID,
+		PreviousActivePackID:     activePointer.ActivePackID,
+		RollbackTargetPackID:     candidate.RollbackTargetPackID,
+		TargetSurfaces:           append([]string(nil), candidate.MutableSurfaces...),
+		SurfaceClasses:           append([]string(nil), candidate.SurfaceClasses...),
+		ReloadMode:               deriveHotUpdateReloadMode(candidate.MutableSurfaces),
+		CompatibilityContractRef: candidate.CompatibilityContractRef,
+		PreparedAt:               requestedAt.UTC(),
+		State:                    HotUpdateGateStatePrepared,
+		Decision:                 HotUpdateGateDecisionKeepStaged,
+		FailureReason:            "",
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, err
+	}
+	return record, nil
 }
 
 func loadHotUpdateGateRecordFile(path string) (HotUpdateGateRecord, error) {
@@ -407,4 +483,32 @@ func isValidHotUpdateGateDecision(decision HotUpdateGateDecision) bool {
 	default:
 		return false
 	}
+}
+
+func deriveHotUpdateReloadMode(targetSurfaces []string) HotUpdateReloadMode {
+	if len(targetSurfaces) == 1 {
+		switch strings.TrimSpace(targetSurfaces[0]) {
+		case "skills":
+			return HotUpdateReloadModeSkillReload
+		case "extensions":
+			return HotUpdateReloadModeExtensionReload
+		}
+	}
+	return HotUpdateReloadModeSoftReload
+}
+
+func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord) error {
+	if _, err := LoadRuntimePackRecord(root, record.CandidatePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate candidate_pack_id %q: %w", record.CandidatePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.PreviousActivePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate previous_active_pack_id %q: %w", record.PreviousActivePackID, err)
+	}
+	if strings.TrimSpace(record.RollbackTargetPackID) == "" {
+		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id is required")
+	}
+	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
+	}
+	return nil
 }
