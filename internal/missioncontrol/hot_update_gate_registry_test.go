@@ -1297,6 +1297,178 @@ func TestReconcileHotUpdateGateRecoveryNeededReplayIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestExecuteHotUpdateGateReloadApplyRetryFromRecoveryNeededSucceedsWithoutSecondPointerMutation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 11, 30, 0, 0, time.UTC)
+	storeHotUpdateRecoveryNeededFixture(t, root, now, "hot-update-retry-success")
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	record, changed, err := ExecuteHotUpdateGateReloadApply(root, "hot-update-retry-success", "operator", now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply() changed = false, want true")
+	}
+	if record.State != HotUpdateGateStateReloadApplySucceeded {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().State = %q, want reload_apply_succeeded", record.State)
+	}
+	if record.FailureReason != "" {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().FailureReason = %q, want empty", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during retry reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed during retry reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ActivePackID != "pack-candidate" {
+		t.Fatalf("LoadActiveRuntimePackPointer().ActivePackID = %q, want pack-candidate", gotPointer.ActivePackID)
+	}
+	if gotPointer.ReloadGeneration != 3 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 3", gotPointer.ReloadGeneration)
+	}
+
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 1 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 1", len(gates))
+	}
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+}
+
+func TestExecuteHotUpdateGateReloadApplyRetryFromRecoveryNeededRecordsFailureAndClearsFailureReasonOnStart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 11, 45, 0, 0, time.UTC)
+	storeHotUpdateRecoveryNeededFixture(t, root, now, "hot-update-retry-failure")
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	observedInProgress := false
+	record, changed, err := executeHotUpdateGateReloadApplyWithConvergence(root, "hot-update-retry-failure", "operator", now.Add(10*time.Minute), func(root string, record HotUpdateGateRecord) error {
+		current, err := LoadHotUpdateGateRecord(root, record.HotUpdateID)
+		if err != nil {
+			return err
+		}
+		if current.State != HotUpdateGateStateReloadApplyInProgress {
+			return errors.New("retry did not persist reload_apply_in_progress before convergence")
+		}
+		if current.FailureReason != "" {
+			return errors.New("retry did not clear stale failure reason before convergence")
+		}
+		observedInProgress = true
+		return errors.New("simulated retry convergence failure")
+	})
+	if err == nil {
+		t.Fatal("executeHotUpdateGateReloadApplyWithConvergence() error = nil, want failure")
+	}
+	if !changed {
+		t.Fatal("executeHotUpdateGateReloadApplyWithConvergence() changed = false, want true")
+	}
+	if !observedInProgress {
+		t.Fatal("executeHotUpdateGateReloadApplyWithConvergence() did not persist reload_apply_in_progress with cleared failure_reason before failure")
+	}
+	if record.State != HotUpdateGateStateReloadApplyFailed {
+		t.Fatalf("executeHotUpdateGateReloadApplyWithConvergence().State = %q, want reload_apply_failed", record.State)
+	}
+	if record.FailureReason != "simulated retry convergence failure" {
+		t.Fatalf("executeHotUpdateGateReloadApplyWithConvergence().FailureReason = %q, want simulated retry failure", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during retry failure\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed during retry failure\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 3 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 3", gotPointer.ReloadGeneration)
+	}
+
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 1 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 1", len(gates))
+	}
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+}
+
 func TestHotUpdateGateValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -1519,5 +1691,27 @@ func storeHotUpdateReloadInProgressFixture(t *testing.T, root string, now time.T
 	record.PhaseUpdatedBy = "operator"
 	if err := StoreHotUpdateGateRecord(root, record); err != nil {
 		t.Fatalf("StoreHotUpdateGateRecord(reload_apply_in_progress) error = %v", err)
+	}
+}
+
+func storeHotUpdateRecoveryNeededFixture(t *testing.T, root string, now time.Time, hotUpdateID string) {
+	t.Helper()
+
+	storeHotUpdateReloadInProgressFixture(t, root, now, hotUpdateID)
+	if _, changed, err := ReconcileHotUpdateGateRecoveryNeeded(root, hotUpdateID, "operator", now.Add(8*time.Minute)); err != nil {
+		t.Fatalf("ReconcileHotUpdateGateRecoveryNeeded() error = %v", err)
+	} else if !changed {
+		t.Fatal("ReconcileHotUpdateGateRecoveryNeeded() changed = false, want true")
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, hotUpdateID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord(recovery-needed) error = %v", err)
+	}
+	record.FailureReason = "stale retry detail"
+	record.PhaseUpdatedAt = now.Add(9 * time.Minute)
+	record.PhaseUpdatedBy = "operator"
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord(reload_apply_recovery_needed) error = %v", err)
 	}
 }

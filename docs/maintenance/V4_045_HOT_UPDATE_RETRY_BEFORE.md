@@ -1,0 +1,51 @@
+## V4-045 Hot-Update Retry Before
+
+- branch: `frank-v4-045-hot-update-retry`
+- HEAD: `cef23997edbed891b7f3e011382b9be124ecefdf`
+- tags at HEAD: none
+- ahead/behind `upstream/main`: `443/0`
+- git status --short --branch:
+  - `## frank-v4-045-hot-update-retry`
+- baseline `go test -count=1 ./...` result:
+  - pass
+  - `ok  	github.com/local/picobot/cmd/picobot	13.801s`
+  - `?   	github.com/local/picobot/embeds	[no test files]`
+  - `ok  	github.com/local/picobot/internal/agent	0.618s`
+  - `ok  	github.com/local/picobot/internal/agent/memory	0.116s`
+  - `ok  	github.com/local/picobot/internal/agent/skills	0.007s`
+  - `ok  	github.com/local/picobot/internal/agent/tools	14.604s`
+  - `ok  	github.com/local/picobot/internal/channels	0.589s`
+  - `?   	github.com/local/picobot/internal/chat	[no test files]`
+  - `ok  	github.com/local/picobot/internal/config	0.011s`
+  - `ok  	github.com/local/picobot/internal/cron	2.307s`
+  - `?   	github.com/local/picobot/internal/heartbeat	[no test files]`
+  - `ok  	github.com/local/picobot/internal/mcp	0.027s`
+  - `ok  	github.com/local/picobot/internal/missioncontrol	10.755s`
+  - `ok  	github.com/local/picobot/internal/providers	0.019s`
+  - `ok  	github.com/local/picobot/internal/session	0.077s`
+- exact files planned:
+  - `internal/missioncontrol/hot_update_gate_registry.go`
+  - `internal/missioncontrol/hot_update_gate_registry_test.go`
+  - `internal/agent/loop_processdirect_test.go`
+  - `docs/maintenance/V4_045_HOT_UPDATE_RETRY_BEFORE.md`
+  - `docs/maintenance/V4_045_HOT_UPDATE_RETRY_AFTER.md`
+- exact state transitions planned:
+  - permit `reload_apply_recovery_needed -> reload_apply_in_progress`
+  - keep existing `reloading -> reload_apply_in_progress`
+  - keep `reload_apply_in_progress -> reload_apply_succeeded` on bounded convergence success
+  - keep `reload_apply_in_progress -> reload_apply_failed` on bounded convergence failure
+  - keep replay after `reload_apply_succeeded` idempotent
+  - keep `reload_apply_failed` closed
+  - clear stale `FailureReason` when retry starts from `reload_apply_recovery_needed`
+- exact non-goals:
+  - no new operator command
+  - no new hot-update gate or apply record
+  - no second active runtime-pack pointer switch
+  - no second `reload_generation` increment
+  - no `last_known_good_pointer.json` mutation
+  - no `HotUpdateOutcomeRecord` creation
+  - no `PromotionRecord` creation
+  - no terminal-failure resolution action
+  - no promotion behavior changes
+  - no evaluator, scoring, autonomy, provider, or channel behavior changes
+  - no dependency changes

@@ -859,7 +859,8 @@ func executeHotUpdateGateReloadApplyWithConvergence(root string, hotUpdateID str
 			ref.HotUpdateID,
 			record.State,
 		)
-	case HotUpdateGateStateReloading:
+	case HotUpdateGateStateReloading,
+		HotUpdateGateStateReloadApplyRecoveryNeeded:
 	default:
 		return HotUpdateGateRecord{}, false, fmt.Errorf(
 			"mission store hot-update gate %q state %q does not permit reload/apply execution",
