@@ -232,6 +232,247 @@ func TestLoadHotUpdateOutcomeRecordNotFound(t *testing.T) {
 	}
 }
 
+func TestCreateHotUpdateOutcomeFromTerminalGateSucceededCreatesHotUpdatedOutcomeAndPreservesState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.FixedZone("offset", -4*60*60))
+	terminalAt := now.Add(10 * time.Minute)
+	createdAt := now.Add(11 * time.Minute)
+
+	storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-success", HotUpdateGateStateReloadApplySucceeded, "")
+	before := snapshotHotUpdateOutcomeSideEffects(t, root, "hot-update-success")
+
+	got, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-success", " outcome-writer ", createdAt)
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+	}
+	want := HotUpdateOutcomeRecord{
+		RecordVersion:   StoreRecordVersion,
+		OutcomeID:       "hot-update-outcome-hot-update-success",
+		HotUpdateID:     "hot-update-success",
+		CandidatePackID: "pack-candidate",
+		OutcomeKind:     HotUpdateOutcomeKindHotUpdated,
+		Reason:          "hot update reload/apply succeeded",
+		OutcomeAt:       terminalAt.UTC(),
+		CreatedAt:       createdAt.UTC(),
+		CreatedBy:       "outcome-writer",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() = %#v, want %#v", got, want)
+	}
+	if got.CandidateID != "" || got.RunID != "" || got.CandidateResultID != "" {
+		t.Fatalf("optional candidate/run/result refs = %q/%q/%q, want empty", got.CandidateID, got.RunID, got.CandidateResultID)
+	}
+
+	loaded, err := LoadHotUpdateOutcomeRecord(root, got.OutcomeID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOutcomeRecord() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, got) {
+		t.Fatalf("LoadHotUpdateOutcomeRecord() = %#v, want %#v", loaded, got)
+	}
+	assertHotUpdateOutcomeSideEffectsUnchanged(t, root, "hot-update-success", before)
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateFailedCopiesFailureDetail(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 11, 0, 0, 0, time.UTC)
+	failureReason := "operator_terminal_failure: operator requested stop after recovery review"
+
+	storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-failed", HotUpdateGateStateReloadApplyFailed, failureReason)
+
+	got, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-failed", "operator", now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+	}
+	if got.OutcomeID != "hot-update-outcome-hot-update-failed" {
+		t.Fatalf("OutcomeID = %q, want deterministic outcome id", got.OutcomeID)
+	}
+	if got.OutcomeKind != HotUpdateOutcomeKindFailed {
+		t.Fatalf("OutcomeKind = %q, want failed", got.OutcomeKind)
+	}
+	if got.Reason != failureReason {
+		t.Fatalf("Reason = %q, want copied deterministic failure detail", got.Reason)
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateFailedRequiresFailureReason(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-empty-failure", HotUpdateGateStateReloadApplyFailed, " \t ")
+
+	_, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-empty-failure", "operator", now.Add(11*time.Minute))
+	if err == nil {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() error = nil, want missing failure_reason rejection")
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), `failure_reason is required for outcome creation`) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %q, want failure_reason context", err.Error())
+	}
+	records, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(records))
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateReplayIsIdempotentAndDivergentDuplicateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC)
+	createdAt := now.Add(11 * time.Minute)
+
+	storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-replay", HotUpdateGateStateReloadApplySucceeded, "")
+
+	first, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-replay", "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(first) changed = false, want true")
+	}
+	firstBytes, err := os.ReadFile(StoreHotUpdateOutcomePath(root, first.OutcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(first outcome) error = %v", err)
+	}
+
+	second, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-replay", "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(replay) = %#v, want %#v", second, first)
+	}
+	secondBytes, err := os.ReadFile(StoreHotUpdateOutcomePath(root, first.OutcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(second outcome) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("hot-update outcome file changed on idempotent replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+
+	_, changed, err = CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-replay", "operator", createdAt.Add(time.Minute))
+	if err == nil {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent) error = nil, want duplicate rejection")
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent) changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), `mission store hot-update outcome "hot-update-outcome-hot-update-replay" already exists`) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(divergent) error = %q, want duplicate context", err.Error())
+	}
+	records, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 1", len(records))
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateRejectsExistingDifferentOutcomeForSameHotUpdate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC)
+
+	gate := storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-existing", HotUpdateGateStateReloadApplySucceeded, "")
+	if err := StoreHotUpdateOutcomeRecord(root, HotUpdateOutcomeRecord{
+		OutcomeID:       "legacy-outcome",
+		HotUpdateID:     "hot-update-existing",
+		CandidatePackID: "pack-candidate",
+		OutcomeKind:     HotUpdateOutcomeKindHotUpdated,
+		Reason:          "hot update reload/apply succeeded",
+		OutcomeAt:       gate.PhaseUpdatedAt,
+		CreatedAt:       now.Add(11 * time.Minute),
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord(legacy) error = %v", err)
+	}
+
+	_, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, "hot-update-existing", "operator", now.Add(11*time.Minute))
+	if err == nil {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() error = nil, want existing hot_update_id duplicate rejection")
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), `hot_update_id "hot-update-existing" already exists as "legacy-outcome"`) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %q, want hot_update_id duplicate context", err.Error())
+	}
+	records, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(records) != 1 || records[0].OutcomeID != "legacy-outcome" {
+		t.Fatalf("ListHotUpdateOutcomeRecords() = %#v, want only legacy-outcome", records)
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateRejectsNonTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []HotUpdateGateState{
+		HotUpdateGateStatePrepared,
+		HotUpdateGateStateValidated,
+		HotUpdateGateStateStaged,
+		HotUpdateGateStateReloading,
+		HotUpdateGateStateReloadApplyInProgress,
+		HotUpdateGateStateReloadApplyRecoveryNeeded,
+	}
+
+	for _, state := range tests {
+		state := state
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 5, 1, 15, 0, 0, 0, time.UTC)
+			hotUpdateID := "hot-update-" + strings.ReplaceAll(string(state), "_", "-")
+
+			storeHotUpdateTerminalOutcomeFixture(t, root, now, hotUpdateID, state, "")
+
+			_, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, hotUpdateID, "operator", now.Add(11*time.Minute))
+			if err == nil {
+				t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() error = nil, want non-terminal rejection")
+			}
+			if changed {
+				t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), `does not permit outcome creation`) {
+				t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %q, want non-terminal context", err.Error())
+			}
+			records, err := ListHotUpdateOutcomeRecords(root)
+			if err != nil {
+				t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+			}
+			if len(records) != 0 {
+				t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(records))
+			}
+		})
+	}
+}
+
 func validHotUpdateOutcomeRecord(now time.Time, mutate func(*HotUpdateOutcomeRecord)) HotUpdateOutcomeRecord {
 	record := HotUpdateOutcomeRecord{
 		OutcomeID:         "outcome-root",
@@ -277,4 +518,149 @@ func storeHotUpdateOutcomeFixtures(t *testing.T, root string, now time.Time) {
 		record.ParentPackID = "pack-base"
 		record.RollbackTargetPackID = "pack-base"
 	}))
+}
+
+func storeHotUpdateTerminalOutcomeFixture(t *testing.T, root string, now time.Time, hotUpdateID string, state HotUpdateGateState, failureReason string) HotUpdateGateRecord {
+	t.Helper()
+
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.MutableSurfaces = []string{"skills"}
+		record.SurfaceClasses = []string{"class_1"}
+		record.CompatibilityContractRef = "compat-v1"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(2 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      hotUpdateGatePointerUpdateRecordRef(hotUpdateID),
+		ReloadGeneration:     7,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(3 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	gate := validHotUpdateGateRecord(now.Add(4*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = hotUpdateID
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.State = state
+		record.FailureReason = failureReason
+		record.PhaseUpdatedAt = now.Add(10 * time.Minute)
+		record.PhaseUpdatedBy = "operator"
+	})
+	if err := StoreHotUpdateGateRecord(root, gate); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+	stored, err := LoadHotUpdateGateRecord(root, hotUpdateID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+	}
+	return stored
+}
+
+type hotUpdateOutcomeSideEffectSnapshot struct {
+	activePointerBytes   []byte
+	lastKnownGoodBytes   []byte
+	hotUpdateGateBytes   []byte
+	reloadGeneration     uint64
+	hotUpdateGateRecords int
+}
+
+func snapshotHotUpdateOutcomeSideEffects(t *testing.T, root string, hotUpdateID string) hotUpdateOutcomeSideEffectSnapshot {
+	t.Helper()
+
+	activePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer) error = %v", err)
+	}
+	lastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good pointer) error = %v", err)
+	}
+	hotUpdateGateBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update gate) error = %v", err)
+	}
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	return hotUpdateOutcomeSideEffectSnapshot{
+		activePointerBytes:   activePointerBytes,
+		lastKnownGoodBytes:   lastKnownGoodBytes,
+		hotUpdateGateBytes:   hotUpdateGateBytes,
+		reloadGeneration:     activePointer.ReloadGeneration,
+		hotUpdateGateRecords: len(gates),
+	}
+}
+
+func assertHotUpdateOutcomeSideEffectsUnchanged(t *testing.T, root string, hotUpdateID string, before hotUpdateOutcomeSideEffectSnapshot) {
+	t.Helper()
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(before.activePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime-pack pointer changed during outcome creation\nbefore:\n%s\nafter:\n%s", string(before.activePointerBytes), string(afterPointerBytes))
+	}
+	afterPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if afterPointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("ReloadGeneration = %d, want %d", afterPointer.ReloadGeneration, before.reloadGeneration)
+	}
+
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good pointer after) error = %v", err)
+	}
+	if string(before.lastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer changed during outcome creation\nbefore:\n%s\nafter:\n%s", string(before.lastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	afterGateBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update gate after) error = %v", err)
+	}
+	if string(before.hotUpdateGateBytes) != string(afterGateBytes) {
+		t.Fatalf("hot-update gate changed during outcome creation\nbefore:\n%s\nafter:\n%s", string(before.hotUpdateGateBytes), string(afterGateBytes))
+	}
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords(after) error = %v", err)
+	}
+	if len(gates) != before.hotUpdateGateRecords {
+		t.Fatalf("ListHotUpdateGateRecords(after) len = %d, want %d", len(gates), before.hotUpdateGateRecords)
+	}
+
+	promotions, err := ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
 }

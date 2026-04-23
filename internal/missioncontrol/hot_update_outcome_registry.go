@@ -215,6 +215,101 @@ func ListHotUpdateOutcomeRecords(root string) ([]HotUpdateOutcomeRecord, error) 
 	})
 }
 
+func CreateHotUpdateOutcomeFromTerminalGate(root string, hotUpdateID string, createdBy string, createdAt time.Time) (HotUpdateOutcomeRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return HotUpdateOutcomeRecord{}, false, fmt.Errorf("mission store hot-update outcome created_by is required")
+	}
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		return HotUpdateOutcomeRecord{}, false, fmt.Errorf("mission store hot-update outcome created_at is required")
+	}
+
+	gate, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, gate); err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+
+	outcomeKind := HotUpdateOutcomeKind("")
+	reason := ""
+	switch gate.State {
+	case HotUpdateGateStateReloadApplySucceeded:
+		outcomeKind = HotUpdateOutcomeKindHotUpdated
+		reason = "hot update reload/apply succeeded"
+	case HotUpdateGateStateReloadApplyFailed:
+		reason = strings.TrimSpace(gate.FailureReason)
+		if reason == "" {
+			return HotUpdateOutcomeRecord{}, false, fmt.Errorf("mission store hot-update gate %q failure_reason is required for outcome creation", gate.HotUpdateID)
+		}
+		outcomeKind = HotUpdateOutcomeKindFailed
+	default:
+		return HotUpdateOutcomeRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit outcome creation",
+			gate.HotUpdateID,
+			gate.State,
+		)
+	}
+
+	record := NormalizeHotUpdateOutcomeRecord(HotUpdateOutcomeRecord{
+		RecordVersion:   StoreRecordVersion,
+		OutcomeID:       hotUpdateOutcomeIDFromGate(gate.HotUpdateID),
+		HotUpdateID:     gate.HotUpdateID,
+		CandidatePackID: gate.CandidatePackID,
+		OutcomeKind:     outcomeKind,
+		Reason:          reason,
+		OutcomeAt:       gate.PhaseUpdatedAt,
+		CreatedAt:       createdAt,
+		CreatedBy:       createdBy,
+	})
+	if err := ValidateHotUpdateOutcomeRecord(record); err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+
+	existingRecords, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	for _, existing := range existingRecords {
+		if existing.HotUpdateID == record.HotUpdateID && existing.OutcomeID != record.OutcomeID {
+			return HotUpdateOutcomeRecord{}, false, fmt.Errorf(
+				"mission store hot-update outcome for hot_update_id %q already exists as %q",
+				record.HotUpdateID,
+				existing.OutcomeID,
+			)
+		}
+	}
+
+	existing, err := LoadHotUpdateOutcomeRecord(root, record.OutcomeID)
+	if err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return existing, false, nil
+		}
+		return HotUpdateOutcomeRecord{}, false, fmt.Errorf("mission store hot-update outcome %q already exists", record.OutcomeID)
+	}
+	if !errors.Is(err, ErrHotUpdateOutcomeRecordNotFound) {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+
+	if err := StoreHotUpdateOutcomeRecord(root, record); err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateOutcomeRecord(root, record.OutcomeID)
+	if err != nil {
+		return HotUpdateOutcomeRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func loadHotUpdateOutcomeRecordFile(root, path string) (HotUpdateOutcomeRecord, error) {
 	var record HotUpdateOutcomeRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
@@ -415,4 +510,8 @@ func isValidHotUpdateOutcomeKind(kind HotUpdateOutcomeKind) bool {
 	default:
 		return false
 	}
+}
+
+func hotUpdateOutcomeIDFromGate(hotUpdateID string) string {
+	return "hot-update-outcome-" + strings.TrimSpace(hotUpdateID)
 }
