@@ -1244,6 +1244,102 @@ func TestProcessDirectHotUpdateGateRecordCommandCreatesOrSelectsGateAndPreserves
 	}
 }
 
+func TestProcessDirectHotUpdateGatePhaseCommandAdvancesGateAndPreservesActiveRuntimePackPointer(t *testing.T) {
+	t.Parallel()
+
+	root, wantPointer := writeLoopHotUpdateGateControlFixtures(t)
+
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) error = %v", err)
+	}
+	if resp != "Advanced hot-update gate job=job-1 hot_update=hot-update-1 phase=validated." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) response = %q, want validated acknowledgement", resp)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord(validated) error = %v", err)
+	}
+	if record.State != missioncontrol.HotUpdateGateStateValidated {
+		t.Fatalf("HotUpdateGateRecord.State = %q, want validated", record.State)
+	}
+	if record.PhaseUpdatedAt.IsZero() {
+		t.Fatal("HotUpdateGateRecord.PhaseUpdatedAt = zero, want populated")
+	}
+	if record.PhaseUpdatedBy != "operator" {
+		t.Fatalf("HotUpdateGateRecord.PhaseUpdatedBy = %q, want operator", record.PhaseUpdatedBy)
+	}
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) error = %v", err)
+	}
+	if resp != "Advanced hot-update gate job=job-1 hot_update=hot-update-1 phase=staged." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) response = %q, want staged acknowledgement", resp)
+	}
+
+	record, err = missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord(staged) error = %v", err)
+	}
+	if record.State != missioncontrol.HotUpdateGateStateStaged {
+		t.Fatalf("HotUpdateGateRecord.State = %q, want staged", record.State)
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer != wantPointer {
+		t.Fatalf("LoadActiveRuntimePackPointer() = %#v, want %#v", gotPointer, wantPointer)
+	}
+
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active pointer changed on hot-update gate phase path\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateGateIdentity == nil {
+		t.Fatal("HotUpdateGateIdentity = nil, want hot-update gate identity block")
+	}
+	if len(summary.HotUpdateGateIdentity.Gates) != 1 {
+		t.Fatalf("HotUpdateGateIdentity.Gates len = %d, want 1", len(summary.HotUpdateGateIdentity.Gates))
+	}
+	if summary.HotUpdateGateIdentity.Gates[0].State != "staged" {
+		t.Fatalf("HotUpdateGateIdentity.Gates[0].State = %q, want staged", summary.HotUpdateGateIdentity.Gates[0].State)
+	}
+}
+
 func TestProcessDirectHotUpdateGateRecordCommandFailsClosedWhenRollbackTargetLinkageIsMissing(t *testing.T) {
 	t.Parallel()
 

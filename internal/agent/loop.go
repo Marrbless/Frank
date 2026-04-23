@@ -27,6 +27,7 @@ var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S
 var revokeApprovalCommandRE = regexp.MustCompile(`(?i)^\s*(revoke_approval)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateRecordCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
+var hotUpdateGatePhaseCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_phase)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyPhaseCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_phase)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_execute)\s+(\S+)\s+(\S+)\s*$`)
@@ -1802,6 +1803,21 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			return true, fmt.Sprintf("Recorded hot-update gate job=%s hot_update=%s candidate_pack=%s.", jobID, hotUpdateID, candidatePackID), nil
 		}
 		return true, fmt.Sprintf("Selected hot-update gate job=%s hot_update=%s candidate_pack=%s.", jobID, hotUpdateID, candidatePackID), nil
+	}
+
+	hotUpdateGatePhaseMatches := hotUpdateGatePhaseCommandRE.FindStringSubmatch(trimmed)
+	if len(hotUpdateGatePhaseMatches) == 5 {
+		jobID := hotUpdateGatePhaseMatches[2]
+		hotUpdateID := hotUpdateGatePhaseMatches[3]
+		phase := hotUpdateGatePhaseMatches[4]
+		changed, err := a.taskState.AdvanceHotUpdateGatePhase(jobID, hotUpdateID, phase)
+		if err != nil {
+			return true, "", err
+		}
+		if changed {
+			return true, fmt.Sprintf("Advanced hot-update gate job=%s hot_update=%s phase=%s.", jobID, hotUpdateID, phase), nil
+		}
+		return true, fmt.Sprintf("Selected hot-update gate job=%s hot_update=%s phase=%s.", jobID, hotUpdateID, phase), nil
 	}
 
 	rollbackApplyMatches := rollbackApplyRecordCommandRE.FindStringSubmatch(trimmed)

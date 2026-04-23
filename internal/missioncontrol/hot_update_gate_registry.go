@@ -82,6 +82,8 @@ type HotUpdateGateRecord struct {
 	ApprovalRef              string                `json:"approval_ref,omitempty"`
 	BudgetRef                string                `json:"budget_ref,omitempty"`
 	PreparedAt               time.Time             `json:"prepared_at"`
+	PhaseUpdatedAt           time.Time             `json:"phase_updated_at,omitempty"`
+	PhaseUpdatedBy           string                `json:"phase_updated_by,omitempty"`
 	State                    HotUpdateGateState    `json:"state"`
 	Decision                 HotUpdateGateDecision `json:"decision"`
 	FailureReason            string                `json:"failure_reason,omitempty"`
@@ -132,6 +134,19 @@ func NormalizeHotUpdateGateRecord(record HotUpdateGateRecord) HotUpdateGateRecor
 	record.ApprovalRef = strings.TrimSpace(record.ApprovalRef)
 	record.BudgetRef = strings.TrimSpace(record.BudgetRef)
 	record.PreparedAt = record.PreparedAt.UTC()
+	record.PhaseUpdatedAt = record.PhaseUpdatedAt.UTC()
+	record.PhaseUpdatedBy = strings.TrimSpace(record.PhaseUpdatedBy)
+	if record.PreparedAt.IsZero() {
+		record.PhaseUpdatedAt = time.Time{}
+		record.PhaseUpdatedBy = strings.TrimSpace(record.PhaseUpdatedBy)
+	} else {
+		if record.PhaseUpdatedAt.IsZero() {
+			record.PhaseUpdatedAt = record.PreparedAt
+		}
+		if record.PhaseUpdatedBy == "" {
+			record.PhaseUpdatedBy = "operator"
+		}
+	}
 	record.FailureReason = strings.TrimSpace(record.FailureReason)
 	return record
 }
@@ -192,6 +207,15 @@ func ValidateHotUpdateGateRecord(record HotUpdateGateRecord) error {
 	}
 	if record.PreparedAt.IsZero() {
 		return fmt.Errorf("mission store hot-update gate prepared_at is required")
+	}
+	if record.PhaseUpdatedAt.IsZero() {
+		return fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+	if record.PhaseUpdatedBy == "" {
+		return fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	if record.PhaseUpdatedAt.Before(record.PreparedAt) {
+		return fmt.Errorf("mission store hot-update gate phase_updated_at must not precede prepared_at")
 	}
 	if !isValidHotUpdateGateState(record.State) {
 		return fmt.Errorf("mission store hot-update gate state %q is invalid", record.State)
@@ -293,6 +317,56 @@ func EnsureHotUpdateGateRecordFromCandidate(root string, hotUpdateID string, can
 	return stored, true, nil
 }
 
+func AdvanceHotUpdateGatePhase(root string, hotUpdateID string, nextState HotUpdateGateState, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+	if nextState != HotUpdateGateStatePrepared && nextState != HotUpdateGateStateValidated && nextState != HotUpdateGateStateStaged {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate target state %q is invalid", nextState)
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if !isValidHotUpdateGatePhaseStartState(record.State) {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q state %q cannot advance via phase control", ref.HotUpdateID, record.State)
+	}
+	if record.State == nextState {
+		return record, false, nil
+	}
+	if !isValidHotUpdateGateAdjacentTransition(record.State, nextState) {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q transition %q -> %q is invalid", ref.HotUpdateID, record.State, nextState)
+	}
+
+	record.State = nextState
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -371,6 +445,8 @@ func buildHotUpdateGateRecordFromCandidate(root string, hotUpdateID string, cand
 		ReloadMode:               deriveHotUpdateReloadMode(candidate.MutableSurfaces),
 		CompatibilityContractRef: candidate.CompatibilityContractRef,
 		PreparedAt:               requestedAt.UTC(),
+		PhaseUpdatedAt:           requestedAt.UTC(),
+		PhaseUpdatedBy:           strings.TrimSpace(createdBy),
 		State:                    HotUpdateGateStatePrepared,
 		Decision:                 HotUpdateGateDecisionKeepStaged,
 		FailureReason:            "",
@@ -480,6 +556,26 @@ func isValidHotUpdateGateDecision(decision HotUpdateGateDecision) bool {
 		HotUpdateGateDecisionRequireColdRestart,
 		HotUpdateGateDecisionRollback:
 		return true
+	default:
+		return false
+	}
+}
+
+func isValidHotUpdateGatePhaseStartState(state HotUpdateGateState) bool {
+	switch state {
+	case HotUpdateGateStatePrepared, HotUpdateGateStateValidated, HotUpdateGateStateStaged:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHotUpdateGateAdjacentTransition(current HotUpdateGateState, next HotUpdateGateState) bool {
+	switch current {
+	case HotUpdateGateStatePrepared:
+		return next == HotUpdateGateStateValidated
+	case HotUpdateGateStateValidated:
+		return next == HotUpdateGateStateStaged
 	default:
 		return false
 	}
