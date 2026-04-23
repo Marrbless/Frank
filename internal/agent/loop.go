@@ -30,6 +30,7 @@ var rollbackApplyRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_r
 var rollbackApplyPhaseCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_phase)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_execute)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyReloadCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_reload)\s+(\S+)\s+(\S+)\s*$`)
+var rollbackApplyFailCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_fail)\s+(\S+)\s+(\S+)(?:\s+(.*?))?\s*$`)
 var runtimeCommandRE = regexp.MustCompile(`(?i)^\s*(pause|resume|abort|status)\s+(\S+)\s*$`)
 var inspectCommandRE = regexp.MustCompile(`(?i)^\s*(inspect)\s+(\S+)\s+(\S+)\s*$`)
 var setStepCommandRE = regexp.MustCompile(`(?i)^\s*(set_step)\s+(\S+)\s+(\S+)\s*$`)
@@ -1843,6 +1844,21 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			return true, fmt.Sprintf("Executed rollback-apply reload/apply job=%s apply=%s.", jobID, applyID), nil
 		}
 		return true, fmt.Sprintf("Selected rollback-apply reload/apply job=%s apply=%s.", jobID, applyID), nil
+	}
+
+	rollbackApplyFailMatches := rollbackApplyFailCommandRE.FindStringSubmatch(trimmed)
+	if len(rollbackApplyFailMatches) == 5 {
+		jobID := rollbackApplyFailMatches[2]
+		applyID := rollbackApplyFailMatches[3]
+		reason := rollbackApplyFailMatches[4]
+		changed, err := a.taskState.ResolveRollbackApplyTerminalFailure(jobID, applyID, reason)
+		if err != nil {
+			return true, "", err
+		}
+		if changed {
+			return true, fmt.Sprintf("Resolved rollback-apply terminal failure job=%s apply=%s.", jobID, applyID), nil
+		}
+		return true, fmt.Sprintf("Selected rollback-apply terminal failure job=%s apply=%s.", jobID, applyID), nil
 	}
 
 	matches := approvalCommandRE.FindStringSubmatch(trimmed)

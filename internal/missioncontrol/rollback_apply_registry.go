@@ -420,6 +420,78 @@ func ExecuteRollbackApplyReloadApply(root string, applyID string, updatedBy stri
 	return executeRollbackApplyReloadApplyWithConvergence(root, applyID, updatedBy, updatedAt, rollbackApplyRestartStyleConvergence)
 }
 
+func ResolveRollbackApplyTerminalFailure(root string, applyID string, reason string, updatedBy string, updatedAt time.Time) (RollbackApplyRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	ref := NormalizeRollbackApplyRef(RollbackApplyRef{ApplyID: applyID})
+	if err := ValidateRollbackApplyRef(ref); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply terminal failure reason is required")
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return RollbackApplyRecord{}, false, fmt.Errorf("mission store rollback apply phase_updated_at is required")
+	}
+
+	record, err := LoadRollbackApplyRecord(root, ref.ApplyID)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	expectedExecutionError := rollbackApplyTerminalFailureExecutionError(reason)
+	switch record.Phase {
+	case RollbackApplyPhaseReloadApplyFailed:
+		if record.ExecutionError == expectedExecutionError {
+			return record, false, nil
+		}
+		return RollbackApplyRecord{}, false, fmt.Errorf(
+			"mission store rollback apply %q phase %q already resolved with execution_error %q",
+			ref.ApplyID,
+			record.Phase,
+			record.ExecutionError,
+		)
+	case RollbackApplyPhaseReloadApplyRecoveryNeeded:
+	default:
+		return RollbackApplyRecord{}, false, fmt.Errorf(
+			"mission store rollback apply %q phase %q does not permit terminal failure resolution",
+			ref.ApplyID,
+			record.Phase,
+		)
+	}
+
+	if _, err := validateRollbackApplyExecutionLinkage(root, record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+
+	record.Phase = RollbackApplyPhaseReloadApplyFailed
+	record.ExecutionError = expectedExecutionError
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeRollbackApplyRecord(record)
+	if err := ValidateRollbackApplyRecord(record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := validateRollbackApplyLinkage(root, record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreRollbackApplyPath(root, record.ApplyID), record); err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	record, err = LoadRollbackApplyRecord(root, ref.ApplyID)
+	if err != nil {
+		return RollbackApplyRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func ReconcileRollbackApplyRecoveryNeeded(root string, applyID string, updatedBy string, updatedAt time.Time) (RollbackApplyRecord, bool, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return RollbackApplyRecord{}, false, err
@@ -722,6 +794,10 @@ func rollbackApplyPhaseOrder(phase RollbackApplyPhase) int {
 
 func rollbackApplyPointerUpdateRecordRef(applyID string) string {
 	return "rollback_apply:" + strings.TrimSpace(applyID)
+}
+
+func rollbackApplyTerminalFailureExecutionError(reason string) string {
+	return "operator_terminal_failure: " + strings.TrimSpace(reason)
 }
 
 // rollbackApplyRestartStyleConvergence models the smallest bounded reload/apply

@@ -1269,6 +1269,169 @@ func TestExecuteRollbackApplyReloadApplyRejectsInvalidStartingPhase(t *testing.T
 	}
 }
 
+func TestResolveRollbackApplyTerminalFailureFromRecoveryNeededPreservesPointerState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 18, 5, 0, 0, time.UTC)
+	storeRollbackApplyRecoveryNeededFixture(t, root, now, "rollback-terminal-failure", "apply-terminal-failure")
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	record, changed, err := ResolveRollbackApplyTerminalFailure(root, "apply-terminal-failure", "operator requested stop after recovery review", "operator", now.Add(21*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ResolveRollbackApplyTerminalFailure() changed = false, want true")
+	}
+	if record.Phase != RollbackApplyPhaseReloadApplyFailed {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure().Phase = %q, want reload_apply_failed", record.Phase)
+	}
+	if record.ExecutionError != "operator_terminal_failure: operator requested stop after recovery review" {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure().ExecutionError = %q, want deterministic operator failure detail", record.ExecutionError)
+	}
+	if record.ActivationState != RollbackApplyActivationStateUnchanged {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure().ActivationState = %q, want unchanged", record.ActivationState)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during terminal failure resolution\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed during terminal failure resolution\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 8 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 8", gotPointer.ReloadGeneration)
+	}
+}
+
+func TestResolveRollbackApplyTerminalFailureRequiresReasonAndReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 18, 10, 0, 0, time.UTC)
+	storeRollbackApplyRecoveryNeededFixture(t, root, now, "rollback-terminal-replay", "apply-terminal-replay")
+
+	got, changed, err := ResolveRollbackApplyTerminalFailure(root, "apply-terminal-replay", "   ", "operator", now.Add(21*time.Minute))
+	if err == nil {
+		t.Fatal("ResolveRollbackApplyTerminalFailure() error = nil, want required reason rejection")
+	}
+	if changed {
+		t.Fatal("ResolveRollbackApplyTerminalFailure() changed = true, want false")
+	}
+	if got != (RollbackApplyRecord{}) {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure() record = %#v, want zero value", got)
+	}
+	if !strings.Contains(err.Error(), "terminal failure reason is required") {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure() error = %q, want required reason rejection", err.Error())
+	}
+
+	first, changed, err := ResolveRollbackApplyTerminalFailure(root, "apply-terminal-replay", "operator requested stop after recovery review", "operator", now.Add(22*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ResolveRollbackApplyTerminalFailure(first) changed = false, want true")
+	}
+	firstBytes, err := os.ReadFile(StoreRollbackApplyPath(root, "apply-terminal-replay"))
+	if err != nil {
+		t.Fatalf("ReadFile(first) error = %v", err)
+	}
+
+	second, changed, err := ResolveRollbackApplyTerminalFailure(root, "apply-terminal-replay", "operator requested stop after recovery review", "operator", now.Add(23*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure(second) error = %v", err)
+	}
+	if changed {
+		t.Fatal("ResolveRollbackApplyTerminalFailure(second) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure(second) = %#v, want %#v", second, first)
+	}
+	secondBytes, err := os.ReadFile(StoreRollbackApplyPath(root, "apply-terminal-replay"))
+	if err != nil {
+		t.Fatalf("ReadFile(second) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("rollback apply record file changed on idempotent terminal failure replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+}
+
+func TestResolveRollbackApplyTerminalFailureRejectsInvalidStartingPhase(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 18, 15, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-terminal-invalid"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord() error = %v", err)
+	}
+	if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-terminal-invalid", "rollback-terminal-invalid", "operator", now.Add(13*time.Minute)); err != nil {
+		t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+	}
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(14 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "promotion:promotion-1",
+		ReloadGeneration:     7,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	got, changed, err := ResolveRollbackApplyTerminalFailure(root, "apply-terminal-invalid", "operator requested stop after recovery review", "operator", now.Add(15*time.Minute))
+	if err == nil {
+		t.Fatal("ResolveRollbackApplyTerminalFailure() error = nil, want invalid phase rejection")
+	}
+	if changed {
+		t.Fatal("ResolveRollbackApplyTerminalFailure() changed = true, want false")
+	}
+	if got != (RollbackApplyRecord{}) {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure() record = %#v, want zero value", got)
+	}
+	if !strings.Contains(err.Error(), `phase "recorded" does not permit terminal failure resolution`) {
+		t.Fatalf("ResolveRollbackApplyTerminalFailure() error = %q, want invalid phase rejection", err.Error())
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed after invalid terminal failure rejection\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+}
+
 func TestReconcileRollbackApplyRecoveryNeededNormalizesInProgressWithoutMutatingPointerState(t *testing.T) {
 	t.Parallel()
 
