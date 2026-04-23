@@ -25,22 +25,23 @@ const (
 type HotUpdateGateState string
 
 const (
-	HotUpdateGateStateDraft                 HotUpdateGateState = "draft"
-	HotUpdateGateStatePrepared              HotUpdateGateState = "prepared"
-	HotUpdateGateStateValidated             HotUpdateGateState = "validated"
-	HotUpdateGateStateStaged                HotUpdateGateState = "staged"
-	HotUpdateGateStateQuiescing             HotUpdateGateState = "quiescing"
-	HotUpdateGateStateReloading             HotUpdateGateState = "reloading"
-	HotUpdateGateStateReloadApplyInProgress HotUpdateGateState = "reload_apply_in_progress"
-	HotUpdateGateStateReloadApplySucceeded  HotUpdateGateState = "reload_apply_succeeded"
-	HotUpdateGateStateReloadApplyFailed     HotUpdateGateState = "reload_apply_failed"
-	HotUpdateGateStateSmokeTesting          HotUpdateGateState = "smoke_testing"
-	HotUpdateGateStateCanarying             HotUpdateGateState = "canarying"
-	HotUpdateGateStateCommitted             HotUpdateGateState = "committed"
-	HotUpdateGateStateRolledBack            HotUpdateGateState = "rolled_back"
-	HotUpdateGateStateRejected              HotUpdateGateState = "rejected"
-	HotUpdateGateStateFailed                HotUpdateGateState = "failed"
-	HotUpdateGateStateAborted               HotUpdateGateState = "aborted"
+	HotUpdateGateStateDraft                     HotUpdateGateState = "draft"
+	HotUpdateGateStatePrepared                  HotUpdateGateState = "prepared"
+	HotUpdateGateStateValidated                 HotUpdateGateState = "validated"
+	HotUpdateGateStateStaged                    HotUpdateGateState = "staged"
+	HotUpdateGateStateQuiescing                 HotUpdateGateState = "quiescing"
+	HotUpdateGateStateReloading                 HotUpdateGateState = "reloading"
+	HotUpdateGateStateReloadApplyInProgress     HotUpdateGateState = "reload_apply_in_progress"
+	HotUpdateGateStateReloadApplyRecoveryNeeded HotUpdateGateState = "reload_apply_recovery_needed"
+	HotUpdateGateStateReloadApplySucceeded      HotUpdateGateState = "reload_apply_succeeded"
+	HotUpdateGateStateReloadApplyFailed         HotUpdateGateState = "reload_apply_failed"
+	HotUpdateGateStateSmokeTesting              HotUpdateGateState = "smoke_testing"
+	HotUpdateGateStateCanarying                 HotUpdateGateState = "canarying"
+	HotUpdateGateStateCommitted                 HotUpdateGateState = "committed"
+	HotUpdateGateStateRolledBack                HotUpdateGateState = "rolled_back"
+	HotUpdateGateStateRejected                  HotUpdateGateState = "rejected"
+	HotUpdateGateStateFailed                    HotUpdateGateState = "failed"
+	HotUpdateGateStateAborted                   HotUpdateGateState = "aborted"
 )
 
 type HotUpdateGateDecision string
@@ -477,6 +478,68 @@ func ExecuteHotUpdateGateReloadApply(root string, hotUpdateID string, updatedBy 
 	return executeHotUpdateGateReloadApplyWithConvergence(root, hotUpdateID, updatedBy, updatedAt, hotUpdateGateRestartStyleConvergence)
 }
 
+func ReconcileHotUpdateGateRecoveryNeeded(root string, hotUpdateID string, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	switch record.State {
+	case HotUpdateGateStateReloadApplyRecoveryNeeded:
+		if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+		return record, false, nil
+	case HotUpdateGateStateReloadApplyInProgress:
+	default:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit recovery-needed normalization",
+			ref.HotUpdateID,
+			record.State,
+		)
+	}
+
+	if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	record.State = HotUpdateGateStateReloadApplyRecoveryNeeded
+	record.FailureReason = ""
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeHotUpdateGateRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	record, err = LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func StoreCandidateRuntimePackPointer(root string, pointer CandidateRuntimePackPointer) error {
 	if err := ValidateStoreRoot(root); err != nil {
 		return err
@@ -643,6 +706,7 @@ func isValidHotUpdateGateState(state HotUpdateGateState) bool {
 		HotUpdateGateStateQuiescing,
 		HotUpdateGateStateReloading,
 		HotUpdateGateStateReloadApplyInProgress,
+		HotUpdateGateStateReloadApplyRecoveryNeeded,
 		HotUpdateGateStateReloadApplySucceeded,
 		HotUpdateGateStateReloadApplyFailed,
 		HotUpdateGateStateSmokeTesting,
