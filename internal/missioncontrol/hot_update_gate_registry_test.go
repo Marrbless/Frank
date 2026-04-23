@@ -1469,6 +1469,215 @@ func TestExecuteHotUpdateGateReloadApplyRetryFromRecoveryNeededRecordsFailureAnd
 	}
 }
 
+func TestResolveHotUpdateGateTerminalFailureFromRecoveryNeededPreservesCommittedState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	storeHotUpdateRecoveryNeededFixture(t, root, now, "hot-update-terminal-failure")
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before) error = %v", err)
+	}
+
+	record, changed, err := ResolveHotUpdateGateTerminalFailure(root, "hot-update-terminal-failure", "operator requested stop after recovery review", "operator", now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure() changed = false, want true")
+	}
+	if record.State != HotUpdateGateStateReloadApplyFailed {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure().State = %q, want reload_apply_failed", record.State)
+	}
+	if record.FailureReason != "operator_terminal_failure: operator requested stop after recovery review" {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure().FailureReason = %q, want deterministic operator failure detail", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during terminal failure resolution\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed during terminal failure resolution\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 3 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 3", gotPointer.ReloadGeneration)
+	}
+
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 1 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 1", len(gates))
+	}
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+	applies, err := ListRollbackApplyRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(applies) != 0 {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want 0", len(applies))
+	}
+}
+
+func TestResolveHotUpdateGateTerminalFailureRequiresReasonAndReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 12, 15, 0, 0, time.UTC)
+	storeHotUpdateRecoveryNeededFixture(t, root, now, "hot-update-terminal-replay")
+
+	got, changed, err := ResolveHotUpdateGateTerminalFailure(root, "hot-update-terminal-replay", "   ", "operator", now.Add(10*time.Minute))
+	if err == nil {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure() error = nil, want required reason rejection")
+	}
+	if changed {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure() changed = true, want false")
+	}
+	if !reflect.DeepEqual(got, HotUpdateGateRecord{}) {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure() record = %#v, want zero value", got)
+	}
+	if !strings.Contains(err.Error(), "terminal failure reason is required") {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure() error = %q, want required reason rejection", err.Error())
+	}
+
+	first, changed, err := ResolveHotUpdateGateTerminalFailure(root, "hot-update-terminal-replay", "operator requested stop after recovery review", "operator", now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure(first) changed = false, want true")
+	}
+	firstBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, "hot-update-terminal-replay"))
+	if err != nil {
+		t.Fatalf("ReadFile(first) error = %v", err)
+	}
+
+	second, changed, err := ResolveHotUpdateGateTerminalFailure(root, "hot-update-terminal-replay", "operator requested stop after recovery review", "operator", now.Add(12*time.Minute))
+	if err != nil {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure(second) error = %v", err)
+	}
+	if changed {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure(second) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure(second) = %#v, want %#v", second, first)
+	}
+	secondBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, "hot-update-terminal-replay"))
+	if err != nil {
+		t.Fatalf("ReadFile(second) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("hot-update gate record file changed on idempotent terminal failure replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+
+	_, changed, err = ResolveHotUpdateGateTerminalFailure(root, "hot-update-terminal-replay", "different operator reason", "operator", now.Add(13*time.Minute))
+	if err == nil {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure(different reason) error = nil, want fail-closed rejection")
+	}
+	if changed {
+		t.Fatal("ResolveHotUpdateGateTerminalFailure(different reason) changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), "already resolved with failure_reason") {
+		t.Fatalf("ResolveHotUpdateGateTerminalFailure(different reason) error = %q, want already-resolved rejection", err.Error())
+	}
+}
+
+func TestResolveHotUpdateGateTerminalFailureRejectsNonRecoveryNeededStates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 23, 12, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		state HotUpdateGateState
+	}{
+		{name: "prepared", state: HotUpdateGateStatePrepared},
+		{name: "reloading", state: HotUpdateGateStateReloading},
+		{name: "reload_apply_in_progress", state: HotUpdateGateStateReloadApplyInProgress},
+		{name: "reload_apply_succeeded", state: HotUpdateGateStateReloadApplySucceeded},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			hotUpdateID := "hot-update-terminal-invalid-" + tc.name
+			storeHotUpdateRecoveryNeededFixture(t, root, now, hotUpdateID)
+			record, err := LoadHotUpdateGateRecord(root, hotUpdateID)
+			if err != nil {
+				t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+			}
+			record.State = tc.state
+			record.FailureReason = ""
+			record.PhaseUpdatedAt = now.Add(10 * time.Minute)
+			record.PhaseUpdatedBy = "operator"
+			if err := StoreHotUpdateGateRecord(root, record); err != nil {
+				t.Fatalf("StoreHotUpdateGateRecord(%s) error = %v", tc.state, err)
+			}
+			beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+			if err != nil {
+				t.Fatalf("ReadFile(active pointer before) error = %v", err)
+			}
+
+			got, changed, err := ResolveHotUpdateGateTerminalFailure(root, hotUpdateID, "operator requested stop after recovery review", "operator", now.Add(11*time.Minute))
+			if err == nil {
+				t.Fatal("ResolveHotUpdateGateTerminalFailure() error = nil, want invalid state rejection")
+			}
+			if changed {
+				t.Fatal("ResolveHotUpdateGateTerminalFailure() changed = true, want false")
+			}
+			if !reflect.DeepEqual(got, HotUpdateGateRecord{}) {
+				t.Fatalf("ResolveHotUpdateGateTerminalFailure() record = %#v, want zero value", got)
+			}
+			if !strings.Contains(err.Error(), "does not permit terminal failure resolution") {
+				t.Fatalf("ResolveHotUpdateGateTerminalFailure() error = %q, want invalid state rejection", err.Error())
+			}
+
+			afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+			if err != nil {
+				t.Fatalf("ReadFile(active pointer after) error = %v", err)
+			}
+			if string(beforePointerBytes) != string(afterPointerBytes) {
+				t.Fatalf("active runtime pack pointer file changed after invalid terminal failure rejection\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+			}
+		})
+	}
+}
+
 func TestHotUpdateGateValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 

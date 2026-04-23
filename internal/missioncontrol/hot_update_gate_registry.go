@@ -478,6 +478,78 @@ func ExecuteHotUpdateGateReloadApply(root string, hotUpdateID string, updatedBy 
 	return executeHotUpdateGateReloadApplyWithConvergence(root, hotUpdateID, updatedBy, updatedAt, hotUpdateGateRestartStyleConvergence)
 }
 
+func ResolveHotUpdateGateTerminalFailure(root string, hotUpdateID string, reason string, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate terminal failure reason is required")
+	}
+	updatedBy = strings.TrimSpace(updatedBy)
+	if updatedBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_by is required")
+	}
+	updatedAt = updatedAt.UTC()
+	if updatedAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate phase_updated_at is required")
+	}
+
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	expectedFailureReason := hotUpdateGateTerminalFailureReason(reason)
+	switch record.State {
+	case HotUpdateGateStateReloadApplyFailed:
+		if record.FailureReason == expectedFailureReason {
+			return record, false, nil
+		}
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q already resolved with failure_reason %q",
+			ref.HotUpdateID,
+			record.State,
+			record.FailureReason,
+		)
+	case HotUpdateGateStateReloadApplyRecoveryNeeded:
+	default:
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate %q state %q does not permit terminal failure resolution",
+			ref.HotUpdateID,
+			record.State,
+		)
+	}
+
+	if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	record.State = HotUpdateGateStateReloadApplyFailed
+	record.FailureReason = expectedFailureReason
+	record.PhaseUpdatedAt = updatedAt
+	record.PhaseUpdatedBy = updatedBy
+	record = NormalizeHotUpdateGateRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	record, err = LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return record, true, nil
+}
+
 func ReconcileHotUpdateGateRecoveryNeeded(root string, hotUpdateID string, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return HotUpdateGateRecord{}, false, err
@@ -740,6 +812,10 @@ func isValidHotUpdateGateDecision(decision HotUpdateGateDecision) bool {
 
 func hotUpdateGatePointerUpdateRecordRef(hotUpdateID string) string {
 	return "hot_update:" + strings.TrimSpace(hotUpdateID)
+}
+
+func hotUpdateGateTerminalFailureReason(reason string) string {
+	return "operator_terminal_failure: " + strings.TrimSpace(reason)
 }
 
 func isValidHotUpdateGatePhaseStartState(state HotUpdateGateState) bool {
