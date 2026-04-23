@@ -1,0 +1,32 @@
+## V4-034 Hot-Update Gate Read-Model / Inspect Exposure BEFORE
+
+- branch: `frank-v4-034-hot-update-gate-read-model`
+- HEAD: `12a57fd4ce149b505f44e65239c8f7a8694b5583`
+- tags at HEAD: none
+- ahead/behind upstream: `432 0`
+- git status --short --branch:
+  - `## frank-v4-034-hot-update-gate-read-model`
+- baseline `go test -count=1 ./...` result:
+  - passed
+- exact files planned:
+  - `internal/missioncontrol/status.go`
+  - `internal/missioncontrol/store_project.go`
+  - `internal/agent/tools/taskstate_readout.go`
+  - `internal/missioncontrol/status_hot_update_gate_identity_test.go`
+  - `internal/agent/tools/taskstate_status_test.go`
+  - `docs/maintenance/V4_034_HOT_UPDATE_GATE_READ_MODEL_AFTER.md`
+- exact read-model surface chosen:
+  - `missioncontrol.OperatorStatusSummary` on the existing operator status / committed `runtime_summary` path, exposed through direct `TaskState.OperatorStatus(...)` and `BuildCommittedMissionStatusSnapshot(...)`
+- exact non-goals:
+  - no hot-update apply or reload behavior
+  - no promotion changes
+  - no rollback changes
+  - no evaluator execution
+  - no scoring changes
+  - no autonomy changes
+  - no provider or channel changes
+  - no dependency changes
+  - no commit
+- whether the slice was already present or not:
+  - not already present
+  - committed storage exists in `internal/missioncontrol/hot_update_gate_registry.go`, but there is no committed `hot_update_gate_identity` block or equivalent hot-update gate read-model on `OperatorStatusSummary`, `taskstate` status readout, or committed mission `runtime_summary`

@@ -1,0 +1,61 @@
+## V4-034 Hot-Update Gate Read-Model / Inspect Exposure AFTER
+
+- git diff --stat:
+  - `internal/agent/tools/taskstate_readout.go     |   1 +`
+  - `internal/agent/tools/taskstate_status_test.go | 121 +++++++++++++++++++++-`
+  - `internal/missioncontrol/status.go             | 140 ++++++++++++++++++++++++++`
+  - `internal/missioncontrol/store_project.go      |   1 +`
+  - `4 files changed, 260 insertions(+), 3 deletions(-)`
+- git diff --numstat:
+  - `1  0  internal/agent/tools/taskstate_readout.go`
+  - `118 3  internal/agent/tools/taskstate_status_test.go`
+  - `140 0  internal/missioncontrol/status.go`
+  - `1  0  internal/missioncontrol/store_project.go`
+- files changed:
+  - `internal/missioncontrol/status.go`
+  - `internal/missioncontrol/store_project.go`
+  - `internal/agent/tools/taskstate_readout.go`
+  - `internal/agent/tools/taskstate_status_test.go`
+  - `internal/missioncontrol/status_hot_update_gate_identity_test.go`
+  - `docs/maintenance/V4_034_HOT_UPDATE_GATE_READ_MODEL_BEFORE.md`
+  - `docs/maintenance/V4_034_HOT_UPDATE_GATE_READ_MODEL_AFTER.md`
+- exact read-model fields added:
+  - top-level summary field: `hot_update_gate_identity`
+  - identity block fields: `state`, `gates`
+  - per-gate fields:
+    - `hot_update_id`
+    - `candidate_pack_id`
+    - `previous_active_pack_id`
+    - `rollback_target_pack_id`
+    - `target_surfaces`
+    - `surface_classes`
+    - `reload_mode`
+    - `compatibility_contract_ref`
+    - `prepared_at`
+    - `state`
+    - `decision`
+    - `error`
+- exact tests added:
+  - `internal/missioncontrol/status_hot_update_gate_identity_test.go`
+    - `TestLoadOperatorHotUpdateGateIdentityStatusConfigured`
+    - `TestLoadOperatorHotUpdateGateIdentityStatusNotConfigured`
+    - `TestLoadOperatorHotUpdateGateIdentityStatusInvalidMissingLinkedRefs`
+    - `TestBuildCommittedMissionStatusSnapshotIncludesHotUpdateGateIdentity`
+  - `internal/agent/tools/taskstate_status_test.go`
+    - `TestTaskStateOperatorStatusSurfacesHotUpdateGateIdentity`
+    - updated exact-key assertions to include `hot_update_gate_identity`
+- validation commands and results:
+  - `gofmt -w internal/missioncontrol/status.go internal/missioncontrol/store_project.go internal/missioncontrol/status_hot_update_gate_identity_test.go internal/agent/tools/taskstate_readout.go internal/agent/tools/taskstate_status_test.go`
+    - passed
+  - `git diff --check`
+    - passed
+  - `go test -count=1 ./internal/missioncontrol`
+    - passed
+  - `go test -count=1 ./...`
+    - passed
+  - `git status --short --branch`
+    - showed only expected V4-034 edits and report files
+- deferred next V4 candidates:
+  - add a minimal hot-update gate control entry only if a later checkpoint needs committed gate creation/selection through an operator surface
+  - add read-only exposure of bounded gate-adjacent metadata such as approval or canary refs only if a later checkpoint explicitly needs them
+  - keep apply/reload, promotion, rollback, evaluator, scoring, autonomy, and provider/channel changes out of this slice

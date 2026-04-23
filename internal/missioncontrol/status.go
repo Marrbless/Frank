@@ -3,6 +3,7 @@ package missioncontrol
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,7 @@ type OperatorStatusSummary struct {
 	EvalSuiteIdentity                  *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
+	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
 	PromotionIdentity                  *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
 	RollbackIdentity                   *OperatorRollbackIdentityStatus                             `json:"rollback_identity,omitempty"`
@@ -142,6 +144,11 @@ type OperatorHotUpdateOutcomeIdentityStatus struct {
 	Outcomes []OperatorHotUpdateOutcomeStatus `json:"outcomes,omitempty"`
 }
 
+type OperatorHotUpdateGateIdentityStatus struct {
+	State string                        `json:"state"`
+	Gates []OperatorHotUpdateGateStatus `json:"gates,omitempty"`
+}
+
 type OperatorPromotionIdentityStatus struct {
 	State      string                    `json:"state"`
 	Promotions []OperatorPromotionStatus `json:"promotions,omitempty"`
@@ -172,6 +179,21 @@ type OperatorHotUpdateOutcomeStatus struct {
 	CreatedAt         *string `json:"created_at,omitempty"`
 	CreatedBy         string  `json:"created_by,omitempty"`
 	Error             string  `json:"error,omitempty"`
+}
+
+type OperatorHotUpdateGateStatus struct {
+	HotUpdateID              string   `json:"hot_update_id,omitempty"`
+	CandidatePackID          string   `json:"candidate_pack_id,omitempty"`
+	PreviousActivePackID     string   `json:"previous_active_pack_id,omitempty"`
+	RollbackTargetPackID     string   `json:"rollback_target_pack_id,omitempty"`
+	TargetSurfaces           []string `json:"target_surfaces,omitempty"`
+	SurfaceClasses           []string `json:"surface_classes,omitempty"`
+	ReloadMode               string   `json:"reload_mode,omitempty"`
+	CompatibilityContractRef string   `json:"compatibility_contract_ref,omitempty"`
+	PreparedAt               *string  `json:"prepared_at,omitempty"`
+	State                    string   `json:"state,omitempty"`
+	Decision                 string   `json:"decision,omitempty"`
+	Error                    string   `json:"error,omitempty"`
 }
 
 type OperatorPromotionStatus struct {
@@ -499,6 +521,16 @@ func WithCandidateResultIdentity(summary OperatorStatusSummary, root string) Ope
 	return summary
 }
 
+func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateGateIdentityStatus(root)
+	summary.HotUpdateGateIdentity = &status
+	return summary
+}
+
 func WithHotUpdateOutcomeIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -615,6 +647,24 @@ func LoadOperatorCandidateResultIdentityStatus(root string) OperatorCandidateRes
 	return OperatorCandidateResultIdentityStatus{
 		State:   state,
 		Results: results,
+	}
+}
+
+func LoadOperatorHotUpdateGateIdentityStatus(root string) OperatorHotUpdateGateIdentityStatus {
+	gates, found, invalid, err := loadOperatorHotUpdateGateStatuses(root)
+	if !found {
+		return OperatorHotUpdateGateIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateGateIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateGateIdentityStatus{
+		State: state,
+		Gates: gates,
 	}
 }
 
@@ -1310,6 +1360,83 @@ func operatorCandidateResultStatusFromRecord(record CandidateResultRecord) Opera
 	}
 }
 
+func loadOperatorHotUpdateGateStatuses(root string) ([]OperatorHotUpdateGateStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateGatesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	gates := make([]OperatorHotUpdateGateStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorHotUpdateGateStatus(root, filepath.Join(StoreHotUpdateGatesDir(root), name))
+		if status.Error != "" {
+			invalid = true
+		}
+		gates = append(gates, status)
+	}
+	return gates, true, invalid, nil
+}
+
+func loadOperatorHotUpdateGateStatus(root, path string) OperatorHotUpdateGateStatus {
+	status := OperatorHotUpdateGateStatus{
+		HotUpdateID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record HotUpdateGateRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeHotUpdateGateRecord(record)
+	status = operatorHotUpdateGateStatusFromRecord(record)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateHotUpdateGateReadModelLinkage(root, record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	return status
+}
+
+func operatorHotUpdateGateStatusFromRecord(record HotUpdateGateRecord) OperatorHotUpdateGateStatus {
+	return OperatorHotUpdateGateStatus{
+		HotUpdateID:              record.HotUpdateID,
+		CandidatePackID:          record.CandidatePackID,
+		PreviousActivePackID:     record.PreviousActivePackID,
+		RollbackTargetPackID:     record.RollbackTargetPackID,
+		TargetSurfaces:           append([]string(nil), record.TargetSurfaces...),
+		SurfaceClasses:           append([]string(nil), record.SurfaceClasses...),
+		ReloadMode:               string(record.ReloadMode),
+		CompatibilityContractRef: record.CompatibilityContractRef,
+		PreparedAt:               formatOperatorStatusTime(record.PreparedAt),
+		State:                    string(record.State),
+		Decision:                 string(record.Decision),
+	}
+}
+
 func loadOperatorHotUpdateOutcomeStatuses(root string) ([]OperatorHotUpdateOutcomeStatus, bool, bool, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, true, false, err
@@ -1390,6 +1517,19 @@ func operatorHotUpdateOutcomeStatusFromRecord(record HotUpdateOutcomeRecord) Ope
 		CreatedAt:         formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:         record.CreatedBy,
 	}
+}
+
+func validateHotUpdateGateReadModelLinkage(root string, record HotUpdateGateRecord) error {
+	if _, err := LoadRuntimePackRecord(root, record.CandidatePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate candidate_pack_id %q: %w", record.CandidatePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.PreviousActivePackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate previous_active_pack_id %q: %w", record.PreviousActivePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
+		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
+	}
+	return nil
 }
 
 func loadOperatorPromotionStatuses(root string) ([]OperatorPromotionStatus, bool, bool, error) {
