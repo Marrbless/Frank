@@ -1874,6 +1874,15 @@ func TestProcessDirectHotUpdateGateFailCommandResolvesRecoveryNeededTerminalFail
 	if summary.HotUpdateGateIdentity.Gates[0].State != string(missioncontrol.HotUpdateGateStateReloadApplyFailed) {
 		t.Fatalf("HotUpdateGateIdentity.Gates[0].State = %q, want reload_apply_failed", summary.HotUpdateGateIdentity.Gates[0].State)
 	}
+	if summary.HotUpdateGateIdentity.Gates[0].FailureReason != "operator_terminal_failure: operator requested stop after recovery review" {
+		t.Fatalf("HotUpdateGateIdentity.Gates[0].FailureReason = %q, want deterministic terminal failure detail", summary.HotUpdateGateIdentity.Gates[0].FailureReason)
+	}
+	if summary.HotUpdateGateIdentity.Gates[0].PhaseUpdatedAt == nil {
+		t.Fatal("HotUpdateGateIdentity.Gates[0].PhaseUpdatedAt = nil, want transition timestamp")
+	}
+	if summary.HotUpdateGateIdentity.Gates[0].PhaseUpdatedBy != "operator" {
+		t.Fatalf("HotUpdateGateIdentity.Gates[0].PhaseUpdatedBy = %q, want operator", summary.HotUpdateGateIdentity.Gates[0].PhaseUpdatedBy)
+	}
 }
 
 func TestProcessDirectHotUpdateGateFailCommandRequiresReasonAndRejectsInvalidStartingPhase(t *testing.T) {

@@ -1,6 +1,9 @@
 package missioncontrol
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -63,14 +66,148 @@ func TestLoadOperatorHotUpdateGateIdentityStatusConfigured(t *testing.T) {
 	if gate.PreparedAt == nil || *gate.PreparedAt != "2026-04-30T19:03:00Z" {
 		t.Fatalf("Gates[0].PreparedAt = %#v, want 2026-04-30T19:03:00Z", gate.PreparedAt)
 	}
+	if gate.PhaseUpdatedAt == nil || *gate.PhaseUpdatedAt != "2026-04-30T19:03:00Z" {
+		t.Fatalf("Gates[0].PhaseUpdatedAt = %#v, want 2026-04-30T19:03:00Z", gate.PhaseUpdatedAt)
+	}
+	if gate.PhaseUpdatedBy != "operator" {
+		t.Fatalf("Gates[0].PhaseUpdatedBy = %q, want operator", gate.PhaseUpdatedBy)
+	}
 	if gate.State != string(HotUpdateGateStatePrepared) {
 		t.Fatalf("Gates[0].State = %q, want prepared", gate.State)
 	}
 	if gate.Decision != string(HotUpdateGateDecisionKeepStaged) {
 		t.Fatalf("Gates[0].Decision = %q, want keep_staged", gate.Decision)
 	}
+	if gate.FailureReason != "" {
+		t.Fatalf("Gates[0].FailureReason = %q, want empty", gate.FailureReason)
+	}
 	if gate.Error != "" {
 		t.Fatalf("Gates[0].Error = %q, want empty", gate.Error)
+	}
+}
+
+func TestLoadOperatorHotUpdateGateIdentityStatusSurfacesTerminalFailureDetailAndTransitionMetadataReadOnly(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 19, 30, 0, 0, time.UTC)
+	storeHotUpdateGateIdentityFixtures(t, root, now)
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-candidate",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(2 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "hot_update:hot-update-terminal",
+		ReloadGeneration:    7,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(3*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = "hot-update-terminal"
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.State = HotUpdateGateStateReloadApplyFailed
+		record.Decision = HotUpdateGateDecisionKeepStaged
+		record.FailureReason = "operator_terminal_failure: operator requested stop after recovery review"
+		record.PhaseUpdatedAt = now.Add(12 * time.Minute)
+		record.PhaseUpdatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good before) error = %v", err)
+	}
+
+	first := LoadOperatorHotUpdateGateIdentityStatus(root)
+	second := LoadOperatorHotUpdateGateIdentityStatus(root)
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("json.Marshal(first) error = %v", err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("json.Marshal(second) error = %v", err)
+	}
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("LoadOperatorHotUpdateGateIdentityStatus output is not deterministic\nfirst:\n%s\nsecond:\n%s", string(firstJSON), string(secondJSON))
+	}
+	if first.State != "configured" {
+		t.Fatalf("State = %q, want configured", first.State)
+	}
+	if len(first.Gates) != 1 {
+		t.Fatalf("Gates len = %d, want 1", len(first.Gates))
+	}
+	gate := first.Gates[0]
+	if gate.State != string(HotUpdateGateStateReloadApplyFailed) {
+		t.Fatalf("Gates[0].State = %q, want reload_apply_failed", gate.State)
+	}
+	if gate.FailureReason != "operator_terminal_failure: operator requested stop after recovery review" {
+		t.Fatalf("Gates[0].FailureReason = %q, want deterministic terminal failure detail", gate.FailureReason)
+	}
+	if gate.PhaseUpdatedAt == nil || *gate.PhaseUpdatedAt != "2026-04-30T19:42:00Z" {
+		t.Fatalf("Gates[0].PhaseUpdatedAt = %#v, want 2026-04-30T19:42:00Z", gate.PhaseUpdatedAt)
+	}
+	if gate.PhaseUpdatedBy != "operator" {
+		t.Fatalf("Gates[0].PhaseUpdatedBy = %q, want operator", gate.PhaseUpdatedBy)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer changed during read-model load\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good after) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer changed during read-model load\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+	gotPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 7 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 7", gotPointer.ReloadGeneration)
+	}
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+	gates, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 1 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 1", len(gates))
 	}
 }
 

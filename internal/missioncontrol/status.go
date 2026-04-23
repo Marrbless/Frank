@@ -191,8 +191,11 @@ type OperatorHotUpdateGateStatus struct {
 	ReloadMode               string   `json:"reload_mode,omitempty"`
 	CompatibilityContractRef string   `json:"compatibility_contract_ref,omitempty"`
 	PreparedAt               *string  `json:"prepared_at,omitempty"`
+	PhaseUpdatedAt           *string  `json:"phase_updated_at,omitempty"`
+	PhaseUpdatedBy           string   `json:"phase_updated_by,omitempty"`
 	State                    string   `json:"state,omitempty"`
 	Decision                 string   `json:"decision,omitempty"`
+	FailureReason            string   `json:"failure_reason,omitempty"`
 	Error                    string   `json:"error,omitempty"`
 }
 
@@ -1432,8 +1435,11 @@ func operatorHotUpdateGateStatusFromRecord(record HotUpdateGateRecord) OperatorH
 		ReloadMode:               string(record.ReloadMode),
 		CompatibilityContractRef: record.CompatibilityContractRef,
 		PreparedAt:               formatOperatorStatusTime(record.PreparedAt),
+		PhaseUpdatedAt:           formatOperatorStatusTime(record.PhaseUpdatedAt),
+		PhaseUpdatedBy:           record.PhaseUpdatedBy,
 		State:                    string(record.State),
 		Decision:                 string(record.Decision),
+		FailureReason:            record.FailureReason,
 	}
 }
 
