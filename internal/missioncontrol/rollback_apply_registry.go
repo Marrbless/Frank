@@ -594,7 +594,8 @@ func executeRollbackApplyReloadApplyWithConvergence(root string, applyID string,
 			ref.ApplyID,
 			record.Phase,
 		)
-	case RollbackApplyPhasePointerSwitchedReloadPending:
+	case RollbackApplyPhasePointerSwitchedReloadPending,
+		RollbackApplyPhaseReloadApplyRecoveryNeeded:
 	default:
 		return RollbackApplyRecord{}, false, fmt.Errorf(
 			"mission store rollback apply %q phase %q does not permit reload/apply execution",

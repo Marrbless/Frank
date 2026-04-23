@@ -1766,6 +1766,119 @@ func TestProcessDirectRollbackApplyReloadCommandSucceedsWithoutSecondPointerMuta
 	}
 }
 
+func TestProcessDirectRollbackApplyReloadCommandRetriesFromRecoveryNeeded(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopRollbackPromotionFixtures(t)
+	now := time.Date(2026, 4, 21, 12, 8, 0, 0, time.UTC)
+	if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now,
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "promotion:promotion-1",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("ROLLBACK_RECORD job-1 promotion-1 rollback-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_RECORD job-1 rollback-1 apply-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_PHASE job-1 apply-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_PHASE job-1 apply-1 ready_to_apply", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_PHASE ready_to_apply) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("ROLLBACK_APPLY_EXECUTE job-1 apply-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_EXECUTE) error = %v", err)
+	}
+
+	record, err := missioncontrol.LoadRollbackApplyRecord(root, "apply-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackApplyRecord() error = %v", err)
+	}
+	recoveryAt := record.CreatedAt.Add(time.Minute)
+	record.Phase = missioncontrol.RollbackApplyPhaseReloadApplyInProgress
+	record.ExecutionError = ""
+	record.PhaseUpdatedAt = recoveryAt.UTC()
+	record.PhaseUpdatedBy = "operator"
+	record = missioncontrol.NormalizeRollbackApplyRecord(record)
+	if err := missioncontrol.ValidateRollbackApplyRecord(record); err != nil {
+		t.Fatalf("ValidateRollbackApplyRecord() error = %v", err)
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreRollbackApplyPath(root, "apply-1"), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(reload_apply_in_progress) error = %v", err)
+	}
+	if _, changed, err := missioncontrol.ReconcileRollbackApplyRecoveryNeeded(root, "apply-1", "operator", recoveryAt.Add(time.Minute)); err != nil {
+		t.Fatalf("ReconcileRollbackApplyRecoveryNeeded() error = %v", err)
+	} else if !changed {
+		t.Fatal("ReconcileRollbackApplyRecoveryNeeded() changed = false, want true")
+	}
+
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before retry) error = %v", err)
+	}
+	beforeLastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good before retry) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("ROLLBACK_APPLY_RELOAD job-1 apply-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RELOAD retry) error = %v", err)
+	}
+	if resp != "Executed rollback-apply reload/apply job=job-1 apply=apply-1." {
+		t.Fatalf("ProcessDirect(ROLLBACK_APPLY_RELOAD retry) response = %q, want reload/apply acknowledgement", resp)
+	}
+
+	record, err = missioncontrol.LoadRollbackApplyRecord(root, "apply-1")
+	if err != nil {
+		t.Fatalf("LoadRollbackApplyRecord(retry result) error = %v", err)
+	}
+	if record.Phase != missioncontrol.RollbackApplyPhaseReloadApplySucceeded {
+		t.Fatalf("RollbackApplyRecord.Phase = %q, want reload_apply_succeeded", record.Phase)
+	}
+	if record.ExecutionError != "" {
+		t.Fatalf("RollbackApplyRecord.ExecutionError = %q, want empty", record.ExecutionError)
+	}
+
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after retry) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during retry reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last known good after retry) error = %v", err)
+	}
+	if string(beforeLastKnownGoodBytes) != string(afterLastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer file changed during retry reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeLastKnownGoodBytes), string(afterLastKnownGoodBytes))
+	}
+
+	gotPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	if gotPointer.ReloadGeneration != 8 {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want 8", gotPointer.ReloadGeneration)
+	}
+}
+
 func TestProcessDirectRollbackApplyReloadCommandRejectsInvalidStartingPhase(t *testing.T) {
 	t.Parallel()
 
