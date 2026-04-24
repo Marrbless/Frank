@@ -364,6 +364,10 @@ func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []
 			Message: fmt.Sprintf("mission_family %q requires target surface class %q", family, JobSurfaceClassSkillTopology),
 		})
 	}
+	if family == MissionFamilyProposeSourcePatch {
+		errors = append(errors, validateV4SourcePatchArtifactOnlySurfaces(job.TargetSurfaces, "target_surfaces")...)
+		errors = append(errors, validateV4SourcePatchArtifactOnlySurfaces(job.MutableSurfaces, "mutable_surfaces")...)
+	}
 	if family == MissionFamilyProposeSourcePatch && !hasV4JobSurfaceClass(job.TargetSurfaces, job.MutableSurfaces, JobSurfaceClassSourcePatchArtifact) {
 		errors = append(errors, ValidationError{
 			Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
@@ -371,6 +375,21 @@ func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []
 		})
 	}
 
+	return errors
+}
+
+func validateV4SourcePatchArtifactOnlySurfaces(refs []JobSurfaceRef, field string) []ValidationError {
+	errors := make([]ValidationError, 0)
+	for i, raw := range refs {
+		ref := NormalizeJobSurfaceRef(raw)
+		if ref.Class == "" || !isKnownJobSurfaceClass(ref.Class) || ref.Class == JobSurfaceClassSourcePatchArtifact {
+			continue
+		}
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
+			Message: fmt.Sprintf("mission_family %q requires %s[%d].class %q to be %q", MissionFamilyProposeSourcePatch, field, i, ref.Class, JobSurfaceClassSourcePatchArtifact),
+		})
+	}
 	return errors
 }
 

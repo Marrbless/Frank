@@ -508,8 +508,88 @@ func TestValidatePlanRejectsV4SourcePatchProposalWithoutSourcePatchArtifactTarge
 		Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
 		Message: `mission_family "propose_source_patch" requires target surface class "source_patch_artifact"`,
 	}
+	if !hasValidationError(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want to include %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAdmitsV4SourcePatchProposalWithArtifactOnlyTarget(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyProposeSourcePatch)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSourcePatchArtifact, Ref: "patches/source.patch"}}
+	job.MutableSurfaces = nil
+	job.ImmutableSurfaces = testV4ImmutableSurfaces()
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsV4SourcePatchProposalDirectMutationSurfaceClasses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		class string
+		ref   string
+	}{
+		{name: "prompt pack", class: JobSurfaceClassPromptPack, ref: "prompt-pack/main"},
+		{name: "skill", class: JobSurfaceClassSkill, ref: "skills/research"},
+		{name: "manifest entry", class: JobSurfaceClassManifestEntry, ref: "manifest/research"},
+		{name: "skill topology", class: JobSurfaceClassSkillTopology, ref: "topology/split-research"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyProposeSourcePatch)
+			job.TargetSurfaces = []JobSurfaceRef{{Class: tt.class, Ref: tt.ref}}
+			job.MutableSurfaces = nil
+
+			errors := ValidatePlan(job)
+			want := ValidationError{
+				Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
+				Message: `mission_family "propose_source_patch" requires target_surfaces[0].class "` + tt.class + `" to be "source_patch_artifact"`,
+			}
+			if len(errors) == 0 || errors[0] != want {
+				t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsV4SourcePatchProposalMixedArtifactAndDirectMutableClass(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyProposeSourcePatch)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSourcePatchArtifact, Ref: "patches/source.patch"}}
+	job.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
+		Message: `mission_family "propose_source_patch" requires mutable_surfaces[0].class "skill" to be "source_patch_artifact"`,
+	}
 	if len(errors) == 0 || errors[0] != want {
 		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanDoesNotApplySourcePatchArtifactOnlyRuleToOtherImprovementFamilies(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveSkills)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+	job.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassManifestEntry, Ref: "manifest/research"}}
+	job.ImmutableSurfaces = testV4ImmutableSurfaces()
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
 	}
 }
 
@@ -1480,6 +1560,15 @@ func firstValidationError(errors []ValidationError) ValidationError {
 		return ValidationError{}
 	}
 	return errors[0]
+}
+
+func hasValidationError(errors []ValidationError, want ValidationError) bool {
+	for _, got := range errors {
+		if got == want {
+			return true
+		}
+	}
+	return false
 }
 
 func testV4TargetSurfacesForFamily(missionFamily string) []JobSurfaceRef {
