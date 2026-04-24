@@ -79,6 +79,15 @@ func TestRuntimeContextsCarryPromotionPolicyID(t *testing.T) {
 	if runtime.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("runtime.PromotionPolicyID = %q, want promotion-policy-1", runtime.PromotionPolicyID)
 	}
+	if runtime.BaselineRef != "evidence/baseline" {
+		t.Fatalf("runtime.BaselineRef = %q, want evidence/baseline", runtime.BaselineRef)
+	}
+	if runtime.TrainRef != "evidence/train" {
+		t.Fatalf("runtime.TrainRef = %q, want evidence/train", runtime.TrainRef)
+	}
+	if runtime.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("runtime.HoldoutRef = %q, want evidence/holdout", runtime.HoldoutRef)
+	}
 
 	control, err := BuildRuntimeControlContext(job, "build")
 	if err != nil {
@@ -87,6 +96,15 @@ func TestRuntimeContextsCarryPromotionPolicyID(t *testing.T) {
 	if control.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("control.PromotionPolicyID = %q, want promotion-policy-1", control.PromotionPolicyID)
 	}
+	if control.BaselineRef != "evidence/baseline" {
+		t.Fatalf("control.BaselineRef = %q, want evidence/baseline", control.BaselineRef)
+	}
+	if control.TrainRef != "evidence/train" {
+		t.Fatalf("control.TrainRef = %q, want evidence/train", control.TrainRef)
+	}
+	if control.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("control.HoldoutRef = %q, want evidence/holdout", control.HoldoutRef)
+	}
 
 	plan, err := BuildInspectablePlanContext(job)
 	if err != nil {
@@ -94,6 +112,15 @@ func TestRuntimeContextsCarryPromotionPolicyID(t *testing.T) {
 	}
 	if plan.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("plan.PromotionPolicyID = %q, want promotion-policy-1", plan.PromotionPolicyID)
+	}
+	if plan.BaselineRef != "evidence/baseline" {
+		t.Fatalf("plan.BaselineRef = %q, want evidence/baseline", plan.BaselineRef)
+	}
+	if plan.TrainRef != "evidence/train" {
+		t.Fatalf("plan.TrainRef = %q, want evidence/train", plan.TrainRef)
+	}
+	if plan.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("plan.HoldoutRef = %q, want evidence/holdout", plan.HoldoutRef)
 	}
 }
 

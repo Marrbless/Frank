@@ -80,6 +80,15 @@ func TestNewInspectSummaryExposesPromotionPolicyID(t *testing.T) {
 	if summary.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("PromotionPolicyID = %q, want promotion-policy-1", summary.PromotionPolicyID)
 	}
+	if summary.BaselineRef != "evidence/baseline" {
+		t.Fatalf("BaselineRef = %q, want evidence/baseline", summary.BaselineRef)
+	}
+	if summary.TrainRef != "evidence/train" {
+		t.Fatalf("TrainRef = %q, want evidence/train", summary.TrainRef)
+	}
+	if summary.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("HoldoutRef = %q, want evidence/holdout", summary.HoldoutRef)
+	}
 }
 
 func TestNewInspectSummaryExposesV4ImprovementSurfaces(t *testing.T) {
@@ -168,6 +177,15 @@ func TestNewInspectSummaryFromInspectablePlanExposesV4ExecutionMetadata(t *testi
 	}
 	if summary.PromotionPolicyID != job.PromotionPolicyID {
 		t.Fatalf("PromotionPolicyID = %q, want %q", summary.PromotionPolicyID, job.PromotionPolicyID)
+	}
+	if summary.BaselineRef != job.BaselineRef {
+		t.Fatalf("BaselineRef = %q, want %q", summary.BaselineRef, job.BaselineRef)
+	}
+	if summary.TrainRef != job.TrainRef {
+		t.Fatalf("TrainRef = %q, want %q", summary.TrainRef, job.TrainRef)
+	}
+	if summary.HoldoutRef != job.HoldoutRef {
+		t.Fatalf("HoldoutRef = %q, want %q", summary.HoldoutRef, job.HoldoutRef)
 	}
 	if !reflect.DeepEqual(summary.TargetSurfaces, job.TargetSurfaces) {
 		t.Fatalf("TargetSurfaces = %#v, want %#v", summary.TargetSurfaces, job.TargetSurfaces)

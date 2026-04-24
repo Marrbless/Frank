@@ -700,6 +700,103 @@ func TestValidatePlanAdmitsV4ImprovementFamilyWithSyntacticPromotionPolicyID(t *
 	}
 }
 
+func TestValidatePlanRequiresV4ImprovementEvidenceRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		edit func(*Job)
+		want ValidationError
+	}{
+		{
+			name: "missing baseline ref",
+			edit: func(job *Job) {
+				job.BaselineRef = ""
+			},
+			want: ValidationError{
+				Code:    RejectionCodeV4BaselineRequired,
+				Message: "improvement-family job requires baseline_ref",
+			},
+		},
+		{
+			name: "missing train ref",
+			edit: func(job *Job) {
+				job.TrainRef = ""
+			},
+			want: ValidationError{
+				Code:    RejectionCodeV4TrainRequired,
+				Message: "improvement-family job requires train_ref",
+			},
+		},
+		{
+			name: "missing holdout ref",
+			edit: func(job *Job) {
+				job.HoldoutRef = ""
+			},
+			want: ValidationError{
+				Code:    RejectionCodeV4HoldoutRequired,
+				Message: "improvement-family job requires holdout_ref",
+			},
+		},
+		{
+			name: "whitespace refs",
+			edit: func(job *Job) {
+				job.BaselineRef = " "
+				job.TrainRef = "\t"
+				job.HoldoutRef = "\n"
+			},
+			want: ValidationError{
+				Code:    RejectionCodeV4BaselineRequired,
+				Message: "improvement-family job requires baseline_ref",
+			},
+		},
+		{
+			name: "train equals holdout",
+			edit: func(job *Job) {
+				job.TrainRef = "evidence/shared"
+				job.HoldoutRef = "evidence/shared"
+			},
+			want: ValidationError{
+				Code:    RejectionCodeV4MutationScopeViolation,
+				Message: "train_ref and holdout_ref must be distinct",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+			tc.edit(&job)
+
+			errors := ValidatePlan(job)
+			if len(errors) == 0 || errors[0] != tc.want {
+				t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), tc.want, errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanAllowsBaselineRefToMatchTrainOrHoldoutRef(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.BaselineRef = job.TrainRef
+
+	if errors := ValidatePlan(job); len(errors) != 0 {
+		t.Fatalf("ValidatePlan(baseline=train) = %#v, want no errors", errors)
+	}
+
+	job = testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.BaselineRef = job.HoldoutRef
+
+	if errors := ValidatePlan(job); len(errors) != 0 {
+		t.Fatalf("ValidatePlan(baseline=holdout) = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanStoreAwarePromotionPolicyReference(t *testing.T) {
 	t.Parallel()
 
@@ -747,6 +844,20 @@ func TestValidatePlanDoesNotRequirePromotionPolicyIDForNonImprovementV4Job(t *te
 
 	job := testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue)
 	job.PromotionPolicyID = ""
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanDoesNotRequireEvidenceRefsForNonImprovementV4Job(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue)
+	job.BaselineRef = ""
+	job.TrainRef = ""
+	job.HoldoutRef = ""
 
 	errors := ValidatePlan(job)
 	if len(errors) != 0 {
@@ -1702,6 +1813,9 @@ func testV4Job(executionPlane, executionHost, missionFamily string) Job {
 	job.MissionFamily = missionFamily
 	if isImprovementMissionFamily(missionFamily) {
 		job.PromotionPolicyID = "promotion-policy-1"
+		job.BaselineRef = "evidence/baseline"
+		job.TrainRef = "evidence/train"
+		job.HoldoutRef = "evidence/holdout"
 		job.TargetSurfaces = testV4TargetSurfacesForFamily(missionFamily)
 		job.ImmutableSurfaces = testV4ImmutableSurfaces()
 	}

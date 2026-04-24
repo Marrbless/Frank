@@ -190,6 +190,7 @@ func TestV4RejectionCodeConstants(t *testing.T) {
 		{name: "package authority grant forbidden", got: RejectionCodeV4PackageAuthorityGrantForbidden, want: "E_PACKAGE_AUTHORITY_GRANT_FORBIDDEN"},
 		{name: "lab only family", got: RejectionCodeV4LabOnlyFamily, want: "E_LAB_ONLY_FAMILY"},
 		{name: "mission family required", got: RejectionCodeV4MissionFamilyRequired, want: "E_MISSION_FAMILY_REQUIRED"},
+		{name: "train required", got: RejectionCodeV4TrainRequired, want: "E_TRAIN_REQUIRED"},
 		{name: "execution plane unknown", got: RejectionCodeV4ExecutionPlaneUnknown, want: "E_EXECUTION_PLANE_UNKNOWN"},
 		{name: "execution host unknown", got: RejectionCodeV4ExecutionHostUnknown, want: "E_EXECUTION_HOST_UNKNOWN"},
 		{name: "mission family unknown", got: RejectionCodeV4MissionFamilyUnknown, want: "E_MISSION_FAMILY_UNKNOWN"},
@@ -219,6 +220,9 @@ func TestJobJSONRoundTrip(t *testing.T) {
 		ExecutionHost:     ExecutionHostPhone,
 		MissionFamily:     MissionFamilyBootstrapRevenue,
 		PromotionPolicyID: "promotion-policy-1",
+		BaselineRef:       "evidence/baseline",
+		TrainRef:          "evidence/train",
+		HoldoutRef:        "evidence/holdout",
 		TargetSurfaces: []JobSurfaceRef{
 			{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
 		},

@@ -11,6 +11,9 @@ type InspectSummary struct {
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
 	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
+	BaselineRef         string          `json:"baseline_ref,omitempty"`
+	TrainRef            string          `json:"train_ref,omitempty"`
+	HoldoutRef          string          `json:"holdout_ref,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -97,6 +100,9 @@ func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionCon
 		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(job.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(job.BaselineRef),
+		TrainRef:            strings.TrimSpace(job.TrainRef),
+		HoldoutRef:          strings.TrimSpace(job.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -151,6 +157,9 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(control.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(control.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(control.BaselineRef),
+		TrainRef:            strings.TrimSpace(control.TrainRef),
+		HoldoutRef:          strings.TrimSpace(control.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
@@ -166,6 +175,9 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		ExecutionHost:       job.ExecutionHost,
 		MissionFamily:       job.MissionFamily,
 		PromotionPolicyID:   job.PromotionPolicyID,
+		BaselineRef:         job.BaselineRef,
+		TrainRef:            job.TrainRef,
+		HoldoutRef:          job.HoldoutRef,
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -190,6 +202,9 @@ func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanCon
 		ExecutionHost:       strings.TrimSpace(plan.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(plan.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(plan.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(plan.BaselineRef),
+		TrainRef:            strings.TrimSpace(plan.TrainRef),
+		HoldoutRef:          strings.TrimSpace(plan.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(plan.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(plan.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(plan.ImmutableSurfaces),

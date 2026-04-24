@@ -72,6 +72,7 @@ const (
 
 	RejectionCodeV4LabOnlyFamily              RejectionCode = "E_LAB_ONLY_FAMILY"
 	RejectionCodeV4MissionFamilyRequired      RejectionCode = "E_MISSION_FAMILY_REQUIRED"
+	RejectionCodeV4TrainRequired              RejectionCode = "E_TRAIN_REQUIRED"
 	RejectionCodeV4ExecutionPlaneUnknown      RejectionCode = "E_EXECUTION_PLANE_UNKNOWN"
 	RejectionCodeV4ExecutionHostUnknown       RejectionCode = "E_EXECUTION_HOST_UNKNOWN"
 	RejectionCodeV4MissionFamilyUnknown       RejectionCode = "E_MISSION_FAMILY_UNKNOWN"
@@ -333,6 +334,7 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 	}
 	if isImprovementMissionFamily(family) {
 		errors = append(errors, validateV4PromotionPolicyReference(promotionPolicyID, job.MissionStoreRoot)...)
+		errors = append(errors, validateV4EvidenceReferences(job)...)
 	}
 	errors = append(errors, validateV4ImprovementTargetSurfaces(job, plane, host, family)...)
 
@@ -371,6 +373,40 @@ func validateV4PromotionPolicyReference(promotionPolicyID, storeRoot string) []V
 		}
 	}
 	return nil
+}
+
+func validateV4EvidenceReferences(job Job) []ValidationError {
+	baselineRef := strings.TrimSpace(job.BaselineRef)
+	trainRef := strings.TrimSpace(job.TrainRef)
+	holdoutRef := strings.TrimSpace(job.HoldoutRef)
+	errors := make([]ValidationError, 0, 4)
+
+	if baselineRef == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4BaselineRequired,
+			Message: "improvement-family job requires baseline_ref",
+		})
+	}
+	if trainRef == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4TrainRequired,
+			Message: "improvement-family job requires train_ref",
+		})
+	}
+	if holdoutRef == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4HoldoutRequired,
+			Message: "improvement-family job requires holdout_ref",
+		})
+	}
+	if trainRef != "" && holdoutRef != "" && trainRef == holdoutRef {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4MutationScopeViolation,
+			Message: "train_ref and holdout_ref must be distinct",
+		})
+	}
+
+	return errors
 }
 
 func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []ValidationError {

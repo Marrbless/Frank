@@ -29,6 +29,9 @@ type JobRuntimeRecord struct {
 	ExecutionHost       string                      `json:"execution_host,omitempty"`
 	MissionFamily       string                      `json:"mission_family,omitempty"`
 	PromotionPolicyID   string                      `json:"promotion_policy_id,omitempty"`
+	BaselineRef         string                      `json:"baseline_ref,omitempty"`
+	TrainRef            string                      `json:"train_ref,omitempty"`
+	HoldoutRef          string                      `json:"holdout_ref,omitempty"`
 	TargetSurfaces      []JobSurfaceRef             `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef             `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef             `json:"immutable_surfaces,omitempty"`
@@ -81,6 +84,9 @@ type RuntimeControlRecord struct {
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
 	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
+	BaselineRef         string          `json:"baseline_ref,omitempty"`
+	TrainRef            string          `json:"train_ref,omitempty"`
+	HoldoutRef          string          `json:"holdout_ref,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`

@@ -73,6 +73,9 @@ type InspectablePlanContext struct {
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
 	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
+	BaselineRef         string          `json:"baseline_ref,omitempty"`
+	TrainRef            string          `json:"train_ref,omitempty"`
+	HoldoutRef          string          `json:"holdout_ref,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -88,6 +91,9 @@ type JobRuntimeState struct {
 	ExecutionHost                    string                            `json:"execution_host,omitempty"`
 	MissionFamily                    string                            `json:"mission_family,omitempty"`
 	PromotionPolicyID                string                            `json:"promotion_policy_id,omitempty"`
+	BaselineRef                      string                            `json:"baseline_ref,omitempty"`
+	TrainRef                         string                            `json:"train_ref,omitempty"`
+	HoldoutRef                       string                            `json:"holdout_ref,omitempty"`
 	TargetSurfaces                   []JobSurfaceRef                   `json:"target_surfaces,omitempty"`
 	MutableSurfaces                  []JobSurfaceRef                   `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces                []JobSurfaceRef                   `json:"immutable_surfaces,omitempty"`
@@ -126,6 +132,9 @@ type RuntimeControlContext struct {
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
 	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
+	BaselineRef         string          `json:"baseline_ref,omitempty"`
+	TrainRef            string          `json:"train_ref,omitempty"`
+	HoldoutRef          string          `json:"holdout_ref,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -276,6 +285,9 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 		ExecutionHost:       strings.TrimSpace(ec.Job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(ec.Job.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(ec.Job.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(ec.Job.BaselineRef),
+		TrainRef:            strings.TrimSpace(ec.Job.TrainRef),
+		HoldoutRef:          strings.TrimSpace(ec.Job.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(ec.Job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(ec.Job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(ec.Job.ImmutableSurfaces),
@@ -296,6 +308,9 @@ func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
 		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(job.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(job.BaselineRef),
+		TrainRef:            strings.TrimSpace(job.TrainRef),
+		HoldoutRef:          strings.TrimSpace(job.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -372,6 +387,9 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(control.MissionFamily),
 		PromotionPolicyID:   strings.TrimSpace(control.PromotionPolicyID),
+		BaselineRef:         strings.TrimSpace(control.BaselineRef),
+		TrainRef:            strings.TrimSpace(control.TrainRef),
+		HoldoutRef:          strings.TrimSpace(control.HoldoutRef),
 		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
@@ -403,6 +421,9 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 			ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 			MissionFamily:       strings.TrimSpace(job.MissionFamily),
 			PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
+			BaselineRef:         strings.TrimSpace(job.BaselineRef),
+			TrainRef:            strings.TrimSpace(job.TrainRef),
+			HoldoutRef:          strings.TrimSpace(job.HoldoutRef),
 			TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 			MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 			ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -428,6 +449,9 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	next.ExecutionHost = strings.TrimSpace(job.ExecutionHost)
 	next.MissionFamily = strings.TrimSpace(job.MissionFamily)
 	next.PromotionPolicyID = strings.TrimSpace(job.PromotionPolicyID)
+	next.BaselineRef = strings.TrimSpace(job.BaselineRef)
+	next.TrainRef = strings.TrimSpace(job.TrainRef)
+	next.HoldoutRef = strings.TrimSpace(job.HoldoutRef)
 	next.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
 	next.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
 	next.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)

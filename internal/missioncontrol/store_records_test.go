@@ -62,6 +62,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	runtimeRecord.ExecutionHost = ExecutionHostWorkspace
 	runtimeRecord.MissionFamily = MissionFamilyImprovePromptpack
 	runtimeRecord.PromotionPolicyID = "promotion-policy-1"
+	runtimeRecord.BaselineRef = "evidence/baseline"
+	runtimeRecord.TrainRef = "evidence/train"
+	runtimeRecord.HoldoutRef = "evidence/holdout"
 	runtimeRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
@@ -86,6 +89,15 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	if loadedRuntime.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("JobRuntimeRecord.PromotionPolicyID = %q, want promotion-policy-1", loadedRuntime.PromotionPolicyID)
 	}
+	if loadedRuntime.BaselineRef != "evidence/baseline" {
+		t.Fatalf("JobRuntimeRecord.BaselineRef = %q, want evidence/baseline", loadedRuntime.BaselineRef)
+	}
+	if loadedRuntime.TrainRef != "evidence/train" {
+		t.Fatalf("JobRuntimeRecord.TrainRef = %q, want evidence/train", loadedRuntime.TrainRef)
+	}
+	if loadedRuntime.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("JobRuntimeRecord.HoldoutRef = %q, want evidence/holdout", loadedRuntime.HoldoutRef)
+	}
 	if !reflect.DeepEqual(loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces) {
 		t.Fatalf("JobRuntimeRecord.TargetSurfaces = %#v, want %#v", loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces)
 	}
@@ -104,6 +116,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	controlRecord.ExecutionHost = ExecutionHostWorkspace
 	controlRecord.MissionFamily = MissionFamilyImprovePromptpack
 	controlRecord.PromotionPolicyID = "promotion-policy-1"
+	controlRecord.BaselineRef = "evidence/baseline"
+	controlRecord.TrainRef = "evidence/train"
+	controlRecord.HoldoutRef = "evidence/holdout"
 	controlRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
@@ -127,6 +142,15 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	}
 	if loadedControl.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("RuntimeControlRecord.PromotionPolicyID = %q, want promotion-policy-1", loadedControl.PromotionPolicyID)
+	}
+	if loadedControl.BaselineRef != "evidence/baseline" {
+		t.Fatalf("RuntimeControlRecord.BaselineRef = %q, want evidence/baseline", loadedControl.BaselineRef)
+	}
+	if loadedControl.TrainRef != "evidence/train" {
+		t.Fatalf("RuntimeControlRecord.TrainRef = %q, want evidence/train", loadedControl.TrainRef)
+	}
+	if loadedControl.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("RuntimeControlRecord.HoldoutRef = %q, want evidence/holdout", loadedControl.HoldoutRef)
 	}
 	if !reflect.DeepEqual(loadedControl.TargetSurfaces, controlRecord.TargetSurfaces) {
 		t.Fatalf("RuntimeControlRecord.TargetSurfaces = %#v, want %#v", loadedControl.TargetSurfaces, controlRecord.TargetSurfaces)

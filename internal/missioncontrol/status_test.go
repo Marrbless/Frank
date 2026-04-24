@@ -17,6 +17,9 @@ func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
 		ExecutionHost:     ExecutionHostPhone,
 		MissionFamily:     MissionFamilyBootstrapRevenue,
 		PromotionPolicyID: "promotion-policy-1",
+		BaselineRef:       "evidence/baseline",
+		TrainRef:          "evidence/train",
+		HoldoutRef:        "evidence/holdout",
 		State:             JobStateRunning,
 		ActiveStepID:      "build",
 	})
@@ -33,6 +36,15 @@ func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
 	if summary.PromotionPolicyID != "promotion-policy-1" {
 		t.Fatalf("PromotionPolicyID = %q, want promotion-policy-1", summary.PromotionPolicyID)
 	}
+	if summary.BaselineRef != "evidence/baseline" {
+		t.Fatalf("BaselineRef = %q, want evidence/baseline", summary.BaselineRef)
+	}
+	if summary.TrainRef != "evidence/train" {
+		t.Fatalf("TrainRef = %q, want evidence/train", summary.TrainRef)
+	}
+	if summary.HoldoutRef != "evidence/holdout" {
+		t.Fatalf("HoldoutRef = %q, want evidence/holdout", summary.HoldoutRef)
+	}
 }
 
 func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(t *testing.T) {
@@ -46,6 +58,9 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		ExecutionHost:       ExecutionHostWorkspace,
 		MissionFamily:       MissionFamilyImprovePromptpack,
 		PromotionPolicyID:   "promotion-policy-1",
+		BaselineRef:         "evidence/baseline",
+		TrainRef:            "evidence/train",
+		HoldoutRef:          "evidence/holdout",
 		TargetSurfaces:      targetSurfaces,
 		ImmutableSurfaces:   immutableSurfaces,
 		TopologyModeEnabled: true,
@@ -61,6 +76,9 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		`"execution_host": "workspace"`,
 		`"mission_family": "improve_promptpack"`,
 		`"promotion_policy_id": "promotion-policy-1"`,
+		`"baseline_ref": "evidence/baseline"`,
+		`"train_ref": "evidence/train"`,
+		`"holdout_ref": "evidence/holdout"`,
 		`"target_surfaces": [`,
 		`"class": "prompt_pack"`,
 		`"ref": "prompt-pack/main"`,
@@ -96,6 +114,15 @@ func TestBuildOperatorStatusSummaryFallsBackToInspectablePlanSurfaces(t *testing
 	}
 	if summary.PromotionPolicyID != job.PromotionPolicyID {
 		t.Fatalf("PromotionPolicyID = %q, want %q", summary.PromotionPolicyID, job.PromotionPolicyID)
+	}
+	if summary.BaselineRef != job.BaselineRef {
+		t.Fatalf("BaselineRef = %q, want %q", summary.BaselineRef, job.BaselineRef)
+	}
+	if summary.TrainRef != job.TrainRef {
+		t.Fatalf("TrainRef = %q, want %q", summary.TrainRef, job.TrainRef)
+	}
+	if summary.HoldoutRef != job.HoldoutRef {
+		t.Fatalf("HoldoutRef = %q, want %q", summary.HoldoutRef, job.HoldoutRef)
 	}
 }
 

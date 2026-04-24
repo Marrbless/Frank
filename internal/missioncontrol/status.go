@@ -21,6 +21,9 @@ type OperatorStatusSummary struct {
 	ExecutionHost                      string                                                      `json:"execution_host,omitempty"`
 	MissionFamily                      string                                                      `json:"mission_family,omitempty"`
 	PromotionPolicyID                  string                                                      `json:"promotion_policy_id,omitempty"`
+	BaselineRef                        string                                                      `json:"baseline_ref,omitempty"`
+	TrainRef                           string                                                      `json:"train_ref,omitempty"`
+	HoldoutRef                         string                                                      `json:"holdout_ref,omitempty"`
 	TargetSurfaces                     []JobSurfaceRef                                             `json:"target_surfaces,omitempty"`
 	MutableSurfaces                    []JobSurfaceRef                                             `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces                  []JobSurfaceRef                                             `json:"immutable_surfaces,omitempty"`
@@ -839,6 +842,9 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	executionHost := strings.TrimSpace(runtime.ExecutionHost)
 	missionFamily := strings.TrimSpace(runtime.MissionFamily)
 	promotionPolicyID := strings.TrimSpace(runtime.PromotionPolicyID)
+	baselineRef := strings.TrimSpace(runtime.BaselineRef)
+	trainRef := strings.TrimSpace(runtime.TrainRef)
+	holdoutRef := strings.TrimSpace(runtime.HoldoutRef)
 	targetSurfaces := cloneJobSurfaceRefs(runtime.TargetSurfaces)
 	mutableSurfaces := cloneJobSurfaceRefs(runtime.MutableSurfaces)
 	immutableSurfaces := cloneJobSurfaceRefs(runtime.ImmutableSurfaces)
@@ -855,6 +861,15 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		}
 		if promotionPolicyID == "" {
 			promotionPolicyID = strings.TrimSpace(runtime.InspectablePlan.PromotionPolicyID)
+		}
+		if baselineRef == "" {
+			baselineRef = strings.TrimSpace(runtime.InspectablePlan.BaselineRef)
+		}
+		if trainRef == "" {
+			trainRef = strings.TrimSpace(runtime.InspectablePlan.TrainRef)
+		}
+		if holdoutRef == "" {
+			holdoutRef = strings.TrimSpace(runtime.InspectablePlan.HoldoutRef)
 		}
 		if len(targetSurfaces) == 0 {
 			targetSurfaces = cloneJobSurfaceRefs(runtime.InspectablePlan.TargetSurfaces)
@@ -876,6 +891,9 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		ExecutionHost:       executionHost,
 		MissionFamily:       missionFamily,
 		PromotionPolicyID:   promotionPolicyID,
+		BaselineRef:         baselineRef,
+		TrainRef:            trainRef,
+		HoldoutRef:          holdoutRef,
 		TargetSurfaces:      targetSurfaces,
 		MutableSurfaces:     mutableSurfaces,
 		ImmutableSurfaces:   immutableSurfaces,
