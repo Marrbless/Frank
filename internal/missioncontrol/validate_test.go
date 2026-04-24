@@ -180,7 +180,7 @@ func TestValidatePlanRejectsV4MissingExecutionMetadata(t *testing.T) {
 			name: "execution_plane",
 			job:  testV4Job("", ExecutionHostPhone, MissionFamilyBootstrapRevenue),
 			want: ValidationError{
-				Code:    RejectionCodeInvalidExecutionPlane,
+				Code:    RejectionCodeV4ExecutionPlaneRequired,
 				Message: "frank_v4 job requires execution_plane",
 			},
 		},
@@ -188,7 +188,7 @@ func TestValidatePlanRejectsV4MissingExecutionMetadata(t *testing.T) {
 			name: "execution_host",
 			job:  testV4Job(ExecutionPlaneLiveRuntime, "", MissionFamilyBootstrapRevenue),
 			want: ValidationError{
-				Code:    RejectionCodeInvalidExecutionHost,
+				Code:    RejectionCodeV4ExecutionHostRequired,
 				Message: "frank_v4 job requires execution_host",
 			},
 		},
@@ -196,7 +196,7 @@ func TestValidatePlanRejectsV4MissingExecutionMetadata(t *testing.T) {
 			name: "mission_family",
 			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, ""),
 			want: ValidationError{
-				Code:    RejectionCodeInvalidMissionFamily,
+				Code:    RejectionCodeV4MissionFamilyRequired,
 				Message: "frank_v4 job requires mission_family",
 			},
 		},
@@ -230,7 +230,7 @@ func TestValidatePlanRejectsV4UnknownExecutionMetadata(t *testing.T) {
 			name: "execution_plane",
 			job:  testV4Job("moon_base", ExecutionHostPhone, MissionFamilyBootstrapRevenue),
 			want: ValidationError{
-				Code:    RejectionCodeInvalidExecutionPlane,
+				Code:    RejectionCodeV4ExecutionPlaneUnknown,
 				Message: "execution_plane must be live_runtime, improvement_workspace, or hot_update_gate",
 			},
 		},
@@ -238,8 +238,16 @@ func TestValidatePlanRejectsV4UnknownExecutionMetadata(t *testing.T) {
 			name: "execution_host",
 			job:  testV4Job(ExecutionPlaneLiveRuntime, "satellite", MissionFamilyBootstrapRevenue),
 			want: ValidationError{
-				Code:    RejectionCodeInvalidExecutionHost,
+				Code:    RejectionCodeV4ExecutionHostUnknown,
 				Message: "execution_host must be phone, desktop, workspace, desktop_dev, or remote_provider",
+			},
+		},
+		{
+			name: "mission_family",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, "invented_family"),
+			want: ValidationError{
+				Code:    RejectionCodeV4MissionFamilyUnknown,
+				Message: "mission_family is not recognized for frank_v4",
 			},
 		},
 	}
@@ -273,7 +281,7 @@ func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testi
 			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostWorkspace, MissionFamilyImprovePromptpack),
 			want: []ValidationError{
 				{
-					Code:    RejectionCodeInvalidMissionFamily,
+					Code:    RejectionCodeV4LabOnlyFamily,
 					Message: `mission_family "improve_promptpack" requires execution_plane "improvement_workspace"`,
 				},
 			},
@@ -288,7 +296,7 @@ func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testi
 			job:  testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostPhone, MissionFamilyBootstrapRevenue),
 			want: []ValidationError{
 				{
-					Code:    RejectionCodeInvalidMissionFamily,
+					Code:    RejectionCodeV4ExecutionPlaneIncompatible,
 					Message: `mission_family "bootstrap_revenue" requires execution_plane "live_runtime"`,
 				},
 			},
@@ -298,7 +306,7 @@ func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testi
 			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyApplyHotUpdate),
 			want: []ValidationError{
 				{
-					Code:    RejectionCodeInvalidMissionFamily,
+					Code:    RejectionCodeV4ExecutionPlaneIncompatible,
 					Message: `mission_family "apply_hot_update" requires execution_plane "hot_update_gate"`,
 				},
 			},

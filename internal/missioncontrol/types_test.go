@@ -125,6 +125,75 @@ func TestEnumValues(t *testing.T) {
 	}
 }
 
+func TestV4RejectionCodeConstants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		got  RejectionCode
+		want RejectionCode
+	}{
+		{name: "execution plane required", got: RejectionCodeV4ExecutionPlaneRequired, want: "E_EXECUTION_PLANE_REQUIRED"},
+		{name: "execution host required", got: RejectionCodeV4ExecutionHostRequired, want: "E_EXECUTION_HOST_REQUIRED"},
+		{name: "improvement workspace required", got: RejectionCodeV4ImprovementWorkspaceRequired, want: "E_IMPROVEMENT_WORKSPACE_REQUIRED"},
+		{name: "hot update gate required", got: RejectionCodeV4HotUpdateGateRequired, want: "E_HOT_UPDATE_GATE_REQUIRED"},
+		{name: "baseline required", got: RejectionCodeV4BaselineRequired, want: "E_BASELINE_REQUIRED"},
+		{name: "holdout required", got: RejectionCodeV4HoldoutRequired, want: "E_HOLDOUT_REQUIRED"},
+		{name: "smoke check required", got: RejectionCodeV4SmokeCheckRequired, want: "E_SMOKE_CHECK_REQUIRED"},
+		{name: "eval immutable", got: RejectionCodeV4EvalImmutable, want: "E_EVAL_IMMUTABLE"},
+		{name: "mutation scope violation", got: RejectionCodeV4MutationScopeViolation, want: "E_MUTATION_SCOPE_VIOLATION"},
+		{name: "surface class required", got: RejectionCodeV4SurfaceClassRequired, want: "E_SURFACE_CLASS_REQUIRED"},
+		{name: "forbidden surface change", got: RejectionCodeV4ForbiddenSurfaceChange, want: "E_FORBIDDEN_SURFACE_CHANGE"},
+		{name: "topology change disabled", got: RejectionCodeV4TopologyChangeDisabled, want: "E_TOPOLOGY_CHANGE_DISABLED"},
+		{name: "promotion policy required", got: RejectionCodeV4PromotionPolicyRequired, want: "E_PROMOTION_POLICY_REQUIRED"},
+		{name: "hot update policy required", got: RejectionCodeV4HotUpdatePolicyRequired, want: "E_HOT_UPDATE_POLICY_REQUIRED"},
+		{name: "canary required", got: RejectionCodeV4CanaryRequired, want: "E_CANARY_REQUIRED"},
+		{name: "promotion approval required", got: RejectionCodeV4PromotionApprovalRequired, want: "E_PROMOTION_APPROVAL_REQUIRED"},
+		{name: "hot update approval required", got: RejectionCodeV4HotUpdateApprovalRequired, want: "E_HOT_UPDATE_APPROVAL_REQUIRED"},
+		{name: "active job deploy lock", got: RejectionCodeV4ActiveJobDeployLock, want: "E_ACTIVE_JOB_DEPLOY_LOCK"},
+		{name: "pack not found", got: RejectionCodeV4PackNotFound, want: "E_PACK_NOT_FOUND"},
+		{name: "last known good required", got: RejectionCodeV4LastKnownGoodRequired, want: "E_LAST_KNOWN_GOOD_REQUIRED"},
+		{name: "canary failed", got: RejectionCodeV4CanaryFailed, want: "E_CANARY_FAILED"},
+		{name: "smoke check failed", got: RejectionCodeV4SmokeCheckFailed, want: "E_SMOKE_CHECK_FAILED"},
+		{name: "rollback required", got: RejectionCodeV4RollbackRequired, want: "E_ROLLBACK_REQUIRED"},
+		{name: "promotion already applied", got: RejectionCodeV4PromotionAlreadyApplied, want: "E_PROMOTION_ALREADY_APPLIED"},
+		{name: "hot update already applied", got: RejectionCodeV4HotUpdateAlreadyApplied, want: "E_HOT_UPDATE_ALREADY_APPLIED"},
+		{name: "reload mode unsupported", got: RejectionCodeV4ReloadModeUnsupported, want: "E_RELOAD_MODE_UNSUPPORTED"},
+		{name: "reload quiesce failed", got: RejectionCodeV4ReloadQuiesceFailed, want: "E_RELOAD_QUIESCE_FAILED"},
+		{name: "extension compatibility required", got: RejectionCodeV4ExtensionCompatibilityRequired, want: "E_EXTENSION_COMPATIBILITY_REQUIRED"},
+		{name: "extension permission widening", got: RejectionCodeV4ExtensionPermissionWidening, want: "E_EXTENSION_PERMISSION_WIDENING"},
+		{name: "runtime source mutation forbidden", got: RejectionCodeV4RuntimeSourceMutationForbidden, want: "E_RUNTIME_SOURCE_MUTATION_FORBIDDEN"},
+		{name: "policy mutation forbidden", got: RejectionCodeV4PolicyMutationForbidden, want: "E_POLICY_MUTATION_FORBIDDEN"},
+		{name: "active pack adhoc mutation forbidden", got: RejectionCodeV4ActivePackAdhocMutationForbidden, want: "E_ACTIVE_PACK_ADHOC_MUTATION_FORBIDDEN"},
+		{name: "autonomy envelope required", got: RejectionCodeV4AutonomyEnvelopeRequired, want: "E_AUTONOMY_ENVELOPE_REQUIRED"},
+		{name: "standing directive required", got: RejectionCodeV4StandingDirectiveRequired, want: "E_STANDING_DIRECTIVE_REQUIRED"},
+		{name: "autonomy budget exceeded", got: RejectionCodeV4AutonomyBudgetExceeded, want: "E_AUTONOMY_BUDGET_EXCEEDED"},
+		{name: "no eligible autonomous action", got: RejectionCodeV4NoEligibleAutonomousAction, want: "E_NO_ELIGIBLE_AUTONOMOUS_ACTION"},
+		{name: "autonomy paused", got: RejectionCodeV4AutonomyPaused, want: "E_AUTONOMY_PAUSED"},
+		{name: "external action limit reached", got: RejectionCodeV4ExternalActionLimitReached, want: "E_EXTERNAL_ACTION_LIMIT_REACHED"},
+		{name: "repeated failure pause", got: RejectionCodeV4RepeatedFailurePause, want: "E_REPEATED_FAILURE_PAUSE"},
+		{name: "package authority grant forbidden", got: RejectionCodeV4PackageAuthorityGrantForbidden, want: "E_PACKAGE_AUTHORITY_GRANT_FORBIDDEN"},
+		{name: "lab only family", got: RejectionCodeV4LabOnlyFamily, want: "E_LAB_ONLY_FAMILY"},
+		{name: "mission family required", got: RejectionCodeV4MissionFamilyRequired, want: "E_MISSION_FAMILY_REQUIRED"},
+		{name: "execution plane unknown", got: RejectionCodeV4ExecutionPlaneUnknown, want: "E_EXECUTION_PLANE_UNKNOWN"},
+		{name: "execution host unknown", got: RejectionCodeV4ExecutionHostUnknown, want: "E_EXECUTION_HOST_UNKNOWN"},
+		{name: "mission family unknown", got: RejectionCodeV4MissionFamilyUnknown, want: "E_MISSION_FAMILY_UNKNOWN"},
+		{name: "execution plane incompatible", got: RejectionCodeV4ExecutionPlaneIncompatible, want: "E_EXECUTION_PLANE_INCOMPATIBLE"},
+		{name: "live phone self edit forbidden", got: RejectionCodeV4LivePhoneSelfEditForbidden, want: "E_LIVE_PHONE_SELF_EDIT_FORBIDDEN"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.got != tt.want {
+				t.Fatalf("constant = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestJobJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 

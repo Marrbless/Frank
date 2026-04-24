@@ -28,6 +28,57 @@ const (
 	RejectionCodeLongRunningStartForbidden     RejectionCode = "longrun_start_forbidden"
 )
 
+const (
+	RejectionCodeV4ExecutionPlaneRequired           RejectionCode = "E_EXECUTION_PLANE_REQUIRED"
+	RejectionCodeV4ExecutionHostRequired            RejectionCode = "E_EXECUTION_HOST_REQUIRED"
+	RejectionCodeV4ImprovementWorkspaceRequired     RejectionCode = "E_IMPROVEMENT_WORKSPACE_REQUIRED"
+	RejectionCodeV4HotUpdateGateRequired            RejectionCode = "E_HOT_UPDATE_GATE_REQUIRED"
+	RejectionCodeV4BaselineRequired                 RejectionCode = "E_BASELINE_REQUIRED"
+	RejectionCodeV4HoldoutRequired                  RejectionCode = "E_HOLDOUT_REQUIRED"
+	RejectionCodeV4SmokeCheckRequired               RejectionCode = "E_SMOKE_CHECK_REQUIRED"
+	RejectionCodeV4EvalImmutable                    RejectionCode = "E_EVAL_IMMUTABLE"
+	RejectionCodeV4MutationScopeViolation           RejectionCode = "E_MUTATION_SCOPE_VIOLATION"
+	RejectionCodeV4SurfaceClassRequired             RejectionCode = "E_SURFACE_CLASS_REQUIRED"
+	RejectionCodeV4ForbiddenSurfaceChange           RejectionCode = "E_FORBIDDEN_SURFACE_CHANGE"
+	RejectionCodeV4TopologyChangeDisabled           RejectionCode = "E_TOPOLOGY_CHANGE_DISABLED"
+	RejectionCodeV4PromotionPolicyRequired          RejectionCode = "E_PROMOTION_POLICY_REQUIRED"
+	RejectionCodeV4HotUpdatePolicyRequired          RejectionCode = "E_HOT_UPDATE_POLICY_REQUIRED"
+	RejectionCodeV4CanaryRequired                   RejectionCode = "E_CANARY_REQUIRED"
+	RejectionCodeV4PromotionApprovalRequired        RejectionCode = "E_PROMOTION_APPROVAL_REQUIRED"
+	RejectionCodeV4HotUpdateApprovalRequired        RejectionCode = "E_HOT_UPDATE_APPROVAL_REQUIRED"
+	RejectionCodeV4ActiveJobDeployLock              RejectionCode = "E_ACTIVE_JOB_DEPLOY_LOCK"
+	RejectionCodeV4PackNotFound                     RejectionCode = "E_PACK_NOT_FOUND"
+	RejectionCodeV4LastKnownGoodRequired            RejectionCode = "E_LAST_KNOWN_GOOD_REQUIRED"
+	RejectionCodeV4CanaryFailed                     RejectionCode = "E_CANARY_FAILED"
+	RejectionCodeV4SmokeCheckFailed                 RejectionCode = "E_SMOKE_CHECK_FAILED"
+	RejectionCodeV4RollbackRequired                 RejectionCode = "E_ROLLBACK_REQUIRED"
+	RejectionCodeV4PromotionAlreadyApplied          RejectionCode = "E_PROMOTION_ALREADY_APPLIED"
+	RejectionCodeV4HotUpdateAlreadyApplied          RejectionCode = "E_HOT_UPDATE_ALREADY_APPLIED"
+	RejectionCodeV4ReloadModeUnsupported            RejectionCode = "E_RELOAD_MODE_UNSUPPORTED"
+	RejectionCodeV4ReloadQuiesceFailed              RejectionCode = "E_RELOAD_QUIESCE_FAILED"
+	RejectionCodeV4ExtensionCompatibilityRequired   RejectionCode = "E_EXTENSION_COMPATIBILITY_REQUIRED"
+	RejectionCodeV4ExtensionPermissionWidening      RejectionCode = "E_EXTENSION_PERMISSION_WIDENING"
+	RejectionCodeV4RuntimeSourceMutationForbidden   RejectionCode = "E_RUNTIME_SOURCE_MUTATION_FORBIDDEN"
+	RejectionCodeV4PolicyMutationForbidden          RejectionCode = "E_POLICY_MUTATION_FORBIDDEN"
+	RejectionCodeV4ActivePackAdhocMutationForbidden RejectionCode = "E_ACTIVE_PACK_ADHOC_MUTATION_FORBIDDEN"
+	RejectionCodeV4AutonomyEnvelopeRequired         RejectionCode = "E_AUTONOMY_ENVELOPE_REQUIRED"
+	RejectionCodeV4StandingDirectiveRequired        RejectionCode = "E_STANDING_DIRECTIVE_REQUIRED"
+	RejectionCodeV4AutonomyBudgetExceeded           RejectionCode = "E_AUTONOMY_BUDGET_EXCEEDED"
+	RejectionCodeV4NoEligibleAutonomousAction       RejectionCode = "E_NO_ELIGIBLE_AUTONOMOUS_ACTION"
+	RejectionCodeV4AutonomyPaused                   RejectionCode = "E_AUTONOMY_PAUSED"
+	RejectionCodeV4ExternalActionLimitReached       RejectionCode = "E_EXTERNAL_ACTION_LIMIT_REACHED"
+	RejectionCodeV4RepeatedFailurePause             RejectionCode = "E_REPEATED_FAILURE_PAUSE"
+	RejectionCodeV4PackageAuthorityGrantForbidden   RejectionCode = "E_PACKAGE_AUTHORITY_GRANT_FORBIDDEN"
+
+	RejectionCodeV4LabOnlyFamily              RejectionCode = "E_LAB_ONLY_FAMILY"
+	RejectionCodeV4MissionFamilyRequired      RejectionCode = "E_MISSION_FAMILY_REQUIRED"
+	RejectionCodeV4ExecutionPlaneUnknown      RejectionCode = "E_EXECUTION_PLANE_UNKNOWN"
+	RejectionCodeV4ExecutionHostUnknown       RejectionCode = "E_EXECUTION_HOST_UNKNOWN"
+	RejectionCodeV4MissionFamilyUnknown       RejectionCode = "E_MISSION_FAMILY_UNKNOWN"
+	RejectionCodeV4ExecutionPlaneIncompatible RejectionCode = "E_EXECUTION_PLANE_INCOMPATIBLE"
+	RejectionCodeV4LivePhoneSelfEditForbidden RejectionCode = "E_LIVE_PHONE_SELF_EDIT_FORBIDDEN"
+)
+
 func ValidatePlan(job Job) []ValidationError {
 	steps := job.Plan.Steps
 	if len(steps) == 0 {
@@ -233,48 +284,55 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 
 	if plane == "" {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidExecutionPlane,
+			Code:    RejectionCodeV4ExecutionPlaneRequired,
 			Message: "frank_v4 job requires execution_plane",
 		})
 	} else if !isKnownExecutionPlane(plane) {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidExecutionPlane,
+			Code:    RejectionCodeV4ExecutionPlaneUnknown,
 			Message: "execution_plane must be live_runtime, improvement_workspace, or hot_update_gate",
 		})
 	}
 
 	if host == "" {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidExecutionHost,
+			Code:    RejectionCodeV4ExecutionHostRequired,
 			Message: "frank_v4 job requires execution_host",
 		})
 	} else if !isKnownExecutionHost(host) {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidExecutionHost,
+			Code:    RejectionCodeV4ExecutionHostUnknown,
 			Message: "execution_host must be phone, desktop, workspace, desktop_dev, or remote_provider",
 		})
 	}
 
 	if family == "" {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidMissionFamily,
+			Code:    RejectionCodeV4MissionFamilyRequired,
 			Message: "frank_v4 job requires mission_family",
 		})
 	} else if !isKnownMissionFamily(family) {
 		errors = append(errors, ValidationError{
-			Code:    RejectionCodeInvalidMissionFamily,
+			Code:    RejectionCodeV4MissionFamilyUnknown,
 			Message: "mission_family is not recognized for frank_v4",
 		})
 	} else if plane != "" && isKnownExecutionPlane(plane) {
 		if want, ok := requiredExecutionPlaneForMissionFamily(family); ok && plane != want {
 			errors = append(errors, ValidationError{
-				Code:    RejectionCodeInvalidMissionFamily,
+				Code:    v4ExecutionPlaneIncompatibilityCodeForFamily(family),
 				Message: fmt.Sprintf("mission_family %q requires execution_plane %q", family, want),
 			})
 		}
 	}
 
 	return errors
+}
+
+func v4ExecutionPlaneIncompatibilityCodeForFamily(family string) RejectionCode {
+	if want, ok := requiredExecutionPlaneForMissionFamily(family); ok && want == ExecutionPlaneImprovementWorkspace {
+		return RejectionCodeV4LabOnlyFamily
+	}
+	return RejectionCodeV4ExecutionPlaneIncompatible
 }
 
 func isKnownExecutionPlane(plane string) bool {
