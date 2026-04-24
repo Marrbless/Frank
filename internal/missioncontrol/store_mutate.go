@@ -153,6 +153,9 @@ func projectJobRuntimeRecord(runtime JobRuntimeState, plan *InspectablePlanConte
 		WriterEpoch:     writerEpoch,
 		AppliedSeq:      nextSeq,
 		JobID:           runtime.JobID,
+		ExecutionPlane:  strings.TrimSpace(runtime.ExecutionPlane),
+		ExecutionHost:   strings.TrimSpace(runtime.ExecutionHost),
+		MissionFamily:   strings.TrimSpace(runtime.MissionFamily),
 		State:           runtime.State,
 		ActiveStepID:    runtime.ActiveStepID,
 		InspectablePlan: CloneInspectablePlanContext(plan),
@@ -367,14 +370,17 @@ func projectRuntimeControlRecord(runtime JobRuntimeState, control *RuntimeContro
 		return nil, fmt.Errorf("mission store projected runtime control step %q does not match runtime active step %q", control.Step.ID, runtime.ActiveStepID)
 	}
 	record := RuntimeControlRecord{
-		RecordVersion: StoreRecordVersion,
-		WriterEpoch:   writerEpoch,
-		LastSeq:       nextSeq,
-		JobID:         runtime.JobID,
-		StepID:        control.Step.ID,
-		MaxAuthority:  control.MaxAuthority,
-		AllowedTools:  append([]string(nil), control.AllowedTools...),
-		Step:          copyStep(control.Step),
+		RecordVersion:  StoreRecordVersion,
+		WriterEpoch:    writerEpoch,
+		LastSeq:        nextSeq,
+		JobID:          runtime.JobID,
+		StepID:         control.Step.ID,
+		ExecutionPlane: strings.TrimSpace(control.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(control.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(control.MissionFamily),
+		MaxAuthority:   control.MaxAuthority,
+		AllowedTools:   append([]string(nil), control.AllowedTools...),
+		Step:           copyStep(control.Step),
 	}
 	return &record, nil
 }

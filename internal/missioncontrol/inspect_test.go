@@ -48,6 +48,26 @@ func TestNewInspectSummaryReturnsFilteredResolvedStep(t *testing.T) {
 	}
 }
 
+func TestNewInspectSummaryExposesV4ExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue)
+
+	summary, err := NewInspectSummary(job, "")
+	if err != nil {
+		t.Fatalf("NewInspectSummary() error = %v", err)
+	}
+	if summary.ExecutionPlane != ExecutionPlaneLiveRuntime {
+		t.Fatalf("ExecutionPlane = %q, want %q", summary.ExecutionPlane, ExecutionPlaneLiveRuntime)
+	}
+	if summary.ExecutionHost != ExecutionHostPhone {
+		t.Fatalf("ExecutionHost = %q, want %q", summary.ExecutionHost, ExecutionHostPhone)
+	}
+	if summary.MissionFamily != MissionFamilyBootstrapRevenue {
+		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyBootstrapRevenue)
+	}
+}
+
 func TestNewInspectSummaryFromControlReturnsResolvableStep(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +96,30 @@ func TestNewInspectSummaryFromControlReturnsResolvableStep(t *testing.T) {
 	}
 	if !reflect.DeepEqual(summary.Steps[0].EffectiveAllowedTools, []string{"read"}) {
 		t.Fatalf("EffectiveAllowedTools = %#v, want %#v", summary.Steps[0].EffectiveAllowedTools, []string{"read"})
+	}
+}
+
+func TestNewInspectSummaryFromInspectablePlanExposesV4ExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	summary, err := NewInspectSummaryFromInspectablePlan(job.ID, &plan, "")
+	if err != nil {
+		t.Fatalf("NewInspectSummaryFromInspectablePlan() error = %v", err)
+	}
+	if summary.ExecutionPlane != ExecutionPlaneImprovementWorkspace {
+		t.Fatalf("ExecutionPlane = %q, want %q", summary.ExecutionPlane, ExecutionPlaneImprovementWorkspace)
+	}
+	if summary.ExecutionHost != ExecutionHostWorkspace {
+		t.Fatalf("ExecutionHost = %q, want %q", summary.ExecutionHost, ExecutionHostWorkspace)
+	}
+	if summary.MissionFamily != MissionFamilyImprovePromptpack {
+		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyImprovePromptpack)
 	}
 }
 

@@ -1,12 +1,18 @@
 package missioncontrol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type InspectSummary struct {
-	JobID        string        `json:"job_id"`
-	MaxAuthority AuthorityTier `json:"max_authority"`
-	AllowedTools []string      `json:"allowed_tools"`
-	Steps        []InspectStep `json:"steps"`
+	JobID          string        `json:"job_id"`
+	ExecutionPlane string        `json:"execution_plane,omitempty"`
+	ExecutionHost  string        `json:"execution_host,omitempty"`
+	MissionFamily  string        `json:"mission_family,omitempty"`
+	MaxAuthority   AuthorityTier `json:"max_authority"`
+	AllowedTools   []string      `json:"allowed_tools"`
+	Steps          []InspectStep `json:"steps"`
 }
 
 type InspectStep struct {
@@ -81,9 +87,12 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 
 func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionContext) (InspectStep, error)) (InspectSummary, error) {
 	summary := InspectSummary{
-		JobID:        job.ID,
-		MaxAuthority: job.MaxAuthority,
-		AllowedTools: append([]string(nil), job.AllowedTools...),
+		JobID:          job.ID,
+		ExecutionPlane: strings.TrimSpace(job.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(job.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(job.MissionFamily),
+		MaxAuthority:   job.MaxAuthority,
+		AllowedTools:   append([]string(nil), job.AllowedTools...),
 	}
 
 	if stepID != "" {
@@ -127,9 +136,12 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 	}
 
 	job := Job{
-		ID:           control.JobID,
-		MaxAuthority: control.MaxAuthority,
-		AllowedTools: append([]string(nil), control.AllowedTools...),
+		ID:             control.JobID,
+		ExecutionPlane: strings.TrimSpace(control.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(control.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(control.MissionFamily),
+		MaxAuthority:   control.MaxAuthority,
+		AllowedTools:   append([]string(nil), control.AllowedTools...),
 	}
 	step := copyStep(control.Step)
 
@@ -150,9 +162,12 @@ func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanCon
 	}
 
 	job := Job{
-		ID:           jobID,
-		MaxAuthority: plan.MaxAuthority,
-		AllowedTools: append([]string(nil), plan.AllowedTools...),
+		ID:             jobID,
+		ExecutionPlane: strings.TrimSpace(plan.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(plan.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(plan.MissionFamily),
+		MaxAuthority:   plan.MaxAuthority,
+		AllowedTools:   append([]string(nil), plan.AllowedTools...),
 		Plan: Plan{
 			Steps: make([]Step, len(plan.Steps)),
 		},

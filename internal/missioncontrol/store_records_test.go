@@ -50,6 +50,57 @@ func testRuntimeControlRecord(lastSeq uint64, writerEpoch uint64) RuntimeControl
 	}
 }
 
+func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC)
+
+	runtimeRecord := testJobRuntimeRecord(now, 1, 1)
+	runtimeRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
+	runtimeRecord.ExecutionHost = ExecutionHostWorkspace
+	runtimeRecord.MissionFamily = MissionFamilyImprovePromptpack
+	if err := StoreJobRuntimeRecord(root, runtimeRecord); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord() error = %v", err)
+	}
+
+	loadedRuntime, err := LoadJobRuntimeRecord(root, "job-1")
+	if err != nil {
+		t.Fatalf("LoadJobRuntimeRecord() error = %v", err)
+	}
+	if loadedRuntime.ExecutionPlane != ExecutionPlaneImprovementWorkspace {
+		t.Fatalf("JobRuntimeRecord.ExecutionPlane = %q, want %q", loadedRuntime.ExecutionPlane, ExecutionPlaneImprovementWorkspace)
+	}
+	if loadedRuntime.ExecutionHost != ExecutionHostWorkspace {
+		t.Fatalf("JobRuntimeRecord.ExecutionHost = %q, want %q", loadedRuntime.ExecutionHost, ExecutionHostWorkspace)
+	}
+	if loadedRuntime.MissionFamily != MissionFamilyImprovePromptpack {
+		t.Fatalf("JobRuntimeRecord.MissionFamily = %q, want %q", loadedRuntime.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+
+	controlRecord := testRuntimeControlRecord(1, 1)
+	controlRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
+	controlRecord.ExecutionHost = ExecutionHostWorkspace
+	controlRecord.MissionFamily = MissionFamilyImprovePromptpack
+	if err := StoreRuntimeControlRecord(root, controlRecord); err != nil {
+		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
+	}
+
+	loadedControl, err := LoadRuntimeControlRecord(root, "job-1")
+	if err != nil {
+		t.Fatalf("LoadRuntimeControlRecord() error = %v", err)
+	}
+	if loadedControl.ExecutionPlane != ExecutionPlaneImprovementWorkspace {
+		t.Fatalf("RuntimeControlRecord.ExecutionPlane = %q, want %q", loadedControl.ExecutionPlane, ExecutionPlaneImprovementWorkspace)
+	}
+	if loadedControl.ExecutionHost != ExecutionHostWorkspace {
+		t.Fatalf("RuntimeControlRecord.ExecutionHost = %q, want %q", loadedControl.ExecutionHost, ExecutionHostWorkspace)
+	}
+	if loadedControl.MissionFamily != MissionFamilyImprovePromptpack {
+		t.Fatalf("RuntimeControlRecord.MissionFamily = %q, want %q", loadedControl.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+}
+
 func testApprovalRequestRecord(now time.Time, lastSeq uint64, state ApprovalState) ApprovalRequestRecord {
 	return ApprovalRequestRecord{
 		RecordVersion:   StoreRecordVersion,

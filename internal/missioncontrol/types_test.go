@@ -14,6 +14,27 @@ func TestEnumValues(t *testing.T) {
 	if JobSpecVersionV2 != "frank_v2" {
 		t.Fatalf("JobSpecVersionV2 = %q, want %q", JobSpecVersionV2, "frank_v2")
 	}
+	if JobSpecVersionV4 != "frank_v4" {
+		t.Fatalf("JobSpecVersionV4 = %q, want %q", JobSpecVersionV4, "frank_v4")
+	}
+	if ExecutionPlaneLiveRuntime != "live_runtime" {
+		t.Fatalf("ExecutionPlaneLiveRuntime = %q, want %q", ExecutionPlaneLiveRuntime, "live_runtime")
+	}
+	if ExecutionPlaneImprovementWorkspace != "improvement_workspace" {
+		t.Fatalf("ExecutionPlaneImprovementWorkspace = %q, want %q", ExecutionPlaneImprovementWorkspace, "improvement_workspace")
+	}
+	if ExecutionPlaneHotUpdateGate != "hot_update_gate" {
+		t.Fatalf("ExecutionPlaneHotUpdateGate = %q, want %q", ExecutionPlaneHotUpdateGate, "hot_update_gate")
+	}
+	if ExecutionHostPhone != "phone" {
+		t.Fatalf("ExecutionHostPhone = %q, want %q", ExecutionHostPhone, "phone")
+	}
+	if ExecutionHostDesktop != "desktop" {
+		t.Fatalf("ExecutionHostDesktop = %q, want %q", ExecutionHostDesktop, "desktop")
+	}
+	if ExecutionHostWorkspace != "workspace" {
+		t.Fatalf("ExecutionHostWorkspace = %q, want %q", ExecutionHostWorkspace, "workspace")
+	}
 	if JobStateRunning != "running" {
 		t.Fatalf("JobStateRunning = %q, want %q", JobStateRunning, "running")
 	}
@@ -108,10 +129,14 @@ func TestJobJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	want := Job{
-		ID:           "job-1",
-		State:        JobStatePending,
-		MaxAuthority: AuthorityTierMedium,
-		AllowedTools: []string{"shell"},
+		ID:             "job-1",
+		SpecVersion:    JobSpecVersionV4,
+		ExecutionPlane: ExecutionPlaneLiveRuntime,
+		ExecutionHost:  ExecutionHostPhone,
+		MissionFamily:  MissionFamilyBootstrapRevenue,
+		State:          JobStatePending,
+		MaxAuthority:   AuthorityTierMedium,
+		AllowedTools:   []string{"shell"},
 		Plan: Plan{
 			ID: "plan-1",
 			Steps: []Step{

@@ -7,7 +7,60 @@ import (
 
 type JobState string
 
-const JobSpecVersionV2 = "frank_v2"
+const (
+	JobSpecVersionV2 = "frank_v2"
+	JobSpecVersionV4 = "frank_v4"
+)
+
+const (
+	ExecutionPlaneLiveRuntime          = "live_runtime"
+	ExecutionPlaneImprovementWorkspace = "improvement_workspace"
+	ExecutionPlaneHotUpdateGate        = "hot_update_gate"
+)
+
+const (
+	ExecutionHostPhone          = "phone"
+	ExecutionHostDesktop        = "desktop"
+	ExecutionHostWorkspace      = "workspace"
+	ExecutionHostDesktopDev     = "desktop_dev"
+	ExecutionHostRemoteProvider = "remote_provider"
+)
+
+const (
+	MissionFamilyBuild                        = "build"
+	MissionFamilyResearch                     = "research"
+	MissionFamilyMonitor                      = "monitor"
+	MissionFamilyOperate                      = "operate"
+	MissionFamilyMaintenance                  = "maintenance"
+	MissionFamilyOutreach                     = "outreach"
+	MissionFamilyCommunityDiscovery           = "community_discovery"
+	MissionFamilyOpportunityScan              = "opportunity_scan"
+	MissionFamilyBootstrapRevenue             = "bootstrap_revenue"
+	MissionFamilyBootstrapIdentityAndAccounts = "bootstrap_identity_and_accounts"
+	MissionFamilyContinuousAutonomyTick       = "continuous_autonomy_tick"
+	MissionFamilyStandingDirectiveReview      = "standing_directive_review"
+	MissionFamilyAutonomousMissionProposal    = "autonomous_mission_proposal"
+	MissionFamilyAutonomyBudgetReport         = "autonomy_budget_report"
+	MissionFamilyAutonomyPause                = "autonomy_pause"
+	MissionFamilyAutonomyResume               = "autonomy_resume"
+	MissionFamilyImprovePromptpack            = "improve_promptpack"
+	MissionFamilyImproveSkills                = "improve_skills"
+	MissionFamilyImproveRoutingManifest       = "improve_routing_manifest"
+	MissionFamilyImproveRuntimeExtension      = "improve_runtime_extension"
+	MissionFamilyEvaluateCandidate            = "evaluate_candidate"
+	MissionFamilyPromoteCandidate             = "promote_candidate"
+	MissionFamilyRollbackCandidate            = "rollback_candidate"
+	MissionFamilyImproveTopology              = "improve_topology"
+	MissionFamilyProposeSourcePatch           = "propose_source_patch"
+	MissionFamilyPrepareHotUpdate             = "prepare_hot_update"
+	MissionFamilyValidateHotUpdate            = "validate_hot_update"
+	MissionFamilyStageHotUpdate               = "stage_hot_update"
+	MissionFamilyApplyHotUpdate               = "apply_hot_update"
+	MissionFamilySmokeTestHotUpdate           = "smoke_test_hot_update"
+	MissionFamilyCanaryHotUpdate              = "canary_hot_update"
+	MissionFamilyCommitHotUpdate              = "commit_hot_update"
+	MissionFamilyRollbackHotUpdate            = "rollback_hot_update"
+)
 
 const (
 	JobStatePending   JobState = "pending"
@@ -79,6 +132,9 @@ type CapabilityOnboardingProposalRef struct {
 type Job struct {
 	ID               string        `json:"id"`
 	SpecVersion      string        `json:"spec_version,omitempty"`
+	ExecutionPlane   string        `json:"execution_plane,omitempty"`
+	ExecutionHost    string        `json:"execution_host,omitempty"`
+	MissionFamily    string        `json:"mission_family,omitempty"`
 	State            JobState      `json:"state"`
 	MaxAuthority     AuthorityTier `json:"max_authority"`
 	AllowedTools     []string      `json:"allowed_tools"`

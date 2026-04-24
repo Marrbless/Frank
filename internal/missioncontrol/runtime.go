@@ -69,13 +69,19 @@ type RuntimeBudgetBlockerRecord struct {
 }
 
 type InspectablePlanContext struct {
-	MaxAuthority AuthorityTier `json:"max_authority"`
-	AllowedTools []string      `json:"allowed_tools,omitempty"`
-	Steps        []Step        `json:"steps,omitempty"`
+	ExecutionPlane string        `json:"execution_plane,omitempty"`
+	ExecutionHost  string        `json:"execution_host,omitempty"`
+	MissionFamily  string        `json:"mission_family,omitempty"`
+	MaxAuthority   AuthorityTier `json:"max_authority"`
+	AllowedTools   []string      `json:"allowed_tools,omitempty"`
+	Steps          []Step        `json:"steps,omitempty"`
 }
 
 type JobRuntimeState struct {
 	JobID                            string                            `json:"job_id"`
+	ExecutionPlane                   string                            `json:"execution_plane,omitempty"`
+	ExecutionHost                    string                            `json:"execution_host,omitempty"`
+	MissionFamily                    string                            `json:"mission_family,omitempty"`
 	State                            JobState                          `json:"state"`
 	ActiveStepID                     string                            `json:"active_step_id,omitempty"`
 	InspectablePlan                  *InspectablePlanContext           `json:"inspectable_plan,omitempty"`
@@ -105,10 +111,13 @@ type JobRuntimeState struct {
 }
 
 type RuntimeControlContext struct {
-	JobID        string        `json:"job_id"`
-	MaxAuthority AuthorityTier `json:"max_authority"`
-	AllowedTools []string      `json:"allowed_tools,omitempty"`
-	Step         Step          `json:"step"`
+	JobID          string        `json:"job_id"`
+	ExecutionPlane string        `json:"execution_plane,omitempty"`
+	ExecutionHost  string        `json:"execution_host,omitempty"`
+	MissionFamily  string        `json:"mission_family,omitempty"`
+	MaxAuthority   AuthorityTier `json:"max_authority"`
+	AllowedTools   []string      `json:"allowed_tools,omitempty"`
+	Step           Step          `json:"step"`
 }
 
 type RuntimeTransitionOptions struct {
@@ -238,10 +247,13 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 	}
 
 	return RuntimeControlContext{
-		JobID:        ec.Job.ID,
-		MaxAuthority: ec.Job.MaxAuthority,
-		AllowedTools: append([]string(nil), ec.Job.AllowedTools...),
-		Step:         normalizedStep(*ec.Step),
+		JobID:          ec.Job.ID,
+		ExecutionPlane: strings.TrimSpace(ec.Job.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(ec.Job.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(ec.Job.MissionFamily),
+		MaxAuthority:   ec.Job.MaxAuthority,
+		AllowedTools:   append([]string(nil), ec.Job.AllowedTools...),
+		Step:           normalizedStep(*ec.Step),
 	}, nil
 }
 
@@ -251,8 +263,11 @@ func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
 	}
 
 	context := InspectablePlanContext{
-		MaxAuthority: job.MaxAuthority,
-		AllowedTools: append([]string(nil), job.AllowedTools...),
+		ExecutionPlane: strings.TrimSpace(job.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(job.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(job.MissionFamily),
+		MaxAuthority:   job.MaxAuthority,
+		AllowedTools:   append([]string(nil), job.AllowedTools...),
 	}
 	if len(job.Plan.Steps) > 0 {
 		context.Steps = make([]Step, len(job.Plan.Steps))
@@ -318,9 +333,12 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 	}
 
 	job := Job{
-		ID:           control.JobID,
-		MaxAuthority: control.MaxAuthority,
-		AllowedTools: append([]string(nil), control.AllowedTools...),
+		ID:             control.JobID,
+		ExecutionPlane: strings.TrimSpace(control.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(control.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(control.MissionFamily),
+		MaxAuthority:   control.MaxAuthority,
+		AllowedTools:   append([]string(nil), control.AllowedTools...),
 		Plan: Plan{
 			Steps: []Step{normalizedStep(control.Step)},
 		},
@@ -341,13 +359,16 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 
 	if current == nil || current.JobID == "" {
 		return JobRuntimeState{
-			JobID:        job.ID,
-			State:        JobStateRunning,
-			ActiveStepID: stepID,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			StartedAt:    now,
-			ActiveStepAt: now,
+			JobID:          job.ID,
+			ExecutionPlane: strings.TrimSpace(job.ExecutionPlane),
+			ExecutionHost:  strings.TrimSpace(job.ExecutionHost),
+			MissionFamily:  strings.TrimSpace(job.MissionFamily),
+			State:          JobStateRunning,
+			ActiveStepID:   stepID,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+			StartedAt:      now,
+			ActiveStepAt:   now,
 		}, nil
 	}
 
@@ -359,6 +380,9 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	}
 
 	next := *CloneJobRuntimeState(current)
+	next.ExecutionPlane = strings.TrimSpace(job.ExecutionPlane)
+	next.ExecutionHost = strings.TrimSpace(job.ExecutionHost)
+	next.MissionFamily = strings.TrimSpace(job.MissionFamily)
 	if next.CreatedAt.IsZero() {
 		next.CreatedAt = now
 	}

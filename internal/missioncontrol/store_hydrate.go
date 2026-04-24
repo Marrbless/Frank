@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -121,6 +122,9 @@ func hydrateCommittedStoreState(root, jobID string, now time.Time) (hydratedComm
 func hydrateCommittedJobRuntimeRecord(record JobRuntimeRecord) JobRuntimeState {
 	return JobRuntimeState{
 		JobID:           record.JobID,
+		ExecutionPlane:  strings.TrimSpace(record.ExecutionPlane),
+		ExecutionHost:   strings.TrimSpace(record.ExecutionHost),
+		MissionFamily:   strings.TrimSpace(record.MissionFamily),
 		State:           record.State,
 		ActiveStepID:    record.ActiveStepID,
 		InspectablePlan: CloneInspectablePlanContext(record.InspectablePlan),
@@ -500,10 +504,13 @@ func hydrateCommittedRuntimeControl(root string, jobRuntime JobRuntimeRecord) (*
 	}
 
 	return &RuntimeControlContext{
-		JobID:        record.JobID,
-		MaxAuthority: record.MaxAuthority,
-		AllowedTools: append([]string(nil), record.AllowedTools...),
-		Step:         copyStep(record.Step),
+		JobID:          record.JobID,
+		ExecutionPlane: strings.TrimSpace(record.ExecutionPlane),
+		ExecutionHost:  strings.TrimSpace(record.ExecutionHost),
+		MissionFamily:  strings.TrimSpace(record.MissionFamily),
+		MaxAuthority:   record.MaxAuthority,
+		AllowedTools:   append([]string(nil), record.AllowedTools...),
+		Step:           copyStep(record.Step),
 	}, nil
 }
 

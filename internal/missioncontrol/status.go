@@ -17,6 +17,9 @@ const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
 	JobID                              string                                                      `json:"job_id"`
+	ExecutionPlane                     string                                                      `json:"execution_plane,omitempty"`
+	ExecutionHost                      string                                                      `json:"execution_host,omitempty"`
+	MissionFamily                      string                                                      `json:"mission_family,omitempty"`
 	State                              JobState                                                    `json:"state"`
 	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
@@ -773,15 +776,33 @@ func EffectiveAllowedTools(job *Job, step *Step) []string {
 }
 
 func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) OperatorStatusSummary {
+	executionPlane := strings.TrimSpace(runtime.ExecutionPlane)
+	executionHost := strings.TrimSpace(runtime.ExecutionHost)
+	missionFamily := strings.TrimSpace(runtime.MissionFamily)
+	if runtime.InspectablePlan != nil {
+		if executionPlane == "" {
+			executionPlane = strings.TrimSpace(runtime.InspectablePlan.ExecutionPlane)
+		}
+		if executionHost == "" {
+			executionHost = strings.TrimSpace(runtime.InspectablePlan.ExecutionHost)
+		}
+		if missionFamily == "" {
+			missionFamily = strings.TrimSpace(runtime.InspectablePlan.MissionFamily)
+		}
+	}
+
 	summary := OperatorStatusSummary{
-		JobID:         runtime.JobID,
-		State:         runtime.State,
-		ActiveStepID:  runtime.ActiveStepID,
-		WaitingReason: runtime.WaitingReason,
-		WaitingAt:     formatOperatorStatusTime(runtime.WaitingAt),
-		PausedReason:  runtime.PausedReason,
-		PausedAt:      formatOperatorStatusTime(runtime.PausedAt),
-		AbortedReason: runtime.AbortedReason,
+		JobID:          runtime.JobID,
+		ExecutionPlane: executionPlane,
+		ExecutionHost:  executionHost,
+		MissionFamily:  missionFamily,
+		State:          runtime.State,
+		ActiveStepID:   runtime.ActiveStepID,
+		WaitingReason:  runtime.WaitingReason,
+		WaitingAt:      formatOperatorStatusTime(runtime.WaitingAt),
+		PausedReason:   runtime.PausedReason,
+		PausedAt:       formatOperatorStatusTime(runtime.PausedAt),
+		AbortedReason:  runtime.AbortedReason,
 	}
 	if runtime.BudgetBlocker != nil {
 		summary.BudgetBlocker = &OperatorBudgetBlockerStatus{

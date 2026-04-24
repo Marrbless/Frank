@@ -18,6 +18,9 @@ const (
 	RejectionCodeInvalidCapabilityProposalRef  RejectionCode = "invalid_capability_onboarding_proposal_ref"
 	RejectionCodeMissingCapabilityProposal     RejectionCode = "missing_capability_onboarding_proposal"
 	RejectionCodeInvalidIdentityMode           RejectionCode = "invalid_identity_mode"
+	RejectionCodeInvalidExecutionPlane         RejectionCode = "invalid_execution_plane"
+	RejectionCodeInvalidExecutionHost          RejectionCode = "invalid_execution_host"
+	RejectionCodeInvalidMissionFamily          RejectionCode = "invalid_mission_family"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
 	RejectionCodeMissingTerminalFinalStep      RejectionCode = "missing_terminal_final_response"
@@ -35,6 +38,8 @@ func ValidatePlan(job Job) []ValidationError {
 			},
 		}
 	}
+
+	executionMetadataErrors := validateV4ExecutionMetadata(job)
 
 	firstIndexByID := make(map[string]int, len(steps))
 	duplicateSeen := make(map[string]bool, len(steps))
@@ -204,7 +209,8 @@ func ValidatePlan(job Job) []ValidationError {
 		})
 	}
 
-	errors := make([]ValidationError, 0, len(duplicateErrors)+len(missingDependencyErrors)+len(cycleErrors)+len(terminalErrors)+len(invalidTypeErrors)+len(authorityErrors)+len(toolScopeErrors))
+	errors := make([]ValidationError, 0, len(executionMetadataErrors)+len(duplicateErrors)+len(missingDependencyErrors)+len(cycleErrors)+len(terminalErrors)+len(invalidTypeErrors)+len(authorityErrors)+len(toolScopeErrors))
+	errors = append(errors, executionMetadataErrors...)
 	errors = append(errors, duplicateErrors...)
 	errors = append(errors, missingDependencyErrors...)
 	errors = append(errors, cycleErrors...)
@@ -213,6 +219,130 @@ func ValidatePlan(job Job) []ValidationError {
 	errors = append(errors, authorityErrors...)
 	errors = append(errors, toolScopeErrors...)
 	return errors
+}
+
+func validateV4ExecutionMetadata(job Job) []ValidationError {
+	if strings.TrimSpace(job.SpecVersion) != JobSpecVersionV4 {
+		return nil
+	}
+
+	plane := strings.TrimSpace(job.ExecutionPlane)
+	host := strings.TrimSpace(job.ExecutionHost)
+	family := strings.TrimSpace(job.MissionFamily)
+	errors := make([]ValidationError, 0, 3)
+
+	if plane == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidExecutionPlane,
+			Message: "frank_v4 job requires execution_plane",
+		})
+	} else if !isKnownExecutionPlane(plane) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidExecutionPlane,
+			Message: "execution_plane must be live_runtime, improvement_workspace, or hot_update_gate",
+		})
+	}
+
+	if host == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidExecutionHost,
+			Message: "frank_v4 job requires execution_host",
+		})
+	} else if !isKnownExecutionHost(host) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidExecutionHost,
+			Message: "execution_host must be phone, desktop, workspace, desktop_dev, or remote_provider",
+		})
+	}
+
+	if family == "" {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidMissionFamily,
+			Message: "frank_v4 job requires mission_family",
+		})
+	} else if !isKnownMissionFamily(family) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeInvalidMissionFamily,
+			Message: "mission_family is not recognized for frank_v4",
+		})
+	} else if plane != "" && isKnownExecutionPlane(plane) {
+		if want, ok := requiredExecutionPlaneForMissionFamily(family); ok && plane != want {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeInvalidMissionFamily,
+				Message: fmt.Sprintf("mission_family %q requires execution_plane %q", family, want),
+			})
+		}
+	}
+
+	return errors
+}
+
+func isKnownExecutionPlane(plane string) bool {
+	switch plane {
+	case ExecutionPlaneLiveRuntime, ExecutionPlaneImprovementWorkspace, ExecutionPlaneHotUpdateGate:
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownExecutionHost(host string) bool {
+	switch host {
+	case ExecutionHostPhone, ExecutionHostDesktop, ExecutionHostWorkspace, ExecutionHostDesktopDev, ExecutionHostRemoteProvider:
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownMissionFamily(family string) bool {
+	if _, ok := requiredExecutionPlaneForMissionFamily(family); ok {
+		return true
+	}
+	return false
+}
+
+func requiredExecutionPlaneForMissionFamily(family string) (string, bool) {
+	switch family {
+	case MissionFamilyBuild,
+		MissionFamilyResearch,
+		MissionFamilyMonitor,
+		MissionFamilyOperate,
+		MissionFamilyMaintenance,
+		MissionFamilyOutreach,
+		MissionFamilyCommunityDiscovery,
+		MissionFamilyOpportunityScan,
+		MissionFamilyBootstrapRevenue,
+		MissionFamilyBootstrapIdentityAndAccounts,
+		MissionFamilyContinuousAutonomyTick,
+		MissionFamilyStandingDirectiveReview,
+		MissionFamilyAutonomousMissionProposal,
+		MissionFamilyAutonomyBudgetReport,
+		MissionFamilyAutonomyPause,
+		MissionFamilyAutonomyResume:
+		return ExecutionPlaneLiveRuntime, true
+	case MissionFamilyImprovePromptpack,
+		MissionFamilyImproveSkills,
+		MissionFamilyImproveRoutingManifest,
+		MissionFamilyImproveRuntimeExtension,
+		MissionFamilyEvaluateCandidate,
+		MissionFamilyPromoteCandidate,
+		MissionFamilyRollbackCandidate,
+		MissionFamilyImproveTopology,
+		MissionFamilyProposeSourcePatch:
+		return ExecutionPlaneImprovementWorkspace, true
+	case MissionFamilyPrepareHotUpdate,
+		MissionFamilyValidateHotUpdate,
+		MissionFamilyStageHotUpdate,
+		MissionFamilyApplyHotUpdate,
+		MissionFamilySmokeTestHotUpdate,
+		MissionFamilyCanaryHotUpdate,
+		MissionFamilyCommitHotUpdate,
+		MissionFamilyRollbackHotUpdate:
+		return ExecutionPlaneHotUpdateGate, true
+	default:
+		return "", false
+	}
 }
 
 func validateCapabilityRequirementDeclaration(step Step) []ValidationError {

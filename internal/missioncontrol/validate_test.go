@@ -159,6 +159,188 @@ func TestValidatePlanAcceptsWaitUserStepWithSubtype(t *testing.T) {
 	}
 }
 
+func TestValidatePlanAcceptsV4LiveRuntimePhoneLiveFamily(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsV4MissingExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		job  Job
+		want ValidationError
+	}{
+		{
+			name: "execution_plane",
+			job:  testV4Job("", ExecutionHostPhone, MissionFamilyBootstrapRevenue),
+			want: ValidationError{
+				Code:    RejectionCodeInvalidExecutionPlane,
+				Message: "frank_v4 job requires execution_plane",
+			},
+		},
+		{
+			name: "execution_host",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, "", MissionFamilyBootstrapRevenue),
+			want: ValidationError{
+				Code:    RejectionCodeInvalidExecutionHost,
+				Message: "frank_v4 job requires execution_host",
+			},
+		},
+		{
+			name: "mission_family",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, ""),
+			want: ValidationError{
+				Code:    RejectionCodeInvalidMissionFamily,
+				Message: "frank_v4 job requires mission_family",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(tt.job)
+			if len(errors) == 0 {
+				t.Fatalf("ValidatePlan() = nil, want %#v", tt.want)
+			}
+			if errors[0] != tt.want {
+				t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", errors[0], tt.want, errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsV4UnknownExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		job  Job
+		want ValidationError
+	}{
+		{
+			name: "execution_plane",
+			job:  testV4Job("moon_base", ExecutionHostPhone, MissionFamilyBootstrapRevenue),
+			want: ValidationError{
+				Code:    RejectionCodeInvalidExecutionPlane,
+				Message: "execution_plane must be live_runtime, improvement_workspace, or hot_update_gate",
+			},
+		},
+		{
+			name: "execution_host",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, "satellite", MissionFamilyBootstrapRevenue),
+			want: ValidationError{
+				Code:    RejectionCodeInvalidExecutionHost,
+				Message: "execution_host must be phone, desktop, workspace, desktop_dev, or remote_provider",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(tt.job)
+			if len(errors) == 0 {
+				t.Fatalf("ValidatePlan() = nil, want %#v", tt.want)
+			}
+			if errors[0] != tt.want {
+				t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", errors[0], tt.want, errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		job  Job
+		want []ValidationError
+	}{
+		{
+			name: "improvement family on live runtime rejects",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostWorkspace, MissionFamilyImprovePromptpack),
+			want: []ValidationError{
+				{
+					Code:    RejectionCodeInvalidMissionFamily,
+					Message: `mission_family "improve_promptpack" requires execution_plane "improvement_workspace"`,
+				},
+			},
+		},
+		{
+			name: "improvement family on improvement workspace passes",
+			job:  testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack),
+			want: nil,
+		},
+		{
+			name: "live family on improvement workspace rejects",
+			job:  testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostPhone, MissionFamilyBootstrapRevenue),
+			want: []ValidationError{
+				{
+					Code:    RejectionCodeInvalidMissionFamily,
+					Message: `mission_family "bootstrap_revenue" requires execution_plane "live_runtime"`,
+				},
+			},
+		},
+		{
+			name: "hot update family on wrong plane rejects",
+			job:  testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyApplyHotUpdate),
+			want: []ValidationError{
+				{
+					Code:    RejectionCodeInvalidMissionFamily,
+					Message: `mission_family "apply_hot_update" requires execution_plane "hot_update_gate"`,
+				},
+			},
+		},
+		{
+			name: "hot update family on hot update gate passes",
+			job:  testV4Job(ExecutionPlaneHotUpdateGate, ExecutionHostPhone, MissionFamilyApplyHotUpdate),
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(tt.job)
+			if len(tt.want) == 0 {
+				if len(errors) != 0 {
+					t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+				}
+				return
+			}
+			if !reflect.DeepEqual(errors, tt.want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidatePlanDoesNotRequireExecutionMetadataForPreV4Jobs(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testJob([]Step{
+		{ID: "draft", Type: StepTypeDiscussion},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	}))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsWaitUserStepWithoutSubtype(t *testing.T) {
 	t.Parallel()
 
@@ -1014,5 +1196,17 @@ func testJob(steps []Step) Job {
 func testV2Job(steps []Step) Job {
 	job := testJob(steps)
 	job.SpecVersion = JobSpecVersionV2
+	return job
+}
+
+func testV4Job(executionPlane, executionHost, missionFamily string) Job {
+	job := testJob([]Step{
+		{ID: "build", Type: StepTypeDiscussion},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"build"}},
+	})
+	job.SpecVersion = JobSpecVersionV4
+	job.ExecutionPlane = executionPlane
+	job.ExecutionHost = executionHost
+	job.MissionFamily = missionFamily
 	return job
 }

@@ -3,9 +3,59 @@ package missioncontrol
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:          "job-1",
+		ExecutionPlane: ExecutionPlaneLiveRuntime,
+		ExecutionHost:  ExecutionHostPhone,
+		MissionFamily:  MissionFamilyBootstrapRevenue,
+		State:          JobStateRunning,
+		ActiveStepID:   "build",
+	})
+
+	if summary.ExecutionPlane != ExecutionPlaneLiveRuntime {
+		t.Fatalf("ExecutionPlane = %q, want %q", summary.ExecutionPlane, ExecutionPlaneLiveRuntime)
+	}
+	if summary.ExecutionHost != ExecutionHostPhone {
+		t.Fatalf("ExecutionHost = %q, want %q", summary.ExecutionHost, ExecutionHostPhone)
+	}
+	if summary.MissionFamily != MissionFamilyBootstrapRevenue {
+		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyBootstrapRevenue)
+	}
+}
+
+func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(t *testing.T) {
+	t.Parallel()
+
+	formatted, err := FormatOperatorStatusSummary(JobRuntimeState{
+		JobID:          "job-1",
+		ExecutionPlane: ExecutionPlaneImprovementWorkspace,
+		ExecutionHost:  ExecutionHostWorkspace,
+		MissionFamily:  MissionFamilyImprovePromptpack,
+		State:          JobStateRunning,
+		ActiveStepID:   "build",
+	})
+	if err != nil {
+		t.Fatalf("FormatOperatorStatusSummary() error = %v", err)
+	}
+
+	for _, want := range []string{
+		`"execution_plane": "improvement_workspace"`,
+		`"execution_host": "workspace"`,
+		`"mission_family": "improve_promptpack"`,
+	} {
+		if !strings.Contains(formatted, want) {
+			t.Fatalf("formatted status missing %s: %s", want, formatted)
+		}
+	}
+}
 
 func TestBuildOperatorStatusSummaryIncludesLatestApprovalForActiveStep(t *testing.T) {
 	t.Parallel()
