@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -153,7 +154,18 @@ func StoreEvalSuiteRecord(root string, record EvalSuiteRecord) error {
 	if err := validateEvalSuiteLinkage(root, record); err != nil {
 		return err
 	}
-	return WriteStoreJSONAtomic(StoreEvalSuitePath(root, record.EvalSuiteID), record)
+
+	path := StoreEvalSuitePath(root, record.EvalSuiteID)
+	if existing, err := loadEvalSuiteRecordFile(root, path); err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return nil
+		}
+		return fmt.Errorf("mission store eval-suite %q already exists", record.EvalSuiteID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	return WriteStoreJSONAtomic(path, record)
 }
 
 func LoadEvalSuiteRecord(root, evalSuiteID string) (EvalSuiteRecord, error) {

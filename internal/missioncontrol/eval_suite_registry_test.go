@@ -134,6 +134,45 @@ func TestEvalSuiteReplayIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEvalSuiteDivergentDuplicateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 11, 30, 0, 0, time.UTC)
+	record := validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+		record.EvalSuiteID = "eval-suite-immutable"
+		record.CandidateID = ""
+		record.BaselinePackID = ""
+		record.CandidatePackID = ""
+	})
+
+	if err := StoreEvalSuiteRecord(root, record); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord(first) error = %v", err)
+	}
+
+	err := StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+		record.EvalSuiteID = "eval-suite-immutable"
+		record.HoldoutCorpusRef = "corpus/holdout-mutated"
+		record.CandidateID = ""
+		record.BaselinePackID = ""
+		record.CandidatePackID = ""
+	}))
+	if err == nil {
+		t.Fatal("StoreEvalSuiteRecord(divergent) error = nil, want duplicate rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store eval-suite "eval-suite-immutable" already exists`) {
+		t.Fatalf("StoreEvalSuiteRecord(divergent) error = %q, want duplicate context", err.Error())
+	}
+
+	got, err := LoadEvalSuiteRecord(root, "eval-suite-immutable")
+	if err != nil {
+		t.Fatalf("LoadEvalSuiteRecord() error = %v", err)
+	}
+	if got.HoldoutCorpusRef != "corpus/holdout-root" {
+		t.Fatalf("HoldoutCorpusRef = %q, want original corpus/holdout-root", got.HoldoutCorpusRef)
+	}
+}
+
 func TestEvalSuiteValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -196,6 +235,39 @@ func TestEvalSuiteValidationFailsClosed(t *testing.T) {
 				t.Fatalf("StoreEvalSuiteRecord() error = %q, want substring %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+func TestEvalSuiteStoreDoesNotMutateRuntimeSurfaces(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 13, 30, 0, 0, time.UTC)
+	if err := StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+		record.CandidateID = ""
+		record.BaselinePackID = ""
+		record.CandidatePackID = ""
+	})); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
+	}
+
+	absentPaths := []string{
+		StoreRuntimePacksDir(root),
+		StoreImprovementCandidatesDir(root),
+		StoreImprovementRunsDir(root),
+		StoreCandidateResultsDir(root),
+		StoreHotUpdateGatesDir(root),
+		StoreHotUpdateOutcomesDir(root),
+		StorePromotionsDir(root),
+		StoreRollbacksDir(root),
+		StoreRollbackAppliesDir(root),
+		StoreActiveRuntimePackPointerPath(root),
+		StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after eval-suite store: %v", path, err)
+		}
 	}
 }
 
