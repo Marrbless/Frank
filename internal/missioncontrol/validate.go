@@ -280,6 +280,7 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 	plane := strings.TrimSpace(job.ExecutionPlane)
 	host := strings.TrimSpace(job.ExecutionHost)
 	family := strings.TrimSpace(job.MissionFamily)
+	promotionPolicyID := strings.TrimSpace(job.PromotionPolicyID)
 	errors := make([]ValidationError, 0, 3)
 
 	if plane == "" {
@@ -330,9 +331,46 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 			Message: fmt.Sprintf("mission_family %q requires execution_host phone, desktop_dev, or workspace when execution_plane is improvement_workspace", family),
 		})
 	}
+	if isImprovementMissionFamily(family) {
+		errors = append(errors, validateV4PromotionPolicyReference(promotionPolicyID, job.MissionStoreRoot)...)
+	}
 	errors = append(errors, validateV4ImprovementTargetSurfaces(job, plane, host, family)...)
 
 	return errors
+}
+
+func validateV4PromotionPolicyReference(promotionPolicyID, storeRoot string) []ValidationError {
+	promotionPolicyID = strings.TrimSpace(promotionPolicyID)
+	if promotionPolicyID == "" {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeV4PromotionPolicyRequired,
+				Message: "improvement-family job requires promotion_policy_id",
+			},
+		}
+	}
+	if err := ValidatePromotionPolicyRef(PromotionPolicyRef{PromotionPolicyID: promotionPolicyID}); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeV4PromotionPolicyRequired,
+				Message: err.Error(),
+			},
+		}
+	}
+
+	storeRoot = strings.TrimSpace(storeRoot)
+	if storeRoot == "" {
+		return nil
+	}
+	if _, err := LoadPromotionPolicyRecord(storeRoot, promotionPolicyID); err != nil {
+		return []ValidationError{
+			{
+				Code:    RejectionCodeV4PromotionPolicyRequired,
+				Message: fmt.Sprintf("promotion_policy_id %q is not registered", promotionPolicyID),
+			},
+		}
+	}
+	return nil
 }
 
 func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []ValidationError {

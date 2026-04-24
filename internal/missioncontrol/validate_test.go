@@ -672,10 +672,83 @@ func TestValidatePlanDoesNotApplySourcePatchArtifactOnlyRuleToOtherImprovementFa
 	}
 }
 
+func TestValidatePlanRejectsV4ImprovementFamilyMissingPromotionPolicyID(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.PromotionPolicyID = " "
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4PromotionPolicyRequired,
+		Message: "improvement-family job requires promotion_policy_id",
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanAdmitsV4ImprovementFamilyWithSyntacticPromotionPolicyID(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.PromotionPolicyID = "promotion-policy-later"
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors without store-aware policy lookup", errors)
+	}
+}
+
+func TestValidatePlanStoreAwarePromotionPolicyReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)
+	missing := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	missing.PromotionPolicyID = "promotion-policy-missing"
+	missing.MissionStoreRoot = root
+
+	errors := ValidatePlan(missing)
+	want := ValidationError{
+		Code:    RejectionCodeV4PromotionPolicyRequired,
+		Message: `promotion_policy_id "promotion-policy-missing" is not registered`,
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now, func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-existing"
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+	existing := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	existing.PromotionPolicyID = "promotion-policy-existing"
+	existing.MissionStoreRoot = root
+
+	errors = ValidatePlan(existing)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan(existing) = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanDoesNotRequireV4SurfaceDeclarationsForLiveFamily(t *testing.T) {
 	t.Parallel()
 
 	errors := ValidatePlan(testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanDoesNotRequirePromotionPolicyIDForNonImprovementV4Job(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue)
+	job.PromotionPolicyID = ""
+
+	errors := ValidatePlan(job)
 	if len(errors) != 0 {
 		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
 	}
@@ -1628,6 +1701,7 @@ func testV4Job(executionPlane, executionHost, missionFamily string) Job {
 	job.ExecutionHost = executionHost
 	job.MissionFamily = missionFamily
 	if isImprovementMissionFamily(missionFamily) {
+		job.PromotionPolicyID = "promotion-policy-1"
 		job.TargetSurfaces = testV4TargetSurfacesForFamily(missionFamily)
 		job.ImmutableSurfaces = testV4ImmutableSurfaces()
 	}

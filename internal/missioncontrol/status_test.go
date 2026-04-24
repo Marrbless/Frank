@@ -12,12 +12,13 @@ func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
 	t.Parallel()
 
 	summary := BuildOperatorStatusSummary(JobRuntimeState{
-		JobID:          "job-1",
-		ExecutionPlane: ExecutionPlaneLiveRuntime,
-		ExecutionHost:  ExecutionHostPhone,
-		MissionFamily:  MissionFamilyBootstrapRevenue,
-		State:          JobStateRunning,
-		ActiveStepID:   "build",
+		JobID:             "job-1",
+		ExecutionPlane:    ExecutionPlaneLiveRuntime,
+		ExecutionHost:     ExecutionHostPhone,
+		MissionFamily:     MissionFamilyBootstrapRevenue,
+		PromotionPolicyID: "promotion-policy-1",
+		State:             JobStateRunning,
+		ActiveStepID:      "build",
 	})
 
 	if summary.ExecutionPlane != ExecutionPlaneLiveRuntime {
@@ -28,6 +29,9 @@ func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
 	}
 	if summary.MissionFamily != MissionFamilyBootstrapRevenue {
 		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyBootstrapRevenue)
+	}
+	if summary.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("PromotionPolicyID = %q, want promotion-policy-1", summary.PromotionPolicyID)
 	}
 }
 
@@ -41,6 +45,7 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		ExecutionPlane:      ExecutionPlaneImprovementWorkspace,
 		ExecutionHost:       ExecutionHostWorkspace,
 		MissionFamily:       MissionFamilyImprovePromptpack,
+		PromotionPolicyID:   "promotion-policy-1",
 		TargetSurfaces:      targetSurfaces,
 		ImmutableSurfaces:   immutableSurfaces,
 		TopologyModeEnabled: true,
@@ -55,6 +60,7 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		`"execution_plane": "improvement_workspace"`,
 		`"execution_host": "workspace"`,
 		`"mission_family": "improve_promptpack"`,
+		`"promotion_policy_id": "promotion-policy-1"`,
 		`"target_surfaces": [`,
 		`"class": "prompt_pack"`,
 		`"ref": "prompt-pack/main"`,
@@ -87,6 +93,9 @@ func TestBuildOperatorStatusSummaryFallsBackToInspectablePlanSurfaces(t *testing
 	}
 	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
 		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
+	}
+	if summary.PromotionPolicyID != job.PromotionPolicyID {
+		t.Fatalf("PromotionPolicyID = %q, want %q", summary.PromotionPolicyID, job.PromotionPolicyID)
 	}
 }
 

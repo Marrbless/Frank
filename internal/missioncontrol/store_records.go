@@ -28,6 +28,7 @@ type JobRuntimeRecord struct {
 	ExecutionPlane      string                      `json:"execution_plane,omitempty"`
 	ExecutionHost       string                      `json:"execution_host,omitempty"`
 	MissionFamily       string                      `json:"mission_family,omitempty"`
+	PromotionPolicyID   string                      `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces      []JobSurfaceRef             `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef             `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef             `json:"immutable_surfaces,omitempty"`
@@ -79,6 +80,7 @@ type RuntimeControlRecord struct {
 	ExecutionPlane      string          `json:"execution_plane,omitempty"`
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
+	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`

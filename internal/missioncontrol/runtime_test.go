@@ -66,6 +66,37 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	}
 }
 
+func TestRuntimeContextsCarryPromotionPolicyID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 30, 13, 0, 0, 0, time.UTC)
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+
+	runtime, err := SetJobRuntimeActiveStep(job, nil, "build", now)
+	if err != nil {
+		t.Fatalf("SetJobRuntimeActiveStep() error = %v", err)
+	}
+	if runtime.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("runtime.PromotionPolicyID = %q, want promotion-policy-1", runtime.PromotionPolicyID)
+	}
+
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if control.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("control.PromotionPolicyID = %q, want promotion-policy-1", control.PromotionPolicyID)
+	}
+
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+	if plan.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("plan.PromotionPolicyID = %q, want promotion-policy-1", plan.PromotionPolicyID)
+	}
+}
+
 func TestTreasuryRegistryScaffoldingDoesNotAlterCurrentV2RuntimePath(t *testing.T) {
 	t.Parallel()
 

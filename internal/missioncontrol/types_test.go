@@ -213,11 +213,12 @@ func TestJobJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	want := Job{
-		ID:             "job-1",
-		SpecVersion:    JobSpecVersionV4,
-		ExecutionPlane: ExecutionPlaneLiveRuntime,
-		ExecutionHost:  ExecutionHostPhone,
-		MissionFamily:  MissionFamilyBootstrapRevenue,
+		ID:                "job-1",
+		SpecVersion:       JobSpecVersionV4,
+		ExecutionPlane:    ExecutionPlaneLiveRuntime,
+		ExecutionHost:     ExecutionHostPhone,
+		MissionFamily:     MissionFamilyBootstrapRevenue,
+		PromotionPolicyID: "promotion-policy-1",
 		TargetSurfaces: []JobSurfaceRef{
 			{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
 		},

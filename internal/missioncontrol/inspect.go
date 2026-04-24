@@ -10,6 +10,7 @@ type InspectSummary struct {
 	ExecutionPlane      string          `json:"execution_plane,omitempty"`
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
+	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -95,6 +96,7 @@ func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionCon
 		ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(job.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -148,6 +150,7 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		ExecutionPlane:      strings.TrimSpace(control.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(control.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(control.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
@@ -162,6 +165,7 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		ExecutionPlane:      job.ExecutionPlane,
 		ExecutionHost:       job.ExecutionHost,
 		MissionFamily:       job.MissionFamily,
+		PromotionPolicyID:   job.PromotionPolicyID,
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -185,6 +189,7 @@ func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanCon
 		ExecutionPlane:      strings.TrimSpace(plan.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(plan.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(plan.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(plan.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(plan.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(plan.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(plan.ImmutableSurfaces),

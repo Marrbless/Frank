@@ -61,6 +61,7 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	runtimeRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
 	runtimeRecord.ExecutionHost = ExecutionHostWorkspace
 	runtimeRecord.MissionFamily = MissionFamilyImprovePromptpack
+	runtimeRecord.PromotionPolicyID = "promotion-policy-1"
 	runtimeRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
@@ -82,6 +83,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	if loadedRuntime.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("JobRuntimeRecord.MissionFamily = %q, want %q", loadedRuntime.MissionFamily, MissionFamilyImprovePromptpack)
 	}
+	if loadedRuntime.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("JobRuntimeRecord.PromotionPolicyID = %q, want promotion-policy-1", loadedRuntime.PromotionPolicyID)
+	}
 	if !reflect.DeepEqual(loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces) {
 		t.Fatalf("JobRuntimeRecord.TargetSurfaces = %#v, want %#v", loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces)
 	}
@@ -99,6 +103,7 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	controlRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
 	controlRecord.ExecutionHost = ExecutionHostWorkspace
 	controlRecord.MissionFamily = MissionFamilyImprovePromptpack
+	controlRecord.PromotionPolicyID = "promotion-policy-1"
 	controlRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
@@ -119,6 +124,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	}
 	if loadedControl.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("RuntimeControlRecord.MissionFamily = %q, want %q", loadedControl.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+	if loadedControl.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("RuntimeControlRecord.PromotionPolicyID = %q, want promotion-policy-1", loadedControl.PromotionPolicyID)
 	}
 	if !reflect.DeepEqual(loadedControl.TargetSurfaces, controlRecord.TargetSurfaces) {
 		t.Fatalf("RuntimeControlRecord.TargetSurfaces = %#v, want %#v", loadedControl.TargetSurfaces, controlRecord.TargetSurfaces)

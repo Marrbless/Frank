@@ -68,6 +68,20 @@ func TestNewInspectSummaryExposesV4ExecutionMetadata(t *testing.T) {
 	}
 }
 
+func TestNewInspectSummaryExposesPromotionPolicyID(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+
+	summary, err := NewInspectSummary(job, "")
+	if err != nil {
+		t.Fatalf("NewInspectSummary() error = %v", err)
+	}
+	if summary.PromotionPolicyID != "promotion-policy-1" {
+		t.Fatalf("PromotionPolicyID = %q, want promotion-policy-1", summary.PromotionPolicyID)
+	}
+}
+
 func TestNewInspectSummaryExposesV4ImprovementSurfaces(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +165,9 @@ func TestNewInspectSummaryFromInspectablePlanExposesV4ExecutionMetadata(t *testi
 	}
 	if summary.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+	if summary.PromotionPolicyID != job.PromotionPolicyID {
+		t.Fatalf("PromotionPolicyID = %q, want %q", summary.PromotionPolicyID, job.PromotionPolicyID)
 	}
 	if !reflect.DeepEqual(summary.TargetSurfaces, job.TargetSurfaces) {
 		t.Fatalf("TargetSurfaces = %#v, want %#v", summary.TargetSurfaces, job.TargetSurfaces)

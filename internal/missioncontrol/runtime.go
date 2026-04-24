@@ -72,6 +72,7 @@ type InspectablePlanContext struct {
 	ExecutionPlane      string          `json:"execution_plane,omitempty"`
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
+	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -86,6 +87,7 @@ type JobRuntimeState struct {
 	ExecutionPlane                   string                            `json:"execution_plane,omitempty"`
 	ExecutionHost                    string                            `json:"execution_host,omitempty"`
 	MissionFamily                    string                            `json:"mission_family,omitempty"`
+	PromotionPolicyID                string                            `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces                   []JobSurfaceRef                   `json:"target_surfaces,omitempty"`
 	MutableSurfaces                  []JobSurfaceRef                   `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces                []JobSurfaceRef                   `json:"immutable_surfaces,omitempty"`
@@ -123,6 +125,7 @@ type RuntimeControlContext struct {
 	ExecutionPlane      string          `json:"execution_plane,omitempty"`
 	ExecutionHost       string          `json:"execution_host,omitempty"`
 	MissionFamily       string          `json:"mission_family,omitempty"`
+	PromotionPolicyID   string          `json:"promotion_policy_id,omitempty"`
 	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
 	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
@@ -272,6 +275,7 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 		ExecutionPlane:      strings.TrimSpace(ec.Job.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(ec.Job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(ec.Job.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(ec.Job.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(ec.Job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(ec.Job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(ec.Job.ImmutableSurfaces),
@@ -291,6 +295,7 @@ func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
 		ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(job.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -366,6 +371,7 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 		ExecutionPlane:      strings.TrimSpace(control.ExecutionPlane),
 		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
 		MissionFamily:       strings.TrimSpace(control.MissionFamily),
+		PromotionPolicyID:   strings.TrimSpace(control.PromotionPolicyID),
 		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
 		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
 		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
@@ -396,6 +402,7 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 			ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
 			ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
 			MissionFamily:       strings.TrimSpace(job.MissionFamily),
+			PromotionPolicyID:   strings.TrimSpace(job.PromotionPolicyID),
 			TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
 			MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
 			ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
@@ -420,6 +427,7 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	next.ExecutionPlane = strings.TrimSpace(job.ExecutionPlane)
 	next.ExecutionHost = strings.TrimSpace(job.ExecutionHost)
 	next.MissionFamily = strings.TrimSpace(job.MissionFamily)
+	next.PromotionPolicyID = strings.TrimSpace(job.PromotionPolicyID)
 	next.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
 	next.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
 	next.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)
