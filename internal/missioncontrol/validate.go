@@ -324,6 +324,12 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 			})
 		}
 	}
+	if isImprovementMissionFamily(family) && plane == ExecutionPlaneImprovementWorkspace && host != "" && isKnownExecutionHost(host) && !isImprovementWorkspaceExecutionHost(host) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4ImprovementWorkspaceRequired,
+			Message: fmt.Sprintf("mission_family %q requires execution_host phone, desktop_dev, or workspace when execution_plane is improvement_workspace", family),
+		})
+	}
 
 	return errors
 }
@@ -358,6 +364,32 @@ func isKnownMissionFamily(family string) bool {
 		return true
 	}
 	return false
+}
+
+func isImprovementMissionFamily(family string) bool {
+	switch family {
+	case MissionFamilyImprovePromptpack,
+		MissionFamilyImproveSkills,
+		MissionFamilyImproveRoutingManifest,
+		MissionFamilyImproveRuntimeExtension,
+		MissionFamilyEvaluateCandidate,
+		MissionFamilyPromoteCandidate,
+		MissionFamilyRollbackCandidate,
+		MissionFamilyImproveTopology,
+		MissionFamilyProposeSourcePatch:
+		return true
+	default:
+		return false
+	}
+}
+
+func isImprovementWorkspaceExecutionHost(host string) bool {
+	switch host {
+	case ExecutionHostPhone, ExecutionHostDesktopDev, ExecutionHostWorkspace:
+		return true
+	default:
+		return false
+	}
 }
 
 func requiredExecutionPlaneForMissionFamily(family string) (string, bool) {

@@ -312,6 +312,16 @@ func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testi
 			},
 		},
 		{
+			name: "hot update family on improvement workspace rejects",
+			job:  testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyApplyHotUpdate),
+			want: []ValidationError{
+				{
+					Code:    RejectionCodeV4ExecutionPlaneIncompatible,
+					Message: `mission_family "apply_hot_update" requires execution_plane "hot_update_gate"`,
+				},
+			},
+		},
+		{
 			name: "hot update family on hot update gate passes",
 			job:  testV4Job(ExecutionPlaneHotUpdateGate, ExecutionHostPhone, MissionFamilyApplyHotUpdate),
 			want: nil,
@@ -334,6 +344,89 @@ func TestValidatePlanEnforcesV4MissionFamilyExecutionPlaneCompatibility(t *testi
 				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidatePlanAdmitsV4ImprovementFamiliesInImprovementWorkspace(t *testing.T) {
+	t.Parallel()
+
+	for _, family := range improvementMissionFamiliesForAdmissionTest() {
+		family := family
+		t.Run(family, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, family))
+			if len(errors) != 0 {
+				t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanAdmitsV4ImprovementFamiliesOnCompatibleWorkspaceHosts(t *testing.T) {
+	t.Parallel()
+
+	for _, host := range []string{ExecutionHostPhone, ExecutionHostDesktopDev, ExecutionHostWorkspace} {
+		host := host
+		t.Run(host, func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testV4Job(ExecutionPlaneImprovementWorkspace, host, MissionFamilyImprovePromptpack))
+			if len(errors) != 0 {
+				t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamiliesOutsideImprovementWorkspace(t *testing.T) {
+	t.Parallel()
+
+	for _, family := range improvementMissionFamiliesForAdmissionTest() {
+		family := family
+		t.Run(family+"_live_runtime", func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, family))
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeV4LabOnlyFamily,
+					Message: `mission_family "` + family + `" requires execution_plane "improvement_workspace"`,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
+		t.Run(family+"_hot_update_gate", func(t *testing.T) {
+			t.Parallel()
+
+			errors := ValidatePlan(testV4Job(ExecutionPlaneHotUpdateGate, ExecutionHostPhone, family))
+			want := []ValidationError{
+				{
+					Code:    RejectionCodeV4LabOnlyFamily,
+					Message: `mission_family "` + family + `" requires execution_plane "improvement_workspace"`,
+				},
+			}
+			if !reflect.DeepEqual(errors, want) {
+				t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyWithIncompatibleWorkspaceHost(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostRemoteProvider, MissionFamilyImprovePromptpack))
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeV4ImprovementWorkspaceRequired,
+			Message: `mission_family "improve_promptpack" requires execution_host phone, desktop_dev, or workspace when execution_plane is improvement_workspace`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
 	}
 }
 
@@ -1217,4 +1310,18 @@ func testV4Job(executionPlane, executionHost, missionFamily string) Job {
 	job.ExecutionHost = executionHost
 	job.MissionFamily = missionFamily
 	return job
+}
+
+func improvementMissionFamiliesForAdmissionTest() []string {
+	return []string{
+		MissionFamilyImprovePromptpack,
+		MissionFamilyImproveSkills,
+		MissionFamilyImproveRoutingManifest,
+		MissionFamilyImproveRuntimeExtension,
+		MissionFamilyEvaluateCandidate,
+		MissionFamilyPromoteCandidate,
+		MissionFamilyRollbackCandidate,
+		MissionFamilyImproveTopology,
+		MissionFamilyProposeSourcePatch,
+	}
 }
