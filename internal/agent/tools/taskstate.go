@@ -2725,6 +2725,107 @@ func taskStateHotUpdatePromotionID(hotUpdateID string) string {
 	return "hot-update-promotion-" + strings.TrimSpace(hotUpdateID)
 }
 
+func (s *TaskState) RecertifyLastKnownGoodFromPromotion(jobID string, promotionID string) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+		return false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+			return false, err
+		}
+	}
+
+	_, changed, err := missioncontrol.RecertifyLastKnownGoodFromPromotion(root, promotionID, "operator", now)
+	if err != nil && strings.Contains(err.Error(), "already points to promoted pack but differs from deterministic recertification") {
+		promotion, loadPromotionErr := missioncontrol.LoadPromotionRecord(root, promotionID)
+		pointer, loadPointerErr := missioncontrol.LoadLastKnownGoodRuntimePackPointer(root)
+		recertificationRef := "hot_update_promotion:" + strings.TrimSpace(promotionID)
+		if loadPromotionErr == nil &&
+			loadPointerErr == nil &&
+			pointer.PackID == promotion.PromotedPackID &&
+			pointer.Basis == recertificationRef &&
+			pointer.RollbackRecordRef == recertificationRef {
+			_, changed, err = missioncontrol.RecertifyLastKnownGoodFromPromotion(root, promotionID, "operator", pointer.VerifiedAt)
+		}
+	}
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", err)
+		return false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, "hot_update_lkg_recertify", nil)
+	return changed, nil
+}
+
 func (s *TaskState) AdvanceRollbackApplyPhase(jobID string, applyID string, phase string) (bool, error) {
 	if s == nil {
 		return false, nil

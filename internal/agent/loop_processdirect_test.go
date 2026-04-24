@@ -2481,6 +2481,280 @@ func TestProcessDirectHotUpdatePromotionCreateCommandRejectsDuplicatePromotionsF
 	}
 }
 
+func TestProcessDirectHotUpdateLKGRecertifyCommandRecertifiesFromPromotionAndIsReplaySafe(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	prepareLoopHotUpdateSucceededGate(t, ag)
+	if _, err := ag.ProcessDirect("HOT_UPDATE_OUTCOME_CREATE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OUTCOME_CREATE) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_PROMOTION_CREATE job-1 hot-update-outcome-hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE) error = %v", err)
+	}
+
+	before := snapshotLoopHotUpdateLKGRecertifySideEffects(t, root, "hot-update-1", "hot-update-outcome-hot-update-1", "hot-update-promotion-hot-update-1")
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_LKG_RECERTIFY job-1 hot-update-promotion-hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_LKG_RECERTIFY first) error = %v", err)
+	}
+	if resp != "Recertified hot-update last-known-good job=job-1 promotion=hot-update-promotion-hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_LKG_RECERTIFY first) response = %q, want recertify acknowledgement", resp)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want lkg recertify audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_lkg_recertify", true, "")
+
+	pointer, err := missioncontrol.LoadLastKnownGoodRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+	if pointer.PackID != "pack-candidate" {
+		t.Fatalf("LastKnownGoodRuntimePackPointer.PackID = %q, want pack-candidate", pointer.PackID)
+	}
+	if pointer.Basis != "hot_update_promotion:hot-update-promotion-hot-update-1" {
+		t.Fatalf("LastKnownGoodRuntimePackPointer.Basis = %q, want deterministic hot-update promotion basis", pointer.Basis)
+	}
+	if pointer.VerifiedBy != "operator" {
+		t.Fatalf("LastKnownGoodRuntimePackPointer.VerifiedBy = %q, want operator", pointer.VerifiedBy)
+	}
+	if pointer.RollbackRecordRef != "hot_update_promotion:hot-update-promotion-hot-update-1" {
+		t.Fatalf("LastKnownGoodRuntimePackPointer.RollbackRecordRef = %q, want deterministic hot-update promotion ref", pointer.RollbackRecordRef)
+	}
+	firstLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(first last-known-good pointer) error = %v", err)
+	}
+	if string(firstLKGBytes) == string(before.lastKnownGoodBytes) {
+		t.Fatal("last-known-good pointer did not change on first recertification")
+	}
+	assertLoopHotUpdateLKGRecertifySideEffectsUnchangedExceptLKG(t, root, "hot-update-1", "hot-update-outcome-hot-update-1", "hot-update-promotion-hot-update-1", before)
+
+	beforeReplay := snapshotLoopHotUpdateLKGRecertifySideEffects(t, root, "hot-update-1", "hot-update-outcome-hot-update-1", "hot-update-promotion-hot-update-1")
+	resp, err = ag.ProcessDirect("HOT_UPDATE_LKG_RECERTIFY job-1 hot-update-promotion-hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_LKG_RECERTIFY replay) error = %v", err)
+	}
+	if resp != "Selected hot-update last-known-good job=job-1 promotion=hot-update-promotion-hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_LKG_RECERTIFY replay) response = %q, want selected acknowledgement", resp)
+	}
+	secondLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(second last-known-good pointer) error = %v", err)
+	}
+	if string(firstLKGBytes) != string(secondLKGBytes) {
+		t.Fatalf("last-known-good pointer changed on idempotent replay\nfirst:\n%s\nsecond:\n%s", string(firstLKGBytes), string(secondLKGBytes))
+	}
+	assertLoopHotUpdateLKGRecertifySideEffectsFullyUnchanged(t, root, "hot-update-1", "hot-update-outcome-hot-update-1", "hot-update-promotion-hot-update-1", beforeReplay)
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.RuntimePackIdentity == nil {
+		t.Fatal("RuntimePackIdentity = nil, want recertified LKG in status")
+	}
+	if summary.RuntimePackIdentity.LastKnownGood.PackID != "pack-candidate" {
+		t.Fatalf("RuntimePackIdentity.LastKnownGood.PackID = %q, want pack-candidate", summary.RuntimePackIdentity.LastKnownGood.PackID)
+	}
+	if summary.RuntimePackIdentity.LastKnownGood.Basis != "hot_update_promotion:hot-update-promotion-hot-update-1" {
+		t.Fatalf("RuntimePackIdentity.LastKnownGood.Basis = %q, want hot-update promotion basis", summary.RuntimePackIdentity.LastKnownGood.Basis)
+	}
+	if summary.RuntimePackIdentity.LastKnownGood.VerifiedAt == nil {
+		t.Fatal("RuntimePackIdentity.LastKnownGood.VerifiedAt = nil, want verification timestamp")
+	}
+}
+
+func TestProcessDirectHotUpdateLKGRecertifyCommandRejectsInvalidSourcesWithoutLKGMutation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, root string) string
+		command   func(promotionID string) string
+		wantError string
+	}{
+		{
+			name:      "missing promotion",
+			setup:     func(t *testing.T, root string) string { return "missing-promotion" },
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: missioncontrol.ErrPromotionRecordNotFound.Error(),
+		},
+		{
+			name: "promotion without outcome id",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, func(record *missioncontrol.PromotionRecord) {
+					record.PromotionID = "promotion-no-outcome"
+					record.OutcomeID = ""
+				})
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: `promotion "promotion-no-outcome" outcome_id is required`,
+		},
+		{
+			name: "linked outcome missing",
+			setup: func(t *testing.T, root string) string {
+				storeLoopHotUpdateTerminalGate(t, root, "hot-update-1", missioncontrol.HotUpdateGateStateReloadApplySucceeded, "")
+				writeLoopHotUpdatePromotionRaw(t, root, missioncontrol.PromotionRecord{
+					RecordVersion:        1,
+					PromotionID:          "promotion-missing-outcome",
+					PromotedPackID:       "pack-candidate",
+					PreviousActivePackID: "pack-base",
+					HotUpdateID:          "hot-update-1",
+					OutcomeID:            "missing-outcome",
+					Reason:               "hot update outcome promoted",
+					PromotedAt:           time.Date(2026, 4, 22, 12, 2, 0, 0, time.UTC),
+					CreatedAt:            time.Date(2026, 4, 22, 12, 3, 0, 0, time.UTC),
+					CreatedBy:            "operator",
+				})
+				return "promotion-missing-outcome"
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: missioncontrol.ErrHotUpdateOutcomeRecordNotFound.Error(),
+		},
+		{
+			name: "linked outcome not hot updated",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, func(record *missioncontrol.HotUpdateOutcomeRecord) {
+					record.OutcomeKind = missioncontrol.HotUpdateOutcomeKindFailed
+					record.Reason = "operator_terminal_failure: recovery reviewed"
+				}, nil)
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: `outcome_kind "failed" does not permit last-known-good recertification`,
+		},
+		{
+			name: "active pointer missing",
+			setup: func(t *testing.T, root string) string {
+				promotionID := storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+				if err := os.Remove(missioncontrol.StoreActiveRuntimePackPointerPath(root)); err != nil {
+					t.Fatalf("Remove(active pointer) error = %v", err)
+				}
+				return promotionID
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: missioncontrol.ErrActiveRuntimePackPointerNotFound.Error(),
+		},
+		{
+			name: "active pointer mismatch",
+			setup: func(t *testing.T, root string) string {
+				promotionID := storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+				if err := missioncontrol.StoreActiveRuntimePackPointer(root, missioncontrol.ActiveRuntimePackPointer{
+					ActivePackID:        "pack-base",
+					LastKnownGoodPackID: "pack-base",
+					UpdatedAt:           time.Date(2026, 4, 22, 12, 4, 0, 0, time.UTC),
+					UpdatedBy:           "operator",
+					UpdateRecordRef:     "manual-active-mismatch",
+					ReloadGeneration:    7,
+				}); err != nil {
+					t.Fatalf("StoreActiveRuntimePackPointer(mismatch) error = %v", err)
+				}
+				return promotionID
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: `active_pack_id "pack-base" does not match promotion promoted_pack_id "pack-candidate"`,
+		},
+		{
+			name: "current lkg missing",
+			setup: func(t *testing.T, root string) string {
+				promotionID := storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+				if err := os.Remove(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root)); err != nil {
+					t.Fatalf("Remove(last-known-good pointer) error = %v", err)
+				}
+				return promotionID
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: missioncontrol.ErrLastKnownGoodRuntimePackPointerNotFound.Error(),
+		},
+		{
+			name: "current lkg not previous or promoted pack",
+			setup: func(t *testing.T, root string) string {
+				promotionID := storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+				mustStoreLoopRuntimePack(t, root, "pack-other")
+				if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+					PackID:            "pack-other",
+					Basis:             "external_basis",
+					VerifiedAt:        time.Date(2026, 4, 22, 12, 5, 0, 0, time.UTC),
+					VerifiedBy:        "operator",
+					RollbackRecordRef: "external",
+				}); err != nil {
+					t.Fatalf("StoreLastKnownGoodRuntimePackPointer(pack-other) error = %v", err)
+				}
+				return promotionID
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: `pack_id "pack-other" does not match promotion previous_active_pack_id "pack-base"`,
+		},
+		{
+			name: "divergent existing lkg",
+			setup: func(t *testing.T, root string) string {
+				promotionID := storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+				if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+					PackID:            "pack-candidate",
+					Basis:             "manual_hot_update_promotion",
+					VerifiedAt:        time.Date(2026, 4, 22, 12, 5, 0, 0, time.UTC),
+					VerifiedBy:        "operator",
+					RollbackRecordRef: "manual",
+				}); err != nil {
+					t.Fatalf("StoreLastKnownGoodRuntimePackPointer(divergent) error = %v", err)
+				}
+				return promotionID
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY job-1 " + promotionID },
+			wantError: `already points to promoted pack but differs from deterministic recertification`,
+		},
+		{
+			name: "wrong job",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t, root, nil, nil)
+			},
+			command:   func(promotionID string) string { return "HOT_UPDATE_LKG_RECERTIFY other-job " + promotionID },
+			wantError: "operator command does not match the active job",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, _ := writeLoopHotUpdateGateControlFixtures(t)
+			writeLoopHotUpdateLastKnownGoodPointer(t, root)
+			promotionID := tc.setup(t, root)
+			beforeLKGBytes, beforeLKGFound := readLoopOptionalFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+			resp, err := ag.ProcessDirect(tc.command(promotionID), 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want rejection", tc.command(promotionID))
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", tc.command(promotionID), resp)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ProcessDirect(%s) error = %q, want substring %q", tc.command(promotionID), err, tc.wantError)
+			}
+			afterLKGBytes, afterLKGFound := readLoopOptionalFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+			if beforeLKGFound != afterLKGFound {
+				t.Fatalf("last-known-good pointer existence changed from %t to %t", beforeLKGFound, afterLKGFound)
+			}
+			if string(beforeLKGBytes) != string(afterLKGBytes) {
+				t.Fatalf("last-known-good pointer changed on rejected recertify\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+			}
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGateRecordCommandFailsClosedWhenRollbackTargetLinkageIsMissing(t *testing.T) {
 	t.Parallel()
 
@@ -5603,6 +5877,180 @@ func assertLoopHotUpdatePromotionCount(t *testing.T, root string, want int) {
 	if len(promotions) != want {
 		t.Fatalf("ListPromotionRecords() len = %d, want %d", len(promotions), want)
 	}
+}
+
+func storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t *testing.T, root string, mutateOutcome func(*missioncontrol.HotUpdateOutcomeRecord), mutatePromotion func(*missioncontrol.PromotionRecord)) string {
+	t.Helper()
+
+	outcomeID := storeLoopHotUpdateOutcomeForPromotionWithMutation(t, root, mutateOutcome)
+	outcome, err := missioncontrol.LoadHotUpdateOutcomeRecord(root, outcomeID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOutcomeRecord() error = %v", err)
+	}
+	record := missioncontrol.PromotionRecord{
+		PromotionID:          "hot-update-promotion-hot-update-1",
+		PromotedPackID:       "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		HotUpdateID:          "hot-update-1",
+		OutcomeID:            outcomeID,
+		Reason:               "hot update outcome promoted",
+		PromotedAt:           outcome.OutcomeAt,
+		CreatedAt:            outcome.OutcomeAt.Add(time.Minute),
+		CreatedBy:            "operator",
+	}
+	if mutatePromotion != nil {
+		mutatePromotion(&record)
+	}
+	if err := missioncontrol.StorePromotionRecord(root, record); err != nil {
+		t.Fatalf("StorePromotionRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreActiveRuntimePackPointer(root, missioncontrol.ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            outcome.OutcomeAt.Add(2 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "hot_update_gate:hot-update-1",
+		ReloadGeneration:     7,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer(candidate) error = %v", err)
+	}
+	return record.PromotionID
+}
+
+type loopHotUpdateLKGRecertifySideEffects struct {
+	activePointerBytes    []byte
+	lastKnownGoodBytes    []byte
+	hotUpdateGateBytes    []byte
+	hotUpdateOutcomeBytes []byte
+	promotionBytes        []byte
+	reloadGeneration      uint64
+	hotUpdateGateRecords  int
+	hotUpdateOutcomes     int
+	promotions            int
+}
+
+func snapshotLoopHotUpdateLKGRecertifySideEffects(t *testing.T, root string, hotUpdateID string, outcomeID string, promotionID string) loopHotUpdateLKGRecertifySideEffects {
+	t.Helper()
+
+	activePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer) error = %v", err)
+	}
+	lastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good pointer) error = %v", err)
+	}
+	hotUpdateGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update gate) error = %v", err)
+	}
+	hotUpdateOutcomeBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateOutcomePath(root, outcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update outcome) error = %v", err)
+	}
+	promotionBytes, err := os.ReadFile(missioncontrol.StorePromotionPath(root, promotionID))
+	if err != nil {
+		t.Fatalf("ReadFile(promotion) error = %v", err)
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	outcomes, err := missioncontrol.ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	promotions, err := missioncontrol.ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	return loopHotUpdateLKGRecertifySideEffects{
+		activePointerBytes:    activePointerBytes,
+		lastKnownGoodBytes:    lastKnownGoodBytes,
+		hotUpdateGateBytes:    hotUpdateGateBytes,
+		hotUpdateOutcomeBytes: hotUpdateOutcomeBytes,
+		promotionBytes:        promotionBytes,
+		reloadGeneration:      pointer.ReloadGeneration,
+		hotUpdateGateRecords:  len(gates),
+		hotUpdateOutcomes:     len(outcomes),
+		promotions:            len(promotions),
+	}
+}
+
+func assertLoopHotUpdateLKGRecertifySideEffectsUnchangedExceptLKG(t *testing.T, root string, hotUpdateID string, outcomeID string, promotionID string, before loopHotUpdateLKGRecertifySideEffects) {
+	t.Helper()
+
+	after := snapshotLoopHotUpdateLKGRecertifySideEffects(t, root, hotUpdateID, outcomeID, promotionID)
+	assertLoopHotUpdateLKGRecertifyStableFields(t, before, after)
+}
+
+func assertLoopHotUpdateLKGRecertifySideEffectsFullyUnchanged(t *testing.T, root string, hotUpdateID string, outcomeID string, promotionID string, before loopHotUpdateLKGRecertifySideEffects) {
+	t.Helper()
+
+	after := snapshotLoopHotUpdateLKGRecertifySideEffects(t, root, hotUpdateID, outcomeID, promotionID)
+	assertLoopHotUpdateLKGRecertifyStableFields(t, before, after)
+	if string(before.lastKnownGoodBytes) != string(after.lastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer changed\nbefore:\n%s\nafter:\n%s", string(before.lastKnownGoodBytes), string(after.lastKnownGoodBytes))
+	}
+}
+
+func assertLoopHotUpdateLKGRecertifyStableFields(t *testing.T, before loopHotUpdateLKGRecertifySideEffects, after loopHotUpdateLKGRecertifySideEffects) {
+	t.Helper()
+
+	if string(before.activePointerBytes) != string(after.activePointerBytes) {
+		t.Fatalf("active runtime pack pointer changed during LKG recertify\nbefore:\n%s\nafter:\n%s", string(before.activePointerBytes), string(after.activePointerBytes))
+	}
+	if after.reloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", after.reloadGeneration, before.reloadGeneration)
+	}
+	if string(before.hotUpdateGateBytes) != string(after.hotUpdateGateBytes) {
+		t.Fatalf("hot-update gate changed during LKG recertify\nbefore:\n%s\nafter:\n%s", string(before.hotUpdateGateBytes), string(after.hotUpdateGateBytes))
+	}
+	if string(before.hotUpdateOutcomeBytes) != string(after.hotUpdateOutcomeBytes) {
+		t.Fatalf("hot-update outcome changed during LKG recertify\nbefore:\n%s\nafter:\n%s", string(before.hotUpdateOutcomeBytes), string(after.hotUpdateOutcomeBytes))
+	}
+	if string(before.promotionBytes) != string(after.promotionBytes) {
+		t.Fatalf("promotion changed during LKG recertify\nbefore:\n%s\nafter:\n%s", string(before.promotionBytes), string(after.promotionBytes))
+	}
+	if after.hotUpdateGateRecords != before.hotUpdateGateRecords {
+		t.Fatalf("ListHotUpdateGateRecords(after) len = %d, want %d", after.hotUpdateGateRecords, before.hotUpdateGateRecords)
+	}
+	if after.hotUpdateOutcomes != before.hotUpdateOutcomes {
+		t.Fatalf("ListHotUpdateOutcomeRecords(after) len = %d, want %d", after.hotUpdateOutcomes, before.hotUpdateOutcomes)
+	}
+	if after.promotions != before.promotions {
+		t.Fatalf("ListPromotionRecords(after) len = %d, want %d", after.promotions, before.promotions)
+	}
+}
+
+func writeLoopHotUpdatePromotionRaw(t *testing.T, root string, record missioncontrol.PromotionRecord) {
+	t.Helper()
+
+	if record.RecordVersion == 0 {
+		record.RecordVersion = 1
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StorePromotionPath(root, record.PromotionID), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(promotion) error = %v", err)
+	}
+}
+
+func readLoopOptionalFile(t *testing.T, path string) ([]byte, bool) {
+	t.Helper()
+
+	bytes, err := os.ReadFile(path)
+	if err == nil {
+		return bytes, true
+	}
+	if os.IsNotExist(err) {
+		return nil, false
+	}
+	t.Fatalf("ReadFile(%s) error = %v", path, err)
+	return nil, false
 }
 
 func testMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.Job {
