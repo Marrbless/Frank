@@ -238,6 +238,118 @@ func ListPromotionRecords(root string) ([]PromotionRecord, error) {
 	})
 }
 
+func CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, createdBy string, createdAt time.Time) (PromotionRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return PromotionRecord{}, false, err
+	}
+	outcomeRef := NormalizeHotUpdateOutcomeRef(HotUpdateOutcomeRef{OutcomeID: outcomeID})
+	if err := ValidateHotUpdateOutcomeRef(outcomeRef); err != nil {
+		return PromotionRecord{}, false, err
+	}
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return PromotionRecord{}, false, fmt.Errorf("mission store promotion created_by is required")
+	}
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		return PromotionRecord{}, false, fmt.Errorf("mission store promotion created_at is required")
+	}
+
+	outcome, err := LoadHotUpdateOutcomeRecord(root, outcomeRef.OutcomeID)
+	if err != nil {
+		return PromotionRecord{}, false, err
+	}
+	if outcome.OutcomeKind != HotUpdateOutcomeKindHotUpdated {
+		return PromotionRecord{}, false, fmt.Errorf(
+			"mission store hot-update outcome %q outcome_kind %q does not permit promotion creation",
+			outcome.OutcomeID,
+			outcome.OutcomeKind,
+		)
+	}
+	if strings.TrimSpace(outcome.CandidatePackID) == "" {
+		return PromotionRecord{}, false, fmt.Errorf("mission store hot-update outcome %q candidate_pack_id is required for promotion creation", outcome.OutcomeID)
+	}
+
+	gate, err := LoadHotUpdateGateRecord(root, outcome.HotUpdateID)
+	if err != nil {
+		return PromotionRecord{}, false, fmt.Errorf("mission store promotion hot_update_id %q: %w", outcome.HotUpdateID, err)
+	}
+	if outcome.CandidatePackID != gate.CandidatePackID {
+		return PromotionRecord{}, false, fmt.Errorf(
+			"mission store hot-update outcome %q candidate_pack_id %q does not match hot-update gate candidate_pack_id %q",
+			outcome.OutcomeID,
+			outcome.CandidatePackID,
+			gate.CandidatePackID,
+		)
+	}
+	if strings.TrimSpace(gate.PreviousActivePackID) == "" {
+		return PromotionRecord{}, false, fmt.Errorf("mission store hot-update gate %q previous_active_pack_id is required for promotion creation", gate.HotUpdateID)
+	}
+	if _, err := LoadRuntimePackRecord(root, gate.PreviousActivePackID); err != nil {
+		return PromotionRecord{}, false, fmt.Errorf("mission store hot-update gate %q previous_active_pack_id %q: %w", gate.HotUpdateID, gate.PreviousActivePackID, err)
+	}
+
+	record := NormalizePromotionRecord(PromotionRecord{
+		RecordVersion:        StoreRecordVersion,
+		PromotionID:          hotUpdatePromotionIDFromOutcome(outcome.HotUpdateID),
+		PromotedPackID:       outcome.CandidatePackID,
+		PreviousActivePackID: gate.PreviousActivePackID,
+		HotUpdateID:          outcome.HotUpdateID,
+		OutcomeID:            outcome.OutcomeID,
+		CandidateID:          outcome.CandidateID,
+		RunID:                outcome.RunID,
+		CandidateResultID:    outcome.CandidateResultID,
+		Reason:               "hot update outcome promoted",
+		PromotedAt:           outcome.OutcomeAt,
+		CreatedAt:            createdAt,
+		CreatedBy:            createdBy,
+	})
+	if err := ValidatePromotionRecord(record); err != nil {
+		return PromotionRecord{}, false, err
+	}
+
+	existingRecords, err := ListPromotionRecords(root)
+	if err != nil {
+		return PromotionRecord{}, false, err
+	}
+	for _, existing := range existingRecords {
+		if existing.OutcomeID == record.OutcomeID && existing.PromotionID != record.PromotionID {
+			return PromotionRecord{}, false, fmt.Errorf(
+				"mission store promotion for outcome_id %q already exists as %q",
+				record.OutcomeID,
+				existing.PromotionID,
+			)
+		}
+		if existing.HotUpdateID == record.HotUpdateID && existing.PromotionID != record.PromotionID {
+			return PromotionRecord{}, false, fmt.Errorf(
+				"mission store promotion for hot_update_id %q already exists as %q",
+				record.HotUpdateID,
+				existing.PromotionID,
+			)
+		}
+	}
+
+	existing, err := LoadPromotionRecord(root, record.PromotionID)
+	if err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return existing, false, nil
+		}
+		return PromotionRecord{}, false, fmt.Errorf("mission store promotion %q already exists", record.PromotionID)
+	}
+	if !errors.Is(err, ErrPromotionRecordNotFound) {
+		return PromotionRecord{}, false, err
+	}
+
+	if err := StorePromotionRecord(root, record); err != nil {
+		return PromotionRecord{}, false, err
+	}
+	stored, err := LoadPromotionRecord(root, record.PromotionID)
+	if err != nil {
+		return PromotionRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func loadPromotionRecordFile(root, path string) (PromotionRecord, error) {
 	var record PromotionRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
@@ -483,4 +595,8 @@ func validatePromotionIdentifierField(surface, fieldName, value string) error {
 		}
 	}
 	return nil
+}
+
+func hotUpdatePromotionIDFromOutcome(hotUpdateID string) string {
+	return "hot-update-promotion-" + strings.TrimSpace(hotUpdateID)
 }

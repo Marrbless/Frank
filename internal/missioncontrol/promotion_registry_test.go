@@ -275,6 +275,363 @@ func TestLoadPromotionRecordNotFound(t *testing.T) {
 	}
 }
 
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeCreatesPromotionAndPreservesState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 4, 9, 0, 0, 0, time.FixedZone("offset", -4*60*60))
+
+	outcome, gate := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+	before := snapshotHotUpdatePromotionSideEffects(t, root, outcome.OutcomeID, gate.HotUpdateID)
+
+	createdAt := now.Add(12 * time.Minute)
+	got, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, " "+outcome.OutcomeID+" ", " operator ", createdAt)
+	if err != nil {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = false, want true")
+	}
+
+	want := PromotionRecord{
+		RecordVersion:        StoreRecordVersion,
+		PromotionID:          "hot-update-promotion-hot-update-1",
+		PromotedPackID:       "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		HotUpdateID:          "hot-update-1",
+		OutcomeID:            "hot-update-outcome-hot-update-1",
+		Reason:               "hot update outcome promoted",
+		PromotedAt:           outcome.OutcomeAt.UTC(),
+		CreatedAt:            createdAt.UTC(),
+		CreatedBy:            "operator",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() = %#v, want %#v", got, want)
+	}
+
+	promotions, err := ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 1 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 1", len(promotions))
+	}
+	assertHotUpdatePromotionSideEffectsUnchanged(t, root, outcome.OutcomeID, gate.HotUpdateID, before)
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeRejectsMissingOutcome(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+
+	_, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, "missing-outcome", "operator", now)
+	if !errors.Is(err, ErrHotUpdateOutcomeRecordNotFound) {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %v, want %v", err, ErrHotUpdateOutcomeRecordNotFound)
+	}
+	if changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = true, want false")
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeRejectsNonHotUpdatedOutcomes(t *testing.T) {
+	t.Parallel()
+
+	kinds := []HotUpdateOutcomeKind{
+		HotUpdateOutcomeKindFailed,
+		HotUpdateOutcomeKindKeptStaged,
+		HotUpdateOutcomeKindDiscarded,
+		HotUpdateOutcomeKindBlocked,
+		HotUpdateOutcomeKindApprovalRequired,
+		HotUpdateOutcomeKindColdRestartNeeded,
+		HotUpdateOutcomeKindCanaryApplied,
+		HotUpdateOutcomeKindPromoted,
+		HotUpdateOutcomeKindRolledBack,
+		HotUpdateOutcomeKindAborted,
+	}
+
+	for _, kind := range kinds {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 5, 4, 11, 0, 0, 0, time.UTC)
+			outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, func(record *HotUpdateOutcomeRecord) {
+				record.OutcomeKind = kind
+				record.Reason = "non-successful outcome"
+			}, nil)
+
+			_, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", now.Add(12*time.Minute))
+			if err == nil {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() error = nil, want non-hot_updated rejection")
+			}
+			if changed {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), "does not permit promotion creation") {
+				t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %q, want non-hot_updated context", err.Error())
+			}
+			assertPromotionRecordCount(t, root, 0)
+		})
+	}
+
+	t.Run("unknown future kind", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 5, 4, 11, 30, 0, 0, time.UTC)
+		outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+		outcome.OutcomeKind = HotUpdateOutcomeKind("future_kind")
+		writeRawHotUpdateOutcomeRecord(t, root, outcome)
+
+		_, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", now.Add(12*time.Minute))
+		if err == nil {
+			t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() error = nil, want invalid kind rejection")
+		}
+		if changed {
+			t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), `outcome_kind "future_kind" is invalid`) {
+			t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %q, want invalid kind context", err.Error())
+		}
+		assertPromotionRecordCount(t, root, 0)
+	})
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeRejectsInvalidOutcomeLinkage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, root string, now time.Time) string
+		want  string
+	}{
+		{
+			name: "empty candidate pack",
+			setup: func(t *testing.T, root string, now time.Time) string {
+				outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, func(record *HotUpdateOutcomeRecord) {
+					record.CandidatePackID = ""
+				}, nil)
+				return outcome.OutcomeID
+			},
+			want: `candidate_pack_id is required for promotion creation`,
+		},
+		{
+			name: "candidate pack mismatch with gate",
+			setup: func(t *testing.T, root string, now time.Time) string {
+				outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+				mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(13*time.Minute), func(record *RuntimePackRecord) {
+					record.PackID = "pack-other"
+					record.ParentPackID = "pack-base"
+					record.RollbackTargetPackID = "pack-base"
+				}))
+				outcome.CandidatePackID = "pack-other"
+				writeRawHotUpdateOutcomeRecord(t, root, outcome)
+				return outcome.OutcomeID
+			},
+			want: `candidate_pack_id "pack-other" does not match hot-update gate candidate_pack_id "pack-candidate"`,
+		},
+		{
+			name: "gate missing previous active pack",
+			setup: func(t *testing.T, root string, now time.Time) string {
+				outcome, gate := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+				gate.PreviousActivePackID = "pack-missing"
+				writeRawHotUpdateGateRecord(t, root, gate)
+				return outcome.OutcomeID
+			},
+			want: `previous_active_pack_id "pack-missing"`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+			outcomeID := tc.setup(t, root, now)
+
+			_, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, "operator", now.Add(20*time.Minute))
+			if err == nil {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() error = nil, want fail-closed rejection")
+			}
+			if changed {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %q, want substring %q", err.Error(), tc.want)
+			}
+			assertPromotionRecordCount(t, root, 0)
+		})
+	}
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeReplayIsIdempotentAndDivergentDuplicateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 4, 13, 0, 0, 0, time.UTC)
+	outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+	createdAt := now.Add(12 * time.Minute)
+
+	first, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome(first) changed = false, want true")
+	}
+	firstBytes, err := os.ReadFile(StorePromotionPath(root, first.PromotionID))
+	if err != nil {
+		t.Fatalf("ReadFile(first promotion) error = %v", err)
+	}
+
+	second, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome(replay) = %#v, want %#v", second, first)
+	}
+	secondBytes, err := os.ReadFile(StorePromotionPath(root, first.PromotionID))
+	if err != nil {
+		t.Fatalf("ReadFile(second promotion) error = %v", err)
+	}
+	if string(firstBytes) != string(secondBytes) {
+		t.Fatalf("promotion file changed on exact replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+
+	_, changed, err = CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", createdAt.Add(time.Minute))
+	if err == nil {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome(divergent replay) error = nil, want duplicate rejection")
+	}
+	if changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome(divergent replay) changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), `mission store promotion "hot-update-promotion-hot-update-1" already exists`) {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome(divergent replay) error = %q, want deterministic duplicate context", err.Error())
+	}
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeRejectsExistingDifferentPromotionForSameOutcomeOrHotUpdate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*PromotionRecord)
+		want   string
+	}{
+		{
+			name: "same outcome different promotion id",
+			mutate: func(record *PromotionRecord) {
+				record.PromotionID = "legacy-promotion"
+			},
+			want: `outcome_id "hot-update-outcome-hot-update-1" already exists as "legacy-promotion"`,
+		},
+		{
+			name: "same hot update different promotion id",
+			mutate: func(record *PromotionRecord) {
+				record.PromotionID = "legacy-promotion"
+				record.OutcomeID = ""
+			},
+			want: `hot_update_id "hot-update-1" already exists as "legacy-promotion"`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 5, 4, 14, 0, 0, 0, time.UTC)
+			outcome, _ := storeSuccessfulHotUpdateOutcomePromotionFixture(t, root, now, nil, nil)
+			legacy := PromotionRecord{
+				PromotionID:          "legacy-promotion",
+				PromotedPackID:       "pack-candidate",
+				PreviousActivePackID: "pack-base",
+				HotUpdateID:          "hot-update-1",
+				OutcomeID:            outcome.OutcomeID,
+				Reason:               "legacy promotion",
+				PromotedAt:           outcome.OutcomeAt,
+				CreatedAt:            now.Add(13 * time.Minute),
+				CreatedBy:            "operator",
+			}
+			tc.mutate(&legacy)
+			if err := StorePromotionRecord(root, legacy); err != nil {
+				t.Fatalf("StorePromotionRecord(legacy) error = %v", err)
+			}
+
+			_, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", now.Add(14*time.Minute))
+			if err == nil {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() error = nil, want duplicate linkage rejection")
+			}
+			if changed {
+				t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %q, want substring %q", err.Error(), tc.want)
+			}
+			assertPromotionRecordCount(t, root, 1)
+		})
+	}
+}
+
+func TestCreatePromotionFromSuccessfulHotUpdateOutcomeCopiesOptionalRefsWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 4, 15, 0, 0, 0, time.UTC)
+	storeHotUpdateOutcomeFixtures(t, root, now)
+
+	outcome := validHotUpdateOutcomeRecord(now.Add(8*time.Minute), func(record *HotUpdateOutcomeRecord) {
+		record.OutcomeID = "hot-update-outcome-hot-update-1"
+		record.HotUpdateID = "hot-update-1"
+		record.CandidateID = "candidate-1"
+		record.RunID = "run-1"
+		record.CandidateResultID = "result-1"
+		record.CandidatePackID = "pack-candidate"
+		record.OutcomeKind = HotUpdateOutcomeKindHotUpdated
+		record.Reason = "hot update reload/apply succeeded"
+		record.CreatedBy = "operator"
+	})
+	if err := StoreHotUpdateOutcomeRecord(root, outcome); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord() error = %v", err)
+	}
+
+	got, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", now.Add(9*time.Minute))
+	if err != nil {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = false, want true")
+	}
+	if got.CandidateID != "candidate-1" {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome().CandidateID = %q, want candidate-1", got.CandidateID)
+	}
+	if got.RunID != "run-1" {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome().RunID = %q, want run-1", got.RunID)
+	}
+	if got.CandidateResultID != "result-1" {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome().CandidateResultID = %q, want result-1", got.CandidateResultID)
+	}
+	if got.LastKnownGoodPackID != "" || got.LastKnownGoodBasis != "" {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() LKG fields = (%q, %q), want empty", got.LastKnownGoodPackID, got.LastKnownGoodBasis)
+	}
+}
+
 func validPromotionRecord(now time.Time, mutate func(*PromotionRecord)) PromotionRecord {
 	record := PromotionRecord{
 		PromotionID:          "promotion-root",
@@ -316,5 +673,158 @@ func storePromotionFixtures(t *testing.T, root string, now time.Time) {
 		record.CreatedBy = "operator"
 	})); err != nil {
 		t.Fatalf("StoreHotUpdateOutcomeRecord() error = %v", err)
+	}
+}
+
+func storeSuccessfulHotUpdateOutcomePromotionFixture(t *testing.T, root string, now time.Time, mutateOutcome func(*HotUpdateOutcomeRecord), mutateGate func(*HotUpdateGateRecord)) (HotUpdateOutcomeRecord, HotUpdateGateRecord) {
+	t.Helper()
+
+	gate := storeHotUpdateTerminalOutcomeFixture(t, root, now, "hot-update-1", HotUpdateGateStateReloadApplySucceeded, "")
+	if mutateGate != nil {
+		mutateGate(&gate)
+		if err := StoreHotUpdateGateRecord(root, gate); err != nil {
+			t.Fatalf("StoreHotUpdateGateRecord(mutated gate) error = %v", err)
+		}
+	}
+
+	outcome := validHotUpdateOutcomeRecord(now.Add(11*time.Minute), func(record *HotUpdateOutcomeRecord) {
+		record.OutcomeID = "hot-update-outcome-hot-update-1"
+		record.HotUpdateID = gate.HotUpdateID
+		record.CandidateID = ""
+		record.RunID = ""
+		record.CandidateResultID = ""
+		record.CandidatePackID = "pack-candidate"
+		record.OutcomeKind = HotUpdateOutcomeKindHotUpdated
+		record.Reason = "hot update reload/apply succeeded"
+		record.Notes = ""
+		record.OutcomeAt = gate.PhaseUpdatedAt
+		record.CreatedBy = "operator"
+	})
+	if mutateOutcome != nil {
+		mutateOutcome(&outcome)
+	}
+	if err := StoreHotUpdateOutcomeRecord(root, outcome); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord() error = %v", err)
+	}
+	storedOutcome, err := LoadHotUpdateOutcomeRecord(root, outcome.OutcomeID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOutcomeRecord() error = %v", err)
+	}
+	storedGate, err := LoadHotUpdateGateRecord(root, gate.HotUpdateID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+	}
+	return storedOutcome, storedGate
+}
+
+type hotUpdatePromotionSideEffectSnapshot struct {
+	activePointerBytes []byte
+	lastKnownGoodBytes []byte
+	gateBytes          []byte
+	outcomeBytes       []byte
+	reloadGeneration   uint64
+	outcomeRecords     int
+	gateRecords        int
+}
+
+func snapshotHotUpdatePromotionSideEffects(t *testing.T, root, outcomeID, hotUpdateID string) hotUpdatePromotionSideEffectSnapshot {
+	t.Helper()
+
+	activePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer) error = %v", err)
+	}
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	lastKnownGoodBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good pointer) error = %v", err)
+	}
+	gateBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update gate) error = %v", err)
+	}
+	outcomeBytes, err := os.ReadFile(StoreHotUpdateOutcomePath(root, outcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update outcome) error = %v", err)
+	}
+	outcomeRecords, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	gateRecords, err := ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+
+	return hotUpdatePromotionSideEffectSnapshot{
+		activePointerBytes: activePointerBytes,
+		lastKnownGoodBytes: lastKnownGoodBytes,
+		gateBytes:          gateBytes,
+		outcomeBytes:       outcomeBytes,
+		reloadGeneration:   activePointer.ReloadGeneration,
+		outcomeRecords:     len(outcomeRecords),
+		gateRecords:        len(gateRecords),
+	}
+}
+
+func assertHotUpdatePromotionSideEffectsUnchanged(t *testing.T, root, outcomeID, hotUpdateID string, before hotUpdatePromotionSideEffectSnapshot) {
+	t.Helper()
+
+	after := snapshotHotUpdatePromotionSideEffects(t, root, outcomeID, hotUpdateID)
+	if string(after.activePointerBytes) != string(before.activePointerBytes) {
+		t.Fatalf("active runtime-pack pointer changed\nbefore:\n%s\nafter:\n%s", string(before.activePointerBytes), string(after.activePointerBytes))
+	}
+	if after.reloadGeneration != before.reloadGeneration {
+		t.Fatalf("reload_generation = %d, want %d", after.reloadGeneration, before.reloadGeneration)
+	}
+	if string(after.lastKnownGoodBytes) != string(before.lastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer changed\nbefore:\n%s\nafter:\n%s", string(before.lastKnownGoodBytes), string(after.lastKnownGoodBytes))
+	}
+	if string(after.gateBytes) != string(before.gateBytes) {
+		t.Fatalf("hot-update gate changed\nbefore:\n%s\nafter:\n%s", string(before.gateBytes), string(after.gateBytes))
+	}
+	if string(after.outcomeBytes) != string(before.outcomeBytes) {
+		t.Fatalf("hot-update outcome changed\nbefore:\n%s\nafter:\n%s", string(before.outcomeBytes), string(after.outcomeBytes))
+	}
+	if after.outcomeRecords != before.outcomeRecords {
+		t.Fatalf("hot-update outcome record count = %d, want %d", after.outcomeRecords, before.outcomeRecords)
+	}
+	if after.gateRecords != before.gateRecords {
+		t.Fatalf("hot-update gate record count = %d, want %d", after.gateRecords, before.gateRecords)
+	}
+}
+
+func writeRawHotUpdateOutcomeRecord(t *testing.T, root string, record HotUpdateOutcomeRecord) {
+	t.Helper()
+
+	record = NormalizeHotUpdateOutcomeRecord(record)
+	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	if err := WriteStoreJSONAtomic(StoreHotUpdateOutcomePath(root, record.OutcomeID), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(hot-update outcome) error = %v", err)
+	}
+}
+
+func writeRawHotUpdateGateRecord(t *testing.T, root string, record HotUpdateGateRecord) {
+	t.Helper()
+
+	record = NormalizeHotUpdateGateRecord(record)
+	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	if err := WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(hot-update gate) error = %v", err)
+	}
+}
+
+func assertPromotionRecordCount(t *testing.T, root string, want int) {
+	t.Helper()
+
+	promotions, err := ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != want {
+		t.Fatalf("ListPromotionRecords() len = %d, want %d", len(promotions), want)
 	}
 }
