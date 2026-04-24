@@ -30,6 +30,7 @@ type OperatorStatusSummary struct {
 	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
 	EvalSuiteIdentity                  *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
+	PromotionPolicyIdentity            *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
 	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
@@ -104,6 +105,31 @@ type OperatorImprovementCandidateStatus struct {
 type OperatorEvalSuiteIdentityStatus struct {
 	State  string                    `json:"state"`
 	Suites []OperatorEvalSuiteStatus `json:"suites,omitempty"`
+}
+
+type OperatorPromotionPolicyIdentityStatus struct {
+	State    string                          `json:"state"`
+	Policies []OperatorPromotionPolicyStatus `json:"policies,omitempty"`
+}
+
+type OperatorPromotionPolicyStatus struct {
+	State                     string   `json:"state"`
+	PromotionPolicyID         string   `json:"promotion_policy_id,omitempty"`
+	RequiresHoldoutPass       bool     `json:"requires_holdout_pass,omitempty"`
+	RequiresCanary            bool     `json:"requires_canary,omitempty"`
+	RequiresOwnerApproval     bool     `json:"requires_owner_approval,omitempty"`
+	AllowsAutonomousHotUpdate bool     `json:"allows_autonomous_hot_update,omitempty"`
+	AllowedSurfaceClasses     []string `json:"allowed_surface_classes,omitempty"`
+	EpsilonRule               string   `json:"epsilon_rule,omitempty"`
+	RegressionRule            string   `json:"regression_rule,omitempty"`
+	CompatibilityRule         string   `json:"compatibility_rule,omitempty"`
+	ResourceRule              string   `json:"resource_rule,omitempty"`
+	MaxCanaryDuration         string   `json:"max_canary_duration,omitempty"`
+	ForbiddenSurfaceChanges   []string `json:"forbidden_surface_changes,omitempty"`
+	CreatedAt                 *string  `json:"created_at,omitempty"`
+	CreatedBy                 string   `json:"created_by,omitempty"`
+	Notes                     string   `json:"notes,omitempty"`
+	Error                     string   `json:"error,omitempty"`
 }
 
 type OperatorEvalSuiteStatus struct {
@@ -511,6 +537,16 @@ func WithEvalSuiteIdentity(summary OperatorStatusSummary, root string) OperatorS
 	return summary
 }
 
+func WithPromotionPolicyIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorPromotionPolicyIdentityStatus(root)
+	summary.PromotionPolicyIdentity = &status
+	return summary
+}
+
 func WithImprovementRunIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -621,6 +657,24 @@ func LoadOperatorEvalSuiteIdentityStatus(root string) OperatorEvalSuiteIdentityS
 	return OperatorEvalSuiteIdentityStatus{
 		State:  state,
 		Suites: suites,
+	}
+}
+
+func LoadOperatorPromotionPolicyIdentityStatus(root string) OperatorPromotionPolicyIdentityStatus {
+	policies, found, invalid, err := loadOperatorPromotionPolicyStatuses(root)
+	if !found {
+		return OperatorPromotionPolicyIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorPromotionPolicyIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorPromotionPolicyIdentityStatus{
+		State:    state,
+		Policies: policies,
 	}
 }
 
@@ -1238,6 +1292,86 @@ func operatorEvalSuiteStatusFromRecord(record EvalSuiteRecord) OperatorEvalSuite
 		FrozenForRun:     record.FrozenForRun,
 		CreatedAt:        formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:        record.CreatedBy,
+	}
+}
+
+func loadOperatorPromotionPolicyStatuses(root string) ([]OperatorPromotionPolicyStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StorePromotionPoliciesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	policies := make([]OperatorPromotionPolicyStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorPromotionPolicyStatus(filepath.Join(StorePromotionPoliciesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		policies = append(policies, status)
+	}
+	return policies, true, invalid, nil
+}
+
+func loadOperatorPromotionPolicyStatus(path string) OperatorPromotionPolicyStatus {
+	status := OperatorPromotionPolicyStatus{
+		State:             "invalid",
+		PromotionPolicyID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record PromotionPolicyRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizePromotionPolicyRecord(record)
+	status = operatorPromotionPolicyStatusFromRecord(record)
+	if err := ValidatePromotionPolicyRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorPromotionPolicyStatusFromRecord(record PromotionPolicyRecord) OperatorPromotionPolicyStatus {
+	return OperatorPromotionPolicyStatus{
+		PromotionPolicyID:         record.PromotionPolicyID,
+		RequiresHoldoutPass:       record.RequiresHoldoutPass,
+		RequiresCanary:            record.RequiresCanary,
+		RequiresOwnerApproval:     record.RequiresOwnerApproval,
+		AllowsAutonomousHotUpdate: record.AllowsAutonomousHotUpdate,
+		AllowedSurfaceClasses:     append([]string(nil), record.AllowedSurfaceClasses...),
+		EpsilonRule:               record.EpsilonRule,
+		RegressionRule:            record.RegressionRule,
+		CompatibilityRule:         record.CompatibilityRule,
+		ResourceRule:              record.ResourceRule,
+		MaxCanaryDuration:         record.MaxCanaryDuration,
+		ForbiddenSurfaceChanges:   append([]string(nil), record.ForbiddenSurfaceChanges...),
+		CreatedAt:                 formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:                 record.CreatedBy,
+		Notes:                     record.Notes,
 	}
 }
 
