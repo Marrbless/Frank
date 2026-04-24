@@ -61,6 +61,9 @@ func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
 func copyJob(job Job) Job {
 	jobCopy := job
 	jobCopy.AllowedTools = append([]string(nil), job.AllowedTools...)
+	jobCopy.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
+	jobCopy.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
+	jobCopy.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)
 	jobCopy.Plan = Plan{ID: job.Plan.ID}
 	if job.Plan.Steps != nil {
 		jobCopy.Plan.Steps = make([]Step, len(job.Plan.Steps))
@@ -116,6 +119,16 @@ func cloneFrankRegistryObjectRefs(refs []FrankRegistryObjectRef) []FrankRegistry
 	}
 
 	cloned := make([]FrankRegistryObjectRef, len(refs))
+	copy(cloned, refs)
+	return cloned
+}
+
+func cloneJobSurfaceRefs(refs []JobSurfaceRef) []JobSurfaceRef {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	cloned := make([]JobSurfaceRef, len(refs))
 	copy(cloned, refs)
 	return cloned
 }

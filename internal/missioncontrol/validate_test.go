@@ -363,6 +363,165 @@ func TestValidatePlanAdmitsV4ImprovementFamiliesInImprovementWorkspace(t *testin
 	}
 }
 
+func TestValidatePlanAdmitsV4ImprovementFamiliesWithDeclaredSurfaces(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		family string
+		class  string
+		ref    string
+	}{
+		{name: "improve promptpack", family: MissionFamilyImprovePromptpack, class: JobSurfaceClassPromptPack, ref: "prompt-pack/main"},
+		{name: "improve skills", family: MissionFamilyImproveSkills, class: JobSurfaceClassSkill, ref: "skills/research"},
+		{name: "evaluate candidate", family: MissionFamilyEvaluateCandidate, class: JobSurfaceClassManifestEntry, ref: "manifest/research"},
+		{name: "promote candidate", family: MissionFamilyPromoteCandidate, class: JobSurfaceClassPromptPack, ref: "prompt-pack/main"},
+		{name: "rollback candidate", family: MissionFamilyRollbackCandidate, class: JobSurfaceClassSkill, ref: "skills/research"},
+		{name: "propose source patch", family: MissionFamilyProposeSourcePatch, class: JobSurfaceClassSourcePatchArtifact, ref: "patches/source.patch"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, tt.family)
+			job.TargetSurfaces = []JobSurfaceRef{{Class: tt.class, Ref: tt.ref}}
+			job.ImmutableSurfaces = testV4ImmutableSurfaces()
+			errors := ValidatePlan(job)
+			if len(errors) != 0 {
+				t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+			}
+		})
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyMissingTargetSurfaceDeclarations(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.TargetSurfaces = nil
+	job.MutableSurfaces = nil
+	job.ImmutableSurfaces = testV4ImmutableSurfaces()
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4MutationScopeViolation,
+		Message: "improvement-family job requires at least one target_surfaces or mutable_surfaces entry",
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyMissingImmutableSurfaces(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.ImmutableSurfaces = nil
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4ForbiddenSurfaceChange,
+		Message: "improvement-family job requires immutable_surfaces",
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyEmptySurfaceRef(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "   "}}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4MutationScopeViolation,
+		Message: "target_surfaces[0].ref is required",
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyDuplicateSurfaceRef(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.TargetSurfaces = []JobSurfaceRef{
+		{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
+		{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
+	}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4MutationScopeViolation,
+		Message: `target_surfaces contains duplicate surface ref "prompt-pack/main" first declared at index 0`,
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4ImprovementFamilyUnknownTargetSurfaceClass(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: "runtime_source", Ref: "internal/missioncontrol"}}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4SurfaceClassRequired,
+		Message: `target_surfaces[0].class "runtime_source" is not recognized`,
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4TopologyImprovementWithoutSkillTopologyTarget(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4MutationScopeViolation,
+		Message: `mission_family "improve_topology" requires target surface class "skill_topology"`,
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanRejectsV4SourcePatchProposalWithoutSourcePatchArtifactTarget(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyProposeSourcePatch)
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+
+	errors := ValidatePlan(job)
+	want := ValidationError{
+		Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
+		Message: `mission_family "propose_source_patch" requires target surface class "source_patch_artifact"`,
+	}
+	if len(errors) == 0 || errors[0] != want {
+		t.Fatalf("ValidatePlan()[0] = %#v, want %#v; all errors = %#v", firstValidationError(errors), want, errors)
+	}
+}
+
+func TestValidatePlanDoesNotRequireV4SurfaceDeclarationsForLiveFamily(t *testing.T) {
+	t.Parallel()
+
+	errors := ValidatePlan(testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyBootstrapRevenue))
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanAdmitsV4ImprovementFamiliesOnCompatibleWorkspaceHosts(t *testing.T) {
 	t.Parallel()
 
@@ -1309,7 +1468,40 @@ func testV4Job(executionPlane, executionHost, missionFamily string) Job {
 	job.ExecutionPlane = executionPlane
 	job.ExecutionHost = executionHost
 	job.MissionFamily = missionFamily
+	if isImprovementMissionFamily(missionFamily) {
+		job.TargetSurfaces = testV4TargetSurfacesForFamily(missionFamily)
+		job.ImmutableSurfaces = testV4ImmutableSurfaces()
+	}
 	return job
+}
+
+func firstValidationError(errors []ValidationError) ValidationError {
+	if len(errors) == 0 {
+		return ValidationError{}
+	}
+	return errors[0]
+}
+
+func testV4TargetSurfacesForFamily(missionFamily string) []JobSurfaceRef {
+	switch missionFamily {
+	case MissionFamilyImproveSkills:
+		return []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+	case MissionFamilyImproveRoutingManifest:
+		return []JobSurfaceRef{{Class: JobSurfaceClassManifestEntry, Ref: "manifest/research"}}
+	case MissionFamilyImproveTopology:
+		return []JobSurfaceRef{{Class: JobSurfaceClassSkillTopology, Ref: "topology/split-research"}}
+	case MissionFamilyProposeSourcePatch:
+		return []JobSurfaceRef{{Class: JobSurfaceClassSourcePatchArtifact, Ref: "patches/source.patch"}}
+	default:
+		return []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	}
+}
+
+func testV4ImmutableSurfaces() []JobSurfaceRef {
+	return []JobSurfaceRef{
+		{Class: JobSurfaceClassManifestEntry, Ref: "eval/rubric"},
+		{Class: JobSurfaceClassManifestEntry, Ref: "eval/holdout"},
+	}
 }
 
 func improvementMissionFamiliesForAdmissionTest() []string {

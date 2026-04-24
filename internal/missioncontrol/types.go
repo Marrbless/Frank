@@ -63,6 +63,14 @@ const (
 )
 
 const (
+	JobSurfaceClassPromptPack          = "prompt_pack"
+	JobSurfaceClassSkill               = "skill"
+	JobSurfaceClassManifestEntry       = "manifest_entry"
+	JobSurfaceClassSkillTopology       = "skill_topology"
+	JobSurfaceClassSourcePatchArtifact = "source_patch_artifact"
+)
+
+const (
 	JobStatePending   JobState = "pending"
 	JobStateRunning   JobState = "running"
 	JobStateCompleted JobState = "completed"
@@ -129,17 +137,25 @@ type CapabilityOnboardingProposalRef struct {
 	ProposalID string `json:"proposal_id"`
 }
 
+type JobSurfaceRef struct {
+	Class string `json:"class"`
+	Ref   string `json:"ref"`
+}
+
 type Job struct {
-	ID               string        `json:"id"`
-	SpecVersion      string        `json:"spec_version,omitempty"`
-	ExecutionPlane   string        `json:"execution_plane,omitempty"`
-	ExecutionHost    string        `json:"execution_host,omitempty"`
-	MissionFamily    string        `json:"mission_family,omitempty"`
-	State            JobState      `json:"state"`
-	MaxAuthority     AuthorityTier `json:"max_authority"`
-	AllowedTools     []string      `json:"allowed_tools"`
-	Plan             Plan          `json:"plan"`
-	MissionStoreRoot string        `json:"-"`
+	ID                string          `json:"id"`
+	SpecVersion       string          `json:"spec_version,omitempty"`
+	ExecutionPlane    string          `json:"execution_plane,omitempty"`
+	ExecutionHost     string          `json:"execution_host,omitempty"`
+	MissionFamily     string          `json:"mission_family,omitempty"`
+	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	State             JobState        `json:"state"`
+	MaxAuthority      AuthorityTier   `json:"max_authority"`
+	AllowedTools      []string        `json:"allowed_tools"`
+	Plan              Plan            `json:"plan"`
+	MissionStoreRoot  string          `json:"-"`
 }
 
 type Plan struct {
@@ -212,6 +228,12 @@ func NormalizeTreasuryRef(ref TreasuryRef) TreasuryRef {
 
 func NormalizeCapabilityOnboardingProposalRef(ref CapabilityOnboardingProposalRef) CapabilityOnboardingProposalRef {
 	ref.ProposalID = strings.TrimSpace(ref.ProposalID)
+	return ref
+}
+
+func NormalizeJobSurfaceRef(ref JobSurfaceRef) JobSurfaceRef {
+	ref.Class = strings.TrimSpace(ref.Class)
+	ref.Ref = strings.TrimSpace(ref.Ref)
 	return ref
 }
 

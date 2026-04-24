@@ -68,6 +68,23 @@ func TestNewInspectSummaryExposesV4ExecutionMetadata(t *testing.T) {
 	}
 }
 
+func TestNewInspectSummaryExposesV4ImprovementSurfaces(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+
+	summary, err := NewInspectSummary(job, "")
+	if err != nil {
+		t.Fatalf("NewInspectSummary() error = %v", err)
+	}
+	if !reflect.DeepEqual(summary.TargetSurfaces, job.TargetSurfaces) {
+		t.Fatalf("TargetSurfaces = %#v, want %#v", summary.TargetSurfaces, job.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
+		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
+	}
+}
+
 func TestNewInspectSummaryFromControlReturnsResolvableStep(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +137,12 @@ func TestNewInspectSummaryFromInspectablePlanExposesV4ExecutionMetadata(t *testi
 	}
 	if summary.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("MissionFamily = %q, want %q", summary.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+	if !reflect.DeepEqual(summary.TargetSurfaces, job.TargetSurfaces) {
+		t.Fatalf("TargetSurfaces = %#v, want %#v", summary.TargetSurfaces, job.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
+		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
 	}
 }
 

@@ -330,8 +330,100 @@ func validateV4ExecutionMetadata(job Job) []ValidationError {
 			Message: fmt.Sprintf("mission_family %q requires execution_host phone, desktop_dev, or workspace when execution_plane is improvement_workspace", family),
 		})
 	}
+	errors = append(errors, validateV4ImprovementTargetSurfaces(job, plane, host, family)...)
 
 	return errors
+}
+
+func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []ValidationError {
+	if !isImprovementMissionFamily(family) || plane != ExecutionPlaneImprovementWorkspace || !isKnownExecutionHost(host) || !isImprovementWorkspaceExecutionHost(host) {
+		return nil
+	}
+
+	errors := make([]ValidationError, 0, 4)
+	if len(job.TargetSurfaces) == 0 && len(job.MutableSurfaces) == 0 {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4MutationScopeViolation,
+			Message: "improvement-family job requires at least one target_surfaces or mutable_surfaces entry",
+		})
+	}
+	if len(job.ImmutableSurfaces) == 0 {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4ForbiddenSurfaceChange,
+			Message: "improvement-family job requires immutable_surfaces",
+		})
+	}
+
+	errors = append(errors, validateV4JobSurfaceRefs("target_surfaces", job.TargetSurfaces, RejectionCodeV4MutationScopeViolation)...)
+	errors = append(errors, validateV4JobSurfaceRefs("mutable_surfaces", job.MutableSurfaces, RejectionCodeV4MutationScopeViolation)...)
+	errors = append(errors, validateV4JobSurfaceRefs("immutable_surfaces", job.ImmutableSurfaces, RejectionCodeV4ForbiddenSurfaceChange)...)
+
+	if family == MissionFamilyImproveTopology && !hasV4JobSurfaceClass(job.TargetSurfaces, job.MutableSurfaces, JobSurfaceClassSkillTopology) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4MutationScopeViolation,
+			Message: fmt.Sprintf("mission_family %q requires target surface class %q", family, JobSurfaceClassSkillTopology),
+		})
+	}
+	if family == MissionFamilyProposeSourcePatch && !hasV4JobSurfaceClass(job.TargetSurfaces, job.MutableSurfaces, JobSurfaceClassSourcePatchArtifact) {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4RuntimeSourceMutationForbidden,
+			Message: fmt.Sprintf("mission_family %q requires target surface class %q", family, JobSurfaceClassSourcePatchArtifact),
+		})
+	}
+
+	return errors
+}
+
+func validateV4JobSurfaceRefs(field string, refs []JobSurfaceRef, duplicateCode RejectionCode) []ValidationError {
+	errors := make([]ValidationError, 0)
+	seen := make(map[string]int, len(refs))
+	for i, raw := range refs {
+		ref := NormalizeJobSurfaceRef(raw)
+		if ref.Class == "" {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeV4SurfaceClassRequired,
+				Message: fmt.Sprintf("%s[%d].class is required", field, i),
+			})
+			continue
+		}
+		if !isKnownJobSurfaceClass(ref.Class) {
+			errors = append(errors, ValidationError{
+				Code:    RejectionCodeV4SurfaceClassRequired,
+				Message: fmt.Sprintf("%s[%d].class %q is not recognized", field, i, ref.Class),
+			})
+		}
+		if ref.Ref == "" {
+			errors = append(errors, ValidationError{
+				Code:    duplicateCode,
+				Message: fmt.Sprintf("%s[%d].ref is required", field, i),
+			})
+			continue
+		}
+		key := ref.Class + "\x00" + ref.Ref
+		if firstIndex, ok := seen[key]; ok {
+			errors = append(errors, ValidationError{
+				Code:    duplicateCode,
+				Message: fmt.Sprintf("%s contains duplicate surface ref %q first declared at index %d", field, ref.Ref, firstIndex),
+			})
+			continue
+		}
+		seen[key] = i
+	}
+	return errors
+}
+
+func hasV4JobSurfaceClass(targetSurfaces, mutableSurfaces []JobSurfaceRef, class string) bool {
+	for _, ref := range targetSurfaces {
+		if NormalizeJobSurfaceRef(ref).Class == class {
+			return true
+		}
+	}
+	for _, ref := range mutableSurfaces {
+		if NormalizeJobSurfaceRef(ref).Class == class {
+			return true
+		}
+	}
+	return false
 }
 
 func v4ExecutionPlaneIncompatibilityCodeForFamily(family string) RejectionCode {
@@ -353,6 +445,19 @@ func isKnownExecutionPlane(plane string) bool {
 func isKnownExecutionHost(host string) bool {
 	switch host {
 	case ExecutionHostPhone, ExecutionHostDesktop, ExecutionHostWorkspace, ExecutionHostDesktopDev, ExecutionHostRemoteProvider:
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownJobSurfaceClass(class string) bool {
+	switch class {
+	case JobSurfaceClassPromptPack,
+		JobSurfaceClassSkill,
+		JobSurfaceClassManifestEntry,
+		JobSurfaceClassSkillTopology,
+		JobSurfaceClassSourcePatchArtifact:
 		return true
 	default:
 		return false

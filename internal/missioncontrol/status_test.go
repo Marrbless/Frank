@@ -34,13 +34,17 @@ func TestBuildOperatorStatusSummaryExposesV4ExecutionMetadata(t *testing.T) {
 func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(t *testing.T) {
 	t.Parallel()
 
+	targetSurfaces := []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	immutableSurfaces := testV4ImmutableSurfaces()
 	formatted, err := FormatOperatorStatusSummary(JobRuntimeState{
-		JobID:          "job-1",
-		ExecutionPlane: ExecutionPlaneImprovementWorkspace,
-		ExecutionHost:  ExecutionHostWorkspace,
-		MissionFamily:  MissionFamilyImprovePromptpack,
-		State:          JobStateRunning,
-		ActiveStepID:   "build",
+		JobID:             "job-1",
+		ExecutionPlane:    ExecutionPlaneImprovementWorkspace,
+		ExecutionHost:     ExecutionHostWorkspace,
+		MissionFamily:     MissionFamilyImprovePromptpack,
+		TargetSurfaces:    targetSurfaces,
+		ImmutableSurfaces: immutableSurfaces,
+		State:             JobStateRunning,
+		ActiveStepID:      "build",
 	})
 	if err != nil {
 		t.Fatalf("FormatOperatorStatusSummary() error = %v", err)
@@ -50,10 +54,37 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		`"execution_plane": "improvement_workspace"`,
 		`"execution_host": "workspace"`,
 		`"mission_family": "improve_promptpack"`,
+		`"target_surfaces": [`,
+		`"class": "prompt_pack"`,
+		`"ref": "prompt-pack/main"`,
+		`"immutable_surfaces": [`,
 	} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted status missing %s: %s", want, formatted)
 		}
+	}
+}
+
+func TestBuildOperatorStatusSummaryFallsBackToInspectablePlanSurfaces(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImprovePromptpack)
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &plan,
+	})
+	if !reflect.DeepEqual(summary.TargetSurfaces, job.TargetSurfaces) {
+		t.Fatalf("TargetSurfaces = %#v, want %#v", summary.TargetSurfaces, job.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
+		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
 	}
 }
 

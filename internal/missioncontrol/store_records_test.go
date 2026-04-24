@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -60,6 +61,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	runtimeRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
 	runtimeRecord.ExecutionHost = ExecutionHostWorkspace
 	runtimeRecord.MissionFamily = MissionFamilyImprovePromptpack
+	runtimeRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	runtimeRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	runtimeRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
 	if err := StoreJobRuntimeRecord(root, runtimeRecord); err != nil {
 		t.Fatalf("StoreJobRuntimeRecord() error = %v", err)
 	}
@@ -77,11 +81,23 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	if loadedRuntime.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("JobRuntimeRecord.MissionFamily = %q, want %q", loadedRuntime.MissionFamily, MissionFamilyImprovePromptpack)
 	}
+	if !reflect.DeepEqual(loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces) {
+		t.Fatalf("JobRuntimeRecord.TargetSurfaces = %#v, want %#v", loadedRuntime.TargetSurfaces, runtimeRecord.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(loadedRuntime.MutableSurfaces, runtimeRecord.MutableSurfaces) {
+		t.Fatalf("JobRuntimeRecord.MutableSurfaces = %#v, want %#v", loadedRuntime.MutableSurfaces, runtimeRecord.MutableSurfaces)
+	}
+	if !reflect.DeepEqual(loadedRuntime.ImmutableSurfaces, runtimeRecord.ImmutableSurfaces) {
+		t.Fatalf("JobRuntimeRecord.ImmutableSurfaces = %#v, want %#v", loadedRuntime.ImmutableSurfaces, runtimeRecord.ImmutableSurfaces)
+	}
 
 	controlRecord := testRuntimeControlRecord(1, 1)
 	controlRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
 	controlRecord.ExecutionHost = ExecutionHostWorkspace
 	controlRecord.MissionFamily = MissionFamilyImprovePromptpack
+	controlRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	controlRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
+	controlRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
 	if err := StoreRuntimeControlRecord(root, controlRecord); err != nil {
 		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
 	}
@@ -98,6 +114,15 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	}
 	if loadedControl.MissionFamily != MissionFamilyImprovePromptpack {
 		t.Fatalf("RuntimeControlRecord.MissionFamily = %q, want %q", loadedControl.MissionFamily, MissionFamilyImprovePromptpack)
+	}
+	if !reflect.DeepEqual(loadedControl.TargetSurfaces, controlRecord.TargetSurfaces) {
+		t.Fatalf("RuntimeControlRecord.TargetSurfaces = %#v, want %#v", loadedControl.TargetSurfaces, controlRecord.TargetSurfaces)
+	}
+	if !reflect.DeepEqual(loadedControl.MutableSurfaces, controlRecord.MutableSurfaces) {
+		t.Fatalf("RuntimeControlRecord.MutableSurfaces = %#v, want %#v", loadedControl.MutableSurfaces, controlRecord.MutableSurfaces)
+	}
+	if !reflect.DeepEqual(loadedControl.ImmutableSurfaces, controlRecord.ImmutableSurfaces) {
+		t.Fatalf("RuntimeControlRecord.ImmutableSurfaces = %#v, want %#v", loadedControl.ImmutableSurfaces, controlRecord.ImmutableSurfaces)
 	}
 }
 

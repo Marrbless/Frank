@@ -21,29 +21,32 @@ const (
 )
 
 type JobRuntimeRecord struct {
-	RecordVersion   int                         `json:"record_version"`
-	WriterEpoch     uint64                      `json:"writer_epoch"`
-	AppliedSeq      uint64                      `json:"applied_seq"`
-	JobID           string                      `json:"job_id"`
-	ExecutionPlane  string                      `json:"execution_plane,omitempty"`
-	ExecutionHost   string                      `json:"execution_host,omitempty"`
-	MissionFamily   string                      `json:"mission_family,omitempty"`
-	State           JobState                    `json:"state"`
-	ActiveStepID    string                      `json:"active_step_id,omitempty"`
-	InspectablePlan *InspectablePlanContext     `json:"inspectable_plan,omitempty"`
-	BudgetBlocker   *RuntimeBudgetBlockerRecord `json:"budget_blocker,omitempty"`
-	WaitingReason   string                      `json:"waiting_reason,omitempty"`
-	PausedReason    string                      `json:"paused_reason,omitempty"`
-	AbortedReason   string                      `json:"aborted_reason,omitempty"`
-	CreatedAt       time.Time                   `json:"created_at,omitempty"`
-	UpdatedAt       time.Time                   `json:"updated_at,omitempty"`
-	StartedAt       time.Time                   `json:"started_at,omitempty"`
-	ActiveStepAt    time.Time                   `json:"active_step_at,omitempty"`
-	WaitingAt       time.Time                   `json:"waiting_at,omitempty"`
-	PausedAt        time.Time                   `json:"paused_at,omitempty"`
-	AbortedAt       time.Time                   `json:"aborted_at,omitempty"`
-	CompletedAt     time.Time                   `json:"completed_at,omitempty"`
-	FailedAt        time.Time                   `json:"failed_at,omitempty"`
+	RecordVersion     int                         `json:"record_version"`
+	WriterEpoch       uint64                      `json:"writer_epoch"`
+	AppliedSeq        uint64                      `json:"applied_seq"`
+	JobID             string                      `json:"job_id"`
+	ExecutionPlane    string                      `json:"execution_plane,omitempty"`
+	ExecutionHost     string                      `json:"execution_host,omitempty"`
+	MissionFamily     string                      `json:"mission_family,omitempty"`
+	TargetSurfaces    []JobSurfaceRef             `json:"target_surfaces,omitempty"`
+	MutableSurfaces   []JobSurfaceRef             `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces []JobSurfaceRef             `json:"immutable_surfaces,omitempty"`
+	State             JobState                    `json:"state"`
+	ActiveStepID      string                      `json:"active_step_id,omitempty"`
+	InspectablePlan   *InspectablePlanContext     `json:"inspectable_plan,omitempty"`
+	BudgetBlocker     *RuntimeBudgetBlockerRecord `json:"budget_blocker,omitempty"`
+	WaitingReason     string                      `json:"waiting_reason,omitempty"`
+	PausedReason      string                      `json:"paused_reason,omitempty"`
+	AbortedReason     string                      `json:"aborted_reason,omitempty"`
+	CreatedAt         time.Time                   `json:"created_at,omitempty"`
+	UpdatedAt         time.Time                   `json:"updated_at,omitempty"`
+	StartedAt         time.Time                   `json:"started_at,omitempty"`
+	ActiveStepAt      time.Time                   `json:"active_step_at,omitempty"`
+	WaitingAt         time.Time                   `json:"waiting_at,omitempty"`
+	PausedAt          time.Time                   `json:"paused_at,omitempty"`
+	AbortedAt         time.Time                   `json:"aborted_at,omitempty"`
+	CompletedAt       time.Time                   `json:"completed_at,omitempty"`
+	FailedAt          time.Time                   `json:"failed_at,omitempty"`
 }
 
 type StepRuntimeRecord struct {
@@ -66,18 +69,21 @@ type StepRuntimeRecord struct {
 }
 
 type RuntimeControlRecord struct {
-	RecordVersion  int           `json:"record_version"`
-	WriterEpoch    uint64        `json:"writer_epoch"`
-	LastSeq        uint64        `json:"last_seq"`
-	JobID          string        `json:"job_id"`
-	StepID         string        `json:"step_id"`
-	AttemptID      string        `json:"attempt_id,omitempty"`
-	ExecutionPlane string        `json:"execution_plane,omitempty"`
-	ExecutionHost  string        `json:"execution_host,omitempty"`
-	MissionFamily  string        `json:"mission_family,omitempty"`
-	MaxAuthority   AuthorityTier `json:"max_authority"`
-	AllowedTools   []string      `json:"allowed_tools,omitempty"`
-	Step           Step          `json:"step"`
+	RecordVersion     int             `json:"record_version"`
+	WriterEpoch       uint64          `json:"writer_epoch"`
+	LastSeq           uint64          `json:"last_seq"`
+	JobID             string          `json:"job_id"`
+	StepID            string          `json:"step_id"`
+	AttemptID         string          `json:"attempt_id,omitempty"`
+	ExecutionPlane    string          `json:"execution_plane,omitempty"`
+	ExecutionHost     string          `json:"execution_host,omitempty"`
+	MissionFamily     string          `json:"mission_family,omitempty"`
+	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	MaxAuthority      AuthorityTier   `json:"max_authority"`
+	AllowedTools      []string        `json:"allowed_tools,omitempty"`
+	Step              Step            `json:"step"`
 }
 
 type ApprovalRequestRecord struct {

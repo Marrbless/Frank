@@ -123,6 +123,21 @@ func TestEnumValues(t *testing.T) {
 	if FrankRegistryObjectKindContainer != "container" {
 		t.Fatalf("FrankRegistryObjectKindContainer = %q, want %q", FrankRegistryObjectKindContainer, "container")
 	}
+	if JobSurfaceClassPromptPack != "prompt_pack" {
+		t.Fatalf("JobSurfaceClassPromptPack = %q, want %q", JobSurfaceClassPromptPack, "prompt_pack")
+	}
+	if JobSurfaceClassSkill != "skill" {
+		t.Fatalf("JobSurfaceClassSkill = %q, want %q", JobSurfaceClassSkill, "skill")
+	}
+	if JobSurfaceClassManifestEntry != "manifest_entry" {
+		t.Fatalf("JobSurfaceClassManifestEntry = %q, want %q", JobSurfaceClassManifestEntry, "manifest_entry")
+	}
+	if JobSurfaceClassSkillTopology != "skill_topology" {
+		t.Fatalf("JobSurfaceClassSkillTopology = %q, want %q", JobSurfaceClassSkillTopology, "skill_topology")
+	}
+	if JobSurfaceClassSourcePatchArtifact != "source_patch_artifact" {
+		t.Fatalf("JobSurfaceClassSourcePatchArtifact = %q, want %q", JobSurfaceClassSourcePatchArtifact, "source_patch_artifact")
+	}
 }
 
 func TestV4RejectionCodeConstants(t *testing.T) {
@@ -203,9 +218,18 @@ func TestJobJSONRoundTrip(t *testing.T) {
 		ExecutionPlane: ExecutionPlaneLiveRuntime,
 		ExecutionHost:  ExecutionHostPhone,
 		MissionFamily:  MissionFamilyBootstrapRevenue,
-		State:          JobStatePending,
-		MaxAuthority:   AuthorityTierMedium,
-		AllowedTools:   []string{"shell"},
+		TargetSurfaces: []JobSurfaceRef{
+			{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
+		},
+		MutableSurfaces: []JobSurfaceRef{
+			{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"},
+		},
+		ImmutableSurfaces: []JobSurfaceRef{
+			{Class: JobSurfaceClassSkill, Ref: "skill/evaluator"},
+		},
+		State:        JobStatePending,
+		MaxAuthority: AuthorityTierMedium,
+		AllowedTools: []string{"shell"},
 		Plan: Plan{
 			ID: "plan-1",
 			Steps: []Step{
