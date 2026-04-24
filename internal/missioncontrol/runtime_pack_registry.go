@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -355,6 +356,121 @@ func LoadLastKnownGoodRuntimePackPointer(root string) (LastKnownGoodRuntimePackP
 		return LastKnownGoodRuntimePackPointer{}, fmt.Errorf("mission store last-known-good runtime pack pointer pack_id %q: %w", pointer.PackID, err)
 	}
 	return pointer, nil
+}
+
+func RecertifyLastKnownGoodFromPromotion(root, promotionID, verifiedBy string, verifiedAt time.Time) (LastKnownGoodRuntimePackPointer, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	promotionRef := NormalizePromotionRef(PromotionRef{PromotionID: promotionID})
+	if err := ValidatePromotionRef(promotionRef); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	verifiedBy = strings.TrimSpace(verifiedBy)
+	if verifiedBy == "" {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf("mission store last-known-good runtime pack pointer verified_by is required")
+	}
+	verifiedAt = verifiedAt.UTC()
+	if verifiedAt.IsZero() {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf("mission store last-known-good runtime pack pointer verified_at is required")
+	}
+
+	promotion, err := LoadPromotionRecord(root, promotionRef.PromotionID)
+	if err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	outcomeRef, ok := PromotionHotUpdateOutcomeRef(promotion)
+	if !ok {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf("mission store promotion %q outcome_id is required for last-known-good recertification", promotion.PromotionID)
+	}
+	outcome, err := LoadHotUpdateOutcomeRecord(root, outcomeRef.OutcomeID)
+	if err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf("mission store promotion %q outcome_id %q: %w", promotion.PromotionID, outcomeRef.OutcomeID, err)
+	}
+	if outcome.OutcomeKind != HotUpdateOutcomeKindHotUpdated {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store promotion %q outcome_id %q outcome_kind %q does not permit last-known-good recertification",
+			promotion.PromotionID,
+			outcome.OutcomeID,
+			outcome.OutcomeKind,
+		)
+	}
+	if outcome.HotUpdateID != promotion.HotUpdateID {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store promotion %q outcome_id %q hot_update_id %q does not match promotion hot_update_id %q",
+			promotion.PromotionID,
+			outcome.OutcomeID,
+			outcome.HotUpdateID,
+			promotion.HotUpdateID,
+		)
+	}
+	if outcome.CandidatePackID != "" && outcome.CandidatePackID != promotion.PromotedPackID {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store promotion %q outcome_id %q candidate_pack_id %q does not match promoted_pack_id %q",
+			promotion.PromotionID,
+			outcome.OutcomeID,
+			outcome.CandidatePackID,
+			promotion.PromotedPackID,
+		)
+	}
+
+	active, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	if active.ActivePackID != promotion.PromotedPackID {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store active runtime pack pointer active_pack_id %q does not match promotion promoted_pack_id %q",
+			active.ActivePackID,
+			promotion.PromotedPackID,
+		)
+	}
+
+	current, err := LoadLastKnownGoodRuntimePackPointer(root)
+	if err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	recertificationRef := "hot_update_promotion:" + promotion.PromotionID
+	next := NormalizeLastKnownGoodRuntimePackPointer(LastKnownGoodRuntimePackPointer{
+		RecordVersion:     StoreRecordVersion,
+		PackID:            promotion.PromotedPackID,
+		Basis:             recertificationRef,
+		VerifiedAt:        verifiedAt,
+		VerifiedBy:        verifiedBy,
+		RollbackRecordRef: recertificationRef,
+	})
+	if err := ValidateLastKnownGoodRuntimePackPointer(next); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	if _, err := LoadRuntimePackRecord(root, next.PackID); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf("mission store last-known-good runtime pack pointer pack_id %q: %w", next.PackID, err)
+	}
+
+	if reflect.DeepEqual(current, next) {
+		return current, false, nil
+	}
+	if current.PackID == promotion.PromotedPackID {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store last-known-good runtime pack pointer pack_id %q already points to promoted pack but differs from deterministic recertification",
+			current.PackID,
+		)
+	}
+	if current.PackID != promotion.PreviousActivePackID {
+		return LastKnownGoodRuntimePackPointer{}, false, fmt.Errorf(
+			"mission store last-known-good runtime pack pointer pack_id %q does not match promotion previous_active_pack_id %q",
+			current.PackID,
+			promotion.PreviousActivePackID,
+		)
+	}
+
+	if err := StoreLastKnownGoodRuntimePackPointer(root, next); err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	stored, err := LoadLastKnownGoodRuntimePackPointer(root)
+	if err != nil {
+		return LastKnownGoodRuntimePackPointer{}, false, err
+	}
+	return stored, true, nil
 }
 
 func ResolveActiveRuntimePackRecord(root string) (RuntimePackRecord, error) {
