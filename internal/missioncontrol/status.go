@@ -23,6 +23,7 @@ type OperatorStatusSummary struct {
 	TargetSurfaces                     []JobSurfaceRef                                             `json:"target_surfaces,omitempty"`
 	MutableSurfaces                    []JobSurfaceRef                                             `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces                  []JobSurfaceRef                                             `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled                bool                                                        `json:"topology_mode_enabled,omitempty"`
 	State                              JobState                                                    `json:"state"`
 	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
@@ -785,6 +786,7 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 	targetSurfaces := cloneJobSurfaceRefs(runtime.TargetSurfaces)
 	mutableSurfaces := cloneJobSurfaceRefs(runtime.MutableSurfaces)
 	immutableSurfaces := cloneJobSurfaceRefs(runtime.ImmutableSurfaces)
+	topologyModeEnabled := runtime.TopologyModeEnabled
 	if runtime.InspectablePlan != nil {
 		if executionPlane == "" {
 			executionPlane = strings.TrimSpace(runtime.InspectablePlan.ExecutionPlane)
@@ -804,23 +806,27 @@ func buildOperatorStatusSummary(runtime JobRuntimeState, allowedTools []string) 
 		if len(immutableSurfaces) == 0 {
 			immutableSurfaces = cloneJobSurfaceRefs(runtime.InspectablePlan.ImmutableSurfaces)
 		}
+		if !topologyModeEnabled {
+			topologyModeEnabled = runtime.InspectablePlan.TopologyModeEnabled
+		}
 	}
 
 	summary := OperatorStatusSummary{
-		JobID:             runtime.JobID,
-		ExecutionPlane:    executionPlane,
-		ExecutionHost:     executionHost,
-		MissionFamily:     missionFamily,
-		TargetSurfaces:    targetSurfaces,
-		MutableSurfaces:   mutableSurfaces,
-		ImmutableSurfaces: immutableSurfaces,
-		State:             runtime.State,
-		ActiveStepID:      runtime.ActiveStepID,
-		WaitingReason:     runtime.WaitingReason,
-		WaitingAt:         formatOperatorStatusTime(runtime.WaitingAt),
-		PausedReason:      runtime.PausedReason,
-		PausedAt:          formatOperatorStatusTime(runtime.PausedAt),
-		AbortedReason:     runtime.AbortedReason,
+		JobID:               runtime.JobID,
+		ExecutionPlane:      executionPlane,
+		ExecutionHost:       executionHost,
+		MissionFamily:       missionFamily,
+		TargetSurfaces:      targetSurfaces,
+		MutableSurfaces:     mutableSurfaces,
+		ImmutableSurfaces:   immutableSurfaces,
+		TopologyModeEnabled: topologyModeEnabled,
+		State:               runtime.State,
+		ActiveStepID:        runtime.ActiveStepID,
+		WaitingReason:       runtime.WaitingReason,
+		WaitingAt:           formatOperatorStatusTime(runtime.WaitingAt),
+		PausedReason:        runtime.PausedReason,
+		PausedAt:            formatOperatorStatusTime(runtime.PausedAt),
+		AbortedReason:       runtime.AbortedReason,
 	}
 	if runtime.BudgetBlocker != nil {
 		summary.BudgetBlocker = &OperatorBudgetBlockerStatus{

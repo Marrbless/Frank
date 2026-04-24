@@ -69,15 +69,16 @@ type RuntimeBudgetBlockerRecord struct {
 }
 
 type InspectablePlanContext struct {
-	ExecutionPlane    string          `json:"execution_plane,omitempty"`
-	ExecutionHost     string          `json:"execution_host,omitempty"`
-	MissionFamily     string          `json:"mission_family,omitempty"`
-	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
-	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
-	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
-	MaxAuthority      AuthorityTier   `json:"max_authority"`
-	AllowedTools      []string        `json:"allowed_tools,omitempty"`
-	Steps             []Step          `json:"steps,omitempty"`
+	ExecutionPlane      string          `json:"execution_plane,omitempty"`
+	ExecutionHost       string          `json:"execution_host,omitempty"`
+	MissionFamily       string          `json:"mission_family,omitempty"`
+	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
+	MaxAuthority        AuthorityTier   `json:"max_authority"`
+	AllowedTools        []string        `json:"allowed_tools,omitempty"`
+	Steps               []Step          `json:"steps,omitempty"`
 }
 
 type JobRuntimeState struct {
@@ -88,6 +89,7 @@ type JobRuntimeState struct {
 	TargetSurfaces                   []JobSurfaceRef                   `json:"target_surfaces,omitempty"`
 	MutableSurfaces                  []JobSurfaceRef                   `json:"mutable_surfaces,omitempty"`
 	ImmutableSurfaces                []JobSurfaceRef                   `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled              bool                              `json:"topology_mode_enabled,omitempty"`
 	State                            JobState                          `json:"state"`
 	ActiveStepID                     string                            `json:"active_step_id,omitempty"`
 	InspectablePlan                  *InspectablePlanContext           `json:"inspectable_plan,omitempty"`
@@ -117,16 +119,17 @@ type JobRuntimeState struct {
 }
 
 type RuntimeControlContext struct {
-	JobID             string          `json:"job_id"`
-	ExecutionPlane    string          `json:"execution_plane,omitempty"`
-	ExecutionHost     string          `json:"execution_host,omitempty"`
-	MissionFamily     string          `json:"mission_family,omitempty"`
-	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
-	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
-	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
-	MaxAuthority      AuthorityTier   `json:"max_authority"`
-	AllowedTools      []string        `json:"allowed_tools,omitempty"`
-	Step              Step            `json:"step"`
+	JobID               string          `json:"job_id"`
+	ExecutionPlane      string          `json:"execution_plane,omitempty"`
+	ExecutionHost       string          `json:"execution_host,omitempty"`
+	MissionFamily       string          `json:"mission_family,omitempty"`
+	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
+	MaxAuthority        AuthorityTier   `json:"max_authority"`
+	AllowedTools        []string        `json:"allowed_tools,omitempty"`
+	Step                Step            `json:"step"`
 }
 
 type RuntimeTransitionOptions struct {
@@ -265,16 +268,17 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 	}
 
 	return RuntimeControlContext{
-		JobID:             ec.Job.ID,
-		ExecutionPlane:    strings.TrimSpace(ec.Job.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(ec.Job.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(ec.Job.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(ec.Job.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(ec.Job.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(ec.Job.ImmutableSurfaces),
-		MaxAuthority:      ec.Job.MaxAuthority,
-		AllowedTools:      append([]string(nil), ec.Job.AllowedTools...),
-		Step:              normalizedStep(*ec.Step),
+		JobID:               ec.Job.ID,
+		ExecutionPlane:      strings.TrimSpace(ec.Job.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(ec.Job.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(ec.Job.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(ec.Job.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(ec.Job.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(ec.Job.ImmutableSurfaces),
+		TopologyModeEnabled: ec.Job.TopologyModeEnabled,
+		MaxAuthority:        ec.Job.MaxAuthority,
+		AllowedTools:        append([]string(nil), ec.Job.AllowedTools...),
+		Step:                normalizedStep(*ec.Step),
 	}, nil
 }
 
@@ -284,14 +288,15 @@ func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
 	}
 
 	context := InspectablePlanContext{
-		ExecutionPlane:    strings.TrimSpace(job.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(job.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(job.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(job.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(job.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(job.ImmutableSurfaces),
-		MaxAuthority:      job.MaxAuthority,
-		AllowedTools:      append([]string(nil), job.AllowedTools...),
+		ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(job.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
+		TopologyModeEnabled: job.TopologyModeEnabled,
+		MaxAuthority:        job.MaxAuthority,
+		AllowedTools:        append([]string(nil), job.AllowedTools...),
 	}
 	if len(job.Plan.Steps) > 0 {
 		context.Steps = make([]Step, len(job.Plan.Steps))
@@ -357,15 +362,16 @@ func ResolveExecutionContextWithRuntimeControl(control RuntimeControlContext, ru
 	}
 
 	job := Job{
-		ID:                control.JobID,
-		ExecutionPlane:    strings.TrimSpace(control.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(control.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(control.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(control.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(control.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(control.ImmutableSurfaces),
-		MaxAuthority:      control.MaxAuthority,
-		AllowedTools:      append([]string(nil), control.AllowedTools...),
+		ID:                  control.JobID,
+		ExecutionPlane:      strings.TrimSpace(control.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(control.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
+		TopologyModeEnabled: control.TopologyModeEnabled,
+		MaxAuthority:        control.MaxAuthority,
+		AllowedTools:        append([]string(nil), control.AllowedTools...),
 		Plan: Plan{
 			Steps: []Step{normalizedStep(control.Step)},
 		},
@@ -386,19 +392,20 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 
 	if current == nil || current.JobID == "" {
 		return JobRuntimeState{
-			JobID:             job.ID,
-			ExecutionPlane:    strings.TrimSpace(job.ExecutionPlane),
-			ExecutionHost:     strings.TrimSpace(job.ExecutionHost),
-			MissionFamily:     strings.TrimSpace(job.MissionFamily),
-			TargetSurfaces:    cloneJobSurfaceRefs(job.TargetSurfaces),
-			MutableSurfaces:   cloneJobSurfaceRefs(job.MutableSurfaces),
-			ImmutableSurfaces: cloneJobSurfaceRefs(job.ImmutableSurfaces),
-			State:             JobStateRunning,
-			ActiveStepID:      stepID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-			StartedAt:         now,
-			ActiveStepAt:      now,
+			JobID:               job.ID,
+			ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
+			ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
+			MissionFamily:       strings.TrimSpace(job.MissionFamily),
+			TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
+			MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
+			ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
+			TopologyModeEnabled: job.TopologyModeEnabled,
+			State:               JobStateRunning,
+			ActiveStepID:        stepID,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+			StartedAt:           now,
+			ActiveStepAt:        now,
 		}, nil
 	}
 
@@ -416,6 +423,7 @@ func SetJobRuntimeActiveStep(job Job, current *JobRuntimeState, stepID string, n
 	next.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
 	next.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
 	next.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)
+	next.TopologyModeEnabled = job.TopologyModeEnabled
 	if next.CreatedAt.IsZero() {
 		next.CreatedAt = now
 	}

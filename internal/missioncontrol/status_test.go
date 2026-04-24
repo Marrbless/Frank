@@ -37,14 +37,15 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 	targetSurfaces := []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	immutableSurfaces := testV4ImmutableSurfaces()
 	formatted, err := FormatOperatorStatusSummary(JobRuntimeState{
-		JobID:             "job-1",
-		ExecutionPlane:    ExecutionPlaneImprovementWorkspace,
-		ExecutionHost:     ExecutionHostWorkspace,
-		MissionFamily:     MissionFamilyImprovePromptpack,
-		TargetSurfaces:    targetSurfaces,
-		ImmutableSurfaces: immutableSurfaces,
-		State:             JobStateRunning,
-		ActiveStepID:      "build",
+		JobID:               "job-1",
+		ExecutionPlane:      ExecutionPlaneImprovementWorkspace,
+		ExecutionHost:       ExecutionHostWorkspace,
+		MissionFamily:       MissionFamilyImprovePromptpack,
+		TargetSurfaces:      targetSurfaces,
+		ImmutableSurfaces:   immutableSurfaces,
+		TopologyModeEnabled: true,
+		State:               JobStateRunning,
+		ActiveStepID:        "build",
 	})
 	if err != nil {
 		t.Fatalf("FormatOperatorStatusSummary() error = %v", err)
@@ -58,6 +59,7 @@ func TestFormatOperatorStatusSummaryDeterministicallyExposesV4ExecutionMetadata(
 		`"class": "prompt_pack"`,
 		`"ref": "prompt-pack/main"`,
 		`"immutable_surfaces": [`,
+		`"topology_mode_enabled": true`,
 	} {
 		if !strings.Contains(formatted, want) {
 			t.Fatalf("formatted status missing %s: %s", want, formatted)
@@ -85,6 +87,26 @@ func TestBuildOperatorStatusSummaryFallsBackToInspectablePlanSurfaces(t *testing
 	}
 	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
 		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
+	}
+}
+
+func TestBuildOperatorStatusSummaryFallsBackToInspectablePlanTopologyMode(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+	plan, err := BuildInspectablePlanContext(job)
+	if err != nil {
+		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
+	}
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID:           job.ID,
+		State:           JobStateRunning,
+		ActiveStepID:    "build",
+		InspectablePlan: &plan,
+	})
+	if !summary.TopologyModeEnabled {
+		t.Fatalf("TopologyModeEnabled = false, want true")
 	}
 }
 

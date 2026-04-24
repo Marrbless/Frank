@@ -85,6 +85,20 @@ func TestNewInspectSummaryExposesV4ImprovementSurfaces(t *testing.T) {
 	}
 }
 
+func TestNewInspectSummaryExposesTopologyModeFlag(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+
+	summary, err := NewInspectSummary(job, "")
+	if err != nil {
+		t.Fatalf("NewInspectSummary() error = %v", err)
+	}
+	if !summary.TopologyModeEnabled {
+		t.Fatalf("TopologyModeEnabled = false, want true")
+	}
+}
+
 func TestNewInspectSummaryFromControlReturnsResolvableStep(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +157,9 @@ func TestNewInspectSummaryFromInspectablePlanExposesV4ExecutionMetadata(t *testi
 	}
 	if !reflect.DeepEqual(summary.ImmutableSurfaces, job.ImmutableSurfaces) {
 		t.Fatalf("ImmutableSurfaces = %#v, want %#v", summary.ImmutableSurfaces, job.ImmutableSurfaces)
+	}
+	if summary.TopologyModeEnabled != job.TopologyModeEnabled {
+		t.Fatalf("TopologyModeEnabled = %v, want %v", summary.TopologyModeEnabled, job.TopologyModeEnabled)
 	}
 }
 

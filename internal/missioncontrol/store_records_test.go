@@ -64,6 +64,7 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	runtimeRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	runtimeRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
+	runtimeRecord.TopologyModeEnabled = true
 	if err := StoreJobRuntimeRecord(root, runtimeRecord); err != nil {
 		t.Fatalf("StoreJobRuntimeRecord() error = %v", err)
 	}
@@ -90,6 +91,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(loadedRuntime.ImmutableSurfaces, runtimeRecord.ImmutableSurfaces) {
 		t.Fatalf("JobRuntimeRecord.ImmutableSurfaces = %#v, want %#v", loadedRuntime.ImmutableSurfaces, runtimeRecord.ImmutableSurfaces)
 	}
+	if !loadedRuntime.TopologyModeEnabled {
+		t.Fatalf("JobRuntimeRecord.TopologyModeEnabled = false, want true")
+	}
 
 	controlRecord := testRuntimeControlRecord(1, 1)
 	controlRecord.ExecutionPlane = ExecutionPlaneImprovementWorkspace
@@ -98,6 +102,7 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	controlRecord.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.MutableSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassPromptPack, Ref: "prompt-pack/main"}}
 	controlRecord.ImmutableSurfaces = testV4ImmutableSurfaces()
+	controlRecord.TopologyModeEnabled = true
 	if err := StoreRuntimeControlRecord(root, controlRecord); err != nil {
 		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
 	}
@@ -123,6 +128,9 @@ func TestRuntimeExecutionMetadataRecordsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loadedControl.ImmutableSurfaces, controlRecord.ImmutableSurfaces) {
 		t.Fatalf("RuntimeControlRecord.ImmutableSurfaces = %#v, want %#v", loadedControl.ImmutableSurfaces, controlRecord.ImmutableSurfaces)
+	}
+	if !loadedControl.TopologyModeEnabled {
+		t.Fatalf("RuntimeControlRecord.TopologyModeEnabled = false, want true")
 	}
 }
 

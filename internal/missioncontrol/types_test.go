@@ -227,9 +227,10 @@ func TestJobJSONRoundTrip(t *testing.T) {
 		ImmutableSurfaces: []JobSurfaceRef{
 			{Class: JobSurfaceClassSkill, Ref: "skill/evaluator"},
 		},
-		State:        JobStatePending,
-		MaxAuthority: AuthorityTierMedium,
-		AllowedTools: []string{"shell"},
+		TopologyModeEnabled: true,
+		State:               JobStatePending,
+		MaxAuthority:        AuthorityTierMedium,
+		AllowedTools:        []string{"shell"},
 		Plan: Plan{
 			ID: "plan-1",
 			Steps: []Step{

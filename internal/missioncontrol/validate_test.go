@@ -497,6 +497,85 @@ func TestValidatePlanRejectsV4TopologyImprovementWithoutSkillTopologyTarget(t *t
 	}
 }
 
+func TestValidatePlanRejectsV4TopologyImprovementWhenTopologyModeDisabled(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+	job.TopologyModeEnabled = false
+
+	errors := ValidatePlan(job)
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeV4TopologyChangeDisabled,
+			Message: `mission_family "improve_topology" requires topology_mode_enabled=true`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanAdmitsV4TopologyImprovementWhenTopologyModeEnabled(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+	job.TopologyModeEnabled = true
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
+func TestValidatePlanRejectsV4TopologyImprovementWrongPlaneBeforeTopologyMode(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneLiveRuntime, ExecutionHostPhone, MissionFamilyImproveTopology)
+	job.TopologyModeEnabled = false
+
+	errors := ValidatePlan(job)
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeV4LabOnlyFamily,
+			Message: `mission_family "improve_topology" requires execution_plane "improvement_workspace"`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanRejectsV4TopologyImprovementMissingSkillTopologyTargetWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveTopology)
+	job.TopologyModeEnabled = true
+	job.TargetSurfaces = []JobSurfaceRef{{Class: JobSurfaceClassSkill, Ref: "skills/research"}}
+
+	errors := ValidatePlan(job)
+	want := []ValidationError{
+		{
+			Code:    RejectionCodeV4MutationScopeViolation,
+			Message: `mission_family "improve_topology" requires target surface class "skill_topology"`,
+		},
+	}
+	if !reflect.DeepEqual(errors, want) {
+		t.Fatalf("ValidatePlan() = %#v, want %#v", errors, want)
+	}
+}
+
+func TestValidatePlanDoesNotRequireTopologyModeForOtherImprovementFamilies(t *testing.T) {
+	t.Parallel()
+
+	job := testV4Job(ExecutionPlaneImprovementWorkspace, ExecutionHostWorkspace, MissionFamilyImproveSkills)
+	job.TopologyModeEnabled = false
+
+	errors := ValidatePlan(job)
+	if len(errors) != 0 {
+		t.Fatalf("ValidatePlan() = %#v, want no errors", errors)
+	}
+}
+
 func TestValidatePlanRejectsV4SourcePatchProposalWithoutSourcePatchArtifactTarget(t *testing.T) {
 	t.Parallel()
 
@@ -1551,6 +1630,9 @@ func testV4Job(executionPlane, executionHost, missionFamily string) Job {
 	if isImprovementMissionFamily(missionFamily) {
 		job.TargetSurfaces = testV4TargetSurfacesForFamily(missionFamily)
 		job.ImmutableSurfaces = testV4ImmutableSurfaces()
+	}
+	if missionFamily == MissionFamilyImproveTopology {
+		job.TopologyModeEnabled = true
 	}
 	return job
 }

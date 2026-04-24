@@ -6,16 +6,17 @@ import (
 )
 
 type InspectSummary struct {
-	JobID             string          `json:"job_id"`
-	ExecutionPlane    string          `json:"execution_plane,omitempty"`
-	ExecutionHost     string          `json:"execution_host,omitempty"`
-	MissionFamily     string          `json:"mission_family,omitempty"`
-	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
-	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
-	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
-	MaxAuthority      AuthorityTier   `json:"max_authority"`
-	AllowedTools      []string        `json:"allowed_tools"`
-	Steps             []InspectStep   `json:"steps"`
+	JobID               string          `json:"job_id"`
+	ExecutionPlane      string          `json:"execution_plane,omitempty"`
+	ExecutionHost       string          `json:"execution_host,omitempty"`
+	MissionFamily       string          `json:"mission_family,omitempty"`
+	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
+	MaxAuthority        AuthorityTier   `json:"max_authority"`
+	AllowedTools        []string        `json:"allowed_tools"`
+	Steps               []InspectStep   `json:"steps"`
 }
 
 type InspectStep struct {
@@ -90,15 +91,16 @@ func NewInspectSummaryWithCampaignAndTreasuryPreflight(job Job, stepID string, s
 
 func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionContext) (InspectStep, error)) (InspectSummary, error) {
 	summary := InspectSummary{
-		JobID:             job.ID,
-		ExecutionPlane:    strings.TrimSpace(job.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(job.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(job.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(job.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(job.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(job.ImmutableSurfaces),
-		MaxAuthority:      job.MaxAuthority,
-		AllowedTools:      append([]string(nil), job.AllowedTools...),
+		JobID:               job.ID,
+		ExecutionPlane:      strings.TrimSpace(job.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(job.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(job.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
+		TopologyModeEnabled: job.TopologyModeEnabled,
+		MaxAuthority:        job.MaxAuthority,
+		AllowedTools:        append([]string(nil), job.AllowedTools...),
 	}
 
 	if stepID != "" {
@@ -142,29 +144,31 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 	}
 
 	job := Job{
-		ID:                control.JobID,
-		ExecutionPlane:    strings.TrimSpace(control.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(control.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(control.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(control.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(control.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(control.ImmutableSurfaces),
-		MaxAuthority:      control.MaxAuthority,
-		AllowedTools:      append([]string(nil), control.AllowedTools...),
+		ID:                  control.JobID,
+		ExecutionPlane:      strings.TrimSpace(control.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(control.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(control.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(control.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(control.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(control.ImmutableSurfaces),
+		TopologyModeEnabled: control.TopologyModeEnabled,
+		MaxAuthority:        control.MaxAuthority,
+		AllowedTools:        append([]string(nil), control.AllowedTools...),
 	}
 	step := copyStep(control.Step)
 
 	return InspectSummary{
-		JobID:             job.ID,
-		ExecutionPlane:    job.ExecutionPlane,
-		ExecutionHost:     job.ExecutionHost,
-		MissionFamily:     job.MissionFamily,
-		TargetSurfaces:    cloneJobSurfaceRefs(job.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(job.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(job.ImmutableSurfaces),
-		MaxAuthority:      job.MaxAuthority,
-		AllowedTools:      append([]string(nil), job.AllowedTools...),
-		Steps:             []InspectStep{newInspectStepSummary(step, ExecutionContext{Job: &job, Step: &step})},
+		JobID:               job.ID,
+		ExecutionPlane:      job.ExecutionPlane,
+		ExecutionHost:       job.ExecutionHost,
+		MissionFamily:       job.MissionFamily,
+		TargetSurfaces:      cloneJobSurfaceRefs(job.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(job.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(job.ImmutableSurfaces),
+		TopologyModeEnabled: job.TopologyModeEnabled,
+		MaxAuthority:        job.MaxAuthority,
+		AllowedTools:        append([]string(nil), job.AllowedTools...),
+		Steps:               []InspectStep{newInspectStepSummary(step, ExecutionContext{Job: &job, Step: &step})},
 	}, nil
 }
 
@@ -177,15 +181,16 @@ func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanCon
 	}
 
 	job := Job{
-		ID:                jobID,
-		ExecutionPlane:    strings.TrimSpace(plan.ExecutionPlane),
-		ExecutionHost:     strings.TrimSpace(plan.ExecutionHost),
-		MissionFamily:     strings.TrimSpace(plan.MissionFamily),
-		TargetSurfaces:    cloneJobSurfaceRefs(plan.TargetSurfaces),
-		MutableSurfaces:   cloneJobSurfaceRefs(plan.MutableSurfaces),
-		ImmutableSurfaces: cloneJobSurfaceRefs(plan.ImmutableSurfaces),
-		MaxAuthority:      plan.MaxAuthority,
-		AllowedTools:      append([]string(nil), plan.AllowedTools...),
+		ID:                  jobID,
+		ExecutionPlane:      strings.TrimSpace(plan.ExecutionPlane),
+		ExecutionHost:       strings.TrimSpace(plan.ExecutionHost),
+		MissionFamily:       strings.TrimSpace(plan.MissionFamily),
+		TargetSurfaces:      cloneJobSurfaceRefs(plan.TargetSurfaces),
+		MutableSurfaces:     cloneJobSurfaceRefs(plan.MutableSurfaces),
+		ImmutableSurfaces:   cloneJobSurfaceRefs(plan.ImmutableSurfaces),
+		TopologyModeEnabled: plan.TopologyModeEnabled,
+		MaxAuthority:        plan.MaxAuthority,
+		AllowedTools:        append([]string(nil), plan.AllowedTools...),
 		Plan: Plan{
 			Steps: make([]Step, len(plan.Steps)),
 		},

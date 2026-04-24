@@ -143,19 +143,20 @@ type JobSurfaceRef struct {
 }
 
 type Job struct {
-	ID                string          `json:"id"`
-	SpecVersion       string          `json:"spec_version,omitempty"`
-	ExecutionPlane    string          `json:"execution_plane,omitempty"`
-	ExecutionHost     string          `json:"execution_host,omitempty"`
-	MissionFamily     string          `json:"mission_family,omitempty"`
-	TargetSurfaces    []JobSurfaceRef `json:"target_surfaces,omitempty"`
-	MutableSurfaces   []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
-	ImmutableSurfaces []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
-	State             JobState        `json:"state"`
-	MaxAuthority      AuthorityTier   `json:"max_authority"`
-	AllowedTools      []string        `json:"allowed_tools"`
-	Plan              Plan            `json:"plan"`
-	MissionStoreRoot  string          `json:"-"`
+	ID                  string          `json:"id"`
+	SpecVersion         string          `json:"spec_version,omitempty"`
+	ExecutionPlane      string          `json:"execution_plane,omitempty"`
+	ExecutionHost       string          `json:"execution_host,omitempty"`
+	MissionFamily       string          `json:"mission_family,omitempty"`
+	TargetSurfaces      []JobSurfaceRef `json:"target_surfaces,omitempty"`
+	MutableSurfaces     []JobSurfaceRef `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces   []JobSurfaceRef `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
+	State               JobState        `json:"state"`
+	MaxAuthority        AuthorityTier   `json:"max_authority"`
+	AllowedTools        []string        `json:"allowed_tools"`
+	Plan                Plan            `json:"plan"`
+	MissionStoreRoot    string          `json:"-"`
 }
 
 type Plan struct {

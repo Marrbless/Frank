@@ -364,6 +364,12 @@ func validateV4ImprovementTargetSurfaces(job Job, plane, host, family string) []
 			Message: fmt.Sprintf("mission_family %q requires target surface class %q", family, JobSurfaceClassSkillTopology),
 		})
 	}
+	if family == MissionFamilyImproveTopology && !job.TopologyModeEnabled {
+		errors = append(errors, ValidationError{
+			Code:    RejectionCodeV4TopologyChangeDisabled,
+			Message: fmt.Sprintf("mission_family %q requires topology_mode_enabled=true", family),
+		})
+	}
 	if family == MissionFamilyProposeSourcePatch {
 		errors = append(errors, validateV4SourcePatchArtifactOnlySurfaces(job.TargetSurfaces, "target_surfaces")...)
 		errors = append(errors, validateV4SourcePatchArtifactOnlySurfaces(job.MutableSurfaces, "mutable_surfaces")...)
