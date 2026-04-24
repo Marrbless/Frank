@@ -2623,6 +2623,108 @@ func taskStateHotUpdateOutcomeID(hotUpdateID string) string {
 	return "hot-update-outcome-" + strings.TrimSpace(hotUpdateID)
 }
 
+func (s *TaskState) CreatePromotionFromSuccessfulHotUpdateOutcome(jobID string, outcomeID string) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+		return false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+	}
+
+	_, changed, err := missioncontrol.CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, "operator", now)
+	if err != nil {
+		outcome, loadOutcomeErr := missioncontrol.LoadHotUpdateOutcomeRecord(root, outcomeID)
+		if loadOutcomeErr == nil {
+			promotion, loadPromotionErr := missioncontrol.LoadPromotionRecord(root, taskStateHotUpdatePromotionID(outcome.HotUpdateID))
+			if loadPromotionErr == nil {
+				_, changed, err = missioncontrol.CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, "operator", promotion.CreatedAt)
+			}
+		}
+		if err != nil {
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", err)
+			return false, err
+		}
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, "hot_update_promotion_create", nil)
+	return changed, nil
+}
+
+func taskStateHotUpdatePromotionID(hotUpdateID string) string {
+	return "hot-update-promotion-" + strings.TrimSpace(hotUpdateID)
+}
+
 func (s *TaskState) AdvanceRollbackApplyPhase(jobID string, applyID string, phase string) (bool, error) {
 	if s == nil {
 		return false, nil

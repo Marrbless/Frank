@@ -2180,6 +2180,307 @@ func TestProcessDirectHotUpdateOutcomeCreateCommandRejectsDuplicateOutcomesFailC
 	}
 }
 
+func TestProcessDirectHotUpdatePromotionCreateCommandCreatesPromotionAndIsReplaySafe(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	prepareLoopHotUpdateSucceededGate(t, ag)
+	if _, err := ag.ProcessDirect("HOT_UPDATE_OUTCOME_CREATE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OUTCOME_CREATE) error = %v", err)
+	}
+
+	before := snapshotLoopHotUpdatePromotionCreateSideEffects(t, root, "hot-update-1", "hot-update-outcome-hot-update-1")
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_PROMOTION_CREATE job-1 hot-update-outcome-hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE first) error = %v", err)
+	}
+	if resp != "Created hot-update promotion job=job-1 outcome=hot-update-outcome-hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE first) response = %q, want create acknowledgement", resp)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want promotion create audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_promotion_create", true, "")
+
+	promotion, err := missioncontrol.LoadPromotionRecord(root, "hot-update-promotion-hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadPromotionRecord() error = %v", err)
+	}
+	if promotion.PromotedPackID != "pack-candidate" {
+		t.Fatalf("PromotionRecord.PromotedPackID = %q, want pack-candidate", promotion.PromotedPackID)
+	}
+	if promotion.PreviousActivePackID != "pack-base" {
+		t.Fatalf("PromotionRecord.PreviousActivePackID = %q, want pack-base", promotion.PreviousActivePackID)
+	}
+	if promotion.HotUpdateID != "hot-update-1" {
+		t.Fatalf("PromotionRecord.HotUpdateID = %q, want hot-update-1", promotion.HotUpdateID)
+	}
+	if promotion.OutcomeID != "hot-update-outcome-hot-update-1" {
+		t.Fatalf("PromotionRecord.OutcomeID = %q, want deterministic outcome id", promotion.OutcomeID)
+	}
+	if promotion.Reason != "hot update outcome promoted" {
+		t.Fatalf("PromotionRecord.Reason = %q, want deterministic promotion reason", promotion.Reason)
+	}
+	if promotion.LastKnownGoodPackID != "" || promotion.LastKnownGoodBasis != "" {
+		t.Fatalf("PromotionRecord LKG fields = %q/%q, want empty", promotion.LastKnownGoodPackID, promotion.LastKnownGoodBasis)
+	}
+
+	firstPromotionBytes, err := os.ReadFile(missioncontrol.StorePromotionPath(root, promotion.PromotionID))
+	if err != nil {
+		t.Fatalf("ReadFile(first promotion) error = %v", err)
+	}
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_PROMOTION_CREATE job-1 hot-update-outcome-hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE replay) error = %v", err)
+	}
+	if resp != "Selected hot-update promotion job=job-1 outcome=hot-update-outcome-hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE replay) response = %q, want idempotent acknowledgement", resp)
+	}
+	secondPromotionBytes, err := os.ReadFile(missioncontrol.StorePromotionPath(root, promotion.PromotionID))
+	if err != nil {
+		t.Fatalf("ReadFile(second promotion) error = %v", err)
+	}
+	if string(firstPromotionBytes) != string(secondPromotionBytes) {
+		t.Fatalf("hot-update promotion file changed on idempotent replay\nfirst:\n%s\nsecond:\n%s", string(firstPromotionBytes), string(secondPromotionBytes))
+	}
+
+	assertLoopHotUpdatePromotionCreateSideEffectsUnchanged(t, root, "hot-update-1", "hot-update-outcome-hot-update-1", before)
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.PromotionIdentity == nil {
+		t.Fatal("PromotionIdentity = nil, want created promotion in status")
+	}
+	if summary.PromotionIdentity.State != "configured" {
+		t.Fatalf("PromotionIdentity.State = %q, want configured", summary.PromotionIdentity.State)
+	}
+	if len(summary.PromotionIdentity.Promotions) != 1 {
+		t.Fatalf("PromotionIdentity.Promotions len = %d, want 1", len(summary.PromotionIdentity.Promotions))
+	}
+	statusPromotion := summary.PromotionIdentity.Promotions[0]
+	if statusPromotion.PromotionID != "hot-update-promotion-hot-update-1" {
+		t.Fatalf("PromotionIdentity.Promotions[0].PromotionID = %q, want deterministic promotion id", statusPromotion.PromotionID)
+	}
+	if statusPromotion.OutcomeID != "hot-update-outcome-hot-update-1" {
+		t.Fatalf("PromotionIdentity.Promotions[0].OutcomeID = %q, want source outcome id", statusPromotion.OutcomeID)
+	}
+}
+
+func TestProcessDirectHotUpdatePromotionCreateCommandRejectsInvalidSourcesWithoutPromotionRecord(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, root string) string
+		command   func(outcomeID string) string
+		wantError string
+	}{
+		{
+			name:      "missing outcome",
+			setup:     func(t *testing.T, root string) string { return "missing-outcome" },
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: missioncontrol.ErrHotUpdateOutcomeRecordNotFound.Error(),
+		},
+		{
+			name: "non-hot-updated outcome",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindBlocked, "blocked by policy")
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: "does not permit promotion creation",
+		},
+		{
+			name: "failed outcome",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindFailed, "operator_terminal_failure: recovery reviewed")
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: "does not permit promotion creation",
+		},
+		{
+			name: "missing originating gate",
+			setup: func(t *testing.T, root string) string {
+				writeLoopHotUpdateOutcomeRaw(t, root, missioncontrol.HotUpdateOutcomeRecord{
+					RecordVersion:   1,
+					OutcomeID:       "hot-update-outcome-missing-gate",
+					HotUpdateID:     "missing-gate",
+					CandidatePackID: "pack-candidate",
+					OutcomeKind:     missioncontrol.HotUpdateOutcomeKindHotUpdated,
+					Reason:          "hot update reload/apply succeeded",
+					OutcomeAt:       time.Date(2026, 4, 22, 12, 2, 0, 0, time.UTC),
+					CreatedAt:       time.Date(2026, 4, 22, 12, 3, 0, 0, time.UTC),
+					CreatedBy:       "operator",
+				})
+				return "hot-update-outcome-missing-gate"
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: missioncontrol.ErrHotUpdateGateRecordNotFound.Error(),
+		},
+		{
+			name: "invalid outcome gate linkage",
+			setup: func(t *testing.T, root string) string {
+				outcomeID := storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindHotUpdated, "hot update reload/apply succeeded")
+				mustStoreLoopRuntimePack(t, root, "pack-other")
+				outcome, err := missioncontrol.LoadHotUpdateOutcomeRecord(root, outcomeID)
+				if err != nil {
+					t.Fatalf("LoadHotUpdateOutcomeRecord() error = %v", err)
+				}
+				outcome.CandidatePackID = "pack-other"
+				writeLoopHotUpdateOutcomeRaw(t, root, outcome)
+				return outcomeID
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: `candidate_pack_id "pack-other" does not match hot-update gate candidate_pack_id "pack-candidate"`,
+		},
+		{
+			name: "empty candidate pack",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdateOutcomeForPromotionWithMutation(t, root, func(record *missioncontrol.HotUpdateOutcomeRecord) {
+					record.CandidatePackID = ""
+				})
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: "candidate_pack_id is required for promotion creation",
+		},
+		{
+			name: "unresolved previous active pack",
+			setup: func(t *testing.T, root string) string {
+				outcomeID := storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindHotUpdated, "hot update reload/apply succeeded")
+				gate, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+				if err != nil {
+					t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+				}
+				gate.PreviousActivePackID = "pack-missing"
+				writeLoopHotUpdateGateRaw(t, root, gate)
+				return outcomeID
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE job-1 " + outcomeID },
+			wantError: `previous_active_pack_id "pack-missing"`,
+		},
+		{
+			name: "wrong job",
+			setup: func(t *testing.T, root string) string {
+				return storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindHotUpdated, "hot update reload/apply succeeded")
+			},
+			command:   func(outcomeID string) string { return "HOT_UPDATE_PROMOTION_CREATE other-job " + outcomeID },
+			wantError: "operator command does not match the active job",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, _ := writeLoopHotUpdateGateControlFixtures(t)
+			writeLoopHotUpdateLastKnownGoodPointer(t, root)
+			outcomeID := tc.setup(t, root)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+			resp, err := ag.ProcessDirect(tc.command(outcomeID), 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want rejection", tc.command(outcomeID))
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", tc.command(outcomeID), resp)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ProcessDirect(%s) error = %q, want substring %q", tc.command(outcomeID), err, tc.wantError)
+			}
+			assertLoopHotUpdatePromotionCount(t, root, 0)
+		})
+	}
+}
+
+func TestProcessDirectHotUpdatePromotionCreateCommandRejectsDuplicatePromotionsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		existingID string
+		mutate     func(*missioncontrol.PromotionRecord)
+		wantError  string
+	}{
+		{
+			name:       "divergent deterministic promotion",
+			existingID: "hot-update-promotion-hot-update-1",
+			mutate: func(record *missioncontrol.PromotionRecord) {
+				record.Notes = "manual divergent duplicate"
+			},
+			wantError: `mission store promotion "hot-update-promotion-hot-update-1" already exists`,
+		},
+		{
+			name:       "different promotion for same hot update",
+			existingID: "legacy-promotion",
+			mutate: func(record *missioncontrol.PromotionRecord) {
+				record.OutcomeID = ""
+			},
+			wantError: `hot_update_id "hot-update-1" already exists as "legacy-promotion"`,
+		},
+		{
+			name:       "different promotion for same outcome",
+			existingID: "legacy-promotion",
+			mutate:     func(record *missioncontrol.PromotionRecord) {},
+			wantError:  `outcome_id "hot-update-outcome-hot-update-1" already exists as "legacy-promotion"`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, _ := writeLoopHotUpdateGateControlFixtures(t)
+			writeLoopHotUpdateLastKnownGoodPointer(t, root)
+			outcomeID := storeLoopHotUpdateOutcomeForPromotion(t, root, missioncontrol.HotUpdateOutcomeKindHotUpdated, "hot update reload/apply succeeded")
+			outcome, err := missioncontrol.LoadHotUpdateOutcomeRecord(root, outcomeID)
+			if err != nil {
+				t.Fatalf("LoadHotUpdateOutcomeRecord() error = %v", err)
+			}
+			record := missioncontrol.PromotionRecord{
+				PromotionID:          tc.existingID,
+				PromotedPackID:       "pack-candidate",
+				PreviousActivePackID: "pack-base",
+				HotUpdateID:          "hot-update-1",
+				OutcomeID:            outcomeID,
+				Reason:               "hot update outcome promoted",
+				PromotedAt:           outcome.OutcomeAt,
+				CreatedAt:            outcome.OutcomeAt.Add(time.Minute),
+				CreatedBy:            "operator",
+			}
+			tc.mutate(&record)
+			if err := missioncontrol.StorePromotionRecord(root, record); err != nil {
+				t.Fatalf("StorePromotionRecord(existing) error = %v", err)
+			}
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+			resp, err := ag.ProcessDirect("HOT_UPDATE_PROMOTION_CREATE job-1 "+outcomeID, 2*time.Second)
+			if err == nil {
+				t.Fatal("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE) error = nil, want duplicate rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_PROMOTION_CREATE) error = %q, want substring %q", err, tc.wantError)
+			}
+			assertLoopHotUpdatePromotionCount(t, root, 1)
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGateRecordCommandFailsClosedWhenRollbackTargetLinkageIsMissing(t *testing.T) {
 	t.Parallel()
 
@@ -5131,6 +5432,176 @@ func assertLoopHotUpdateOutcomeCount(t *testing.T, root string, want int) {
 	}
 	if len(outcomes) != want {
 		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want %d", len(outcomes), want)
+	}
+}
+
+func storeLoopHotUpdateOutcomeForPromotion(t *testing.T, root string, kind missioncontrol.HotUpdateOutcomeKind, reason string) string {
+	t.Helper()
+
+	return storeLoopHotUpdateOutcomeForPromotionWithMutation(t, root, func(record *missioncontrol.HotUpdateOutcomeRecord) {
+		record.OutcomeKind = kind
+		record.Reason = reason
+	})
+}
+
+func storeLoopHotUpdateOutcomeForPromotionWithMutation(t *testing.T, root string, mutate func(*missioncontrol.HotUpdateOutcomeRecord)) string {
+	t.Helper()
+
+	gate := storeLoopHotUpdateTerminalGate(t, root, "hot-update-1", missioncontrol.HotUpdateGateStateReloadApplySucceeded, "")
+	record := missioncontrol.HotUpdateOutcomeRecord{
+		OutcomeID:       "hot-update-outcome-hot-update-1",
+		HotUpdateID:     "hot-update-1",
+		CandidatePackID: "pack-candidate",
+		OutcomeKind:     missioncontrol.HotUpdateOutcomeKindHotUpdated,
+		Reason:          "hot update reload/apply succeeded",
+		OutcomeAt:       gate.PhaseUpdatedAt,
+		CreatedAt:       gate.PhaseUpdatedAt.Add(time.Minute),
+		CreatedBy:       "operator",
+	}
+	if mutate != nil {
+		mutate(&record)
+	}
+	if err := missioncontrol.StoreHotUpdateOutcomeRecord(root, record); err != nil {
+		t.Fatalf("StoreHotUpdateOutcomeRecord() error = %v", err)
+	}
+	return record.OutcomeID
+}
+
+func writeLoopHotUpdateOutcomeRaw(t *testing.T, root string, record missioncontrol.HotUpdateOutcomeRecord) {
+	t.Helper()
+
+	if record.RecordVersion == 0 {
+		record.RecordVersion = 1
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateOutcomePath(root, record.OutcomeID), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(hot-update outcome) error = %v", err)
+	}
+}
+
+func writeLoopHotUpdateGateRaw(t *testing.T, root string, record missioncontrol.HotUpdateGateRecord) {
+	t.Helper()
+
+	if record.RecordVersion == 0 {
+		record.RecordVersion = 1
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateGatePath(root, record.HotUpdateID), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(hot-update gate) error = %v", err)
+	}
+}
+
+func mustStoreLoopRuntimePack(t *testing.T, root string, packID string) {
+	t.Helper()
+
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+		PackID:                   packID,
+		ParentPackID:             "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		CreatedAt:                now.Add(time.Minute),
+		Channel:                  "phone",
+		PromptPackRef:            "prompt-pack-" + packID,
+		SkillPackRef:             "skill-pack-" + packID,
+		ManifestRef:              "manifest-" + packID,
+		ExtensionPackRef:         "extension-" + packID,
+		PolicyRef:                "policy-" + packID,
+		SourceSummary:            "extra pack",
+		MutableSurfaces:          []string{"skills"},
+		ImmutableSurfaces:        []string{"policy", "authority"},
+		SurfaceClasses:           []string{"class_1"},
+		CompatibilityContractRef: "compat-v1",
+	}); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", packID, err)
+	}
+}
+
+type loopHotUpdatePromotionCreateSideEffects struct {
+	activePointerBytes    []byte
+	lastKnownGoodBytes    []byte
+	hotUpdateGateBytes    []byte
+	hotUpdateOutcomeBytes []byte
+	reloadGeneration      uint64
+	hotUpdateGateRecords  int
+	hotUpdateOutcomes     int
+}
+
+func snapshotLoopHotUpdatePromotionCreateSideEffects(t *testing.T, root string, hotUpdateID string, outcomeID string) loopHotUpdatePromotionCreateSideEffects {
+	t.Helper()
+
+	activePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	lastKnownGoodBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good pointer before) error = %v", err)
+	}
+	hotUpdateGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update gate before) error = %v", err)
+	}
+	hotUpdateOutcomeBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateOutcomePath(root, outcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(hot-update outcome before) error = %v", err)
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	outcomes, err := missioncontrol.ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	return loopHotUpdatePromotionCreateSideEffects{
+		activePointerBytes:    activePointerBytes,
+		lastKnownGoodBytes:    lastKnownGoodBytes,
+		hotUpdateGateBytes:    hotUpdateGateBytes,
+		hotUpdateOutcomeBytes: hotUpdateOutcomeBytes,
+		reloadGeneration:      pointer.ReloadGeneration,
+		hotUpdateGateRecords:  len(gates),
+		hotUpdateOutcomes:     len(outcomes),
+	}
+}
+
+func assertLoopHotUpdatePromotionCreateSideEffectsUnchanged(t *testing.T, root string, hotUpdateID string, outcomeID string, before loopHotUpdatePromotionCreateSideEffects) {
+	t.Helper()
+
+	after := snapshotLoopHotUpdatePromotionCreateSideEffects(t, root, hotUpdateID, outcomeID)
+	if string(before.activePointerBytes) != string(after.activePointerBytes) {
+		t.Fatalf("active runtime pack pointer changed during promotion create\nbefore:\n%s\nafter:\n%s", string(before.activePointerBytes), string(after.activePointerBytes))
+	}
+	if after.reloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", after.reloadGeneration, before.reloadGeneration)
+	}
+	if string(before.lastKnownGoodBytes) != string(after.lastKnownGoodBytes) {
+		t.Fatalf("last-known-good pointer changed during promotion create\nbefore:\n%s\nafter:\n%s", string(before.lastKnownGoodBytes), string(after.lastKnownGoodBytes))
+	}
+	if string(before.hotUpdateGateBytes) != string(after.hotUpdateGateBytes) {
+		t.Fatalf("hot-update gate changed during promotion create\nbefore:\n%s\nafter:\n%s", string(before.hotUpdateGateBytes), string(after.hotUpdateGateBytes))
+	}
+	if string(before.hotUpdateOutcomeBytes) != string(after.hotUpdateOutcomeBytes) {
+		t.Fatalf("hot-update outcome changed during promotion create\nbefore:\n%s\nafter:\n%s", string(before.hotUpdateOutcomeBytes), string(after.hotUpdateOutcomeBytes))
+	}
+	if after.hotUpdateGateRecords != before.hotUpdateGateRecords {
+		t.Fatalf("ListHotUpdateGateRecords(after) len = %d, want %d", after.hotUpdateGateRecords, before.hotUpdateGateRecords)
+	}
+	if after.hotUpdateOutcomes != before.hotUpdateOutcomes {
+		t.Fatalf("ListHotUpdateOutcomeRecords(after) len = %d, want %d", after.hotUpdateOutcomes, before.hotUpdateOutcomes)
+	}
+}
+
+func assertLoopHotUpdatePromotionCount(t *testing.T, root string, want int) {
+	t.Helper()
+
+	promotions, err := missioncontrol.ListPromotionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != want {
+		t.Fatalf("ListPromotionRecords() len = %d, want %d", len(promotions), want)
 	}
 }
 

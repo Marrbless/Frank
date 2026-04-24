@@ -32,6 +32,7 @@ var hotUpdateGateExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate
 var hotUpdateGateReloadCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_reload)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateFailCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_fail)\s+(\S+)\s+(\S+)(?:\s+(.*?))?\s*$`)
 var hotUpdateOutcomeCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_outcome_create)\s+(\S+)\s+(\S+)\s*$`)
+var hotUpdatePromotionCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_promotion_create)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyPhaseCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_phase)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var rollbackApplyExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_apply_execute)\s+(\S+)\s+(\S+)\s*$`)
@@ -1879,6 +1880,20 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 			return true, fmt.Sprintf("Created hot-update outcome job=%s hot_update=%s.", jobID, hotUpdateID), nil
 		}
 		return true, fmt.Sprintf("Selected hot-update outcome job=%s hot_update=%s.", jobID, hotUpdateID), nil
+	}
+
+	hotUpdatePromotionCreateMatches := hotUpdatePromotionCreateCommandRE.FindStringSubmatch(trimmed)
+	if len(hotUpdatePromotionCreateMatches) == 4 {
+		jobID := hotUpdatePromotionCreateMatches[2]
+		outcomeID := hotUpdatePromotionCreateMatches[3]
+		changed, err := a.taskState.CreatePromotionFromSuccessfulHotUpdateOutcome(jobID, outcomeID)
+		if err != nil {
+			return true, "", err
+		}
+		if changed {
+			return true, fmt.Sprintf("Created hot-update promotion job=%s outcome=%s.", jobID, outcomeID), nil
+		}
+		return true, fmt.Sprintf("Selected hot-update promotion job=%s outcome=%s.", jobID, outcomeID), nil
 	}
 
 	rollbackApplyMatches := rollbackApplyRecordCommandRE.FindStringSubmatch(trimmed)
