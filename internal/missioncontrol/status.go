@@ -37,6 +37,7 @@ type OperatorStatusSummary struct {
 	PromotionPolicyIdentity            *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
+	HotUpdateCanaryRequirementIdentity *OperatorHotUpdateCanaryRequirementIdentityStatus           `json:"hot_update_canary_requirement_identity,omitempty"`
 	CandidatePromotionDecisionIdentity *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
 	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
@@ -180,6 +181,11 @@ type OperatorCandidateResultIdentityStatus struct {
 type OperatorCandidatePromotionDecisionIdentityStatus struct {
 	State     string                                     `json:"state"`
 	Decisions []OperatorCandidatePromotionDecisionStatus `json:"decisions,omitempty"`
+}
+
+type OperatorHotUpdateCanaryRequirementIdentityStatus struct {
+	State        string                                     `json:"state"`
+	Requirements []OperatorHotUpdateCanaryRequirementStatus `json:"requirements,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeIdentityStatus struct {
@@ -332,6 +338,26 @@ type OperatorCandidatePromotionDecisionStatus struct {
 	CreatedAt           *string `json:"created_at,omitempty"`
 	CreatedBy           string  `json:"created_by,omitempty"`
 	Error               string  `json:"error,omitempty"`
+}
+
+type OperatorHotUpdateCanaryRequirementStatus struct {
+	State                 string  `json:"state"`
+	CanaryRequirementID   string  `json:"canary_requirement_id,omitempty"`
+	ResultID              string  `json:"result_id,omitempty"`
+	RunID                 string  `json:"run_id,omitempty"`
+	CandidateID           string  `json:"candidate_id,omitempty"`
+	EvalSuiteID           string  `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID     string  `json:"promotion_policy_id,omitempty"`
+	BaselinePackID        string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID       string  `json:"candidate_pack_id,omitempty"`
+	EligibilityState      string  `json:"eligibility_state,omitempty"`
+	RequiredByPolicy      bool    `json:"required_by_policy"`
+	OwnerApprovalRequired bool    `json:"owner_approval_required"`
+	RequirementState      string  `json:"requirement_state,omitempty"`
+	Reason                string  `json:"reason,omitempty"`
+	CreatedAt             *string `json:"created_at,omitempty"`
+	CreatedBy             string  `json:"created_by,omitempty"`
+	Error                 string  `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -608,6 +634,16 @@ func WithCandidatePromotionDecisionIdentity(summary OperatorStatusSummary, root 
 	return summary
 }
 
+func WithHotUpdateCanaryRequirementIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateCanaryRequirementIdentityStatus(root)
+	summary.HotUpdateCanaryRequirementIdentity = &status
+	return summary
+}
+
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -770,6 +806,24 @@ func LoadOperatorCandidatePromotionDecisionIdentityStatus(root string) OperatorC
 	return OperatorCandidatePromotionDecisionIdentityStatus{
 		State:     state,
 		Decisions: decisions,
+	}
+}
+
+func LoadOperatorHotUpdateCanaryRequirementIdentityStatus(root string) OperatorHotUpdateCanaryRequirementIdentityStatus {
+	requirements, found, invalid, err := loadOperatorHotUpdateCanaryRequirementStatuses(root)
+	if !found {
+		return OperatorHotUpdateCanaryRequirementIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateCanaryRequirementIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateCanaryRequirementIdentityStatus{
+		State:        state,
+		Requirements: requirements,
 	}
 }
 
@@ -1712,6 +1766,91 @@ func operatorCandidatePromotionDecisionStatusFromRecord(record CandidatePromotio
 		Notes:               record.Notes,
 		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorHotUpdateCanaryRequirementStatuses(root string) ([]OperatorHotUpdateCanaryRequirementStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateCanaryRequirementsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	requirements := make([]OperatorHotUpdateCanaryRequirementStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorHotUpdateCanaryRequirementStatus(root, filepath.Join(StoreHotUpdateCanaryRequirementsDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		requirements = append(requirements, status)
+	}
+	return requirements, true, invalid, nil
+}
+
+func loadOperatorHotUpdateCanaryRequirementStatus(root, path string) OperatorHotUpdateCanaryRequirementStatus {
+	status := OperatorHotUpdateCanaryRequirementStatus{
+		State:               "invalid",
+		CanaryRequirementID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record HotUpdateCanaryRequirementRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeHotUpdateCanaryRequirementRecord(record)
+	status = operatorHotUpdateCanaryRequirementStatusFromRecord(record)
+	if err := ValidateHotUpdateCanaryRequirementRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateHotUpdateCanaryRequirementLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorHotUpdateCanaryRequirementStatusFromRecord(record HotUpdateCanaryRequirementRecord) OperatorHotUpdateCanaryRequirementStatus {
+	return OperatorHotUpdateCanaryRequirementStatus{
+		CanaryRequirementID:   record.CanaryRequirementID,
+		ResultID:              record.ResultID,
+		RunID:                 record.RunID,
+		CandidateID:           record.CandidateID,
+		EvalSuiteID:           record.EvalSuiteID,
+		PromotionPolicyID:     record.PromotionPolicyID,
+		BaselinePackID:        record.BaselinePackID,
+		CandidatePackID:       record.CandidatePackID,
+		EligibilityState:      record.EligibilityState,
+		RequiredByPolicy:      record.RequiredByPolicy,
+		OwnerApprovalRequired: record.OwnerApprovalRequired,
+		RequirementState:      string(record.State),
+		Reason:                record.Reason,
+		CreatedAt:             formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:             record.CreatedBy,
 	}
 }
 
