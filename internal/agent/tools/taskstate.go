@@ -2270,6 +2270,106 @@ func taskStateHotUpdateGateIDFromPromotionDecision(promotionDecisionID string) s
 	return "hot-update-" + strings.TrimSpace(promotionDecisionID)
 }
 
+func (s *TaskState) CreateHotUpdateCanaryRequirementFromCandidateResult(jobID string, resultID string) (missioncontrol.HotUpdateCanaryRequirementRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	const action = "hot_update_canary_requirement_create"
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+		}
+	}
+
+	createdAt := now
+	canaryRequirementID := missioncontrol.HotUpdateCanaryRequirementIDFromResult(resultID)
+	if existing, err := missioncontrol.LoadHotUpdateCanaryRequirementRecord(root, canaryRequirementID); err == nil {
+		createdAt = existing.CreatedAt
+	} else if !errors.Is(err, missioncontrol.ErrHotUpdateCanaryRequirementRecordNotFound) {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+	}
+
+	record, changed, err := missioncontrol.CreateHotUpdateCanaryRequirementFromCandidateResult(root, resultID, "operator", createdAt)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryRequirementRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, action, nil)
+	return record, changed, nil
+}
+
 func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
 	if s == nil {
 		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil

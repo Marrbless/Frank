@@ -1245,6 +1245,413 @@ func TestProcessDirectHotUpdateGateRecordCommandCreatesOrSelectsGateAndPreserves
 	}
 }
 
+func TestProcessDirectHotUpdateCanaryRequirementCreateCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresCanary = true
+	}, nil)
+	canaryRequirementID := missioncontrol.HotUpdateCanaryRequirementIDFromResult(resultID)
+	before := snapshotLoopHotUpdateCanaryRequirementSideEffects(t, root, resultID)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 "+resultID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE first) error = %v", err)
+	}
+	wantCreated := "Created hot-update canary requirement job=job-1 result=" + resultID + " canary_requirement=" + canaryRequirementID + " owner_approval_required=false."
+	if resp != wantCreated {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE first) response = %q, want %q", resp, wantCreated)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateCanaryRequirementRecord(root, canaryRequirementID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanaryRequirementRecord() error = %v", err)
+	}
+	if record.ResultID != resultID {
+		t.Fatalf("HotUpdateCanaryRequirementRecord.ResultID = %q, want %q", record.ResultID, resultID)
+	}
+	if record.EligibilityState != missioncontrol.CandidatePromotionEligibilityStateCanaryRequired {
+		t.Fatalf("HotUpdateCanaryRequirementRecord.EligibilityState = %q, want canary_required", record.EligibilityState)
+	}
+	if record.OwnerApprovalRequired {
+		t.Fatal("HotUpdateCanaryRequirementRecord.OwnerApprovalRequired = true, want false")
+	}
+	if record.State != missioncontrol.HotUpdateCanaryRequirementStateRequired {
+		t.Fatalf("HotUpdateCanaryRequirementRecord.State = %q, want required", record.State)
+	}
+
+	firstRequirementBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, canaryRequirementID))
+	if err != nil {
+		t.Fatalf("ReadFile(first requirement) error = %v", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want hot-update canary requirement audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_requirement_create", true, "")
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateCanaryRequirementIdentity == nil {
+		t.Fatal("HotUpdateCanaryRequirementIdentity = nil, want configured identity block")
+	}
+	if summary.HotUpdateCanaryRequirementIdentity.State != "configured" {
+		t.Fatalf("HotUpdateCanaryRequirementIdentity.State = %q, want configured", summary.HotUpdateCanaryRequirementIdentity.State)
+	}
+	if len(summary.HotUpdateCanaryRequirementIdentity.Requirements) != 1 {
+		t.Fatalf("HotUpdateCanaryRequirementIdentity.Requirements len = %d, want 1", len(summary.HotUpdateCanaryRequirementIdentity.Requirements))
+	}
+	gotRequirement := summary.HotUpdateCanaryRequirementIdentity.Requirements[0]
+	if gotRequirement.CanaryRequirementID != canaryRequirementID {
+		t.Fatalf("status canary_requirement_id = %q, want %q", gotRequirement.CanaryRequirementID, canaryRequirementID)
+	}
+	if gotRequirement.OwnerApprovalRequired {
+		t.Fatal("status owner_approval_required = true, want false")
+	}
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 "+resultID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE second) error = %v", err)
+	}
+	wantSelected := "Selected hot-update canary requirement job=job-1 result=" + resultID + " canary_requirement=" + canaryRequirementID + " owner_approval_required=false."
+	if resp != wantSelected {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE second) response = %q, want %q", resp, wantSelected)
+	}
+	secondRequirementBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, canaryRequirementID))
+	if err != nil {
+		t.Fatalf("ReadFile(second requirement) error = %v", err)
+	}
+	if string(firstRequirementBytes) != string(secondRequirementBytes) {
+		t.Fatalf("hot-update canary requirement file changed on replay\nfirst:\n%s\nsecond:\n%s", string(firstRequirementBytes), string(secondRequirementBytes))
+	}
+	audits = ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want selected audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_requirement_create", true, "")
+
+	assertLoopHotUpdateCanaryRequirementSideEffectsUnchanged(t, root, before)
+	assertLoopHotUpdateCanaryRequirementNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanaryRequirementCreateCommandCreatesCombinedOwnerApprovalRequirement(t *testing.T) {
+	t.Parallel()
+
+	root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresCanary = true
+		record.RequiresOwnerApproval = true
+	}, nil)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	canaryRequirementID := missioncontrol.HotUpdateCanaryRequirementIDFromResult(resultID)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 "+resultID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE) error = %v", err)
+	}
+	want := "Created hot-update canary requirement job=job-1 result=" + resultID + " canary_requirement=" + canaryRequirementID + " owner_approval_required=true."
+	if resp != want {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE) response = %q, want %q", resp, want)
+	}
+	record, err := missioncontrol.LoadHotUpdateCanaryRequirementRecord(root, canaryRequirementID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanaryRequirementRecord() error = %v", err)
+	}
+	if record.EligibilityState != missioncontrol.CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired {
+		t.Fatalf("EligibilityState = %q, want canary_and_owner_approval_required", record.EligibilityState)
+	}
+	if !record.OwnerApprovalRequired {
+		t.Fatal("OwnerApprovalRequired = false, want true")
+	}
+	assertLoopHotUpdateCanaryRequirementNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanaryRequirementCreateCommandRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresCanary = true
+	}, nil)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	tests := []string{
+		"HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1",
+		"HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 " + resultID + " extra",
+	}
+	for _, command := range tests {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want malformed argument rejection", command)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", command, resp)
+			}
+			if !strings.Contains(err.Error(), "HOT_UPDATE_CANARY_REQUIREMENT_CREATE requires job_id and result_id") {
+				t.Fatalf("ProcessDirect(%s) error = %q, want malformed argument context", command, err)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateCanaryRequirementCreateCommandFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		setup    func(t *testing.T) (string, string, string)
+		wantErr  string
+		wantCode missioncontrol.RejectionCode
+	}
+	tests := []testCase{
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				return root, "other-job", resultID
+			},
+			wantErr:  "operator command does not match the active job",
+			wantCode: missioncontrol.RejectionCode("E_VALIDATION_FAILED"),
+		},
+		{
+			name: "missing candidate result",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _ := writeLoopHotUpdateGateControlFixtures(t)
+				return root, "job-1", "result-missing"
+			},
+			wantErr: missioncontrol.ErrCandidateResultRecordNotFound.Error(),
+		},
+		{
+			name: "eligible",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, nil, nil)
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "eligible"`,
+		},
+		{
+			name: "owner approval only",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresOwnerApproval = true
+				}, nil)
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "owner_approval_required"`,
+		},
+		{
+			name: "rejected",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, nil, func(record *missioncontrol.CandidateResultRecord) {
+					record.HoldoutScore = record.BaselineScore
+				})
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "rejected"`,
+		},
+		{
+			name: "unsupported policy",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.EpsilonRule = "epsilon maybe small"
+				}, nil)
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "unsupported_policy"`,
+		},
+		{
+			name: "invalid",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, nil, func(record *missioncontrol.CandidateResultRecord) {
+					record.PromotionPolicyID = ""
+				})
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "invalid"`,
+		},
+		{
+			name: "missing linked run",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StoreImprovementRunPath(root, "run-result")); err != nil {
+					t.Fatalf("Remove(improvement run) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "run_id",
+		},
+		{
+			name: "missing linked candidate",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StoreImprovementCandidatePath(root, "candidate-1")); err != nil {
+					t.Fatalf("Remove(improvement candidate) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "candidate_id",
+		},
+		{
+			name: "missing linked eval suite",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StoreEvalSuitePath(root, "eval-suite-1")); err != nil {
+					t.Fatalf("Remove(eval suite) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "eval_suite_id",
+		},
+		{
+			name: "unfrozen eval suite",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				suite, err := missioncontrol.LoadEvalSuiteRecord(root, "eval-suite-1")
+				if err != nil {
+					t.Fatalf("LoadEvalSuiteRecord() error = %v", err)
+				}
+				suite.FrozenForRun = false
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreEvalSuitePath(root, "eval-suite-1"), suite); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(eval suite) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "frozen",
+		},
+		{
+			name: "missing promotion policy",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StorePromotionPolicyPath(root, "promotion-policy-result")); err != nil {
+					t.Fatalf("Remove(promotion policy) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "promotion_policy_id",
+		},
+		{
+			name: "missing baseline runtime pack",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StoreRuntimePackPath(root, "pack-base")); err != nil {
+					t.Fatalf("Remove(baseline pack) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "baseline_pack_id",
+		},
+		{
+			name: "missing candidate runtime pack",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				if err := os.Remove(missioncontrol.StoreRuntimePackPath(root, "pack-candidate")); err != nil {
+					t.Fatalf("Remove(candidate pack) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "candidate_pack_id",
+		},
+		{
+			name: "divergent duplicate",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				ag := newLoopHotUpdateOutcomeAgent(t, root)
+				if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 "+resultID, 2*time.Second); err != nil {
+					t.Fatalf("ProcessDirect(initial requirement) error = %v", err)
+				}
+				requirementID := missioncontrol.HotUpdateCanaryRequirementIDFromResult(resultID)
+				requirement, err := missioncontrol.LoadHotUpdateCanaryRequirementRecord(root, requirementID)
+				if err != nil {
+					t.Fatalf("LoadHotUpdateCanaryRequirementRecord() error = %v", err)
+				}
+				requirement.Reason = "different reason"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirementID), requirement); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(requirement) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: "already exists",
+		},
+		{
+			name: "stale eligibility on replay",
+			setup: func(t *testing.T) (string, string, string) {
+				root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+					record.RequiresCanary = true
+				}, nil)
+				ag := newLoopHotUpdateOutcomeAgent(t, root)
+				if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE job-1 "+resultID, 2*time.Second); err != nil {
+					t.Fatalf("ProcessDirect(initial requirement) error = %v", err)
+				}
+				policy, err := missioncontrol.LoadPromotionPolicyRecord(root, "promotion-policy-result")
+				if err != nil {
+					t.Fatalf("LoadPromotionPolicyRecord() error = %v", err)
+				}
+				policy.RequiresCanary = false
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StorePromotionPolicyPath(root, "promotion-policy-result"), policy); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(policy) error = %v", err)
+				}
+				return root, "job-1", resultID
+			},
+			wantErr: `promotion eligibility state "eligible"`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, jobID, resultID := tt.setup(t)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+			resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_REQUIREMENT_CREATE "+jobID+" "+resultID, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE) error = nil, want fail-closed rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_REQUIREMENT_CREATE) error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+			audits := ag.taskState.AuditEvents()
+			if len(audits) == 0 {
+				t.Fatal("AuditEvents() count = 0, want rejected hot-update canary requirement audit event")
+			}
+			wantCode := tt.wantCode
+			if wantCode == "" {
+				wantCode = missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")
+			}
+			assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_requirement_create", false, wantCode)
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGateFromDecisionCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
 	t.Parallel()
 
@@ -6530,6 +6937,214 @@ func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol
 	wantPointer.RecordVersion = 1
 
 	return root, wantPointer
+}
+
+func writeLoopHotUpdateCanaryRequirementFixtures(t *testing.T, policyEdit func(*missioncontrol.PromotionPolicyRecord), resultEdit func(*missioncontrol.CandidateResultRecord)) (string, string) {
+	t.Helper()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	now := time.Date(2026, 4, 25, 20, 0, 0, 0, time.UTC)
+
+	if err := missioncontrol.StoreImprovementCandidateRecord(root, missioncontrol.ImprovementCandidateRecord{
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		SourceSummary:       "candidate linkage",
+		ValidationBasisRefs: []string{"eval-suite-1"},
+		CreatedAt:           now.Add(time.Minute),
+		CreatedBy:           "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
+		EvalSuiteID:       "eval-suite-1",
+		RubricRef:         "rubric-v1",
+		TrainCorpusRef:    "train-corpus-v1",
+		HoldoutCorpusRef:  "holdout-corpus-v1",
+		EvaluatorRef:      "evaluator-v1",
+		NegativeCaseCount: 1,
+		BoundaryCaseCount: 1,
+		FrozenForRun:      true,
+		CandidateID:       "candidate-1",
+		BaselinePackID:    "pack-base",
+		CandidatePackID:   "pack-candidate",
+		CreatedAt:         now.Add(2 * time.Minute),
+		CreatedBy:         "operator",
+	}); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreImprovementRunRecord(root, missioncontrol.ImprovementRunRecord{
+		RunID:           "run-result",
+		Objective:       "evaluate candidate for promotion",
+		ExecutionPlane:  missioncontrol.ExecutionPlaneImprovementWorkspace,
+		ExecutionHost:   "phone",
+		MissionFamily:   missioncontrol.MissionFamilyEvaluateCandidate,
+		TargetType:      "prompt_pack",
+		TargetRef:       "prompt-pack://default",
+		SurfaceClass:    "class_1",
+		CandidateID:     "candidate-1",
+		EvalSuiteID:     "eval-suite-1",
+		BaselinePackID:  "pack-base",
+		CandidatePackID: "pack-candidate",
+		State:           missioncontrol.ImprovementRunStateCandidateReady,
+		Decision:        missioncontrol.ImprovementRunDecisionKeep,
+		CreatedAt:       now.Add(3 * time.Minute),
+		CompletedAt:     now.Add(4 * time.Minute),
+		StopReason:      "candidate ready for promotion decision",
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	policy := missioncontrol.PromotionPolicyRecord{
+		PromotionPolicyID:         "promotion-policy-result",
+		RequiresHoldoutPass:       true,
+		RequiresCanary:            false,
+		RequiresOwnerApproval:     false,
+		AllowsAutonomousHotUpdate: true,
+		AllowedSurfaceClasses:     []string{"class_1"},
+		EpsilonRule:               "epsilon <= 0.01",
+		RegressionRule:            "no_regression_flags",
+		CompatibilityRule:         "compatibility_score >= 0.90",
+		ResourceRule:              "resource_score >= 0.60",
+		MaxCanaryDuration:         "15m",
+		ForbiddenSurfaceChanges:   []string{"policy", "authority"},
+		CreatedAt:                 now.Add(5 * time.Minute),
+		CreatedBy:                 "operator",
+		Notes:                     "canary requirement control fixture",
+	}
+	if policyEdit != nil {
+		policyEdit(&policy)
+	}
+	if err := missioncontrol.StorePromotionPolicyRecord(root, policy); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+	result := missioncontrol.CandidateResultRecord{
+		ResultID:           "result-canary-control",
+		RunID:              "run-result",
+		CandidateID:        "candidate-1",
+		EvalSuiteID:        "eval-suite-1",
+		PromotionPolicyID:  "promotion-policy-result",
+		BaselinePackID:     "pack-base",
+		CandidatePackID:    "pack-candidate",
+		BaselineScore:      0.52,
+		TrainScore:         0.78,
+		HoldoutScore:       0.74,
+		ComplexityScore:    0.21,
+		CompatibilityScore: 0.93,
+		ResourceScore:      0.67,
+		RegressionFlags:    []string{"none"},
+		Decision:           missioncontrol.ImprovementRunDecisionKeep,
+		Notes:              "canary requirement control result",
+		CreatedAt:          now.Add(6 * time.Minute),
+		CreatedBy:          "operator",
+	}
+	if resultEdit != nil {
+		resultEdit(&result)
+	}
+	if err := missioncontrol.StoreCandidateResultRecord(root, result); err != nil {
+		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
+	}
+	return root, result.ResultID
+}
+
+type loopHotUpdateCanaryRequirementSideEffects struct {
+	files            map[string][]byte
+	reloadGeneration uint64
+}
+
+func snapshotLoopHotUpdateCanaryRequirementSideEffects(t *testing.T, root string, resultID string) loopHotUpdateCanaryRequirementSideEffects {
+	t.Helper()
+
+	paths := []string{
+		missioncontrol.StoreCandidateResultPath(root, resultID),
+		missioncontrol.StoreImprovementRunPath(root, "run-result"),
+		missioncontrol.StoreImprovementCandidatePath(root, "candidate-1"),
+		missioncontrol.StoreEvalSuitePath(root, "eval-suite-1"),
+		missioncontrol.StorePromotionPolicyPath(root, "promotion-policy-result"),
+		missioncontrol.StoreRuntimePackPath(root, "pack-base"),
+		missioncontrol.StoreRuntimePackPath(root, "pack-candidate"),
+		missioncontrol.StoreActiveRuntimePackPointerPath(root),
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before error = %v", path, err)
+		}
+		files[path] = bytes
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+	return loopHotUpdateCanaryRequirementSideEffects{
+		files:            files,
+		reloadGeneration: pointer.ReloadGeneration,
+	}
+}
+
+func assertLoopHotUpdateCanaryRequirementSideEffectsUnchanged(t *testing.T, root string, before loopHotUpdateCanaryRequirementSideEffects) {
+	t.Helper()
+
+	for path, beforeBytes := range before.files {
+		afterBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after error = %v", path, err)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("source/runtime file %s changed after hot-update canary requirement command\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if pointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", pointer.ReloadGeneration, before.reloadGeneration)
+	}
+}
+
+func assertLoopHotUpdateCanaryRequirementNoDownstreamRecords(t *testing.T, root string) {
+	t.Helper()
+
+	decisions, err := missioncontrol.ListCandidatePromotionDecisionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() error = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() len = %d, want 0", len(decisions))
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 0 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 0", len(gates))
+	}
+	assertLoopCandidateDecisionGateNoTerminalRecords(t, root)
+	requests, err := missioncontrol.ListCommittedApprovalRequestRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalRequestRecords() error = %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("ListCommittedApprovalRequestRecords() len = %d, want 0", len(requests))
+	}
+	grants, err := missioncontrol.ListCommittedApprovalGrantRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalGrantRecords() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("ListCommittedApprovalGrantRecords() len = %d, want 0", len(grants))
+	}
+	absentPaths := []string{
+		missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root),
+		filepath.Join(root, "runtime_packs", "hot_update_canary_evidence"),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after hot-update canary requirement command: %v", path, err)
+		}
+	}
 }
 
 func writeLoopCandidatePromotionDecisionGateFixtures(t *testing.T, withLastKnownGood bool) (string, missioncontrol.CandidatePromotionDecisionRecord) {
