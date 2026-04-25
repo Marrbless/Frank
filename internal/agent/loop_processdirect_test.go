@@ -1244,6 +1244,368 @@ func TestProcessDirectHotUpdateGateRecordCommandCreatesOrSelectsGateAndPreserves
 	}
 }
 
+func TestProcessDirectHotUpdateGateFromDecisionCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, true)
+	hotUpdateID := "hot-update-" + decision.PromotionDecisionID
+	before := snapshotLoopCandidateDecisionGateSideEffects(t, root, decision)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_FROM_DECISION job-1 "+decision.PromotionDecisionID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION first) error = %v", err)
+	}
+	wantCreated := "Created hot-update gate from decision job=job-1 promotion_decision=" + decision.PromotionDecisionID + " hot_update=" + hotUpdateID + "."
+	if resp != wantCreated {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION first) response = %q, want %q", resp, wantCreated)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateGateRecord(root, hotUpdateID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+	}
+	if record.CandidatePackID != decision.CandidatePackID {
+		t.Fatalf("HotUpdateGateRecord.CandidatePackID = %q, want %q", record.CandidatePackID, decision.CandidatePackID)
+	}
+	if record.PreviousActivePackID != decision.BaselinePackID {
+		t.Fatalf("HotUpdateGateRecord.PreviousActivePackID = %q, want %q", record.PreviousActivePackID, decision.BaselinePackID)
+	}
+	if record.RollbackTargetPackID != decision.BaselinePackID {
+		t.Fatalf("HotUpdateGateRecord.RollbackTargetPackID = %q, want %q", record.RollbackTargetPackID, decision.BaselinePackID)
+	}
+	if record.State != missioncontrol.HotUpdateGateStatePrepared {
+		t.Fatalf("HotUpdateGateRecord.State = %q, want prepared", record.State)
+	}
+	if record.Decision != missioncontrol.HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("HotUpdateGateRecord.Decision = %q, want keep_staged", record.Decision)
+	}
+
+	firstGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(first gate) error = %v", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want hot-update gate from decision audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_gate_from_decision", true, "")
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_GATE_FROM_DECISION job-1 "+decision.PromotionDecisionID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION second) error = %v", err)
+	}
+	wantSelected := "Selected hot-update gate from decision job=job-1 promotion_decision=" + decision.PromotionDecisionID + " hot_update=" + hotUpdateID + "."
+	if resp != wantSelected {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION second) response = %q, want %q", resp, wantSelected)
+	}
+
+	secondGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, hotUpdateID))
+	if err != nil {
+		t.Fatalf("ReadFile(second gate) error = %v", err)
+	}
+	if string(firstGateBytes) != string(secondGateBytes) {
+		t.Fatalf("hot-update gate file changed on decision replay\nfirst:\n%s\nsecond:\n%s", string(firstGateBytes), string(secondGateBytes))
+	}
+	audits = ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want selected hot-update gate from decision audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_gate_from_decision", true, "")
+
+	assertLoopCandidateDecisionGateSideEffectsUnchanged(t, root, decision, before)
+	assertLoopCandidateDecisionGateNoTerminalRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateGateFromDecisionCommandRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	tests := []string{
+		"HOT_UPDATE_GATE_FROM_DECISION job-1",
+		"HOT_UPDATE_GATE_FROM_DECISION job-1 " + decision.PromotionDecisionID + " extra",
+	}
+	for _, command := range tests {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want malformed argument rejection", command)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", command, resp)
+			}
+			if !strings.Contains(err.Error(), "HOT_UPDATE_GATE_FROM_DECISION requires job_id and promotion_decision_id") {
+				t.Fatalf("ProcessDirect(%s) error = %q, want malformed argument context", command, err)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateGateFromDecisionCommandFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name       string
+		setup      func(t *testing.T) (string, string, string)
+		wantErr    string
+		wantGateID string
+	}
+	tests := []testCase{
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				return root, "other-job", decision.PromotionDecisionID
+			},
+			wantErr: "operator command does not match the active job",
+		},
+		{
+			name: "missing decision",
+			setup: func(t *testing.T) (string, string, string) {
+				return t.TempDir(), "job-1", "candidate-promotion-decision-missing"
+			},
+			wantErr:    missioncontrol.ErrCandidatePromotionDecisionRecordNotFound.Error(),
+			wantGateID: "hot-update-candidate-promotion-decision-missing",
+		},
+		{
+			name: "non-selected decision",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				decision.Decision = missioncontrol.CandidatePromotionDecision("discarded")
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID), decision); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(non-selected decision) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: `decision must be "selected_for_promotion"`,
+		},
+		{
+			name: "stale derived eligibility",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				result, err := missioncontrol.LoadCandidateResultRecord(root, decision.ResultID)
+				if err != nil {
+					t.Fatalf("LoadCandidateResultRecord() error = %v", err)
+				}
+				result.HoldoutScore = result.BaselineScore
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreCandidateResultPath(root, result.ResultID), result); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(stale eligibility) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: `promotion eligibility state "rejected"`,
+		},
+		{
+			name: "missing linked run",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				if err := os.Remove(missioncontrol.StoreImprovementRunPath(root, decision.RunID)); err != nil {
+					t.Fatalf("Remove(improvement run) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: missioncontrol.ErrImprovementRunRecordNotFound.Error(),
+		},
+		{
+			name: "stale active pointer",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+					PackID:                   "pack-other-active",
+					ParentPackID:             decision.BaselinePackID,
+					CreatedAt:                time.Date(2026, 4, 25, 19, 0, 0, 0, time.UTC),
+					Channel:                  "phone",
+					PromptPackRef:            "prompt-pack-other-active",
+					SkillPackRef:             "skill-pack-other-active",
+					ManifestRef:              "manifest-other-active",
+					ExtensionPackRef:         "extension-other-active",
+					PolicyRef:                "policy-other-active",
+					SourceSummary:            "other active pack",
+					MutableSurfaces:          []string{"skills"},
+					ImmutableSurfaces:        []string{"policy", "authority"},
+					SurfaceClasses:           []string{"class_1"},
+					CompatibilityContractRef: "compat-v1",
+					RollbackTargetPackID:     decision.BaselinePackID,
+				}); err != nil {
+					t.Fatalf("StoreRuntimePackRecord(pack-other-active) error = %v", err)
+				}
+				if err := missioncontrol.StoreActiveRuntimePackPointer(root, missioncontrol.ActiveRuntimePackPointer{
+					ActivePackID:        "pack-other-active",
+					LastKnownGoodPackID: "pack-base",
+					UpdatedAt:           time.Date(2026, 4, 25, 19, 1, 0, 0, time.UTC),
+					UpdatedBy:           "operator",
+					UpdateRecordRef:     "other-hot-update",
+					ReloadGeneration:    3,
+				}); err != nil {
+					t.Fatalf("StoreActiveRuntimePackPointer(stale) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "requires active runtime pack pointer active_pack_id",
+		},
+		{
+			name: "missing candidate rollback target",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				pack, err := missioncontrol.LoadRuntimePackRecord(root, decision.CandidatePackID)
+				if err != nil {
+					t.Fatalf("LoadRuntimePackRecord(candidate) error = %v", err)
+				}
+				pack.RollbackTargetPackID = ""
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreRuntimePackPath(root, pack.PackID), pack); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(candidate without rollback target) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "rollback_target_pack_id is required",
+		},
+		{
+			name: "missing rollback target runtime pack",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				pack, err := missioncontrol.LoadRuntimePackRecord(root, decision.CandidatePackID)
+				if err != nil {
+					t.Fatalf("LoadRuntimePackRecord(candidate) error = %v", err)
+				}
+				pack.RollbackTargetPackID = "pack-missing-rollback"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreRuntimePackPath(root, pack.PackID), pack); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(candidate missing rollback pack) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "pack-missing-rollback",
+		},
+		{
+			name: "mismatched decision result authority",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+					PackID:                   "pack-other-candidate",
+					ParentPackID:             decision.BaselinePackID,
+					CreatedAt:                time.Date(2026, 4, 25, 19, 30, 0, 0, time.UTC),
+					Channel:                  "phone",
+					PromptPackRef:            "prompt-pack-other-candidate",
+					SkillPackRef:             "skill-pack-other-candidate",
+					ManifestRef:              "manifest-other-candidate",
+					ExtensionPackRef:         "extension-other-candidate",
+					PolicyRef:                "policy-other-candidate",
+					SourceSummary:            "other candidate pack",
+					MutableSurfaces:          []string{"skills"},
+					ImmutableSurfaces:        []string{"policy", "authority"},
+					SurfaceClasses:           []string{"class_1"},
+					CompatibilityContractRef: "compat-v1",
+					RollbackTargetPackID:     decision.BaselinePackID,
+				}); err != nil {
+					t.Fatalf("StoreRuntimePackRecord(pack-other-candidate) error = %v", err)
+				}
+				decision.CandidatePackID = "pack-other-candidate"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID), decision); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(decision mismatch) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "does not match candidate result candidate_pack_id",
+		},
+		{
+			name: "divergent duplicate gate",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				hotUpdateID := "hot-update-" + decision.PromotionDecisionID
+				if _, _, err := missioncontrol.CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", time.Date(2026, 4, 25, 20, 0, 0, 0, time.UTC)); err != nil {
+					t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision(setup) error = %v", err)
+				}
+				gate, err := missioncontrol.LoadHotUpdateGateRecord(root, hotUpdateID)
+				if err != nil {
+					t.Fatalf("LoadHotUpdateGateRecord(setup) error = %v", err)
+				}
+				gate.Objective = "manually diverged objective"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateGatePath(root, hotUpdateID), gate); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(divergent gate) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "already exists with divergent candidate promotion decision authority",
+		},
+		{
+			name: "existing deterministic gate with different candidate pack",
+			setup: func(t *testing.T) (string, string, string) {
+				root, decision := writeLoopCandidatePromotionDecisionGateFixtures(t, false)
+				if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+					PackID:                   "pack-other-candidate",
+					ParentPackID:             decision.BaselinePackID,
+					CreatedAt:                time.Date(2026, 4, 25, 20, 30, 0, 0, time.UTC),
+					Channel:                  "phone",
+					PromptPackRef:            "prompt-pack-other-candidate",
+					SkillPackRef:             "skill-pack-other-candidate",
+					ManifestRef:              "manifest-other-candidate",
+					ExtensionPackRef:         "extension-other-candidate",
+					PolicyRef:                "policy-other-candidate",
+					SourceSummary:            "other candidate pack",
+					MutableSurfaces:          []string{"skills"},
+					ImmutableSurfaces:        []string{"policy", "authority"},
+					SurfaceClasses:           []string{"class_1"},
+					CompatibilityContractRef: "compat-v1",
+					RollbackTargetPackID:     decision.BaselinePackID,
+				}); err != nil {
+					t.Fatalf("StoreRuntimePackRecord(pack-other-candidate) error = %v", err)
+				}
+				if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
+					HotUpdateID:              "hot-update-" + decision.PromotionDecisionID,
+					Objective:                "operator requested hot-update gate for different candidate",
+					CandidatePackID:          "pack-other-candidate",
+					PreviousActivePackID:     decision.BaselinePackID,
+					RollbackTargetPackID:     decision.BaselinePackID,
+					TargetSurfaces:           []string{"skills"},
+					SurfaceClasses:           []string{"class_1"},
+					ReloadMode:               missioncontrol.HotUpdateReloadModeSkillReload,
+					CompatibilityContractRef: "compat-v1",
+					PreparedAt:               time.Date(2026, 4, 25, 20, 31, 0, 0, time.UTC),
+					State:                    missioncontrol.HotUpdateGateStatePrepared,
+					Decision:                 missioncontrol.HotUpdateGateDecisionKeepStaged,
+				}); err != nil {
+					t.Fatalf("StoreHotUpdateGateRecord(existing different candidate) error = %v", err)
+				}
+				return root, "job-1", decision.PromotionDecisionID
+			},
+			wantErr: "does not match candidate promotion decision candidate_pack_id",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, jobID, promotionDecisionID := tt.setup(t)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+			resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_FROM_DECISION "+jobID+" "+promotionDecisionID, 2*time.Second)
+			if err == nil {
+				t.Fatal("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION) error = nil, want fail-closed rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_FROM_DECISION) error = %q, want substring %q", err, tt.wantErr)
+			}
+			hotUpdateID := tt.wantGateID
+			if hotUpdateID == "" {
+				hotUpdateID = "hot-update-" + promotionDecisionID
+			}
+			if tt.name != "divergent duplicate gate" && tt.name != "existing deterministic gate with different candidate pack" {
+				if _, err := missioncontrol.LoadHotUpdateGateRecord(root, hotUpdateID); err != missioncontrol.ErrHotUpdateGateRecordNotFound {
+					t.Fatalf("LoadHotUpdateGateRecord(%s) error = %v, want %v", hotUpdateID, err, missioncontrol.ErrHotUpdateGateRecordNotFound)
+				}
+			}
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGatePhaseCommandAdvancesGateAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 
@@ -5525,6 +5887,219 @@ func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol
 	wantPointer.RecordVersion = 1
 
 	return root, wantPointer
+}
+
+func writeLoopCandidatePromotionDecisionGateFixtures(t *testing.T, withLastKnownGood bool) (string, missioncontrol.CandidatePromotionDecisionRecord) {
+	t.Helper()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	now := time.Date(2026, 4, 25, 18, 45, 0, 0, time.UTC)
+
+	if withLastKnownGood {
+		if err := missioncontrol.StoreLastKnownGoodRuntimePackPointer(root, missioncontrol.LastKnownGoodRuntimePackPointer{
+			PackID:            "pack-base",
+			Basis:             "holdout_pass",
+			VerifiedAt:        now.Add(-30 * time.Second),
+			VerifiedBy:        "operator",
+			RollbackRecordRef: "bootstrap",
+		}); err != nil {
+			t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+		}
+	}
+	if err := missioncontrol.StoreImprovementCandidateRecord(root, missioncontrol.ImprovementCandidateRecord{
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		SourceSummary:       "candidate linkage",
+		ValidationBasisRefs: []string{"eval-suite-1"},
+		CreatedAt:           now.Add(time.Minute),
+		CreatedBy:           "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
+		EvalSuiteID:       "eval-suite-1",
+		RubricRef:         "rubric-v1",
+		TrainCorpusRef:    "train-corpus-v1",
+		HoldoutCorpusRef:  "holdout-corpus-v1",
+		EvaluatorRef:      "evaluator-v1",
+		NegativeCaseCount: 1,
+		BoundaryCaseCount: 1,
+		FrozenForRun:      true,
+		CandidateID:       "candidate-1",
+		BaselinePackID:    "pack-base",
+		CandidatePackID:   "pack-candidate",
+		CreatedAt:         now.Add(2 * time.Minute),
+		CreatedBy:         "operator",
+	}); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreImprovementRunRecord(root, missioncontrol.ImprovementRunRecord{
+		RunID:           "run-result",
+		Objective:       "evaluate candidate for promotion",
+		ExecutionPlane:  missioncontrol.ExecutionPlaneImprovementWorkspace,
+		ExecutionHost:   "phone",
+		MissionFamily:   missioncontrol.MissionFamilyEvaluateCandidate,
+		TargetType:      "prompt_pack",
+		TargetRef:       "prompt-pack://default",
+		SurfaceClass:    "class_1",
+		CandidateID:     "candidate-1",
+		EvalSuiteID:     "eval-suite-1",
+		BaselinePackID:  "pack-base",
+		CandidatePackID: "pack-candidate",
+		State:           missioncontrol.ImprovementRunStateCandidateReady,
+		Decision:        missioncontrol.ImprovementRunDecisionKeep,
+		CreatedAt:       now.Add(3 * time.Minute),
+		CompletedAt:     now.Add(4 * time.Minute),
+		StopReason:      "candidate ready for promotion decision",
+		CreatedBy:       "operator",
+	}); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := missioncontrol.StorePromotionPolicyRecord(root, missioncontrol.PromotionPolicyRecord{
+		PromotionPolicyID:         "promotion-policy-result",
+		RequiresHoldoutPass:       true,
+		RequiresCanary:            false,
+		RequiresOwnerApproval:     false,
+		AllowsAutonomousHotUpdate: true,
+		AllowedSurfaceClasses:     []string{"class_1"},
+		EpsilonRule:               "epsilon <= 0.01",
+		RegressionRule:            "no_regression_flags",
+		CompatibilityRule:         "compatibility_score >= 0.90",
+		ResourceRule:              "resource_score >= 0.60",
+		MaxCanaryDuration:         "15m",
+		ForbiddenSurfaceChanges:   []string{"policy", "authority"},
+		CreatedAt:                 now.Add(5 * time.Minute),
+		CreatedBy:                 "operator",
+		Notes:                     "eligible promotion fixture",
+	}); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreCandidateResultRecord(root, missioncontrol.CandidateResultRecord{
+		ResultID:           "result-eligible",
+		RunID:              "run-result",
+		CandidateID:        "candidate-1",
+		EvalSuiteID:        "eval-suite-1",
+		PromotionPolicyID:  "promotion-policy-result",
+		BaselinePackID:     "pack-base",
+		CandidatePackID:    "pack-candidate",
+		BaselineScore:      0.52,
+		TrainScore:         0.78,
+		HoldoutScore:       0.74,
+		ComplexityScore:    0.21,
+		CompatibilityScore: 0.93,
+		ResourceScore:      0.67,
+		RegressionFlags:    []string{"none"},
+		Decision:           missioncontrol.ImprovementRunDecisionKeep,
+		Notes:              "eligible candidate result",
+		CreatedAt:          now.Add(6 * time.Minute),
+		CreatedBy:          "operator",
+	}); err != nil {
+		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
+	}
+	decision, changed, err := missioncontrol.CreateCandidatePromotionDecisionFromEligibleResult(root, "result-eligible", "operator", now.Add(7*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateCandidatePromotionDecisionFromEligibleResult() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateCandidatePromotionDecisionFromEligibleResult() changed = false, want true")
+	}
+	return root, decision
+}
+
+type loopCandidateDecisionGateSideEffects struct {
+	files            map[string][]byte
+	reloadGeneration uint64
+}
+
+func snapshotLoopCandidateDecisionGateSideEffects(t *testing.T, root string, decision missioncontrol.CandidatePromotionDecisionRecord) loopCandidateDecisionGateSideEffects {
+	t.Helper()
+
+	paths := []string{
+		missioncontrol.StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID),
+		missioncontrol.StoreCandidateResultPath(root, decision.ResultID),
+		missioncontrol.StoreImprovementRunPath(root, decision.RunID),
+		missioncontrol.StoreImprovementCandidatePath(root, decision.CandidateID),
+		missioncontrol.StoreEvalSuitePath(root, decision.EvalSuiteID),
+		missioncontrol.StorePromotionPolicyPath(root, decision.PromotionPolicyID),
+		missioncontrol.StoreRuntimePackPath(root, decision.BaselinePackID),
+		missioncontrol.StoreRuntimePackPath(root, decision.CandidatePackID),
+		missioncontrol.StoreActiveRuntimePackPointerPath(root),
+		missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before error = %v", path, err)
+		}
+		files[path] = bytes
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+	return loopCandidateDecisionGateSideEffects{
+		files:            files,
+		reloadGeneration: pointer.ReloadGeneration,
+	}
+}
+
+func assertLoopCandidateDecisionGateSideEffectsUnchanged(t *testing.T, root string, decision missioncontrol.CandidatePromotionDecisionRecord, before loopCandidateDecisionGateSideEffects) {
+	t.Helper()
+
+	for path, beforeBytes := range before.files {
+		afterBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after error = %v", path, err)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("source/runtime file %s changed after decision-derived hot-update gate\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if pointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", pointer.ReloadGeneration, before.reloadGeneration)
+	}
+	if pointer.ActivePackID != decision.BaselinePackID {
+		t.Fatalf("LoadActiveRuntimePackPointer().ActivePackID = %q, want %q", pointer.ActivePackID, decision.BaselinePackID)
+	}
+}
+
+func assertLoopCandidateDecisionGateNoTerminalRecords(t *testing.T, root string) {
+	t.Helper()
+
+	outcomes, err := missioncontrol.ListHotUpdateOutcomeRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := missioncontrol.ListPromotionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+	rollbacks, err := missioncontrol.ListRollbackRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListRollbackRecords() error = %v", err)
+	}
+	if len(rollbacks) != 0 {
+		t.Fatalf("ListRollbackRecords() len = %d, want 0", len(rollbacks))
+	}
+	applies, err := missioncontrol.ListRollbackApplyRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(applies) != 0 {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want 0", len(applies))
+	}
 }
 
 func newLoopHotUpdateOutcomeAgent(t *testing.T, root string) *AgentLoop {
