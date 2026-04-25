@@ -1824,6 +1824,148 @@ func TestProcessDirectHotUpdateGateExecuteCommandSwitchesPointerAndIsReplaySafe(
 	}
 }
 
+func TestProcessDirectHotUpdateGateExecuteCommandFailsClosedWhenReadinessBlocksPointerSwitch(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	now := time.Date(2026, 4, 25, 19, 0, 0, 0, time.UTC)
+
+	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
+		HotUpdateID:              "hot-update-1",
+		Objective:                "stage runtime pack candidate",
+		CandidatePackID:          "pack-candidate",
+		PreviousActivePackID:     "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		TargetSurfaces:           []string{"skills"},
+		SurfaceClasses:           []string{"class_1"},
+		ReloadMode:               missioncontrol.HotUpdateReloadModeSkillReload,
+		CompatibilityContractRef: "compat-v1",
+		PreparedAt:               now,
+		PhaseUpdatedAt:           now,
+		PhaseUpdatedBy:           "operator",
+		State:                    missioncontrol.HotUpdateGateStateStaged,
+		Decision:                 missioncontrol.HotUpdateGateDecisionKeepStaged,
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+	writeLoopActiveJobEvidence(t, root, now, "job-1", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+
+	beforeGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(gate before) error = %v", err)
+	}
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(pointer before) error = %v", err)
+	}
+	beforeLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(lkg before) error = %v", err)
+	}
+	beforePointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testLiveRuntimeMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = nil, want readiness rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeV4ActiveJobDeployLock)) {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %q, want %s", err, missioncontrol.RejectionCodeV4ActiveJobDeployLock)
+	}
+	if !strings.Contains(err.Error(), "hot_update_id=hot-update-1") || !strings.Contains(err.Error(), "transition=pointer_switch") {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %q, want hot_update_id and transition context", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want blocked hot-update execute audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_gate_execute", false, missioncontrol.RejectionCodeV4ActiveJobDeployLock)
+
+	afterGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(gate after) error = %v", err)
+	}
+	if string(beforeGateBytes) != string(afterGateBytes) {
+		t.Fatalf("hot-update gate changed on blocked pointer switch\nbefore:\n%s\nafter:\n%s", string(beforeGateBytes), string(afterGateBytes))
+	}
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active pointer changed on blocked pointer switch\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(lkg after) error = %v", err)
+	}
+	if string(beforeLKGBytes) != string(afterLKGBytes) {
+		t.Fatalf("last-known-good pointer changed on blocked pointer switch\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+	}
+	afterPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if afterPointer.ReloadGeneration != beforePointer.ReloadGeneration {
+		t.Fatalf("ReloadGeneration = %d, want %d", afterPointer.ReloadGeneration, beforePointer.ReloadGeneration)
+	}
+	assertLoopHotUpdateOutcomeCount(t, root, 0)
+	assertLoopHotUpdatePromotionCount(t, root, 0)
+	assertLoopHotUpdateRollbackCount(t, root, 0)
+}
+
+func TestProcessDirectHotUpdateGateExecuteCommandReplayIgnoresLaterActiveLiveJob(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	now := time.Date(2026, 4, 25, 19, 15, 0, 0, time.UTC)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testHotUpdateMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE first) error = %v", err)
+	}
+	writeLoopActiveJobEvidence(t, root, now, "job-live", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE replay) error = %v", err)
+	}
+	if resp != "Selected hot-update pointer switch job=job-1 hot_update=hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE replay) response = %q, want idempotent acknowledgement", resp)
+	}
+}
+
 func TestProcessDirectHotUpdateGateReloadCommandRecordsConvergenceResultWithoutFurtherPointerMutation(t *testing.T) {
 	t.Parallel()
 
@@ -1927,6 +2069,145 @@ func TestProcessDirectHotUpdateGateReloadCommandRecordsConvergenceResultWithoutF
 	}
 	if summary.HotUpdateGateIdentity.Gates[0].State != "reload_apply_succeeded" {
 		t.Fatalf("HotUpdateGateIdentity.Gates[0].State = %q, want reload_apply_succeeded", summary.HotUpdateGateIdentity.Gates[0].State)
+	}
+}
+
+func TestProcessDirectHotUpdateGateReloadCommandFailsClosedWhenReadinessBlocksReloadApply(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	now := time.Date(2026, 4, 25, 19, 30, 0, 0, time.UTC)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testHotUpdateMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %v", err)
+	}
+	writeLoopActiveJobEvidence(t, root, now, "job-1", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+
+	beforeGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(gate before) error = %v", err)
+	}
+	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(pointer before) error = %v", err)
+	}
+	beforeLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(lkg before) error = %v", err)
+	}
+	beforePointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(HOT_UPDATE_GATE_RELOAD) error = nil, want readiness rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeV4ActiveJobDeployLock)) {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD) error = %q, want %s", err, missioncontrol.RejectionCodeV4ActiveJobDeployLock)
+	}
+	if !strings.Contains(err.Error(), "hot_update_id=hot-update-1") || !strings.Contains(err.Error(), "transition=reload_apply") {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD) error = %q, want hot_update_id and transition context", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want blocked hot-update reload audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_gate_reload", false, missioncontrol.RejectionCodeV4ActiveJobDeployLock)
+
+	afterGateBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	if err != nil {
+		t.Fatalf("ReadFile(gate after) error = %v", err)
+	}
+	if string(beforeGateBytes) != string(afterGateBytes) {
+		t.Fatalf("hot-update gate changed on blocked reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeGateBytes), string(afterGateBytes))
+	}
+	afterPointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active pointer changed on blocked reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLKGBytes, err := os.ReadFile(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(lkg after) error = %v", err)
+	}
+	if string(beforeLKGBytes) != string(afterLKGBytes) {
+		t.Fatalf("last-known-good pointer changed on blocked reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+	}
+	afterPointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if afterPointer.ReloadGeneration != beforePointer.ReloadGeneration {
+		t.Fatalf("ReloadGeneration = %d, want %d", afterPointer.ReloadGeneration, beforePointer.ReloadGeneration)
+	}
+	assertLoopHotUpdateOutcomeCount(t, root, 0)
+	assertLoopHotUpdatePromotionCount(t, root, 0)
+	assertLoopHotUpdateRollbackCount(t, root, 0)
+}
+
+func TestProcessDirectHotUpdateGateReloadCommandReplayIgnoresLaterActiveLiveJob(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	now := time.Date(2026, 4, 25, 19, 45, 0, 0, time.UTC)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testHotUpdateMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD first) error = %v", err)
+	}
+	writeLoopActiveJobEvidence(t, root, now, "job-live", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD replay) error = %v", err)
+	}
+	if resp != "Selected hot-update reload/apply job=job-1 hot_update=hot-update-1." {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD replay) response = %q, want idempotent acknowledgement", resp)
 	}
 }
 
@@ -2072,6 +2353,67 @@ func TestProcessDirectHotUpdateGateReloadCommandRetriesFromRecoveryNeeded(t *tes
 	}
 	if summary.HotUpdateGateIdentity.Gates[0].State != "reload_apply_succeeded" {
 		t.Fatalf("HotUpdateGateIdentity.Gates[0].State = %q, want reload_apply_succeeded", summary.HotUpdateGateIdentity.Gates[0].State)
+	}
+}
+
+func TestProcessDirectHotUpdateGateReloadCommandBlocksRecoveryNeededRetryWithoutReadiness(t *testing.T) {
+	t.Parallel()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	now := time.Date(2026, 4, 25, 20, 0, 0, 0, time.UTC)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testHotUpdateMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RECORD job-1 hot-update-1 pack-candidate", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RECORD) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE validated) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_PHASE staged) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %v", err)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
+	}
+	record.State = missioncontrol.HotUpdateGateStateReloadApplyRecoveryNeeded
+	record.FailureReason = ""
+	record.PhaseUpdatedAt = now.Add(time.Minute)
+	record.PhaseUpdatedBy = "operator"
+	record = missioncontrol.NormalizeHotUpdateGateRecord(record)
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"), record); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(recovery-needed) error = %v", err)
+	}
+	writeLoopActiveJobEvidence(t, root, now.Add(2*time.Minute), "job-1", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second)
+	if err == nil {
+		t.Fatal("ProcessDirect(HOT_UPDATE_GATE_RELOAD retry) error = nil, want readiness rejection")
+	}
+	if resp != "" {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD retry) response = %q, want empty on rejection", resp)
+	}
+	if !strings.Contains(err.Error(), string(missioncontrol.RejectionCodeV4ActiveJobDeployLock)) {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD retry) error = %q, want %s", err, missioncontrol.RejectionCodeV4ActiveJobDeployLock)
+	}
+	got, err := missioncontrol.LoadHotUpdateGateRecord(root, "hot-update-1")
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord(after) error = %v", err)
+	}
+	if got.State != missioncontrol.HotUpdateGateStateReloadApplyRecoveryNeeded {
+		t.Fatalf("HotUpdateGateRecord.State = %q, want reload_apply_recovery_needed", got.State)
 	}
 }
 
@@ -6454,6 +6796,25 @@ func assertLoopHotUpdatePromotionCount(t *testing.T, root string, want int) {
 	}
 }
 
+func assertLoopHotUpdateRollbackCount(t *testing.T, root string, want int) {
+	t.Helper()
+
+	rollbacks, err := missioncontrol.ListRollbackRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListRollbackRecords() error = %v", err)
+	}
+	if len(rollbacks) != want {
+		t.Fatalf("ListRollbackRecords() len = %d, want %d", len(rollbacks), want)
+	}
+	rollbackApplies, err := missioncontrol.ListRollbackApplyRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(rollbackApplies) != want {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want %d", len(rollbackApplies), want)
+	}
+}
+
 func storeLoopHotUpdatePromotionForLKGRecertifyWithMutation(t *testing.T, root string, mutateOutcome func(*missioncontrol.HotUpdateOutcomeRecord), mutatePromotion func(*missioncontrol.PromotionRecord)) string {
 	t.Helper()
 
@@ -6651,6 +7012,79 @@ func testMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.J
 				},
 			},
 		},
+	}
+}
+
+func testHotUpdateMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.Job {
+	job := testMissionJob(jobAllowedTools, stepAllowedTools)
+	job.SpecVersion = missioncontrol.JobSpecVersionV4
+	job.ExecutionPlane = missioncontrol.ExecutionPlaneHotUpdateGate
+	job.ExecutionHost = missioncontrol.ExecutionHostPhone
+	job.MissionFamily = missioncontrol.MissionFamilyApplyHotUpdate
+	return job
+}
+
+func testLiveRuntimeMissionJob(jobAllowedTools, stepAllowedTools []string) missioncontrol.Job {
+	job := testMissionJob(jobAllowedTools, stepAllowedTools)
+	job.SpecVersion = missioncontrol.JobSpecVersionV4
+	job.ExecutionPlane = missioncontrol.ExecutionPlaneLiveRuntime
+	job.ExecutionHost = missioncontrol.ExecutionHostPhone
+	job.MissionFamily = missioncontrol.MissionFamilyBootstrapRevenue
+	return job
+}
+
+func writeLoopActiveJobEvidence(t *testing.T, root string, now time.Time, jobID string, state missioncontrol.JobState, executionPlane string, missionFamily string) {
+	t.Helper()
+
+	if err := missioncontrol.StoreActiveJobRecord(root, missioncontrol.ActiveJobRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		WriterEpoch:    1,
+		JobID:          jobID,
+		State:          state,
+		ActiveStepID:   "build",
+		AttemptID:      "attempt-1",
+		LeaseHolderID:  "lease-1",
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+		UpdatedAt:      now,
+		ActivationSeq:  1,
+	}); err != nil {
+		t.Fatalf("StoreActiveJobRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreJobRuntimeRecord(root, missioncontrol.JobRuntimeRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		WriterEpoch:    1,
+		AppliedSeq:     1,
+		JobID:          jobID,
+		ExecutionPlane: executionPlane,
+		ExecutionHost:  missioncontrol.ExecutionHostPhone,
+		MissionFamily:  missionFamily,
+		State:          state,
+		ActiveStepID:   "build",
+		CreatedAt:      now.Add(-time.Minute),
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("StoreJobRuntimeRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreRuntimeControlRecord(root, missioncontrol.RuntimeControlRecord{
+		RecordVersion:  missioncontrol.StoreRecordVersion,
+		WriterEpoch:    1,
+		LastSeq:        1,
+		JobID:          jobID,
+		StepID:         "build",
+		AttemptID:      "attempt-1",
+		ExecutionPlane: executionPlane,
+		ExecutionHost:  missioncontrol.ExecutionHostPhone,
+		MissionFamily:  missionFamily,
+		MaxAuthority:   missioncontrol.AuthorityTierHigh,
+		AllowedTools:   []string{"read"},
+		Step: missioncontrol.Step{
+			ID:                "build",
+			Type:              missioncontrol.StepTypeOneShotCode,
+			RequiredAuthority: missioncontrol.AuthorityTierLow,
+			AllowedTools:      []string{"read"},
+		},
+	}); err != nil {
+		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
 	}
 }
 

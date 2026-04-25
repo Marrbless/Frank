@@ -2438,6 +2438,11 @@ func (s *TaskState) ExecuteHotUpdateGatePointerSwitch(jobID string, hotUpdateID 
 		}
 	}
 
+	if err := taskStateAssessHotUpdateExecutionReadiness(root, missioncontrol.HotUpdateExecutionTransitionPointerSwitch, hotUpdateID, jobID); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_gate_execute", err)
+		return false, err
+	}
+
 	_, changed, err := missioncontrol.ExecuteHotUpdateGatePointerSwitch(root, hotUpdateID, "operator", now)
 	if err != nil {
 		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_gate_execute", err)
@@ -2527,6 +2532,11 @@ func (s *TaskState) ExecuteHotUpdateGateReloadApply(jobID string, hotUpdateID st
 		}
 	}
 
+	if err := taskStateAssessHotUpdateExecutionReadiness(root, missioncontrol.HotUpdateExecutionTransitionReloadApply, hotUpdateID, jobID); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_gate_reload", err)
+		return false, err
+	}
+
 	_, changed, err := missioncontrol.ExecuteHotUpdateGateReloadApply(root, hotUpdateID, "operator", now)
 	if err != nil {
 		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_gate_reload", err)
@@ -2535,6 +2545,37 @@ func (s *TaskState) ExecuteHotUpdateGateReloadApply(jobID string, hotUpdateID st
 
 	s.emitRuntimeControlAuditEvent(auditEC, "hot_update_gate_reload", nil)
 	return changed, nil
+}
+
+func taskStateAssessHotUpdateExecutionReadiness(root string, transition missioncontrol.HotUpdateExecutionTransition, hotUpdateID string, jobID string) error {
+	assessment, err := missioncontrol.AssessHotUpdateExecutionReadiness(root, missioncontrol.HotUpdateExecutionReadinessInput{
+		Transition:   transition,
+		HotUpdateID:  hotUpdateID,
+		CommandJobID: jobID,
+	})
+	if err != nil {
+		return err
+	}
+	if assessment.Ready {
+		return nil
+	}
+	code := assessment.RejectionCode
+	if code == "" {
+		code = missioncontrol.RejectionCodeInvalidRuntimeState
+	}
+	reason := strings.TrimSpace(assessment.Reason)
+	if reason == "" {
+		reason = "hot-update execution readiness blocked"
+	}
+	return missioncontrol.ValidationError{
+		Code: code,
+		Message: fmt.Sprintf(
+			"hot-update execution readiness blocked hot_update_id=%s transition=%s reason=%s",
+			strings.TrimSpace(hotUpdateID),
+			transition,
+			reason,
+		),
+	}
 }
 
 func (s *TaskState) ResolveHotUpdateGateTerminalFailure(jobID string, hotUpdateID string, reason string) (bool, error) {
