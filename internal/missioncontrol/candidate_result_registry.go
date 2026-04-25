@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -15,6 +17,41 @@ import (
 
 type CandidateResultRef struct {
 	ResultID string `json:"result_id"`
+}
+
+const (
+	CandidatePromotionEligibilityStateEligible                       = "eligible"
+	CandidatePromotionEligibilityStateCanaryRequired                 = "canary_required"
+	CandidatePromotionEligibilityStateOwnerApprovalRequired          = "owner_approval_required"
+	CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired = "canary_and_owner_approval_required"
+	CandidatePromotionEligibilityStateRejected                       = "rejected"
+	CandidatePromotionEligibilityStateUnsupportedPolicy              = "unsupported_policy"
+	CandidatePromotionEligibilityStateInvalid                        = "invalid"
+)
+
+var candidateResultRequiredScoreKeys = []string{
+	"baseline_score",
+	"train_score",
+	"holdout_score",
+	"complexity_score",
+	"compatibility_score",
+	"resource_score",
+}
+
+type CandidatePromotionEligibilityStatus struct {
+	State                 string   `json:"state"`
+	ResultID              string   `json:"result_id,omitempty"`
+	RunID                 string   `json:"run_id,omitempty"`
+	CandidateID           string   `json:"candidate_id,omitempty"`
+	EvalSuiteID           string   `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID     string   `json:"promotion_policy_id,omitempty"`
+	BaselinePackID        string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID       string   `json:"candidate_pack_id,omitempty"`
+	Decision              string   `json:"decision,omitempty"`
+	BlockingReasons       []string `json:"blocking_reasons,omitempty"`
+	CanaryRequired        bool     `json:"canary_required,omitempty"`
+	OwnerApprovalRequired bool     `json:"owner_approval_required,omitempty"`
+	Error                 string   `json:"error,omitempty"`
 }
 
 type CandidateResultRecord struct {
@@ -214,6 +251,121 @@ func LoadCandidateResultRecord(root, resultID string) (CandidateResultRecord, er
 	return record, nil
 }
 
+func EvaluateCandidateResultPromotionEligibility(root, resultID string) (CandidatePromotionEligibilityStatus, error) {
+	status := CandidatePromotionEligibilityStatus{
+		State:    CandidatePromotionEligibilityStateInvalid,
+		ResultID: strings.TrimSpace(resultID),
+	}
+	if err := ValidateStoreRoot(root); err != nil {
+		status.Error = err.Error()
+		return status, err
+	}
+
+	record, err := LoadCandidateResultRecord(root, resultID)
+	if err != nil {
+		status.Error = err.Error()
+		return status, nil
+	}
+	status = candidatePromotionEligibilityStatusFromRecord(record)
+
+	if record.PromotionPolicyID == "" {
+		status.State = CandidatePromotionEligibilityStateInvalid
+		status.BlockingReasons = []string{"promotion_policy_id is required"}
+		status.Error = "mission store candidate result promotion_policy_id is required for promotion eligibility"
+		return status, nil
+	}
+	if err := validateCandidateResultScoreKeyPresence(root, record.ResultID); err != nil {
+		status.State = CandidatePromotionEligibilityStateInvalid
+		status.BlockingReasons = []string{err.Error()}
+		status.Error = err.Error()
+		return status, nil
+	}
+	if err := validateCandidateResultFiniteScores(record); err != nil {
+		status.State = CandidatePromotionEligibilityStateInvalid
+		status.BlockingReasons = []string{err.Error()}
+		status.Error = err.Error()
+		return status, nil
+	}
+
+	policy, err := LoadPromotionPolicyRecord(root, record.PromotionPolicyID)
+	if err != nil {
+		status.State = CandidatePromotionEligibilityStateInvalid
+		status.BlockingReasons = []string{err.Error()}
+		status.Error = err.Error()
+		return status, nil
+	}
+
+	epsilon, err := parseCandidateEligibilityEpsilonRule(policy.EpsilonRule)
+	if err != nil {
+		status.State = CandidatePromotionEligibilityStateUnsupportedPolicy
+		status.BlockingReasons = []string{err.Error()}
+		return status, nil
+	}
+	regressionMode, err := parseCandidateEligibilityRegressionRule(policy.RegressionRule)
+	if err != nil {
+		status.State = CandidatePromotionEligibilityStateUnsupportedPolicy
+		status.BlockingReasons = []string{err.Error()}
+		return status, nil
+	}
+	compatibilityThreshold, err := parseCandidateEligibilityThresholdRule(policy.CompatibilityRule, "compatibility_score")
+	if err != nil {
+		status.State = CandidatePromotionEligibilityStateUnsupportedPolicy
+		status.BlockingReasons = []string{err.Error()}
+		return status, nil
+	}
+	resourceThreshold, err := parseCandidateEligibilityThresholdRule(policy.ResourceRule, "resource_score")
+	if err != nil {
+		status.State = CandidatePromotionEligibilityStateUnsupportedPolicy
+		status.BlockingReasons = []string{err.Error()}
+		return status, nil
+	}
+
+	var blocking []string
+	if record.Decision != ImprovementRunDecisionKeep {
+		blocking = append(blocking, fmt.Sprintf("decision %q is not keep", record.Decision))
+	}
+
+	holdoutPass := record.HoldoutScore > record.BaselineScore+epsilon
+	trainPass := record.TrainScore > record.BaselineScore+epsilon
+	if trainPass && !holdoutPass {
+		blocking = append(blocking, "train-only improvement is not promotable")
+	}
+	if policy.RequiresHoldoutPass && !holdoutPass {
+		blocking = append(blocking, "holdout score does not satisfy epsilon rule")
+	}
+	if !holdoutPass {
+		blocking = append(blocking, "holdout improvement is required for promotion eligibility")
+	}
+	if !candidateResultRegressionFlagsPass(record.RegressionFlags, regressionMode) {
+		blocking = append(blocking, "regression flags are not allowed by policy")
+	}
+	if record.CompatibilityScore < compatibilityThreshold {
+		blocking = append(blocking, "compatibility score is below policy threshold")
+	}
+	if record.ResourceScore < resourceThreshold {
+		blocking = append(blocking, "resource score is below policy threshold")
+	}
+	if len(blocking) > 0 {
+		status.State = CandidatePromotionEligibilityStateRejected
+		status.BlockingReasons = blocking
+		return status, nil
+	}
+
+	status.CanaryRequired = policy.RequiresCanary
+	status.OwnerApprovalRequired = policy.RequiresOwnerApproval
+	switch {
+	case status.CanaryRequired && status.OwnerApprovalRequired:
+		status.State = CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired
+	case status.CanaryRequired:
+		status.State = CandidatePromotionEligibilityStateCanaryRequired
+	case status.OwnerApprovalRequired:
+		status.State = CandidatePromotionEligibilityStateOwnerApprovalRequired
+	default:
+		status.State = CandidatePromotionEligibilityStateEligible
+	}
+	return status, nil
+}
+
 func ListCandidateResultRecords(root string) ([]CandidateResultRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return nil, err
@@ -244,6 +396,118 @@ func ListCandidateResultRecords(root string) ([]CandidateResultRecord, error) {
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+func candidatePromotionEligibilityStatusFromRecord(record CandidateResultRecord) CandidatePromotionEligibilityStatus {
+	return CandidatePromotionEligibilityStatus{
+		State:             CandidatePromotionEligibilityStateInvalid,
+		ResultID:          record.ResultID,
+		RunID:             record.RunID,
+		CandidateID:       record.CandidateID,
+		EvalSuiteID:       record.EvalSuiteID,
+		PromotionPolicyID: record.PromotionPolicyID,
+		BaselinePackID:    record.BaselinePackID,
+		CandidatePackID:   record.CandidatePackID,
+		Decision:          string(record.Decision),
+	}
+}
+
+func validateCandidateResultScoreKeyPresence(root, resultID string) error {
+	bytes, err := os.ReadFile(StoreCandidateResultPath(root, resultID))
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes, &fields); err != nil {
+		return err
+	}
+	for _, key := range candidateResultRequiredScoreKeys {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("mission store candidate result %s is required for promotion eligibility", key)
+		}
+	}
+	return nil
+}
+
+func validateCandidateResultFiniteScores(record CandidateResultRecord) error {
+	for fieldName, score := range map[string]float64{
+		"baseline_score":      record.BaselineScore,
+		"train_score":         record.TrainScore,
+		"holdout_score":       record.HoldoutScore,
+		"complexity_score":    record.ComplexityScore,
+		"compatibility_score": record.CompatibilityScore,
+		"resource_score":      record.ResourceScore,
+	} {
+		if math.IsNaN(score) || math.IsInf(score, 0) {
+			return fmt.Errorf("mission store candidate result %s must be finite", fieldName)
+		}
+	}
+	return nil
+}
+
+func parseCandidateEligibilityEpsilonRule(rule string) (float64, error) {
+	field, threshold, err := parseCandidateEligibilityComparisonRule(rule)
+	if err != nil {
+		return 0, fmt.Errorf("unsupported epsilon_rule %q", rule)
+	}
+	if field != "epsilon" || threshold < 0 {
+		return 0, fmt.Errorf("unsupported epsilon_rule %q", rule)
+	}
+	return threshold, nil
+}
+
+func parseCandidateEligibilityRegressionRule(rule string) (string, error) {
+	rule = strings.TrimSpace(rule)
+	switch rule {
+	case "no_regression_flags", "holdout_regression <= 0":
+		return rule, nil
+	default:
+		return "", fmt.Errorf("unsupported regression_rule %q", rule)
+	}
+}
+
+func parseCandidateEligibilityThresholdRule(rule, wantField string) (float64, error) {
+	field, threshold, err := parseCandidateEligibilityComparisonRule(rule)
+	if err != nil {
+		return 0, fmt.Errorf("unsupported %s rule %q", wantField, rule)
+	}
+	if field != wantField || threshold < 0 || threshold > 1 {
+		return 0, fmt.Errorf("unsupported %s rule %q", wantField, rule)
+	}
+	return threshold, nil
+}
+
+func parseCandidateEligibilityComparisonRule(rule string) (string, float64, error) {
+	fields := strings.Fields(strings.TrimSpace(rule))
+	if len(fields) != 3 || fields[1] != "<=" && fields[1] != ">=" {
+		return "", 0, fmt.Errorf("unsupported comparison rule")
+	}
+	if fields[1] != "<=" && fields[0] == "epsilon" {
+		return "", 0, fmt.Errorf("unsupported comparison rule")
+	}
+	if fields[1] != ">=" && fields[0] != "epsilon" {
+		return "", 0, fmt.Errorf("unsupported comparison rule")
+	}
+	threshold, err := strconv.ParseFloat(fields[2], 64)
+	if err != nil || math.IsNaN(threshold) || math.IsInf(threshold, 0) {
+		return "", 0, fmt.Errorf("unsupported comparison rule")
+	}
+	return fields[0], threshold, nil
+}
+
+func candidateResultRegressionFlagsPass(flags []string, mode string) bool {
+	switch mode {
+	case "no_regression_flags", "holdout_regression <= 0":
+		for _, flag := range flags {
+			if strings.TrimSpace(strings.ToLower(flag)) == "none" {
+				continue
+			}
+			return false
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func loadCandidateResultRecordFile(root, path string) (CandidateResultRecord, error) {

@@ -285,27 +285,28 @@ type OperatorRollbackApplyStatus struct {
 }
 
 type OperatorCandidateResultStatus struct {
-	State              string   `json:"state"`
-	ResultID           string   `json:"result_id,omitempty"`
-	RunID              string   `json:"run_id,omitempty"`
-	CandidateID        string   `json:"candidate_id,omitempty"`
-	EvalSuiteID        string   `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID  string   `json:"promotion_policy_id,omitempty"`
-	BaselinePackID     string   `json:"baseline_pack_id,omitempty"`
-	CandidatePackID    string   `json:"candidate_pack_id,omitempty"`
-	HotUpdateID        string   `json:"hot_update_id,omitempty"`
-	BaselineScore      float64  `json:"baseline_score"`
-	TrainScore         float64  `json:"train_score"`
-	HoldoutScore       float64  `json:"holdout_score"`
-	ComplexityScore    float64  `json:"complexity_score"`
-	CompatibilityScore float64  `json:"compatibility_score"`
-	ResourceScore      float64  `json:"resource_score"`
-	RegressionFlags    []string `json:"regression_flags,omitempty"`
-	Decision           string   `json:"decision,omitempty"`
-	Notes              string   `json:"notes,omitempty"`
-	CreatedAt          *string  `json:"created_at,omitempty"`
-	CreatedBy          string   `json:"created_by,omitempty"`
-	Error              string   `json:"error,omitempty"`
+	State                string                               `json:"state"`
+	ResultID             string                               `json:"result_id,omitempty"`
+	RunID                string                               `json:"run_id,omitempty"`
+	CandidateID          string                               `json:"candidate_id,omitempty"`
+	EvalSuiteID          string                               `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID    string                               `json:"promotion_policy_id,omitempty"`
+	BaselinePackID       string                               `json:"baseline_pack_id,omitempty"`
+	CandidatePackID      string                               `json:"candidate_pack_id,omitempty"`
+	HotUpdateID          string                               `json:"hot_update_id,omitempty"`
+	BaselineScore        float64                              `json:"baseline_score"`
+	TrainScore           float64                              `json:"train_score"`
+	HoldoutScore         float64                              `json:"holdout_score"`
+	ComplexityScore      float64                              `json:"complexity_score"`
+	CompatibilityScore   float64                              `json:"compatibility_score"`
+	ResourceScore        float64                              `json:"resource_score"`
+	RegressionFlags      []string                             `json:"regression_flags,omitempty"`
+	Decision             string                               `json:"decision,omitempty"`
+	Notes                string                               `json:"notes,omitempty"`
+	PromotionEligibility *CandidatePromotionEligibilityStatus `json:"promotion_eligibility,omitempty"`
+	CreatedAt            *string                              `json:"created_at,omitempty"`
+	CreatedBy            string                               `json:"created_by,omitempty"`
+	Error                string                               `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -1540,6 +1541,15 @@ func loadOperatorCandidateResultStatus(root, path string) OperatorCandidateResul
 		status.Error = err.Error()
 		return status
 	}
+	eligibility, err := EvaluateCandidateResultPromotionEligibility(root, record.ResultID)
+	if err != nil {
+		eligibility = CandidatePromotionEligibilityStatus{
+			State:    CandidatePromotionEligibilityStateInvalid,
+			ResultID: record.ResultID,
+			Error:    err.Error(),
+		}
+	}
+	status.PromotionEligibility = &eligibility
 	status.State = "configured"
 	return status
 }

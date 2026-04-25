@@ -20,6 +20,12 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 	}
 	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
 		record.PromotionPolicyID = "promotion-policy-result"
+		record.RequiresCanary = false
+		record.RequiresOwnerApproval = false
+		record.EpsilonRule = "epsilon <= 0.01"
+		record.RegressionRule = "no_regression_flags"
+		record.CompatibilityRule = "compatibility_score >= 0.90"
+		record.ResourceRule = "resource_score >= 0.60"
 	})); err != nil {
 		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
 	}
@@ -29,7 +35,7 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 		record.PromotionPolicyID = "promotion-policy-result"
 		record.CreatedBy = "operator"
 		record.Notes = "candidate kept for later gate"
-		record.RegressionFlags = []string{"holdout_warning"}
+		record.RegressionFlags = []string{"none"}
 	})); err != nil {
 		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
 	}
@@ -75,8 +81,17 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 	if result.Notes != "candidate kept for later gate" {
 		t.Fatalf("Results[0].Notes = %q, want notes", result.Notes)
 	}
-	if got := strings.Join(result.RegressionFlags, ","); got != "holdout_warning" {
-		t.Fatalf("Results[0].RegressionFlags = %#v, want holdout_warning", result.RegressionFlags)
+	if got := strings.Join(result.RegressionFlags, ","); got != "none" {
+		t.Fatalf("Results[0].RegressionFlags = %#v, want none", result.RegressionFlags)
+	}
+	if result.PromotionEligibility == nil {
+		t.Fatal("Results[0].PromotionEligibility = nil, want derived eligibility")
+	}
+	if result.PromotionEligibility.State != CandidatePromotionEligibilityStateEligible {
+		t.Fatalf("Results[0].PromotionEligibility.State = %q, want eligible; eligibility = %#v", result.PromotionEligibility.State, result.PromotionEligibility)
+	}
+	if result.PromotionEligibility.PromotionPolicyID != "promotion-policy-result" {
+		t.Fatalf("Results[0].PromotionEligibility.PromotionPolicyID = %q, want promotion-policy-result", result.PromotionEligibility.PromotionPolicyID)
 	}
 	if result.CreatedAt == nil || *result.CreatedAt != "2026-04-24T19:06:00Z" {
 		t.Fatalf("Results[0].CreatedAt = %#v, want 2026-04-24T19:06:00Z", result.CreatedAt)

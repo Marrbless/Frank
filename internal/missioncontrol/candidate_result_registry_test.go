@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -397,6 +398,278 @@ func TestCandidateResultStoreDoesNotMutateLinkedRecordsOrRuntimePointers(t *test
 	}
 }
 
+func TestEvaluateCandidateResultPromotionEligibilityFailClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+
+	status, err := EvaluateCandidateResultPromotionEligibility(root, "missing-result")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility() error = %v, want nil status error", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateInvalid || !strings.Contains(status.Error, ErrCandidateResultRecordNotFound.Error()) {
+		t.Fatalf("missing result status = %#v, want invalid missing-result status", status)
+	}
+
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-missing-policy-id"
+		record.PromotionPolicyID = ""
+	})
+	status, err = EvaluateCandidateResultPromotionEligibility(root, "result-missing-policy-id")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility(missing policy id) error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateInvalid || !strings.Contains(status.Error, "promotion_policy_id is required") {
+		t.Fatalf("missing promotion_policy_id status = %#v, want invalid", status)
+	}
+
+	record := validCandidateResultRecord(now.Add(10*time.Minute), func(record *CandidateResultRecord) {
+		record.RecordVersion = StoreRecordVersion
+		record.ResultID = "result-missing-policy"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = "promotion-policy-missing"
+	})
+	writeRawCandidateResultRecord(t, root, record, "")
+	status, err = EvaluateCandidateResultPromotionEligibility(root, "result-missing-policy")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility(missing policy) error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateInvalid || !strings.Contains(status.Error, ErrPromotionPolicyRecordNotFound.Error()) {
+		t.Fatalf("missing policy status = %#v, want invalid missing-policy status", status)
+	}
+}
+
+func TestEvaluateCandidateResultPromotionEligibilityScorePresenceAndFiniteChecks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 14, 30, 0, 0, time.UTC)
+
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-missing-score"
+	})
+	removeCandidateResultJSONKey(t, root, "result-missing-score", "holdout_score")
+	status, err := EvaluateCandidateResultPromotionEligibility(root, "result-missing-score")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility(missing score) error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateInvalid || !strings.Contains(status.Error, "holdout_score is required") {
+		t.Fatalf("missing score status = %#v, want invalid missing holdout_score", status)
+	}
+
+	nonFiniteRoot := t.TempDir()
+	storeCandidatePromotionEligibilityFixtures(t, nonFiniteRoot, now.Add(time.Hour), nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-non-finite-score"
+	})
+	replaceCandidateResultJSONKey(t, nonFiniteRoot, "result-non-finite-score", "holdout_score", json.RawMessage(`1e999`))
+	status, err = EvaluateCandidateResultPromotionEligibility(nonFiniteRoot, "result-non-finite-score")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility(non-finite score) error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateInvalid {
+		t.Fatalf("non-finite score status = %#v, want invalid", status)
+	}
+}
+
+func TestEvaluateCandidateResultPromotionEligibilityUnsupportedPolicyRules(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		policyEdit func(*PromotionPolicyRecord)
+	}{
+		{
+			name: "epsilon",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.EpsilonRule = "epsilon around 0.01"
+			},
+		},
+		{
+			name: "regression",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.RegressionRule = "regressions maybe ok"
+			},
+		},
+		{
+			name: "compatibility",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.CompatibilityRule = "compatibility_contract_passed"
+			},
+		},
+		{
+			name: "resource",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.ResourceRule = "resource_budget_within_limit"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC)
+			storeCandidatePromotionEligibilityFixtures(t, root, now, tt.policyEdit, func(record *CandidateResultRecord) {
+				record.ResultID = "result-" + tt.name
+			})
+
+			status, err := EvaluateCandidateResultPromotionEligibility(root, "result-"+tt.name)
+			if err != nil {
+				t.Fatalf("EvaluateCandidateResultPromotionEligibility() error = %v", err)
+			}
+			if status.State != CandidatePromotionEligibilityStateUnsupportedPolicy {
+				t.Fatalf("State = %q, want unsupported_policy; status = %#v", status.State, status)
+			}
+		})
+	}
+}
+
+func TestEvaluateCandidateResultPromotionEligibilityStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		policyEdit func(*PromotionPolicyRecord)
+		resultEdit func(*CandidateResultRecord)
+		wantState  string
+	}{
+		{
+			name:      "eligible",
+			wantState: CandidatePromotionEligibilityStateEligible,
+		},
+		{
+			name: "train-only rejected",
+			resultEdit: func(record *CandidateResultRecord) {
+				record.HoldoutScore = record.BaselineScore
+			},
+			wantState: CandidatePromotionEligibilityStateRejected,
+		},
+		{
+			name: "discard decision rejected",
+			resultEdit: func(record *CandidateResultRecord) {
+				record.Decision = ImprovementRunDecisionDiscard
+			},
+			wantState: CandidatePromotionEligibilityStateRejected,
+		},
+		{
+			name: "regression flags rejected",
+			resultEdit: func(record *CandidateResultRecord) {
+				record.RegressionFlags = []string{"latency_regression"}
+			},
+			wantState: CandidatePromotionEligibilityStateRejected,
+		},
+		{
+			name: "canary required",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.RequiresCanary = true
+			},
+			wantState: CandidatePromotionEligibilityStateCanaryRequired,
+		},
+		{
+			name: "owner approval required",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.RequiresOwnerApproval = true
+			},
+			wantState: CandidatePromotionEligibilityStateOwnerApprovalRequired,
+		},
+		{
+			name: "canary and owner approval required",
+			policyEdit: func(record *PromotionPolicyRecord) {
+				record.RequiresCanary = true
+				record.RequiresOwnerApproval = true
+			},
+			wantState: CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 4, 24, 15, 30, 0, 0, time.UTC)
+			storeCandidatePromotionEligibilityFixtures(t, root, now, tt.policyEdit, func(record *CandidateResultRecord) {
+				record.ResultID = "result-" + strings.ReplaceAll(tt.name, " ", "-")
+				if tt.resultEdit != nil {
+					tt.resultEdit(record)
+				}
+			})
+
+			status, err := EvaluateCandidateResultPromotionEligibility(root, "result-"+strings.ReplaceAll(tt.name, " ", "-"))
+			if err != nil {
+				t.Fatalf("EvaluateCandidateResultPromotionEligibility() error = %v", err)
+			}
+			if status.State != tt.wantState {
+				t.Fatalf("State = %q, want %q; status = %#v", status.State, tt.wantState, status)
+			}
+		})
+	}
+}
+
+func TestEvaluateCandidateResultPromotionEligibilityDoesNotMutateLinkedRecordsOrRuntimePointers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 16, 0, 0, 0, time.UTC)
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-no-mutation"
+	})
+
+	snapshots := map[string][]byte{}
+	for _, path := range []string{
+		StoreRuntimePackPath(root, "pack-base"),
+		StoreRuntimePackPath(root, "pack-candidate"),
+		StoreImprovementCandidatePath(root, "candidate-1"),
+		StoreEvalSuitePath(root, "eval-suite-1"),
+		StoreImprovementRunPath(root, "run-result"),
+		StoreCandidateResultPath(root, "result-no-mutation"),
+		StorePromotionPolicyPath(root, "promotion-policy-result"),
+		StoreHotUpdateGatePath(root, "hot-update-1"),
+	} {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		snapshots[path] = bytes
+	}
+
+	status, err := EvaluateCandidateResultPromotionEligibility(root, "result-no-mutation")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility() error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateEligible {
+		t.Fatalf("State = %q, want eligible; status = %#v", status.State, status)
+	}
+
+	for path, before := range snapshots {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after eligibility error = %v", path, err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("linked record %s changed after eligibility evaluation", path)
+		}
+	}
+
+	absentPaths := []string{
+		StoreHotUpdateOutcomesDir(root),
+		StorePromotionsDir(root),
+		StoreRollbacksDir(root),
+		StoreRollbackAppliesDir(root),
+		StoreActiveRuntimePackPointerPath(root),
+		StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after eligibility evaluation: %v", path, err)
+		}
+	}
+}
+
 func TestLoadCandidateResultRecordNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -404,6 +677,110 @@ func TestLoadCandidateResultRecordNotFound(t *testing.T) {
 	if _, err := LoadCandidateResultRecord(root, "missing-result"); !errors.Is(err, ErrCandidateResultRecordNotFound) {
 		t.Fatalf("LoadCandidateResultRecord() error = %v, want %v", err, ErrCandidateResultRecordNotFound)
 	}
+}
+
+func storeCandidatePromotionEligibilityFixtures(t *testing.T, root string, now time.Time, policyEdit func(*PromotionPolicyRecord), resultEdit func(*CandidateResultRecord)) {
+	t.Helper()
+
+	storeImprovementRunFixtures(t, root, now)
+	if err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-result"
+	})); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-result"
+		record.RequiresCanary = false
+		record.RequiresOwnerApproval = false
+		record.RequiresHoldoutPass = true
+		record.EpsilonRule = "epsilon <= 0.01"
+		record.RegressionRule = "no_regression_flags"
+		record.CompatibilityRule = "compatibility_score >= 0.90"
+		record.ResourceRule = "resource_score >= 0.60"
+		if policyEdit != nil {
+			policyEdit(record)
+		}
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+	if err := StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(7*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-eligible"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = "promotion-policy-result"
+		record.BaselineScore = 0.52
+		record.TrainScore = 0.78
+		record.HoldoutScore = 0.74
+		record.CompatibilityScore = 0.93
+		record.ResourceScore = 0.67
+		record.RegressionFlags = []string{"none"}
+		record.Decision = ImprovementRunDecisionKeep
+		if resultEdit != nil {
+			resultEdit(record)
+		}
+	})); err != nil {
+		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
+	}
+}
+
+func writeRawCandidateResultRecord(t *testing.T, root string, record CandidateResultRecord, deleteKey string) {
+	t.Helper()
+
+	record = NormalizeCandidateResultRecord(record)
+	fields := candidateResultRecordJSONFields(t, record)
+	if deleteKey != "" {
+		delete(fields, deleteKey)
+	}
+	if err := WriteStoreJSONAtomic(StoreCandidateResultPath(root, record.ResultID), fields); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(%s) error = %v", record.ResultID, err)
+	}
+}
+
+func removeCandidateResultJSONKey(t *testing.T, root, resultID, key string) {
+	t.Helper()
+
+	fields := readCandidateResultJSONFields(t, root, resultID)
+	delete(fields, key)
+	if err := WriteStoreJSONAtomic(StoreCandidateResultPath(root, resultID), fields); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(remove %s) error = %v", key, err)
+	}
+}
+
+func replaceCandidateResultJSONKey(t *testing.T, root, resultID, key string, value json.RawMessage) {
+	t.Helper()
+
+	fields := readCandidateResultJSONFields(t, root, resultID)
+	fields[key] = value
+	if err := WriteStoreJSONAtomic(StoreCandidateResultPath(root, resultID), fields); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(replace %s) error = %v", key, err)
+	}
+}
+
+func readCandidateResultJSONFields(t *testing.T, root, resultID string) map[string]json.RawMessage {
+	t.Helper()
+
+	bytes, err := os.ReadFile(StoreCandidateResultPath(root, resultID))
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", resultID, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes, &fields); err != nil {
+		t.Fatalf("Unmarshal(%s) error = %v", resultID, err)
+	}
+	return fields
+}
+
+func candidateResultRecordJSONFields(t *testing.T, record CandidateResultRecord) map[string]json.RawMessage {
+	t.Helper()
+
+	bytes, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal(%s) error = %v", record.ResultID, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes, &fields); err != nil {
+		t.Fatalf("Unmarshal marshaled record %s error = %v", record.ResultID, err)
+	}
+	return fields
 }
 
 func validCandidateResultRecord(now time.Time, mutate func(*CandidateResultRecord)) CandidateResultRecord {
