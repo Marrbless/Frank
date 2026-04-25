@@ -23,6 +23,7 @@ type CandidateResultRecord struct {
 	RunID              string                 `json:"run_id"`
 	CandidateID        string                 `json:"candidate_id"`
 	EvalSuiteID        string                 `json:"eval_suite_id"`
+	PromotionPolicyID  string                 `json:"promotion_policy_id,omitempty"`
 	BaselinePackID     string                 `json:"baseline_pack_id"`
 	CandidatePackID    string                 `json:"candidate_pack_id"`
 	HotUpdateID        string                 `json:"hot_update_id,omitempty"`
@@ -59,6 +60,7 @@ func NormalizeCandidateResultRecord(record CandidateResultRecord) CandidateResul
 	record.RunID = strings.TrimSpace(record.RunID)
 	record.CandidateID = strings.TrimSpace(record.CandidateID)
 	record.EvalSuiteID = strings.TrimSpace(record.EvalSuiteID)
+	record.PromotionPolicyID = strings.TrimSpace(record.PromotionPolicyID)
 	record.BaselinePackID = strings.TrimSpace(record.BaselinePackID)
 	record.CandidatePackID = strings.TrimSpace(record.CandidatePackID)
 	record.HotUpdateID = strings.TrimSpace(record.HotUpdateID)
@@ -79,6 +81,14 @@ func CandidateResultImprovementCandidateRef(record CandidateResultRecord) Improv
 
 func CandidateResultEvalSuiteRef(record CandidateResultRecord) EvalSuiteRef {
 	return EvalSuiteRef{EvalSuiteID: strings.TrimSpace(record.EvalSuiteID)}
+}
+
+func CandidateResultPromotionPolicyRef(record CandidateResultRecord) (PromotionPolicyRef, bool) {
+	promotionPolicyID := strings.TrimSpace(record.PromotionPolicyID)
+	if promotionPolicyID == "" {
+		return PromotionPolicyRef{}, false
+	}
+	return PromotionPolicyRef{PromotionPolicyID: promotionPolicyID}, true
 }
 
 func CandidateResultBaselinePackRef(record CandidateResultRecord) RuntimePackRef {
@@ -116,6 +126,11 @@ func ValidateCandidateResultRecord(record CandidateResultRecord) error {
 	}
 	if err := ValidateEvalSuiteRef(CandidateResultEvalSuiteRef(record)); err != nil {
 		return fmt.Errorf("mission store candidate result eval_suite_id %q: %w", record.EvalSuiteID, err)
+	}
+	if promotionPolicyRef, ok := CandidateResultPromotionPolicyRef(record); ok {
+		if err := ValidatePromotionPolicyRef(promotionPolicyRef); err != nil {
+			return fmt.Errorf("mission store candidate result promotion_policy_id %q: %w", record.PromotionPolicyID, err)
+		}
 	}
 	if err := ValidateRuntimePackRef(CandidateResultBaselinePackRef(record)); err != nil {
 		return fmt.Errorf("mission store candidate result baseline_pack_id %q: %w", record.BaselinePackID, err)
@@ -345,6 +360,12 @@ func validateCandidateResultLinkage(root string, record CandidateResultRecord) e
 			evalSuite.CandidatePackID,
 			record.CandidatePackID,
 		)
+	}
+
+	if promotionPolicyRef, ok := CandidateResultPromotionPolicyRef(record); ok {
+		if _, err := LoadPromotionPolicyRecord(root, promotionPolicyRef.PromotionPolicyID); err != nil {
+			return fmt.Errorf("mission store candidate result promotion_policy_id %q: %w", promotionPolicyRef.PromotionPolicyID, err)
+		}
 	}
 
 	if _, err := LoadRuntimePackRecord(root, record.BaselinePackID); err != nil {

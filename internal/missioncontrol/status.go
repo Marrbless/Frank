@@ -290,6 +290,7 @@ type OperatorCandidateResultStatus struct {
 	RunID              string   `json:"run_id,omitempty"`
 	CandidateID        string   `json:"candidate_id,omitempty"`
 	EvalSuiteID        string   `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID  string   `json:"promotion_policy_id,omitempty"`
 	BaselinePackID     string   `json:"baseline_pack_id,omitempty"`
 	CandidatePackID    string   `json:"candidate_pack_id,omitempty"`
 	HotUpdateID        string   `json:"hot_update_id,omitempty"`
@@ -1549,6 +1550,7 @@ func operatorCandidateResultStatusFromRecord(record CandidateResultRecord) Opera
 		RunID:              record.RunID,
 		CandidateID:        record.CandidateID,
 		EvalSuiteID:        record.EvalSuiteID,
+		PromotionPolicyID:  record.PromotionPolicyID,
 		BaselinePackID:     record.BaselinePackID,
 		CandidatePackID:    record.CandidatePackID,
 		HotUpdateID:        record.HotUpdateID,

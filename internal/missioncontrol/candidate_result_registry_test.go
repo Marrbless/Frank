@@ -189,6 +189,15 @@ func TestCandidateResultValidationFailsClosed(t *testing.T) {
 			},
 			want: "mission store candidate result holdout_score must be finite",
 		},
+		{
+			name: "invalid promotion policy id",
+			run: func() error {
+				return StoreCandidateResultRecord(root, validCandidateResultRecord(now, func(record *CandidateResultRecord) {
+					record.PromotionPolicyID = ".bad-policy"
+				}))
+			},
+			want: `mission store candidate result promotion_policy_id ".bad-policy"`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -247,6 +256,145 @@ func TestCandidateResultRejectsMissingOrMismatchedLinkedRefs(t *testing.T) {
 	if !strings.Contains(err.Error(), `baseline_pack_id "pack-other" does not match run baseline_pack_id "pack-base"`) {
 		t.Fatalf("StoreCandidateResultRecord() error = %q, want run linkage mismatch rejection", err.Error())
 	}
+
+	err = StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(8*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-candidate-pack-mismatch"
+		record.RunID = "run-result"
+		record.CandidatePackID = "pack-base"
+	}))
+	if err == nil {
+		t.Fatal("StoreCandidateResultRecord() error = nil, want candidate pack mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `candidate_pack_id "pack-base" does not match run candidate_pack_id "pack-candidate"`) {
+		t.Fatalf("StoreCandidateResultRecord() error = %q, want candidate pack mismatch rejection", err.Error())
+	}
+
+	err = StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(9*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-eval-suite-mismatch"
+		record.RunID = "run-result"
+		record.EvalSuiteID = "eval-suite-other"
+	}))
+	if err == nil {
+		t.Fatal("StoreCandidateResultRecord() error = nil, want eval-suite mismatch rejection")
+	}
+	if !strings.Contains(err.Error(), `eval_suite_id "eval-suite-other" does not match run eval_suite_id "eval-suite-1"`) {
+		t.Fatalf("StoreCandidateResultRecord() error = %q, want eval-suite mismatch rejection", err.Error())
+	}
+}
+
+func TestCandidateResultPromotionPolicyReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 13, 30, 0, 0, time.UTC)
+
+	storeImprovementRunFixtures(t, root, now)
+	if err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-result"
+	})); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-result"
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+
+	record := validCandidateResultRecord(now.Add(7*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-policy"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = " promotion-policy-result "
+	})
+	if err := StoreCandidateResultRecord(root, record); err != nil {
+		t.Fatalf("StoreCandidateResultRecord(with policy) error = %v", err)
+	}
+	got, err := LoadCandidateResultRecord(root, "result-policy")
+	if err != nil {
+		t.Fatalf("LoadCandidateResultRecord() error = %v", err)
+	}
+	if got.PromotionPolicyID != "promotion-policy-result" {
+		t.Fatalf("PromotionPolicyID = %q, want promotion-policy-result", got.PromotionPolicyID)
+	}
+
+	err = StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(8*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-missing-policy"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = "promotion-policy-missing"
+	}))
+	if err == nil {
+		t.Fatal("StoreCandidateResultRecord() error = nil, want missing promotion policy rejection")
+	}
+	if !strings.Contains(err.Error(), ErrPromotionPolicyRecordNotFound.Error()) {
+		t.Fatalf("StoreCandidateResultRecord() error = %q, want missing promotion policy rejection", err.Error())
+	}
+}
+
+func TestCandidateResultStoreDoesNotMutateLinkedRecordsOrRuntimePointers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 13, 45, 0, 0, time.UTC)
+
+	storeImprovementRunFixtures(t, root, now)
+	if err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-result"
+	})); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-result"
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+
+	snapshots := map[string][]byte{}
+	for _, path := range []string{
+		StoreRuntimePackPath(root, "pack-base"),
+		StoreRuntimePackPath(root, "pack-candidate"),
+		StoreImprovementCandidatePath(root, "candidate-1"),
+		StoreEvalSuitePath(root, "eval-suite-1"),
+		StoreImprovementRunPath(root, "run-result"),
+		StoreHotUpdateGatePath(root, "hot-update-1"),
+		StorePromotionPolicyPath(root, "promotion-policy-result"),
+	} {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		snapshots[path] = bytes
+	}
+
+	if err := StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(7*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-no-mutation"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = "promotion-policy-result"
+	})); err != nil {
+		t.Fatalf("StoreCandidateResultRecord() error = %v", err)
+	}
+
+	for path, before := range snapshots {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after store error = %v", path, err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("linked record %s changed after candidate-result store", path)
+		}
+	}
+
+	absentPaths := []string{
+		StoreHotUpdateOutcomesDir(root),
+		StorePromotionsDir(root),
+		StoreRollbacksDir(root),
+		StoreRollbackAppliesDir(root),
+		StoreActiveRuntimePackPointerPath(root),
+		StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after candidate-result store: %v", path, err)
+		}
+	}
 }
 
 func TestLoadCandidateResultRecordNotFound(t *testing.T) {
@@ -264,6 +412,7 @@ func validCandidateResultRecord(now time.Time, mutate func(*CandidateResultRecor
 		RunID:              "run-root",
 		CandidateID:        "candidate-1",
 		EvalSuiteID:        "eval-suite-1",
+		PromotionPolicyID:  "",
 		BaselinePackID:     "pack-base",
 		CandidatePackID:    "pack-candidate",
 		HotUpdateID:        "hot-update-1",

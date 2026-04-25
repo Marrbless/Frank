@@ -18,9 +18,15 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
 	}
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-result"
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
 	if err := StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(6*time.Minute), func(record *CandidateResultRecord) {
 		record.ResultID = "result-1"
 		record.RunID = "run-1"
+		record.PromotionPolicyID = "promotion-policy-result"
 		record.CreatedBy = "operator"
 		record.Notes = "candidate kept for later gate"
 		record.RegressionFlags = []string{"holdout_warning"}
@@ -50,6 +56,9 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 	}
 	if result.EvalSuiteID != "eval-suite-1" {
 		t.Fatalf("Results[0].EvalSuiteID = %q, want eval-suite-1", result.EvalSuiteID)
+	}
+	if result.PromotionPolicyID != "promotion-policy-result" {
+		t.Fatalf("Results[0].PromotionPolicyID = %q, want promotion-policy-result", result.PromotionPolicyID)
 	}
 	if result.BaselinePackID != "pack-base" {
 		t.Fatalf("Results[0].BaselinePackID = %q, want pack-base", result.BaselinePackID)
