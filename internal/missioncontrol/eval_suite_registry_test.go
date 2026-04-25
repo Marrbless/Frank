@@ -220,6 +220,15 @@ func TestEvalSuiteValidationFailsClosed(t *testing.T) {
 			},
 			want: "mission store eval-suite frozen_for_run must be true",
 		},
+		{
+			name: "train holdout same",
+			run: func() error {
+				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+					record.HoldoutCorpusRef = "corpus/train-root"
+				}))
+			},
+			want: "mission store eval-suite train_corpus_ref and holdout_corpus_ref must be distinct",
+		},
 	}
 
 	for _, tc := range tests {

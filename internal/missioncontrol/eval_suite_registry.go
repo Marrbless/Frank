@@ -106,6 +106,9 @@ func ValidateEvalSuiteRecord(record EvalSuiteRecord) error {
 	if record.HoldoutCorpusRef == "" {
 		return fmt.Errorf("mission store eval-suite holdout_corpus_ref is required")
 	}
+	if record.TrainCorpusRef == record.HoldoutCorpusRef {
+		return fmt.Errorf("mission store eval-suite train_corpus_ref and holdout_corpus_ref must be distinct")
+	}
 	if record.EvaluatorRef == "" {
 		return fmt.Errorf("mission store eval-suite evaluator_ref is required")
 	}

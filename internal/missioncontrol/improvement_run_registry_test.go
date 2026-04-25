@@ -239,6 +239,146 @@ func TestImprovementRunRejectsMissingLinkedRefs(t *testing.T) {
 	}
 }
 
+func TestImprovementRunRequiresExistingFrozenEvalSuite(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 17, 30, 0, 0, time.UTC)
+
+	storeImprovementRunFixtures(t, root, now)
+
+	err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-missing-eval-suite"
+		record.EvalSuiteID = "missing-eval-suite"
+		record.HotUpdateID = ""
+		record.State = ImprovementRunStateQueued
+		record.Decision = ""
+		record.CompletedAt = time.Time{}
+		record.StopReason = ""
+	}))
+	if err == nil {
+		t.Fatal("StoreImprovementRunRecord() error = nil, want missing eval-suite rejection")
+	}
+	if !strings.Contains(err.Error(), ErrEvalSuiteRecordNotFound.Error()) {
+		t.Fatalf("StoreImprovementRunRecord() error = %q, want missing eval-suite rejection", err.Error())
+	}
+
+	unfrozen := validEvalSuiteRecord(now.Add(6*time.Minute), func(record *EvalSuiteRecord) {
+		record.RecordVersion = StoreRecordVersion
+		record.EvalSuiteID = "eval-suite-unfrozen"
+		record.CandidateID = "candidate-1"
+		record.BaselinePackID = "pack-base"
+		record.CandidatePackID = "pack-candidate"
+		record.FrozenForRun = false
+	})
+	if err := WriteStoreJSONAtomic(StoreEvalSuitePath(root, unfrozen.EvalSuiteID), unfrozen); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(unfrozen eval-suite) error = %v", err)
+	}
+
+	err = StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(7*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-unfrozen-eval-suite"
+		record.EvalSuiteID = "eval-suite-unfrozen"
+		record.HotUpdateID = ""
+		record.State = ImprovementRunStateQueued
+		record.Decision = ""
+		record.CompletedAt = time.Time{}
+		record.StopReason = ""
+	}))
+	if err == nil {
+		t.Fatal("StoreImprovementRunRecord() error = nil, want unfrozen eval-suite rejection")
+	}
+	if !strings.Contains(err.Error(), "mission store eval-suite frozen_for_run must be true") {
+		t.Fatalf("StoreImprovementRunRecord() error = %q, want unfrozen eval-suite rejection", err.Error())
+	}
+}
+
+func TestImprovementRunRequiresEvalSuitePackLinkage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 17, 45, 0, 0, time.UTC)
+
+	storeImprovementRunFixtures(t, root, now)
+
+	if err := StoreEvalSuiteRecord(root, validEvalSuiteRecord(now.Add(5*time.Minute), func(record *EvalSuiteRecord) {
+		record.EvalSuiteID = "eval-suite-pack-mismatch"
+		record.CandidateID = ""
+		record.BaselinePackID = "pack-candidate"
+		record.CandidatePackID = ""
+	})); err != nil {
+		t.Fatalf("StoreEvalSuiteRecord(mismatch fixture) error = %v", err)
+	}
+
+	err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(6*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-eval-suite-pack-mismatch"
+		record.EvalSuiteID = "eval-suite-pack-mismatch"
+		record.HotUpdateID = ""
+		record.State = ImprovementRunStateQueued
+		record.Decision = ""
+		record.CompletedAt = time.Time{}
+		record.StopReason = ""
+	}))
+	if err == nil {
+		t.Fatal("StoreImprovementRunRecord() error = nil, want eval-suite pack linkage rejection")
+	}
+	if !strings.Contains(err.Error(), `eval_suite_id "eval-suite-pack-mismatch" baseline_pack_id "pack-candidate" does not match run baseline_pack_id "pack-base"`) {
+		t.Fatalf("StoreImprovementRunRecord() error = %q, want eval-suite pack linkage rejection", err.Error())
+	}
+}
+
+func TestImprovementRunStoreDoesNotMutateLinkedRecordsOrRuntimePointers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 23, 18, 0, 0, 0, time.UTC)
+
+	storeImprovementRunFixtures(t, root, now)
+
+	snapshots := map[string][]byte{}
+	for _, path := range []string{
+		StoreRuntimePackPath(root, "pack-base"),
+		StoreRuntimePackPath(root, "pack-candidate"),
+		StoreImprovementCandidatePath(root, "candidate-1"),
+		StoreEvalSuitePath(root, "eval-suite-1"),
+		StoreHotUpdateGatePath(root, "hot-update-1"),
+	} {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		snapshots[path] = bytes
+	}
+
+	if err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), nil)); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+
+	for path, before := range snapshots {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after store error = %v", path, err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("linked record %s changed after improvement-run store", path)
+		}
+	}
+
+	absentPaths := []string{
+		StoreCandidateResultsDir(root),
+		StoreHotUpdateOutcomesDir(root),
+		StorePromotionsDir(root),
+		StoreRollbacksDir(root),
+		StoreRollbackAppliesDir(root),
+		StoreActiveRuntimePackPointerPath(root),
+		StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after improvement-run store: %v", path, err)
+		}
+	}
+}
+
 func TestLoadImprovementRunRecordNotFound(t *testing.T) {
 	t.Parallel()
 
