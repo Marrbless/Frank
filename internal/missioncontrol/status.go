@@ -37,6 +37,7 @@ type OperatorStatusSummary struct {
 	PromotionPolicyIdentity            *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
+	CandidatePromotionDecisionIdentity *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
 	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
 	PromotionIdentity                  *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
@@ -176,6 +177,11 @@ type OperatorCandidateResultIdentityStatus struct {
 	Results []OperatorCandidateResultStatus `json:"results,omitempty"`
 }
 
+type OperatorCandidatePromotionDecisionIdentityStatus struct {
+	State     string                                     `json:"state"`
+	Decisions []OperatorCandidatePromotionDecisionStatus `json:"decisions,omitempty"`
+}
+
 type OperatorHotUpdateOutcomeIdentityStatus struct {
 	State    string                           `json:"state"`
 	Outcomes []OperatorHotUpdateOutcomeStatus `json:"outcomes,omitempty"`
@@ -307,6 +313,25 @@ type OperatorCandidateResultStatus struct {
 	CreatedAt            *string                              `json:"created_at,omitempty"`
 	CreatedBy            string                               `json:"created_by,omitempty"`
 	Error                string                               `json:"error,omitempty"`
+}
+
+type OperatorCandidatePromotionDecisionStatus struct {
+	State               string  `json:"state"`
+	PromotionDecisionID string  `json:"promotion_decision_id,omitempty"`
+	ResultID            string  `json:"result_id,omitempty"`
+	RunID               string  `json:"run_id,omitempty"`
+	CandidateID         string  `json:"candidate_id,omitempty"`
+	EvalSuiteID         string  `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID   string  `json:"promotion_policy_id,omitempty"`
+	BaselinePackID      string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID     string  `json:"candidate_pack_id,omitempty"`
+	EligibilityState    string  `json:"eligibility_state,omitempty"`
+	Decision            string  `json:"decision,omitempty"`
+	Reason              string  `json:"reason,omitempty"`
+	Notes               string  `json:"notes,omitempty"`
+	CreatedAt           *string `json:"created_at,omitempty"`
+	CreatedBy           string  `json:"created_by,omitempty"`
+	Error               string  `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -573,6 +598,16 @@ func WithCandidateResultIdentity(summary OperatorStatusSummary, root string) Ope
 	return summary
 }
 
+func WithCandidatePromotionDecisionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorCandidatePromotionDecisionIdentityStatus(root)
+	summary.CandidatePromotionDecisionIdentity = &status
+	return summary
+}
+
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -717,6 +752,24 @@ func LoadOperatorCandidateResultIdentityStatus(root string) OperatorCandidateRes
 	return OperatorCandidateResultIdentityStatus{
 		State:   state,
 		Results: results,
+	}
+}
+
+func LoadOperatorCandidatePromotionDecisionIdentityStatus(root string) OperatorCandidatePromotionDecisionIdentityStatus {
+	decisions, found, invalid, err := loadOperatorCandidatePromotionDecisionStatuses(root)
+	if !found {
+		return OperatorCandidatePromotionDecisionIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorCandidatePromotionDecisionIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorCandidatePromotionDecisionIdentityStatus{
+		State:     state,
+		Decisions: decisions,
 	}
 }
 
@@ -1575,6 +1628,90 @@ func operatorCandidateResultStatusFromRecord(record CandidateResultRecord) Opera
 		Notes:              record.Notes,
 		CreatedAt:          formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:          record.CreatedBy,
+	}
+}
+
+func loadOperatorCandidatePromotionDecisionStatuses(root string) ([]OperatorCandidatePromotionDecisionStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreCandidatePromotionDecisionsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	decisions := make([]OperatorCandidatePromotionDecisionStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorCandidatePromotionDecisionStatus(root, filepath.Join(StoreCandidatePromotionDecisionsDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		decisions = append(decisions, status)
+	}
+	return decisions, true, invalid, nil
+}
+
+func loadOperatorCandidatePromotionDecisionStatus(root, path string) OperatorCandidatePromotionDecisionStatus {
+	status := OperatorCandidatePromotionDecisionStatus{
+		State:               "invalid",
+		PromotionDecisionID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record CandidatePromotionDecisionRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeCandidatePromotionDecisionRecord(record)
+	status = operatorCandidatePromotionDecisionStatusFromRecord(record)
+	if err := ValidateCandidatePromotionDecisionRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateCandidatePromotionDecisionLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorCandidatePromotionDecisionStatusFromRecord(record CandidatePromotionDecisionRecord) OperatorCandidatePromotionDecisionStatus {
+	return OperatorCandidatePromotionDecisionStatus{
+		PromotionDecisionID: record.PromotionDecisionID,
+		ResultID:            record.ResultID,
+		RunID:               record.RunID,
+		CandidateID:         record.CandidateID,
+		EvalSuiteID:         record.EvalSuiteID,
+		PromotionPolicyID:   record.PromotionPolicyID,
+		BaselinePackID:      record.BaselinePackID,
+		CandidatePackID:     record.CandidatePackID,
+		EligibilityState:    record.EligibilityState,
+		Decision:            string(record.Decision),
+		Reason:              record.Reason,
+		Notes:               record.Notes,
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
 	}
 }
 
