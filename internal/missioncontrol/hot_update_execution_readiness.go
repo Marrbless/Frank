@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type HotUpdateExecutionTransition string
@@ -52,6 +53,7 @@ type HotUpdateExecutionReadinessInput struct {
 	Transition   HotUpdateExecutionTransition
 	HotUpdateID  string
 	CommandJobID string
+	AssessedAt   time.Time
 
 	QuiesceState HotUpdateQuiesceState
 
@@ -76,6 +78,11 @@ type HotUpdateExecutionReadinessAssessment struct {
 	ActiveExecutionPlane string                            `json:"active_execution_plane,omitempty"`
 	ActiveMissionFamily  string                            `json:"active_mission_family,omitempty"`
 	ActiveStepID         string                            `json:"active_step_id,omitempty"`
+	EvidenceID           string                            `json:"evidence_id,omitempty"`
+	DeployLockState      HotUpdateDeployLockState          `json:"deploy_lock_state,omitempty"`
+	EvidenceExpiresAt    time.Time                         `json:"evidence_expires_at,omitempty"`
+	EvidenceExpired      bool                              `json:"evidence_expired,omitempty"`
+	EvidenceStale        bool                              `json:"evidence_stale,omitempty"`
 	QuiesceState         HotUpdateQuiesceState             `json:"quiesce_state"`
 	ReplayClass          HotUpdateExecutionReplayClass     `json:"replay_class"`
 }
@@ -87,6 +94,10 @@ func AssessHotUpdateExecutionReadiness(root string, input HotUpdateExecutionRead
 	input.Transition = HotUpdateExecutionTransition(strings.TrimSpace(string(input.Transition)))
 	input.HotUpdateID = strings.TrimSpace(input.HotUpdateID)
 	input.CommandJobID = strings.TrimSpace(input.CommandJobID)
+	input.AssessedAt = input.AssessedAt.UTC()
+	if input.AssessedAt.IsZero() {
+		input.AssessedAt = time.Now().UTC()
+	}
 	if input.QuiesceState == "" {
 		input.QuiesceState = HotUpdateQuiesceStateNotConfigured
 	}
@@ -166,9 +177,58 @@ func AssessHotUpdateExecutionReadiness(root string, input HotUpdateExecutionRead
 		return assessment, nil
 	}
 	if assessment.ActiveExecutionPlane == ExecutionPlaneLiveRuntime {
-		switch input.QuiesceState {
+		if input.QuiesceState == HotUpdateQuiesceStateFailed {
+			assessment.Ready = false
+			assessment.RejectionCode = RejectionCodeV4ReloadQuiesceFailed
+			assessment.QuiesceState = HotUpdateQuiesceStateFailed
+			assessment.Reason = "active live-runtime job failed quiesce readiness"
+			return assessment, nil
+		}
+		if input.HotUpdateID == "" {
+			assessment.Ready = false
+			assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
+			assessment.QuiesceState = HotUpdateQuiesceStateNotConfigured
+			assessment.Reason = "active live-runtime job has no hot-update id for execution safety evidence"
+			return assessment, nil
+		}
+		evidence, err := LoadCurrentHotUpdateExecutionSafetyEvidenceRecord(root, input.HotUpdateID, activeJob.JobID)
+		if err != nil {
+			if errors.Is(err, ErrHotUpdateExecutionSafetyEvidenceRecordNotFound) {
+				assessment.Ready = false
+				assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
+				assessment.QuiesceState = HotUpdateQuiesceStateNotConfigured
+				assessment.Reason = "active live-runtime job has no explicit execution safety evidence"
+				return assessment, nil
+			}
+			return HotUpdateExecutionReadinessAssessment{}, err
+		}
+		assessment.EvidenceID = evidence.EvidenceID
+		assessment.DeployLockState = evidence.DeployLockState
+		assessment.QuiesceState = evidence.QuiesceState
+		assessment.EvidenceExpiresAt = evidence.ExpiresAt
+		if hotUpdateExecutionSafetyEvidenceExpired(evidence, input.AssessedAt) {
+			assessment.Ready = false
+			assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
+			assessment.EvidenceExpired = true
+			assessment.Reason = "active live-runtime job execution safety evidence is expired"
+			return assessment, nil
+		}
+		if hotUpdateExecutionSafetyEvidenceStale(evidence, activeJob) {
+			assessment.Ready = false
+			assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
+			assessment.EvidenceStale = true
+			assessment.Reason = "active live-runtime job execution safety evidence does not match current active job"
+			return assessment, nil
+		}
+		if evidence.DeployLockState != HotUpdateDeployLockStateDeployUnlocked {
+			assessment.Ready = false
+			assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
+			assessment.Reason = "active live-runtime job is not deploy-unlocked"
+			return assessment, nil
+		}
+		switch evidence.QuiesceState {
 		case HotUpdateQuiesceStateReady:
-			assessment.Reason = "active live-runtime job has explicit quiesce readiness"
+			assessment.Reason = "active live-runtime job has current execution safety evidence"
 			return assessment, nil
 		case HotUpdateQuiesceStateFailed:
 			assessment.Ready = false
@@ -178,7 +238,7 @@ func AssessHotUpdateExecutionReadiness(root string, input HotUpdateExecutionRead
 		default:
 			assessment.Ready = false
 			assessment.RejectionCode = RejectionCodeV4ActiveJobDeployLock
-			assessment.Reason = "active live-runtime job has no explicit quiesce readiness proof"
+			assessment.Reason = "active live-runtime job quiesce readiness is not proven"
 			return assessment, nil
 		}
 	}
@@ -318,4 +378,27 @@ func loadHotUpdateExecutionRuntimeControl(root string, input HotUpdateExecutionR
 		return RuntimeControlRecord{}, false, err
 	}
 	return control, true, nil
+}
+
+func hotUpdateExecutionSafetyEvidenceExpired(record HotUpdateExecutionSafetyEvidenceRecord, assessedAt time.Time) bool {
+	if record.ExpiresAt.IsZero() {
+		return false
+	}
+	return !record.ExpiresAt.After(assessedAt.UTC())
+}
+
+func hotUpdateExecutionSafetyEvidenceStale(record HotUpdateExecutionSafetyEvidenceRecord, activeJob ActiveJobRecord) bool {
+	if record.ActiveStepID != "" && record.ActiveStepID != activeJob.ActiveStepID {
+		return true
+	}
+	if record.AttemptID != "" && record.AttemptID != activeJob.AttemptID {
+		return true
+	}
+	if record.WriterEpoch != 0 && record.WriterEpoch != activeJob.WriterEpoch {
+		return true
+	}
+	if record.ActivationSeq != 0 && record.ActivationSeq != activeJob.ActivationSeq {
+		return true
+	}
+	return false
 }
