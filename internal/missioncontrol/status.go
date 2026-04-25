@@ -38,6 +38,7 @@ type OperatorStatusSummary struct {
 	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
 	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
 	HotUpdateCanaryRequirementIdentity *OperatorHotUpdateCanaryRequirementIdentityStatus           `json:"hot_update_canary_requirement_identity,omitempty"`
+	HotUpdateCanaryEvidenceIdentity    *OperatorHotUpdateCanaryEvidenceIdentityStatus              `json:"hot_update_canary_evidence_identity,omitempty"`
 	CandidatePromotionDecisionIdentity *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
 	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
 	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
@@ -186,6 +187,11 @@ type OperatorCandidatePromotionDecisionIdentityStatus struct {
 type OperatorHotUpdateCanaryRequirementIdentityStatus struct {
 	State        string                                     `json:"state"`
 	Requirements []OperatorHotUpdateCanaryRequirementStatus `json:"requirements,omitempty"`
+}
+
+type OperatorHotUpdateCanaryEvidenceIdentityStatus struct {
+	State    string                                  `json:"state"`
+	Evidence []OperatorHotUpdateCanaryEvidenceStatus `json:"evidence,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeIdentityStatus struct {
@@ -358,6 +364,26 @@ type OperatorHotUpdateCanaryRequirementStatus struct {
 	CreatedAt             *string `json:"created_at,omitempty"`
 	CreatedBy             string  `json:"created_by,omitempty"`
 	Error                 string  `json:"error,omitempty"`
+}
+
+type OperatorHotUpdateCanaryEvidenceStatus struct {
+	State               string  `json:"state"`
+	CanaryEvidenceID    string  `json:"canary_evidence_id,omitempty"`
+	CanaryRequirementID string  `json:"canary_requirement_id,omitempty"`
+	ResultID            string  `json:"result_id,omitempty"`
+	RunID               string  `json:"run_id,omitempty"`
+	CandidateID         string  `json:"candidate_id,omitempty"`
+	EvalSuiteID         string  `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID   string  `json:"promotion_policy_id,omitempty"`
+	BaselinePackID      string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID     string  `json:"candidate_pack_id,omitempty"`
+	EvidenceState       string  `json:"evidence_state,omitempty"`
+	Passed              bool    `json:"passed"`
+	Reason              string  `json:"reason,omitempty"`
+	ObservedAt          *string `json:"observed_at,omitempty"`
+	CreatedAt           *string `json:"created_at,omitempty"`
+	CreatedBy           string  `json:"created_by,omitempty"`
+	Error               string  `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -644,6 +670,16 @@ func WithHotUpdateCanaryRequirementIdentity(summary OperatorStatusSummary, root 
 	return summary
 }
 
+func WithHotUpdateCanaryEvidenceIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateCanaryEvidenceIdentityStatus(root)
+	summary.HotUpdateCanaryEvidenceIdentity = &status
+	return summary
+}
+
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -824,6 +860,24 @@ func LoadOperatorHotUpdateCanaryRequirementIdentityStatus(root string) OperatorH
 	return OperatorHotUpdateCanaryRequirementIdentityStatus{
 		State:        state,
 		Requirements: requirements,
+	}
+}
+
+func LoadOperatorHotUpdateCanaryEvidenceIdentityStatus(root string) OperatorHotUpdateCanaryEvidenceIdentityStatus {
+	evidence, found, invalid, err := loadOperatorHotUpdateCanaryEvidenceStatuses(root)
+	if !found {
+		return OperatorHotUpdateCanaryEvidenceIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateCanaryEvidenceIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateCanaryEvidenceIdentityStatus{
+		State:    state,
+		Evidence: evidence,
 	}
 }
 
@@ -1851,6 +1905,91 @@ func operatorHotUpdateCanaryRequirementStatusFromRecord(record HotUpdateCanaryRe
 		Reason:                record.Reason,
 		CreatedAt:             formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:             record.CreatedBy,
+	}
+}
+
+func loadOperatorHotUpdateCanaryEvidenceStatuses(root string) ([]OperatorHotUpdateCanaryEvidenceStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateCanaryEvidenceDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	evidence := make([]OperatorHotUpdateCanaryEvidenceStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorHotUpdateCanaryEvidenceStatus(root, filepath.Join(StoreHotUpdateCanaryEvidenceDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		evidence = append(evidence, status)
+	}
+	return evidence, true, invalid, nil
+}
+
+func loadOperatorHotUpdateCanaryEvidenceStatus(root, path string) OperatorHotUpdateCanaryEvidenceStatus {
+	status := OperatorHotUpdateCanaryEvidenceStatus{
+		State:            "invalid",
+		CanaryEvidenceID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record HotUpdateCanaryEvidenceRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeHotUpdateCanaryEvidenceRecord(record)
+	status = operatorHotUpdateCanaryEvidenceStatusFromRecord(record)
+	if err := ValidateHotUpdateCanaryEvidenceRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateHotUpdateCanaryEvidenceLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorHotUpdateCanaryEvidenceStatusFromRecord(record HotUpdateCanaryEvidenceRecord) OperatorHotUpdateCanaryEvidenceStatus {
+	return OperatorHotUpdateCanaryEvidenceStatus{
+		CanaryEvidenceID:    record.CanaryEvidenceID,
+		CanaryRequirementID: record.CanaryRequirementID,
+		ResultID:            record.ResultID,
+		RunID:               record.RunID,
+		CandidateID:         record.CandidateID,
+		EvalSuiteID:         record.EvalSuiteID,
+		PromotionPolicyID:   record.PromotionPolicyID,
+		BaselinePackID:      record.BaselinePackID,
+		CandidatePackID:     record.CandidatePackID,
+		EvidenceState:       string(record.EvidenceState),
+		Passed:              record.Passed,
+		Reason:              record.Reason,
+		ObservedAt:          formatOperatorStatusTime(record.ObservedAt),
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
 	}
 }
 

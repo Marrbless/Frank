@@ -96,6 +96,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	summary = WithImprovementRunIdentity(summary, root)
 	summary = WithCandidateResultIdentity(summary, root)
 	summary = WithHotUpdateCanaryRequirementIdentity(summary, root)
+	summary = WithHotUpdateCanaryEvidenceIdentity(summary, root)
 	summary = WithCandidatePromotionDecisionIdentity(summary, root)
 	summary = WithHotUpdateGateIdentity(summary, root)
 	summary = WithHotUpdateOutcomeIdentity(summary, root)
