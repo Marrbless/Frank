@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ var hotUpdateGatePhaseCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_p
 var hotUpdateGateExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_execute)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateReloadCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_reload)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateFailCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_fail)\s+(\S+)\s+(\S+)(?:\s+(.*?))?\s*$`)
+var hotUpdateExecutionReadyCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_execution_ready)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*?))?\s*$`)
 var hotUpdateOutcomeCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_outcome_create)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdatePromotionCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_promotion_create)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateLKGRecertifyCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_lkg_recertify)\s+(\S+)\s+(\S+)\s*$`)
@@ -1888,6 +1890,29 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 		return true, fmt.Sprintf("Selected hot-update terminal failure job=%s hot_update=%s.", jobID, hotUpdateID), nil
 	}
 
+	hotUpdateExecutionReadyMatches := hotUpdateExecutionReadyCommandRE.FindStringSubmatch(trimmed)
+	if len(hotUpdateExecutionReadyMatches) == 6 {
+		jobID := hotUpdateExecutionReadyMatches[2]
+		hotUpdateID := hotUpdateExecutionReadyMatches[3]
+		ttlSeconds, err := strconv.Atoi(hotUpdateExecutionReadyMatches[4])
+		if err != nil {
+			return true, "", fmt.Errorf("HOT_UPDATE_EXECUTION_READY ttl_seconds must be an integer")
+		}
+		reason := hotUpdateExecutionReadyMatches[5]
+		record, changed, err := a.taskState.RecordHotUpdateExecutionReady(jobID, hotUpdateID, ttlSeconds, reason)
+		if err != nil {
+			return true, "", err
+		}
+		expiresAt := record.ExpiresAt.UTC().Format(time.RFC3339)
+		if changed {
+			return true, fmt.Sprintf("Recorded hot-update execution readiness job=%s hot_update=%s expires_at=%s.", jobID, hotUpdateID, expiresAt), nil
+		}
+		return true, fmt.Sprintf("Selected hot-update execution readiness job=%s hot_update=%s expires_at=%s.", jobID, hotUpdateID, expiresAt), nil
+	}
+	if isMalformedHotUpdateExecutionReadyCommand(trimmed) {
+		return true, "", fmt.Errorf("HOT_UPDATE_EXECUTION_READY requires job_id, hot_update_id, ttl_seconds, and optional reason")
+	}
+
 	hotUpdateOutcomeCreateMatches := hotUpdateOutcomeCreateCommandRE.FindStringSubmatch(trimmed)
 	if len(hotUpdateOutcomeCreateMatches) == 4 {
 		jobID := hotUpdateOutcomeCreateMatches[2]
@@ -2069,6 +2094,11 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 func isMalformedHotUpdateGateFromDecisionCommand(content string) bool {
 	fields := strings.Fields(content)
 	return len(fields) > 0 && strings.EqualFold(fields[0], "hot_update_gate_from_decision")
+}
+
+func isMalformedHotUpdateExecutionReadyCommand(content string) bool {
+	fields := strings.Fields(content)
+	return len(fields) > 0 && strings.EqualFold(fields[0], "hot_update_execution_ready")
 }
 
 func cloneToolArguments(args map[string]interface{}) map[string]interface{} {

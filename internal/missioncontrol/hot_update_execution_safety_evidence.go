@@ -154,6 +154,95 @@ func StoreHotUpdateExecutionSafetyEvidenceRecord(root string, record HotUpdateEx
 	return stored, true, nil
 }
 
+func EnsureHotUpdateExecutionReadyEvidence(root string, hotUpdateID string, activeJob ActiveJobRecord, createdBy string, createdAt time.Time, expiresAt time.Time, reason string) (HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if err := ValidateActiveJobRecord(activeJob); err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	hotUpdateID = strings.TrimSpace(hotUpdateID)
+	if err := ValidateHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID}); err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence created_by is required")
+	}
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence created_at is required")
+	}
+	expiresAt = expiresAt.UTC()
+	if expiresAt.IsZero() {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence expires_at is required")
+	}
+	if !expiresAt.After(createdAt) {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence expires_at must be after created_at")
+	}
+
+	evidenceID, err := HotUpdateExecutionSafetyEvidenceID(hotUpdateID, activeJob.JobID)
+	if err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	record := HotUpdateExecutionSafetyEvidenceRecord{
+		RecordVersion:   StoreRecordVersion,
+		EvidenceID:      evidenceID,
+		HotUpdateID:     hotUpdateID,
+		JobID:           strings.TrimSpace(activeJob.JobID),
+		ActiveStepID:    strings.TrimSpace(activeJob.ActiveStepID),
+		AttemptID:       strings.TrimSpace(activeJob.AttemptID),
+		WriterEpoch:     activeJob.WriterEpoch,
+		ActivationSeq:   activeJob.ActivationSeq,
+		DeployLockState: HotUpdateDeployLockStateDeployUnlocked,
+		QuiesceState:    HotUpdateQuiesceStateReady,
+		Reason:          strings.TrimSpace(reason),
+		CreatedAt:       createdAt,
+		CreatedBy:       createdBy,
+		ExpiresAt:       expiresAt,
+	}
+	record = NormalizeHotUpdateExecutionSafetyEvidenceRecord(record)
+	if err := ValidateHotUpdateExecutionSafetyEvidenceRecord(record); err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	path := StoreHotUpdateExecutionSafetyEvidencePath(root, record.EvidenceID)
+	existing, err := loadHotUpdateExecutionSafetyEvidenceRecordFile(path)
+	if err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return existing, false, nil
+		}
+		if hotUpdateExecutionSafetyEvidenceStale(existing, activeJob) {
+			return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence %q is stale for current active job", record.EvidenceID)
+		}
+		if !hotUpdateExecutionSafetyEvidenceExpired(existing, createdAt) {
+			return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence %q divergent duplicate already exists", record.EvidenceID)
+		}
+		if existing.HotUpdateID != record.HotUpdateID || existing.JobID != record.JobID {
+			return HotUpdateExecutionSafetyEvidenceRecord{}, false, fmt.Errorf("mission store hot-update execution safety evidence %q does not match requested hot update and job", record.EvidenceID)
+		}
+		if err := WriteStoreJSONAtomic(path, record); err != nil {
+			return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		stored, err := LoadHotUpdateExecutionSafetyEvidenceRecord(root, record.EvidenceID)
+		if err != nil {
+			return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		return stored, true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if err := WriteStoreJSONAtomic(path, record); err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateExecutionSafetyEvidenceRecord(root, record.EvidenceID)
+	if err != nil {
+		return HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
 func LoadHotUpdateExecutionSafetyEvidenceRecord(root, evidenceID string) (HotUpdateExecutionSafetyEvidenceRecord, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return HotUpdateExecutionSafetyEvidenceRecord{}, err

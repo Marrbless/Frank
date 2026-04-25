@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -2361,8 +2362,6 @@ func TestProcessDirectHotUpdateGateReloadCommandBlocksRecoveryNeededRetryWithout
 
 	root, _ := writeLoopHotUpdateGateControlFixtures(t)
 	writeLoopHotUpdateLastKnownGoodPointer(t, root)
-	now := time.Date(2026, 4, 25, 20, 0, 0, 0, time.UTC)
-
 	b := chat.NewHub(10)
 	prov := &finalResponseProvider{content: "unused"}
 	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
@@ -2388,15 +2387,16 @@ func TestProcessDirectHotUpdateGateReloadCommandBlocksRecoveryNeededRetryWithout
 	if err != nil {
 		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
 	}
+	now := record.PreparedAt.Add(time.Minute).UTC()
 	record.State = missioncontrol.HotUpdateGateStateReloadApplyRecoveryNeeded
 	record.FailureReason = ""
-	record.PhaseUpdatedAt = now.Add(time.Minute)
+	record.PhaseUpdatedAt = now
 	record.PhaseUpdatedBy = "operator"
 	record = missioncontrol.NormalizeHotUpdateGateRecord(record)
 	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"), record); err != nil {
 		t.Fatalf("WriteStoreJSONAtomic(recovery-needed) error = %v", err)
 	}
-	writeLoopActiveJobEvidence(t, root, now.Add(2*time.Minute), "job-1", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
+	writeLoopActiveJobEvidence(t, root, now.Add(time.Minute), "job-1", missioncontrol.JobStateRunning, missioncontrol.ExecutionPlaneLiveRuntime, missioncontrol.MissionFamilyBootstrapRevenue)
 
 	resp, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second)
 	if err == nil {
@@ -2414,6 +2414,307 @@ func TestProcessDirectHotUpdateGateReloadCommandBlocksRecoveryNeededRetryWithout
 	}
 	if got.State != missioncontrol.HotUpdateGateStateReloadApplyRecoveryNeeded {
 		t.Fatalf("HotUpdateGateRecord.State = %q, want reload_apply_recovery_needed", got.State)
+	}
+}
+
+func TestProcessDirectHotUpdateExecutionReadyCommandRecordsEvidenceAndReadiness(t *testing.T) {
+	root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+
+	beforeGate := mustLoopReadFile(t, missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))
+	beforePointer := mustLoopReadFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))
+	beforeLKG := mustLoopReadFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+	beforeRuntime := mustLoopReadFile(t, missioncontrol.StoreJobRuntimePath(root, "job-1"))
+	beforeActiveJob := mustLoopReadFile(t, missioncontrol.StoreActiveJobPath(root))
+	beforeControl, err := missioncontrol.LoadRuntimeControlRecord(root, "job-1")
+	if err != nil {
+		t.Fatalf("LoadRuntimeControlRecord(before) error = %v", err)
+	}
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 60 operator checked quiesce", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY) error = %v", err)
+	}
+	evidenceID, err := missioncontrol.HotUpdateExecutionSafetyEvidenceID("hot-update-1", "job-1")
+	if err != nil {
+		t.Fatalf("HotUpdateExecutionSafetyEvidenceID() error = %v", err)
+	}
+	evidence, err := missioncontrol.LoadHotUpdateExecutionSafetyEvidenceRecord(root, evidenceID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateExecutionSafetyEvidenceRecord() error = %v", err)
+	}
+	wantResp := fmt.Sprintf("Recorded hot-update execution readiness job=job-1 hot_update=hot-update-1 expires_at=%s.", evidence.ExpiresAt.UTC().Format(time.RFC3339))
+	if resp != wantResp {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY) response = %q, want %q", resp, wantResp)
+	}
+	if evidence.DeployLockState != missioncontrol.HotUpdateDeployLockStateDeployUnlocked || evidence.QuiesceState != missioncontrol.HotUpdateQuiesceStateReady {
+		t.Fatalf("evidence safety state = %q/%q, want deploy_unlocked/ready", evidence.DeployLockState, evidence.QuiesceState)
+	}
+	if evidence.ActiveStepID != "build" || evidence.AttemptID != "attempt-1" || evidence.WriterEpoch != 1 || evidence.ActivationSeq != 1 {
+		t.Fatalf("evidence active binding = step %q attempt %q epoch %d activation %d, want build/attempt-1/1/1", evidence.ActiveStepID, evidence.AttemptID, evidence.WriterEpoch, evidence.ActivationSeq)
+	}
+	if evidence.CreatedBy != "operator" || evidence.CreatedAt.IsZero() || evidence.ExpiresAt.Sub(evidence.CreatedAt) != time.Minute {
+		t.Fatalf("evidence timestamp/actor = created_by %q created_at %s expires_at %s, want operator with 60s ttl", evidence.CreatedBy, evidence.CreatedAt, evidence.ExpiresAt)
+	}
+	if evidence.Reason != "operator checked quiesce" {
+		t.Fatalf("evidence reason = %q, want command reason", evidence.Reason)
+	}
+	firstBytes := mustLoopReadFile(t, missioncontrol.StoreHotUpdateExecutionSafetyEvidencePath(root, evidenceID))
+
+	resp, err = ag.ProcessDirect("HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 60 operator checked quiesce", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY replay) error = %v", err)
+	}
+	wantReplay := fmt.Sprintf("Selected hot-update execution readiness job=job-1 hot_update=hot-update-1 expires_at=%s.", evidence.ExpiresAt.UTC().Format(time.RFC3339))
+	if resp != wantReplay {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY replay) response = %q, want %q", resp, wantReplay)
+	}
+	if got := mustLoopReadFile(t, missioncontrol.StoreHotUpdateExecutionSafetyEvidencePath(root, evidenceID)); string(got) != string(firstBytes) {
+		t.Fatalf("evidence changed on direct command replay\nbefore:\n%s\nafter:\n%s", string(firstBytes), string(got))
+	}
+
+	assessment, err := missioncontrol.AssessHotUpdateExecutionReadiness(root, missioncontrol.HotUpdateExecutionReadinessInput{
+		Transition:   missioncontrol.HotUpdateExecutionTransitionPointerSwitch,
+		HotUpdateID:  "hot-update-1",
+		CommandJobID: "job-1",
+		AssessedAt:   evidence.CreatedAt.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("AssessHotUpdateExecutionReadiness(pointer_switch) error = %v", err)
+	}
+	if !assessment.Ready || assessment.EvidenceID != evidenceID {
+		t.Fatalf("pointer-switch readiness = ready %v evidence %q reason %q, want ready with evidence", assessment.Ready, assessment.EvidenceID, assessment.Reason)
+	}
+
+	if string(beforeGate) != string(mustLoopReadFile(t, missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"))) {
+		t.Fatal("hot-update gate mutated")
+	}
+	if string(beforePointer) != string(mustLoopReadFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))) {
+		t.Fatal("active runtime-pack pointer mutated")
+	}
+	if string(beforeLKG) != string(mustLoopReadFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))) {
+		t.Fatal("last-known-good pointer mutated")
+	}
+	if string(beforeRuntime) != string(mustLoopReadFile(t, missioncontrol.StoreJobRuntimePath(root, "job-1"))) {
+		t.Fatal("job runtime record mutated")
+	}
+	if string(beforeActiveJob) != string(mustLoopReadFile(t, missioncontrol.StoreActiveJobPath(root))) {
+		t.Fatal("active job record mutated")
+	}
+	afterControl, err := missioncontrol.LoadRuntimeControlRecord(root, "job-1")
+	if err != nil {
+		t.Fatalf("LoadRuntimeControlRecord(after) error = %v", err)
+	}
+	if !reflect.DeepEqual(beforeControl, afterControl) {
+		t.Fatalf("runtime control mutated\nbefore: %#v\nafter: %#v", beforeControl, afterControl)
+	}
+	assertLoopNoTerminalHotUpdateArtifacts(t, root)
+
+	audits := ag.taskState.AuditEvents()
+	if len(audits) < 2 {
+		t.Fatalf("AuditEvents() count = %d, want created and selected audit events", len(audits))
+	}
+	if audits[len(audits)-2].ToolName != "hot_update_execution_ready" || !audits[len(audits)-2].Allowed {
+		t.Fatalf("created audit = %#v, want allowed hot_update_execution_ready", audits[len(audits)-2])
+	}
+	if audits[len(audits)-1].ToolName != "hot_update_execution_ready" || !audits[len(audits)-1].Allowed {
+		t.Fatalf("selected audit = %#v, want allowed hot_update_execution_ready", audits[len(audits)-1])
+	}
+}
+
+func TestProcessDirectHotUpdateExecutionReadyCommandAllowsReloadApplyReadiness(t *testing.T) {
+	root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateReloading, missioncontrol.ExecutionPlaneLiveRuntime)
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 45", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY) error = %v", err)
+	}
+	assessment, err := missioncontrol.AssessHotUpdateExecutionReadiness(root, missioncontrol.HotUpdateExecutionReadinessInput{
+		Transition:   missioncontrol.HotUpdateExecutionTransitionReloadApply,
+		HotUpdateID:  "hot-update-1",
+		CommandJobID: "job-1",
+		AssessedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("AssessHotUpdateExecutionReadiness(reload_apply) error = %v", err)
+	}
+	if !assessment.Ready {
+		t.Fatalf("reload/apply readiness = blocked code %q reason %q, want ready", assessment.RejectionCode, assessment.Reason)
+	}
+}
+
+func TestProcessDirectHotUpdateExecutionReadyCommandRejectsMalformedTTL(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{name: "missing job", command: "HOT_UPDATE_EXECUTION_READY", want: "requires job_id"},
+		{name: "missing hot update", command: "HOT_UPDATE_EXECUTION_READY job-1", want: "requires job_id"},
+		{name: "missing ttl", command: "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1", want: "requires job_id"},
+		{name: "non integer ttl", command: "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 nope", want: "ttl_seconds must be an integer"},
+		{name: "zero ttl", command: "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 0", want: "ttl_seconds must be positive"},
+		{name: "negative ttl", command: "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 -1", want: "ttl_seconds must be positive"},
+		{name: "too large ttl", command: "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 301", want: "ttl_seconds must be <= 300"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+			resp, err := ag.ProcessDirect(tt.command, 2*time.Second)
+			if err == nil {
+				t.Fatal("ProcessDirect(HOT_UPDATE_EXECUTION_READY malformed) error = nil, want rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY malformed) response = %q, want empty", resp)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY malformed) error = %q, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateExecutionReadyCommandFailsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T) (string, *AgentLoop)
+		command   string
+		wantError string
+	}{
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				return newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY other-job hot-update-1 30",
+			wantError: "does not match the active job",
+		},
+		{
+			name: "missing active job",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+				if err := missioncontrol.RemoveActiveJobRecord(root); err != nil {
+					t.Fatalf("RemoveActiveJobRecord() error = %v", err)
+				}
+				return root, ag
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: missioncontrol.ErrActiveJobRecordNotFound.Error(),
+		},
+		{
+			name: "non live runtime",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				return newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneHotUpdateGate)
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: "live_runtime",
+		},
+		{
+			name: "missing runtime control",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+				if err := os.RemoveAll(filepath.Join(root, "jobs", "job-1", "runtime_control")); err != nil {
+					t.Fatalf("RemoveAll(runtime_control) error = %v", err)
+				}
+				return root, ag
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: missioncontrol.ErrRuntimeControlRecordNotFound.Error(),
+		},
+		{
+			name: "missing gate",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+				if err := os.Remove(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1")); err != nil {
+					t.Fatalf("Remove(hot-update gate) error = %v", err)
+				}
+				return root, ag
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: missioncontrol.ErrHotUpdateGateRecordNotFound.Error(),
+		},
+		{
+			name: "invalid gate state",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				return newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStatePrepared, missioncontrol.ExecutionPlaneLiveRuntime)
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: "requires staged, reloading, or reload_apply_recovery_needed",
+		},
+		{
+			name: "non expired divergent evidence",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+				writeLoopHotUpdateExecutionReadyEvidence(t, root, time.Now().UTC(), "existing reason", "build")
+				return root, ag
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30 different reason",
+			wantError: "divergent duplicate",
+		},
+		{
+			name: "stale active evidence",
+			setup: func(t *testing.T) (string, *AgentLoop) {
+				root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+				writeLoopHotUpdateExecutionReadyEvidence(t, root, time.Now().UTC(), "operator asserted hot-update execution readiness", "other-step")
+				return root, ag
+			},
+			command:   "HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30",
+			wantError: "stale",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, ag := tt.setup(t)
+			beforePointer, _ := readLoopOptionalFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))
+			beforeLKG, _ := readLoopOptionalFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root))
+			resp, err := ag.ProcessDirect(tt.command, 2*time.Second)
+			if err == nil {
+				t.Fatal("ProcessDirect(HOT_UPDATE_EXECUTION_READY rejected) error = nil, want rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY rejected) response = %q, want empty", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY rejected) error = %q, want %q", err, tt.wantError)
+			}
+			if gotPointer, ok := readLoopOptionalFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root)); ok && string(gotPointer) != string(beforePointer) {
+				t.Fatal("active runtime-pack pointer mutated on rejected readiness command")
+			}
+			if gotLKG, ok := readLoopOptionalFile(t, missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root)); ok && string(gotLKG) != string(beforeLKG) {
+				t.Fatal("last-known-good pointer mutated on rejected readiness command")
+			}
+			audits := ag.taskState.AuditEvents()
+			if len(audits) == 0 {
+				t.Fatal("AuditEvents() count = 0, want rejection audit")
+			}
+			last := audits[len(audits)-1]
+			if last.ToolName != "hot_update_execution_ready" || last.Allowed {
+				t.Fatalf("last audit = %#v, want rejected hot_update_execution_ready", last)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateExecutionReadyCommandReplacesExpiredEvidence(t *testing.T) {
+	root, ag := newLoopHotUpdateExecutionReadyAgent(t, missioncontrol.HotUpdateGateStateStaged, missioncontrol.ExecutionPlaneLiveRuntime)
+	writeLoopHotUpdateExecutionReadyEvidence(t, root, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), "expired reason", "build")
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_EXECUTION_READY job-1 hot-update-1 30 refreshed", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY replace expired) error = %v", err)
+	}
+	evidenceID, err := missioncontrol.HotUpdateExecutionSafetyEvidenceID("hot-update-1", "job-1")
+	if err != nil {
+		t.Fatalf("HotUpdateExecutionSafetyEvidenceID() error = %v", err)
+	}
+	record, err := missioncontrol.LoadHotUpdateExecutionSafetyEvidenceRecord(root, evidenceID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateExecutionSafetyEvidenceRecord() error = %v", err)
+	}
+	want := fmt.Sprintf("Recorded hot-update execution readiness job=job-1 hot_update=hot-update-1 expires_at=%s.", record.ExpiresAt.UTC().Format(time.RFC3339))
+	if resp != want {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_EXECUTION_READY replace expired) response = %q, want %q", resp, want)
+	}
+	if record.Reason != "refreshed" || record.ExpiresAt.Sub(record.CreatedAt) != 30*time.Second {
+		t.Fatalf("replaced evidence = reason %q created_at %s expires_at %s, want refreshed with 30s ttl", record.Reason, record.CreatedAt, record.ExpiresAt)
 	}
 }
 
@@ -7033,6 +7334,119 @@ func testLiveRuntimeMissionJob(jobAllowedTools, stepAllowedTools []string) missi
 	return job
 }
 
+func newLoopHotUpdateExecutionReadyAgent(t *testing.T, gateState missioncontrol.HotUpdateGateState, executionPlane string) (string, *AgentLoop) {
+	t.Helper()
+
+	root, _ := writeLoopHotUpdateGateControlFixtures(t)
+	now := time.Now().UTC()
+	writeLoopHotUpdateLastKnownGoodPointer(t, root)
+	writeLoopActiveJobEvidence(t, root, now, "job-1", missioncontrol.JobStateRunning, executionPlane, missioncontrol.MissionFamilyBootstrapRevenue)
+	writeLoopHotUpdateExecutionReadyGate(t, root, now, gateState)
+
+	b := chat.NewHub(10)
+	prov := &finalResponseProvider{content: "unused"}
+	ag := NewAgentLoop(b, prov, prov.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionStoreRoot(root)
+	if err := ag.ActivateMissionStep(testLiveRuntimeMissionJob([]string{"read"}, []string{"read"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	return root, ag
+}
+
+func writeLoopHotUpdateExecutionReadyGate(t *testing.T, root string, now time.Time, state missioncontrol.HotUpdateGateState) {
+	t.Helper()
+
+	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
+		RecordVersion:            missioncontrol.StoreRecordVersion,
+		HotUpdateID:              "hot-update-1",
+		Objective:                "stage candidate pack",
+		CandidatePackID:          "pack-candidate",
+		PreviousActivePackID:     "pack-base",
+		RollbackTargetPackID:     "pack-base",
+		TargetSurfaces:           []string{"skills"},
+		SurfaceClasses:           []string{"class_1"},
+		ReloadMode:               missioncontrol.HotUpdateReloadModeSkillReload,
+		CompatibilityContractRef: "compat-v1",
+		PreparedAt:               now.Add(-time.Minute),
+		PhaseUpdatedAt:           now.Add(-30 * time.Second),
+		PhaseUpdatedBy:           "operator",
+		State:                    state,
+		Decision:                 missioncontrol.HotUpdateGateDecisionKeepStaged,
+	}); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+}
+
+func writeLoopHotUpdateExecutionReadyEvidence(t *testing.T, root string, createdAt time.Time, reason string, activeStepID string) {
+	t.Helper()
+
+	evidenceID, err := missioncontrol.HotUpdateExecutionSafetyEvidenceID("hot-update-1", "job-1")
+	if err != nil {
+		t.Fatalf("HotUpdateExecutionSafetyEvidenceID() error = %v", err)
+	}
+	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateExecutionSafetyEvidencePath(root, evidenceID), missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{
+		RecordVersion:   missioncontrol.StoreRecordVersion,
+		EvidenceID:      evidenceID,
+		HotUpdateID:     "hot-update-1",
+		JobID:           "job-1",
+		ActiveStepID:    activeStepID,
+		AttemptID:       "attempt-1",
+		WriterEpoch:     1,
+		ActivationSeq:   1,
+		DeployLockState: missioncontrol.HotUpdateDeployLockStateDeployUnlocked,
+		QuiesceState:    missioncontrol.HotUpdateQuiesceStateReady,
+		Reason:          reason,
+		CreatedAt:       createdAt,
+		CreatedBy:       "operator",
+		ExpiresAt:       createdAt.Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(evidence) error = %v", err)
+	}
+}
+
+func mustLoopReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	return bytes
+}
+
+func assertLoopNoTerminalHotUpdateArtifacts(t *testing.T, root string) {
+	t.Helper()
+
+	outcomes, err := missioncontrol.ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := missioncontrol.ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+	rollbacks, err := missioncontrol.ListRollbackRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackRecords() error = %v", err)
+	}
+	if len(rollbacks) != 0 {
+		t.Fatalf("ListRollbackRecords() len = %d, want 0", len(rollbacks))
+	}
+	rollbackApplies, err := missioncontrol.ListRollbackApplyRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(rollbackApplies) != 0 {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want 0", len(rollbackApplies))
+	}
+}
+
 func writeLoopActiveJobEvidence(t *testing.T, root string, now time.Time, jobID string, state missioncontrol.JobState, executionPlane string, missionFamily string) {
 	t.Helper()
 
@@ -7085,6 +7499,15 @@ func writeLoopActiveJobEvidence(t *testing.T, root string, now time.Time, jobID 
 		},
 	}); err != nil {
 		t.Fatalf("StoreRuntimeControlRecord() error = %v", err)
+	}
+	if err := missioncontrol.StoreBatchCommitRecord(root, missioncontrol.BatchCommitRecord{
+		RecordVersion: missioncontrol.StoreRecordVersion,
+		JobID:         jobID,
+		Seq:           1,
+		AttemptID:     "attempt-1",
+		CommittedAt:   now,
+	}); err != nil {
+		t.Fatalf("StoreBatchCommitRecord() error = %v", err)
 	}
 }
 

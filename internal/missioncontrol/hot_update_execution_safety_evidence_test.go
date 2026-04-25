@@ -204,6 +204,85 @@ func TestHotUpdateExecutionSafetyEvidenceStoresLoadsListsAndReplays(t *testing.T
 	}
 }
 
+func TestEnsureHotUpdateExecutionReadyEvidenceReplaysAndReplacesOnlyExpiredEvidence(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 25, 20, 15, 0, 0, time.UTC)
+	activeJob := ActiveJobRecord{
+		RecordVersion:  StoreRecordVersion,
+		WriterEpoch:    7,
+		JobID:          "job-live",
+		State:          JobStateRunning,
+		ActiveStepID:   "step-active",
+		AttemptID:      "attempt-1",
+		LeaseHolderID:  "lease-1",
+		LeaseExpiresAt: now.Add(10 * time.Minute),
+		UpdatedAt:      now,
+		ActivationSeq:  3,
+	}
+
+	first, changed, err := EnsureHotUpdateExecutionReadyEvidence(root, "hot-update-ready", activeJob, "operator", now, now.Add(30*time.Second), "ready")
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateExecutionReadyEvidence(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("EnsureHotUpdateExecutionReadyEvidence(first) changed = false, want true")
+	}
+	if first.DeployLockState != HotUpdateDeployLockStateDeployUnlocked {
+		t.Fatalf("DeployLockState = %q, want %q", first.DeployLockState, HotUpdateDeployLockStateDeployUnlocked)
+	}
+	if first.QuiesceState != HotUpdateQuiesceStateReady {
+		t.Fatalf("QuiesceState = %q, want %q", first.QuiesceState, HotUpdateQuiesceStateReady)
+	}
+	beforeBytes := mustReadFileBytes(t, StoreHotUpdateExecutionSafetyEvidencePath(root, first.EvidenceID))
+
+	replayed, changed, err := EnsureHotUpdateExecutionReadyEvidence(root, "hot-update-ready", activeJob, "operator", first.CreatedAt, first.ExpiresAt, "ready")
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateExecutionReadyEvidence(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("EnsureHotUpdateExecutionReadyEvidence(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(replayed, first) {
+		t.Fatalf("replayed = %#v, want %#v", replayed, first)
+	}
+	assertBytesEqual(t, "execution safety evidence replay", beforeBytes, mustReadFileBytes(t, StoreHotUpdateExecutionSafetyEvidencePath(root, first.EvidenceID)))
+
+	if _, _, err := EnsureHotUpdateExecutionReadyEvidence(root, "hot-update-ready", activeJob, "operator", now.Add(time.Second), now.Add(31*time.Second), "different"); err == nil {
+		t.Fatal("EnsureHotUpdateExecutionReadyEvidence(non-expired divergent) error = nil, want rejection")
+	}
+
+	expired := first
+	expired.ExpiresAt = now.Add(-time.Second)
+	if err := WriteStoreJSONAtomic(StoreHotUpdateExecutionSafetyEvidencePath(root, expired.EvidenceID), expired); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(expired) error = %v", err)
+	}
+	replaced, changed, err := EnsureHotUpdateExecutionReadyEvidence(root, "hot-update-ready", activeJob, "operator", now.Add(time.Minute), now.Add(time.Minute+45*time.Second), "refreshed")
+	if err != nil {
+		t.Fatalf("EnsureHotUpdateExecutionReadyEvidence(replace expired) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("EnsureHotUpdateExecutionReadyEvidence(replace expired) changed = false, want true")
+	}
+	if replaced.CreatedAt != now.Add(time.Minute) {
+		t.Fatalf("replaced.CreatedAt = %s, want %s", replaced.CreatedAt, now.Add(time.Minute))
+	}
+	if replaced.ExpiresAt != now.Add(time.Minute+45*time.Second) {
+		t.Fatalf("replaced.ExpiresAt = %s, want %s", replaced.ExpiresAt, now.Add(time.Minute+45*time.Second))
+	}
+
+	stale := replaced
+	stale.ExpiresAt = now.Add(time.Minute - time.Second)
+	stale.ActiveStepID = "step-stale"
+	if err := WriteStoreJSONAtomic(StoreHotUpdateExecutionSafetyEvidencePath(root, stale.EvidenceID), stale); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(stale) error = %v", err)
+	}
+	if _, _, err := EnsureHotUpdateExecutionReadyEvidence(root, "hot-update-ready", activeJob, "operator", now.Add(2*time.Minute), now.Add(2*time.Minute+30*time.Second), "stale"); err == nil {
+		t.Fatal("EnsureHotUpdateExecutionReadyEvidence(stale expired) error = nil, want rejection")
+	}
+}
+
 func TestAssessHotUpdateExecutionReadinessConsumesSafetyEvidence(t *testing.T) {
 	t.Parallel()
 

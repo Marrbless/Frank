@@ -2270,6 +2270,243 @@ func taskStateHotUpdateGateIDFromPromotionDecision(promotionDecisionID string) s
 	return "hot-update-" + strings.TrimSpace(promotionDecisionID)
 }
 
+func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if ttlSeconds <= 0 {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "HOT_UPDATE_EXECUTION_READY ttl_seconds must be positive",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if ttlSeconds > 300 {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "HOT_UPDATE_EXECUTION_READY ttl_seconds must be <= 300",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+		}
+	}
+
+	activeJob, err := missioncontrol.LoadActiveJobRecord(root)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if activeJob.JobID != strings.TrimSpace(jobID) {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "hot-update execution readiness active job does not match requested job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if !missioncontrol.HoldsGlobalActiveJobOccupancy(activeJob.State) {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "hot-update execution readiness requires an active occupied job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	runtime, err := missioncontrol.LoadCommittedJobRuntimeRecord(root, jobID)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	controlRecord, err := missioncontrol.LoadCommittedRuntimeControlRecord(root, jobID)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if runtime.ExecutionPlane != missioncontrol.ExecutionPlaneLiveRuntime {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "hot-update execution readiness requires active live_runtime job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if strings.TrimSpace(controlRecord.ExecutionPlane) != "" && controlRecord.ExecutionPlane != missioncontrol.ExecutionPlaneLiveRuntime {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "hot-update execution readiness requires live_runtime control context",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if runtime.ActiveStepID != "" && runtime.ActiveStepID != activeJob.ActiveStepID {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "hot-update execution readiness runtime active step does not match active job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if controlRecord.StepID != "" && controlRecord.StepID != activeJob.ActiveStepID {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "hot-update execution readiness control step does not match active job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if controlRecord.AttemptID != "" && activeJob.AttemptID != "" && controlRecord.AttemptID != activeJob.AttemptID {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "hot-update execution readiness control attempt does not match active job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if runtime.WriterEpoch != 0 && runtime.WriterEpoch != activeJob.WriterEpoch {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "hot-update execution readiness runtime writer epoch does not match active job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	if controlRecord.WriterEpoch != 0 && controlRecord.WriterEpoch != activeJob.WriterEpoch {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: "hot-update execution readiness control writer epoch does not match active job",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	gate, err := missioncontrol.LoadHotUpdateGateRecord(root, hotUpdateID)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+	switch gate.State {
+	case missioncontrol.HotUpdateGateStateStaged,
+		missioncontrol.HotUpdateGateStateReloading,
+		missioncontrol.HotUpdateGateStateReloadApplyRecoveryNeeded:
+	default:
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+			Message: fmt.Sprintf("hot-update execution readiness requires staged, reloading, or reload_apply_recovery_needed gate state, got %q", gate.State),
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "operator asserted hot-update execution readiness"
+	}
+	createdAt := now
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	if evidenceID, idErr := missioncontrol.HotUpdateExecutionSafetyEvidenceID(hotUpdateID, activeJob.JobID); idErr == nil {
+		if existing, loadErr := missioncontrol.LoadHotUpdateExecutionSafetyEvidenceRecord(root, evidenceID); loadErr == nil {
+			existingTTL := int(existing.ExpiresAt.Sub(existing.CreatedAt).Seconds())
+			if existingTTL == ttlSeconds &&
+				existing.Reason == reason &&
+				existing.DeployLockState == missioncontrol.HotUpdateDeployLockStateDeployUnlocked &&
+				existing.QuiesceState == missioncontrol.HotUpdateQuiesceStateReady &&
+				existing.ExpiresAt.After(now) {
+				createdAt = existing.CreatedAt
+				expiresAt = existing.ExpiresAt
+			}
+		} else if !errors.Is(loadErr, missioncontrol.ErrHotUpdateExecutionSafetyEvidenceRecordNotFound) {
+			s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", loadErr)
+			return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, loadErr
+		}
+	} else {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", idErr)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, idErr
+	}
+	record, changed, err := missioncontrol.EnsureHotUpdateExecutionReadyEvidence(root, hotUpdateID, activeJob, "operator", createdAt, expiresAt, reason)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", err)
+		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, "hot_update_execution_ready", nil)
+	return record, changed, nil
+}
+
 func (s *TaskState) AdvanceHotUpdateGatePhase(jobID string, hotUpdateID string, phase string) (bool, error) {
 	if s == nil {
 		return false, nil
