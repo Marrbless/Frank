@@ -311,6 +311,405 @@ func TestEnsureHotUpdateGateRecordFromCandidateRejectsMismatchedExistingCandidat
 	}
 }
 
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionCreatesPreparedGate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 25, 15, 0, 0, 0, time.UTC)
+	decision := storeCandidatePromotionDecisionGateFixture(t, root, now, true)
+
+	got, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, " operator ", now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got.HotUpdateID != "hot-update-candidate-promotion-decision-result-eligible" {
+		t.Fatalf("HotUpdateID = %q, want deterministic decision-derived id", got.HotUpdateID)
+	}
+	if got.CandidatePackID != decision.CandidatePackID {
+		t.Fatalf("CandidatePackID = %q, want %q", got.CandidatePackID, decision.CandidatePackID)
+	}
+	if got.PreviousActivePackID != decision.BaselinePackID {
+		t.Fatalf("PreviousActivePackID = %q, want %q", got.PreviousActivePackID, decision.BaselinePackID)
+	}
+	if got.RollbackTargetPackID != decision.BaselinePackID {
+		t.Fatalf("RollbackTargetPackID = %q, want %q", got.RollbackTargetPackID, decision.BaselinePackID)
+	}
+	if got.State != HotUpdateGateStatePrepared {
+		t.Fatalf("State = %q, want prepared", got.State)
+	}
+	if got.Decision != HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("Decision = %q, want keep_staged", got.Decision)
+	}
+	if got.PreparedAt != now.Add(10*time.Minute).UTC() {
+		t.Fatalf("PreparedAt = %v, want %v", got.PreparedAt, now.Add(10*time.Minute).UTC())
+	}
+	if got.PhaseUpdatedBy != "operator" {
+		t.Fatalf("PhaseUpdatedBy = %q, want operator", got.PhaseUpdatedBy)
+	}
+	if got.CompatibilityContractRef != "compat-v1" {
+		t.Fatalf("CompatibilityContractRef = %q, want compat-v1", got.CompatibilityContractRef)
+	}
+	if got.ReloadMode != HotUpdateReloadModeSoftReload {
+		t.Fatalf("ReloadMode = %q, want soft_reload", got.ReloadMode)
+	}
+}
+
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionRejectsMissingOrStaleActivePointer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing active pointer", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 25, 15, 30, 0, 0, time.UTC)
+		storeCandidatePromotionEligibilityFixtures(t, root, now, nil, nil)
+		decision, _, err := CreateCandidatePromotionDecisionFromEligibleResult(root, "result-eligible", "operator", now.Add(8*time.Minute))
+		if err != nil {
+			t.Fatalf("CreateCandidatePromotionDecisionFromEligibleResult() error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute))
+		if !errors.Is(err, ErrActiveRuntimePackPointerNotFound) {
+			t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision() error = %v, want %v", err, ErrActiveRuntimePackPointerNotFound)
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+	})
+
+	t.Run("stale active pointer", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 25, 15, 45, 0, 0, time.UTC)
+		decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+		mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(9*time.Minute), func(record *RuntimePackRecord) {
+			record.PackID = "pack-other-active"
+		}))
+		if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+			ActivePackID:        "pack-other-active",
+			LastKnownGoodPackID: "pack-base",
+			UpdatedAt:           now.Add(9 * time.Minute),
+			UpdatedBy:           "operator",
+			UpdateRecordRef:     "other-hot-update",
+			ReloadGeneration:    3,
+		}); err != nil {
+			t.Fatalf("StoreActiveRuntimePackPointer(stale) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCandidatePromotionDecision() error = nil, want stale active rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), `requires active runtime pack pointer active_pack_id "pack-base", found "pack-other-active"`) {
+			t.Fatalf("stale active error = %q, want active pointer context", err.Error())
+		}
+	})
+}
+
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionRejectsRollbackTargetProblems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		editPack func(*RuntimePackRecord)
+		want     string
+	}{
+		{
+			name: "missing rollback target field",
+			editPack: func(record *RuntimePackRecord) {
+				record.RollbackTargetPackID = ""
+			},
+			want: "rollback_target_pack_id is required",
+		},
+		{
+			name: "missing rollback target pack",
+			editPack: func(record *RuntimePackRecord) {
+				record.RollbackTargetPackID = "pack-rollback-missing"
+			},
+			want: "rollback_target_pack_id \"pack-rollback-missing\"",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 4, 25, 16, 0, 0, 0, time.UTC)
+			decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+			mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(9*time.Minute), func(record *RuntimePackRecord) {
+				record.PackID = decision.CandidatePackID
+				record.ParentPackID = decision.BaselinePackID
+				tt.editPack(record)
+			}))
+
+			_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute))
+			if err == nil {
+				t.Fatal("CreateHotUpdateGateFromCandidatePromotionDecision() error = nil, want rollback target rejection")
+			}
+			if changed {
+				t.Fatal("changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("rollback target error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionRejectsStaleDecisionAuthority(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		edit func(t *testing.T, root string, decision CandidatePromotionDecisionRecord)
+		want string
+	}{
+		{
+			name: "mismatched decision candidate pack",
+			edit: func(t *testing.T, root string, decision CandidatePromotionDecisionRecord) {
+				t.Helper()
+				mustStoreRuntimePack(t, root, validRuntimePackRecord(time.Date(2026, 4, 25, 16, 30, 0, 0, time.UTC), func(record *RuntimePackRecord) {
+					record.PackID = "pack-other-candidate"
+					record.ParentPackID = decision.BaselinePackID
+					record.RollbackTargetPackID = decision.BaselinePackID
+				}))
+				decision.CandidatePackID = "pack-other-candidate"
+				if err := WriteStoreJSONAtomic(StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID), decision); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(decision mismatch) error = %v", err)
+				}
+			},
+			want: "does not match candidate result candidate_pack_id",
+		},
+		{
+			name: "derived eligibility no longer eligible",
+			edit: func(t *testing.T, root string, decision CandidatePromotionDecisionRecord) {
+				t.Helper()
+				result, err := LoadCandidateResultRecord(root, decision.ResultID)
+				if err != nil {
+					t.Fatalf("LoadCandidateResultRecord() error = %v", err)
+				}
+				result.HoldoutScore = result.BaselineScore
+				if err := WriteStoreJSONAtomic(StoreCandidateResultPath(root, result.ResultID), result); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(result rejected) error = %v", err)
+				}
+			},
+			want: `promotion eligibility state "rejected"`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 4, 25, 16, 30, 0, 0, time.UTC)
+			decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+			tt.edit(t, root, decision)
+
+			_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute))
+			if err == nil {
+				t.Fatal("CreateHotUpdateGateFromCandidatePromotionDecision() error = nil, want stale authority rejection")
+			}
+			if changed {
+				t.Fatal("changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("stale authority error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionReplayAndDuplicates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("exact replay is byte stable", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 25, 17, 0, 0, 0, time.UTC)
+		decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+		createdAt := now.Add(10 * time.Minute)
+
+		first, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", createdAt)
+		if err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision(first) error = %v", err)
+		}
+		if !changed {
+			t.Fatal("first changed = false, want true")
+		}
+		firstBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, first.HotUpdateID))
+		if err != nil {
+			t.Fatalf("ReadFile(first) error = %v", err)
+		}
+
+		second, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, " operator ", createdAt)
+		if err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision(replay) error = %v", err)
+		}
+		if changed {
+			t.Fatal("replay changed = true, want false")
+		}
+		if !reflect.DeepEqual(second, first) {
+			t.Fatalf("replay = %#v, want %#v", second, first)
+		}
+		secondBytes, err := os.ReadFile(StoreHotUpdateGatePath(root, first.HotUpdateID))
+		if err != nil {
+			t.Fatalf("ReadFile(second) error = %v", err)
+		}
+		if string(firstBytes) != string(secondBytes) {
+			t.Fatalf("hot-update gate changed on exact replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+		}
+	})
+
+	t.Run("divergent duplicate fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 25, 17, 30, 0, 0, time.UTC)
+		decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+		if _, _, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute)); err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision(first) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(11*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCandidatePromotionDecision(divergent) error = nil, want duplicate rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), "already exists with divergent candidate promotion decision authority") {
+			t.Fatalf("divergent duplicate error = %q, want duplicate context", err.Error())
+		}
+	})
+
+	t.Run("existing deterministic gate with different candidate fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 25, 18, 0, 0, 0, time.UTC)
+		decision := storeCandidatePromotionDecisionGateFixture(t, root, now, false)
+		mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(9*time.Minute), func(record *RuntimePackRecord) {
+			record.PackID = "pack-other-candidate"
+			record.ParentPackID = decision.BaselinePackID
+			record.RollbackTargetPackID = decision.BaselinePackID
+		}))
+		if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(9*time.Minute), func(record *HotUpdateGateRecord) {
+			record.HotUpdateID = "hot-update-" + decision.PromotionDecisionID
+			record.CandidatePackID = "pack-other-candidate"
+			record.PreviousActivePackID = decision.BaselinePackID
+			record.RollbackTargetPackID = decision.BaselinePackID
+		})); err != nil {
+			t.Fatalf("StoreHotUpdateGateRecord(existing different candidate) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCandidatePromotionDecision() error = nil, want existing candidate mismatch rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), `candidate_pack_id "pack-other-candidate" does not match candidate promotion decision candidate_pack_id "pack-candidate"`) {
+			t.Fatalf("existing candidate mismatch error = %q, want candidate mismatch context", err.Error())
+		}
+	})
+}
+
+func TestCreateHotUpdateGateFromCandidatePromotionDecisionPreservesSourceAndRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 25, 18, 30, 0, 0, time.UTC)
+	decision := storeCandidatePromotionDecisionGateFixture(t, root, now, true)
+
+	snapshots := map[string][]byte{}
+	for _, path := range []string{
+		StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID),
+		StoreCandidateResultPath(root, decision.ResultID),
+		StoreImprovementRunPath(root, decision.RunID),
+		StoreImprovementCandidatePath(root, decision.CandidateID),
+		StoreEvalSuitePath(root, decision.EvalSuiteID),
+		StorePromotionPolicyPath(root, decision.PromotionPolicyID),
+		StoreRuntimePackPath(root, decision.BaselinePackID),
+		StoreRuntimePackPath(root, decision.CandidatePackID),
+		StoreActiveRuntimePackPointerPath(root),
+		StoreLastKnownGoodRuntimePackPointerPath(root),
+		StoreHotUpdateGatePath(root, "hot-update-1"),
+	} {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before helper error = %v", path, err)
+		}
+		snapshots[path] = bytes
+	}
+	beforePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+
+	if _, _, err := CreateHotUpdateGateFromCandidatePromotionDecision(root, decision.PromotionDecisionID, "operator", now.Add(10*time.Minute)); err != nil {
+		t.Fatalf("CreateHotUpdateGateFromCandidatePromotionDecision() error = %v", err)
+	}
+
+	for path, before := range snapshots {
+		after, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after helper error = %v", path, err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("source/runtime file %s changed after hot-update gate helper", path)
+		}
+	}
+	afterPointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if afterPointer.ReloadGeneration != beforePointer.ReloadGeneration {
+		t.Fatalf("ReloadGeneration = %d, want unchanged %d", afterPointer.ReloadGeneration, beforePointer.ReloadGeneration)
+	}
+
+	outcomes, err := ListHotUpdateOutcomeRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateOutcomeRecords() error = %v", err)
+	}
+	if len(outcomes) != 0 {
+		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 0", len(outcomes))
+	}
+	promotions, err := ListPromotionRecords(root)
+	if err != nil {
+		t.Fatalf("ListPromotionRecords() error = %v", err)
+	}
+	if len(promotions) != 0 {
+		t.Fatalf("ListPromotionRecords() len = %d, want 0", len(promotions))
+	}
+	rollbacks, err := ListRollbackRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackRecords() error = %v", err)
+	}
+	if len(rollbacks) != 0 {
+		t.Fatalf("ListRollbackRecords() len = %d, want 0", len(rollbacks))
+	}
+	applies, err := ListRollbackApplyRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(applies) != 0 {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want 0", len(applies))
+	}
+}
+
 func TestAdvanceHotUpdateGatePhaseValidProgressionAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 
@@ -1901,6 +2300,41 @@ func storeHotUpdateReloadInProgressFixture(t *testing.T, root string, now time.T
 	if err := StoreHotUpdateGateRecord(root, record); err != nil {
 		t.Fatalf("StoreHotUpdateGateRecord(reload_apply_in_progress) error = %v", err)
 	}
+}
+
+func storeCandidatePromotionDecisionGateFixture(t *testing.T, root string, now time.Time, withLastKnownGood bool) CandidatePromotionDecisionRecord {
+	t.Helper()
+
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, nil)
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(8 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if withLastKnownGood {
+		if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+			PackID:            "pack-base",
+			Basis:             "holdout_pass",
+			VerifiedAt:        now.Add(8 * time.Minute),
+			VerifiedBy:        "operator",
+			RollbackRecordRef: "bootstrap",
+		}); err != nil {
+			t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+		}
+	}
+	decision, changed, err := CreateCandidatePromotionDecisionFromEligibleResult(root, "result-eligible", "operator", now.Add(9*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateCandidatePromotionDecisionFromEligibleResult() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateCandidatePromotionDecisionFromEligibleResult() changed = false, want true")
+	}
+	return decision
 }
 
 func storeHotUpdateRecoveryNeededFixture(t *testing.T, root string, now time.Time, hotUpdateID string) {

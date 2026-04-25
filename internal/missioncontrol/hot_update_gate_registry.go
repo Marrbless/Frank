@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -315,6 +316,149 @@ func EnsureHotUpdateGateRecordFromCandidate(root string, hotUpdateID string, can
 		return HotUpdateGateRecord{}, false, err
 	}
 	stored, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
+func CreateHotUpdateGateFromCandidatePromotionDecision(root, promotionDecisionID, createdBy string, createdAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	decisionRef := NormalizeCandidatePromotionDecisionRef(CandidatePromotionDecisionRef{PromotionDecisionID: promotionDecisionID})
+	if err := ValidateCandidatePromotionDecisionRef(decisionRef); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate created_by is required")
+	}
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate created_at is required")
+	}
+
+	decision, err := LoadCandidatePromotionDecisionRecord(root, decisionRef.PromotionDecisionID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if decision.Decision != CandidatePromotionDecisionSelectedForPromotion {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store candidate promotion decision %q decision %q does not permit hot-update gate creation", decision.PromotionDecisionID, decision.Decision)
+	}
+	if decision.EligibilityState != CandidatePromotionEligibilityStateEligible {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store candidate promotion decision %q eligibility_state %q does not permit hot-update gate creation", decision.PromotionDecisionID, decision.EligibilityState)
+	}
+
+	result, err := LoadCandidateResultRecord(root, decision.ResultID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision result_id %q: %w", decision.ResultID, err)
+	}
+	if err := validateCandidatePromotionDecisionResultAuthority(decision, result); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	status, err := EvaluateCandidateResultPromotionEligibility(root, decision.ResultID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if status.State != CandidatePromotionEligibilityStateEligible {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store candidate result %q promotion eligibility state %q does not permit hot-update gate creation", decision.ResultID, status.State)
+	}
+	if err := validateCandidatePromotionDecisionEligibilityAuthority(decision, status); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	run, err := LoadImprovementRunRecord(root, decision.RunID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision run_id %q: %w", decision.RunID, err)
+	}
+	if err := validateCandidatePromotionDecisionRunAuthority(decision, run); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	candidate, err := LoadImprovementCandidateRecord(root, decision.CandidateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision candidate_id %q: %w", decision.CandidateID, err)
+	}
+	if err := validateCandidatePromotionDecisionCandidateAuthority(decision, candidate); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	evalSuite, err := LoadEvalSuiteRecord(root, decision.EvalSuiteID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision eval_suite_id %q: %w", decision.EvalSuiteID, err)
+	}
+	if err := validateCandidatePromotionDecisionEvalSuiteAuthority(decision, evalSuite); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if _, err := LoadPromotionPolicyRecord(root, decision.PromotionPolicyID); err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision promotion_policy_id %q: %w", decision.PromotionPolicyID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, decision.BaselinePackID); err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision baseline_pack_id %q: %w", decision.BaselinePackID, err)
+	}
+	candidatePack, err := LoadRuntimePackRecord(root, decision.CandidatePackID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate promotion decision candidate_pack_id %q: %w", decision.CandidatePackID, err)
+	}
+	if candidatePack.RollbackTargetPackID == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate_pack_id %q rollback_target_pack_id is required", candidatePack.PackID)
+	}
+	if _, err := LoadRuntimePackRecord(root, candidatePack.RollbackTargetPackID); err != nil {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate candidate_pack_id %q rollback_target_pack_id %q: %w", candidatePack.PackID, candidatePack.RollbackTargetPackID, err)
+	}
+
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if activePointer.ActivePackID != decision.BaselinePackID {
+		return HotUpdateGateRecord{}, false, fmt.Errorf(
+			"mission store hot-update gate candidate promotion decision %q requires active runtime pack pointer active_pack_id %q, found %q",
+			decision.PromotionDecisionID,
+			decision.BaselinePackID,
+			activePointer.ActivePackID,
+		)
+	}
+	if _, err := LoadLastKnownGoodRuntimePackPointer(root); err != nil && !errors.Is(err, ErrLastKnownGoodRuntimePackPointerNotFound) {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	hotUpdateID := hotUpdateIDFromCandidatePromotionDecision(decision.PromotionDecisionID)
+	record, err := buildHotUpdateGateRecordFromCandidate(root, hotUpdateID, decision.CandidatePackID, createdBy, createdAt)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	record = NormalizeHotUpdateGateRecord(record)
+	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	existing, err := LoadHotUpdateGateRecord(root, record.HotUpdateID)
+	if err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return existing, false, nil
+		}
+		if existing.CandidatePackID != record.CandidatePackID {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q candidate_pack_id %q does not match candidate promotion decision candidate_pack_id %q",
+				record.HotUpdateID,
+				existing.CandidatePackID,
+				record.CandidatePackID,
+			)
+		}
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q already exists with divergent candidate promotion decision authority", record.HotUpdateID)
+	}
+	if !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateGateRecord(root, record.HotUpdateID)
 	if err != nil {
 		return HotUpdateGateRecord{}, false, err
 	}
@@ -1036,6 +1180,96 @@ func validateHotUpdateGateReloadApplyLinkage(root string, record HotUpdateGateRe
 			record.PreviousActivePackID,
 			activePointer.PreviousActivePackID,
 		)
+	}
+	return nil
+}
+
+func hotUpdateIDFromCandidatePromotionDecision(promotionDecisionID string) string {
+	return "hot-update-" + strings.TrimSpace(promotionDecisionID)
+}
+
+func validateCandidatePromotionDecisionResultAuthority(decision CandidatePromotionDecisionRecord, result CandidateResultRecord) error {
+	if result.ResultID != decision.ResultID {
+		return fmt.Errorf("mission store candidate promotion decision result_id %q does not match candidate result result_id %q", decision.ResultID, result.ResultID)
+	}
+	if result.RunID != decision.RunID {
+		return fmt.Errorf("mission store candidate promotion decision run_id %q does not match candidate result run_id %q", decision.RunID, result.RunID)
+	}
+	if result.CandidateID != decision.CandidateID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_id %q does not match candidate result candidate_id %q", decision.CandidateID, result.CandidateID)
+	}
+	if result.EvalSuiteID != decision.EvalSuiteID {
+		return fmt.Errorf("mission store candidate promotion decision eval_suite_id %q does not match candidate result eval_suite_id %q", decision.EvalSuiteID, result.EvalSuiteID)
+	}
+	if result.PromotionPolicyID != decision.PromotionPolicyID {
+		return fmt.Errorf("mission store candidate promotion decision promotion_policy_id %q does not match candidate result promotion_policy_id %q", decision.PromotionPolicyID, result.PromotionPolicyID)
+	}
+	if result.BaselinePackID != decision.BaselinePackID {
+		return fmt.Errorf("mission store candidate promotion decision baseline_pack_id %q does not match candidate result baseline_pack_id %q", decision.BaselinePackID, result.BaselinePackID)
+	}
+	if result.CandidatePackID != decision.CandidatePackID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_pack_id %q does not match candidate result candidate_pack_id %q", decision.CandidatePackID, result.CandidatePackID)
+	}
+	return nil
+}
+
+func validateCandidatePromotionDecisionEligibilityAuthority(decision CandidatePromotionDecisionRecord, status CandidatePromotionEligibilityStatus) error {
+	if status.ResultID != decision.ResultID ||
+		status.RunID != decision.RunID ||
+		status.CandidateID != decision.CandidateID ||
+		status.EvalSuiteID != decision.EvalSuiteID ||
+		status.PromotionPolicyID != decision.PromotionPolicyID ||
+		status.BaselinePackID != decision.BaselinePackID ||
+		status.CandidatePackID != decision.CandidatePackID {
+		return fmt.Errorf("mission store candidate promotion decision %q does not match derived promotion eligibility status", decision.PromotionDecisionID)
+	}
+	return nil
+}
+
+func validateCandidatePromotionDecisionRunAuthority(decision CandidatePromotionDecisionRecord, run ImprovementRunRecord) error {
+	if run.RunID != decision.RunID {
+		return fmt.Errorf("mission store candidate promotion decision run_id %q does not match improvement run run_id %q", decision.RunID, run.RunID)
+	}
+	if run.CandidateID != decision.CandidateID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_id %q does not match improvement run candidate_id %q", decision.CandidateID, run.CandidateID)
+	}
+	if run.EvalSuiteID != decision.EvalSuiteID {
+		return fmt.Errorf("mission store candidate promotion decision eval_suite_id %q does not match improvement run eval_suite_id %q", decision.EvalSuiteID, run.EvalSuiteID)
+	}
+	if run.BaselinePackID != decision.BaselinePackID {
+		return fmt.Errorf("mission store candidate promotion decision baseline_pack_id %q does not match improvement run baseline_pack_id %q", decision.BaselinePackID, run.BaselinePackID)
+	}
+	if run.CandidatePackID != decision.CandidatePackID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_pack_id %q does not match improvement run candidate_pack_id %q", decision.CandidatePackID, run.CandidatePackID)
+	}
+	return nil
+}
+
+func validateCandidatePromotionDecisionCandidateAuthority(decision CandidatePromotionDecisionRecord, candidate ImprovementCandidateRecord) error {
+	if candidate.CandidateID != decision.CandidateID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_id %q does not match improvement candidate candidate_id %q", decision.CandidateID, candidate.CandidateID)
+	}
+	if candidate.BaselinePackID != decision.BaselinePackID {
+		return fmt.Errorf("mission store candidate promotion decision baseline_pack_id %q does not match improvement candidate baseline_pack_id %q", decision.BaselinePackID, candidate.BaselinePackID)
+	}
+	if candidate.CandidatePackID != decision.CandidatePackID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_pack_id %q does not match improvement candidate candidate_pack_id %q", decision.CandidatePackID, candidate.CandidatePackID)
+	}
+	return nil
+}
+
+func validateCandidatePromotionDecisionEvalSuiteAuthority(decision CandidatePromotionDecisionRecord, evalSuite EvalSuiteRecord) error {
+	if evalSuite.EvalSuiteID != decision.EvalSuiteID {
+		return fmt.Errorf("mission store candidate promotion decision eval_suite_id %q does not match eval-suite eval_suite_id %q", decision.EvalSuiteID, evalSuite.EvalSuiteID)
+	}
+	if evalSuite.CandidateID != "" && evalSuite.CandidateID != decision.CandidateID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_id %q does not match eval-suite candidate_id %q", decision.CandidateID, evalSuite.CandidateID)
+	}
+	if evalSuite.BaselinePackID != "" && evalSuite.BaselinePackID != decision.BaselinePackID {
+		return fmt.Errorf("mission store candidate promotion decision baseline_pack_id %q does not match eval-suite baseline_pack_id %q", decision.BaselinePackID, evalSuite.BaselinePackID)
+	}
+	if evalSuite.CandidatePackID != "" && evalSuite.CandidatePackID != decision.CandidatePackID {
+		return fmt.Errorf("mission store candidate promotion decision candidate_pack_id %q does not match eval-suite candidate_pack_id %q", decision.CandidatePackID, evalSuite.CandidatePackID)
 	}
 	return nil
 }
