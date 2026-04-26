@@ -16,58 +16,59 @@ const OperatorStatusApprovalHistoryLimit = 5
 const OperatorStatusArtifactLimit = 5
 
 type OperatorStatusSummary struct {
-	JobID                              string                                                      `json:"job_id"`
-	ExecutionPlane                     string                                                      `json:"execution_plane,omitempty"`
-	ExecutionHost                      string                                                      `json:"execution_host,omitempty"`
-	MissionFamily                      string                                                      `json:"mission_family,omitempty"`
-	PromotionPolicyID                  string                                                      `json:"promotion_policy_id,omitempty"`
-	BaselineRef                        string                                                      `json:"baseline_ref,omitempty"`
-	TrainRef                           string                                                      `json:"train_ref,omitempty"`
-	HoldoutRef                         string                                                      `json:"holdout_ref,omitempty"`
-	TargetSurfaces                     []JobSurfaceRef                                             `json:"target_surfaces,omitempty"`
-	MutableSurfaces                    []JobSurfaceRef                                             `json:"mutable_surfaces,omitempty"`
-	ImmutableSurfaces                  []JobSurfaceRef                                             `json:"immutable_surfaces,omitempty"`
-	TopologyModeEnabled                bool                                                        `json:"topology_mode_enabled,omitempty"`
-	State                              JobState                                                    `json:"state"`
-	ActiveStepID                       string                                                      `json:"active_step_id,omitempty"`
-	AllowedTools                       []string                                                    `json:"allowed_tools,omitempty"`
-	RuntimePackIdentity                *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
-	ImprovementCandidateIdentity       *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
-	EvalSuiteIdentity                  *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
-	PromotionPolicyIdentity            *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
-	ImprovementRunIdentity             *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
-	CandidateResultIdentity            *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
-	HotUpdateCanaryRequirementIdentity *OperatorHotUpdateCanaryRequirementIdentityStatus           `json:"hot_update_canary_requirement_identity,omitempty"`
-	HotUpdateCanaryEvidenceIdentity    *OperatorHotUpdateCanaryEvidenceIdentityStatus              `json:"hot_update_canary_evidence_identity,omitempty"`
-	CandidatePromotionDecisionIdentity *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
-	HotUpdateGateIdentity              *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
-	HotUpdateOutcomeIdentity           *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
-	PromotionIdentity                  *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
-	RollbackIdentity                   *OperatorRollbackIdentityStatus                             `json:"rollback_identity,omitempty"`
-	RollbackApplyIdentity              *OperatorRollbackApplyIdentityStatus                        `json:"rollback_apply_identity,omitempty"`
-	DeferredSchedulerTriggers          []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
-	CampaignPreflight                  *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
-	TreasuryPreflight                  *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
-	FrankZohoMailboxBootstrapPreflight *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
-	BudgetBlocker                      *OperatorBudgetBlockerStatus                                `json:"budget_blocker,omitempty"`
-	WaitingReason                      string                                                      `json:"waiting_reason,omitempty"`
-	WaitingAt                          *string                                                     `json:"waiting_at,omitempty"`
-	PausedReason                       string                                                      `json:"paused_reason,omitempty"`
-	PausedAt                           *string                                                     `json:"paused_at,omitempty"`
-	AbortedReason                      string                                                      `json:"aborted_reason,omitempty"`
-	FailedStepID                       string                                                      `json:"failed_step_id,omitempty"`
-	FailureReason                      string                                                      `json:"failure_reason,omitempty"`
-	FailedAt                           *string                                                     `json:"failed_at,omitempty"`
-	ApprovalRequest                    *OperatorApprovalRequestStatus                              `json:"approval_request,omitempty"`
-	ApprovalHistory                    []OperatorApprovalHistoryEntry                              `json:"approval_history,omitempty"`
-	RecentAudit                        []OperatorRecentAuditStatus                                 `json:"recent_audit,omitempty"`
-	Artifacts                          []OperatorArtifactStatus                                    `json:"artifacts,omitempty"`
-	CampaignZohoEmailOutbounds         []OperatorCampaignZohoEmailOutboundActionStatus             `json:"campaign_zoho_email_outbounds,omitempty"`
-	CampaignZohoEmailReplyWork         []OperatorCampaignZohoEmailReplyWorkItemStatus              `json:"campaign_zoho_email_reply_work,omitempty"`
-	FrankZohoInboundReplies            []OperatorFrankZohoInboundReplyStatus                       `json:"frank_zoho_inbound_replies,omitempty"`
-	CampaignZohoEmailSendGate          *CampaignZohoEmailSendGateDecision                          `json:"campaign_zoho_email_send_gate,omitempty"`
-	FrankZohoSendProof                 []OperatorFrankZohoSendProofStatus                          `json:"frank_zoho_send_proof,omitempty"`
-	Truncation                         *OperatorStatusTruncation                                   `json:"truncation,omitempty"`
+	JobID                               string                                                      `json:"job_id"`
+	ExecutionPlane                      string                                                      `json:"execution_plane,omitempty"`
+	ExecutionHost                       string                                                      `json:"execution_host,omitempty"`
+	MissionFamily                       string                                                      `json:"mission_family,omitempty"`
+	PromotionPolicyID                   string                                                      `json:"promotion_policy_id,omitempty"`
+	BaselineRef                         string                                                      `json:"baseline_ref,omitempty"`
+	TrainRef                            string                                                      `json:"train_ref,omitempty"`
+	HoldoutRef                          string                                                      `json:"holdout_ref,omitempty"`
+	TargetSurfaces                      []JobSurfaceRef                                             `json:"target_surfaces,omitempty"`
+	MutableSurfaces                     []JobSurfaceRef                                             `json:"mutable_surfaces,omitempty"`
+	ImmutableSurfaces                   []JobSurfaceRef                                             `json:"immutable_surfaces,omitempty"`
+	TopologyModeEnabled                 bool                                                        `json:"topology_mode_enabled,omitempty"`
+	State                               JobState                                                    `json:"state"`
+	ActiveStepID                        string                                                      `json:"active_step_id,omitempty"`
+	AllowedTools                        []string                                                    `json:"allowed_tools,omitempty"`
+	RuntimePackIdentity                 *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
+	ImprovementCandidateIdentity        *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
+	EvalSuiteIdentity                   *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
+	PromotionPolicyIdentity             *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
+	ImprovementRunIdentity              *OperatorImprovementRunIdentityStatus                       `json:"improvement_run_identity,omitempty"`
+	CandidateResultIdentity             *OperatorCandidateResultIdentityStatus                      `json:"candidate_result_identity,omitempty"`
+	HotUpdateCanaryRequirementIdentity  *OperatorHotUpdateCanaryRequirementIdentityStatus           `json:"hot_update_canary_requirement_identity,omitempty"`
+	HotUpdateCanaryEvidenceIdentity     *OperatorHotUpdateCanaryEvidenceIdentityStatus              `json:"hot_update_canary_evidence_identity,omitempty"`
+	HotUpdateCanarySatisfactionIdentity *OperatorHotUpdateCanarySatisfactionIdentityStatus          `json:"hot_update_canary_satisfaction_identity,omitempty"`
+	CandidatePromotionDecisionIdentity  *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
+	HotUpdateGateIdentity               *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
+	HotUpdateOutcomeIdentity            *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
+	PromotionIdentity                   *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
+	RollbackIdentity                    *OperatorRollbackIdentityStatus                             `json:"rollback_identity,omitempty"`
+	RollbackApplyIdentity               *OperatorRollbackApplyIdentityStatus                        `json:"rollback_apply_identity,omitempty"`
+	DeferredSchedulerTriggers           []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
+	CampaignPreflight                   *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
+	TreasuryPreflight                   *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
+	FrankZohoMailboxBootstrapPreflight  *ResolvedExecutionContextFrankZohoMailboxBootstrapPreflight `json:"frank_zoho_mailbox_bootstrap_preflight,omitempty"`
+	BudgetBlocker                       *OperatorBudgetBlockerStatus                                `json:"budget_blocker,omitempty"`
+	WaitingReason                       string                                                      `json:"waiting_reason,omitempty"`
+	WaitingAt                           *string                                                     `json:"waiting_at,omitempty"`
+	PausedReason                        string                                                      `json:"paused_reason,omitempty"`
+	PausedAt                            *string                                                     `json:"paused_at,omitempty"`
+	AbortedReason                       string                                                      `json:"aborted_reason,omitempty"`
+	FailedStepID                        string                                                      `json:"failed_step_id,omitempty"`
+	FailureReason                       string                                                      `json:"failure_reason,omitempty"`
+	FailedAt                            *string                                                     `json:"failed_at,omitempty"`
+	ApprovalRequest                     *OperatorApprovalRequestStatus                              `json:"approval_request,omitempty"`
+	ApprovalHistory                     []OperatorApprovalHistoryEntry                              `json:"approval_history,omitempty"`
+	RecentAudit                         []OperatorRecentAuditStatus                                 `json:"recent_audit,omitempty"`
+	Artifacts                           []OperatorArtifactStatus                                    `json:"artifacts,omitempty"`
+	CampaignZohoEmailOutbounds          []OperatorCampaignZohoEmailOutboundActionStatus             `json:"campaign_zoho_email_outbounds,omitempty"`
+	CampaignZohoEmailReplyWork          []OperatorCampaignZohoEmailReplyWorkItemStatus              `json:"campaign_zoho_email_reply_work,omitempty"`
+	FrankZohoInboundReplies             []OperatorFrankZohoInboundReplyStatus                       `json:"frank_zoho_inbound_replies,omitempty"`
+	CampaignZohoEmailSendGate           *CampaignZohoEmailSendGateDecision                          `json:"campaign_zoho_email_send_gate,omitempty"`
+	FrankZohoSendProof                  []OperatorFrankZohoSendProofStatus                          `json:"frank_zoho_send_proof,omitempty"`
+	Truncation                          *OperatorStatusTruncation                                   `json:"truncation,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
@@ -192,6 +193,11 @@ type OperatorHotUpdateCanaryRequirementIdentityStatus struct {
 type OperatorHotUpdateCanaryEvidenceIdentityStatus struct {
 	State    string                                  `json:"state"`
 	Evidence []OperatorHotUpdateCanaryEvidenceStatus `json:"evidence,omitempty"`
+}
+
+type OperatorHotUpdateCanarySatisfactionIdentityStatus struct {
+	State       string                                      `json:"state"`
+	Assessments []OperatorHotUpdateCanarySatisfactionStatus `json:"assessments,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeIdentityStatus struct {
@@ -384,6 +390,27 @@ type OperatorHotUpdateCanaryEvidenceStatus struct {
 	CreatedAt           *string `json:"created_at,omitempty"`
 	CreatedBy           string  `json:"created_by,omitempty"`
 	Error               string  `json:"error,omitempty"`
+}
+
+type OperatorHotUpdateCanarySatisfactionStatus struct {
+	State                    string  `json:"state"`
+	CanaryRequirementID      string  `json:"canary_requirement_id,omitempty"`
+	SelectedCanaryEvidenceID string  `json:"selected_canary_evidence_id,omitempty"`
+	ResultID                 string  `json:"result_id,omitempty"`
+	RunID                    string  `json:"run_id,omitempty"`
+	CandidateID              string  `json:"candidate_id,omitempty"`
+	EvalSuiteID              string  `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID        string  `json:"promotion_policy_id,omitempty"`
+	BaselinePackID           string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID          string  `json:"candidate_pack_id,omitempty"`
+	EligibilityState         string  `json:"eligibility_state,omitempty"`
+	OwnerApprovalRequired    bool    `json:"owner_approval_required"`
+	SatisfactionState        string  `json:"satisfaction_state,omitempty"`
+	EvidenceState            string  `json:"evidence_state,omitempty"`
+	Passed                   bool    `json:"passed"`
+	ObservedAt               *string `json:"observed_at,omitempty"`
+	Reason                   string  `json:"reason,omitempty"`
+	Error                    string  `json:"error,omitempty"`
 }
 
 type OperatorActiveRuntimePackStatus struct {
@@ -680,6 +707,16 @@ func WithHotUpdateCanaryEvidenceIdentity(summary OperatorStatusSummary, root str
 	return summary
 }
 
+func WithHotUpdateCanarySatisfactionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateCanarySatisfactionIdentityStatus(root)
+	summary.HotUpdateCanarySatisfactionIdentity = &status
+	return summary
+}
+
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -878,6 +915,24 @@ func LoadOperatorHotUpdateCanaryEvidenceIdentityStatus(root string) OperatorHotU
 	return OperatorHotUpdateCanaryEvidenceIdentityStatus{
 		State:    state,
 		Evidence: evidence,
+	}
+}
+
+func LoadOperatorHotUpdateCanarySatisfactionIdentityStatus(root string) OperatorHotUpdateCanarySatisfactionIdentityStatus {
+	assessments, found, invalid, err := loadOperatorHotUpdateCanarySatisfactionStatuses(root)
+	if !found {
+		return OperatorHotUpdateCanarySatisfactionIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateCanarySatisfactionIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateCanarySatisfactionIdentityStatus{
+		State:       state,
+		Assessments: assessments,
 	}
 }
 
@@ -1990,6 +2045,144 @@ func operatorHotUpdateCanaryEvidenceStatusFromRecord(record HotUpdateCanaryEvide
 		ObservedAt:          formatOperatorStatusTime(record.ObservedAt),
 		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorHotUpdateCanarySatisfactionStatuses(root string) ([]OperatorHotUpdateCanarySatisfactionStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateCanaryRequirementsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	statuses := make([]OperatorHotUpdateCanarySatisfactionStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		requirementStatus, extraInvalid, err := loadOperatorHotUpdateCanarySatisfactionStatus(root, filepath.Join(StoreHotUpdateCanaryRequirementsDir(root), name))
+		if err != nil {
+			return nil, true, false, err
+		}
+		if requirementStatus.State == "invalid" {
+			invalid = true
+		}
+		statuses = append(statuses, requirementStatus)
+		for _, status := range extraInvalid {
+			invalid = true
+			statuses = append(statuses, status)
+		}
+	}
+	sort.SliceStable(statuses, func(i, j int) bool {
+		if statuses[i].CanaryRequirementID != statuses[j].CanaryRequirementID {
+			return statuses[i].CanaryRequirementID < statuses[j].CanaryRequirementID
+		}
+		return statuses[i].SelectedCanaryEvidenceID < statuses[j].SelectedCanaryEvidenceID
+	})
+	return statuses, true, invalid, nil
+}
+
+func loadOperatorHotUpdateCanarySatisfactionStatus(root, path string) (OperatorHotUpdateCanarySatisfactionStatus, []OperatorHotUpdateCanarySatisfactionStatus, error) {
+	status := OperatorHotUpdateCanarySatisfactionStatus{
+		State:               "invalid",
+		CanaryRequirementID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+		SatisfactionState:   string(HotUpdateCanarySatisfactionStateInvalid),
+	}
+
+	var requirement HotUpdateCanaryRequirementRecord
+	if err := LoadStoreJSON(path, &requirement); err != nil {
+		status.Error = err.Error()
+		return status, nil, nil
+	}
+	requirement = NormalizeHotUpdateCanaryRequirementRecord(requirement)
+	if requirement.CanaryRequirementID != "" {
+		status.CanaryRequirementID = requirement.CanaryRequirementID
+	}
+	status = operatorHotUpdateCanarySatisfactionStatusFromRequirement(requirement)
+	if err := ValidateHotUpdateCanaryRequirementRecord(requirement); err != nil {
+		status.State = "invalid"
+		status.SatisfactionState = string(HotUpdateCanarySatisfactionStateInvalid)
+		status.Error = err.Error()
+		return status, nil, nil
+	}
+	if err := validateHotUpdateCanaryRequirementLinkage(root, requirement); err != nil {
+		status.State = "invalid"
+		status.SatisfactionState = string(HotUpdateCanarySatisfactionStateInvalid)
+		status.Error = err.Error()
+		return status, nil, nil
+	}
+
+	assessment, err := assessHotUpdateCanarySatisfactionForRequirement(root, requirement)
+	if err != nil {
+		return OperatorHotUpdateCanarySatisfactionStatus{}, nil, err
+	}
+	status = operatorHotUpdateCanarySatisfactionStatusFromAssessment(assessment)
+
+	valid, invalidEvidence, err := loadHotUpdateCanarySatisfactionEvidenceCandidates(root, requirement)
+	if err != nil {
+		return OperatorHotUpdateCanarySatisfactionStatus{}, nil, err
+	}
+	if len(valid) == 0 {
+		return status, nil, nil
+	}
+	invalidStatuses := make([]OperatorHotUpdateCanarySatisfactionStatus, 0, len(invalidEvidence))
+	for _, candidate := range invalidEvidence {
+		invalidStatuses = append(invalidStatuses, operatorHotUpdateCanarySatisfactionStatusFromAssessment(hotUpdateCanaryInvalidSatisfactionAssessmentFromEvidence(requirement, candidate)))
+	}
+	return status, invalidStatuses, nil
+}
+
+func operatorHotUpdateCanarySatisfactionStatusFromRequirement(record HotUpdateCanaryRequirementRecord) OperatorHotUpdateCanarySatisfactionStatus {
+	return OperatorHotUpdateCanarySatisfactionStatus{
+		CanaryRequirementID:   record.CanaryRequirementID,
+		ResultID:              record.ResultID,
+		RunID:                 record.RunID,
+		CandidateID:           record.CandidateID,
+		EvalSuiteID:           record.EvalSuiteID,
+		PromotionPolicyID:     record.PromotionPolicyID,
+		BaselinePackID:        record.BaselinePackID,
+		CandidatePackID:       record.CandidatePackID,
+		EligibilityState:      record.EligibilityState,
+		OwnerApprovalRequired: record.OwnerApprovalRequired,
+	}
+}
+
+func operatorHotUpdateCanarySatisfactionStatusFromAssessment(assessment HotUpdateCanarySatisfactionAssessment) OperatorHotUpdateCanarySatisfactionStatus {
+	return OperatorHotUpdateCanarySatisfactionStatus{
+		State:                    assessment.State,
+		CanaryRequirementID:      assessment.CanaryRequirementID,
+		SelectedCanaryEvidenceID: assessment.SelectedCanaryEvidenceID,
+		ResultID:                 assessment.ResultID,
+		RunID:                    assessment.RunID,
+		CandidateID:              assessment.CandidateID,
+		EvalSuiteID:              assessment.EvalSuiteID,
+		PromotionPolicyID:        assessment.PromotionPolicyID,
+		BaselinePackID:           assessment.BaselinePackID,
+		CandidatePackID:          assessment.CandidatePackID,
+		EligibilityState:         assessment.EligibilityState,
+		OwnerApprovalRequired:    assessment.OwnerApprovalRequired,
+		SatisfactionState:        string(assessment.SatisfactionState),
+		EvidenceState:            string(assessment.EvidenceState),
+		Passed:                   assessment.Passed,
+		ObservedAt:               formatOperatorStatusTime(assessment.ObservedAt),
+		Reason:                   assessment.Reason,
+		Error:                    assessment.Error,
 	}
 }
 
