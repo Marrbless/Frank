@@ -2509,6 +2509,137 @@ func taskStateDefaultHotUpdateCanaryEvidenceReason(state missioncontrol.HotUpdat
 	return "operator recorded hot-update canary evidence " + string(state)
 }
 
+func (s *TaskState) CreateHotUpdateCanarySatisfactionAuthorityFromRequirement(jobID string, canaryRequirementID string) (missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	const action = "hot_update_canary_satisfaction_authority_create"
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+		}
+	}
+
+	assessment, err := missioncontrol.AssessHotUpdateCanarySatisfaction(root, canaryRequirementID)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+	if assessment.State != "configured" {
+		err := fmt.Errorf("mission store hot-update canary satisfaction authority requires configured canary satisfaction assessment, found state %q: %s", assessment.State, assessment.Error)
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+	if !taskStateCanarySatisfactionAuthorityAcceptsAssessmentState(assessment.SatisfactionState) {
+		err := fmt.Errorf("mission store hot-update canary satisfaction authority requires satisfaction_state %q or %q, found %q", missioncontrol.HotUpdateCanarySatisfactionStateSatisfied, missioncontrol.HotUpdateCanarySatisfactionStateWaitingOwnerApproval, assessment.SatisfactionState)
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+	if strings.TrimSpace(assessment.SelectedCanaryEvidenceID) == "" {
+		err := fmt.Errorf("mission store hot-update canary satisfaction authority selected_canary_evidence_id is required")
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+
+	authorityID := missioncontrol.HotUpdateCanarySatisfactionAuthorityIDFromRequirementEvidence(assessment.CanaryRequirementID, assessment.SelectedCanaryEvidenceID)
+	createdAt := now
+	if existing, err := missioncontrol.LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityID); err == nil {
+		createdAt = existing.CreatedAt
+	} else if !errors.Is(err, missioncontrol.ErrHotUpdateCanarySatisfactionAuthorityRecordNotFound) {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+
+	record, changed, err := missioncontrol.CreateHotUpdateCanarySatisfactionAuthorityFromRequirement(root, canaryRequirementID, "operator", createdAt)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, action, nil)
+	return record, changed, nil
+}
+
+func taskStateCanarySatisfactionAuthorityAcceptsAssessmentState(state missioncontrol.HotUpdateCanarySatisfactionState) bool {
+	switch state {
+	case missioncontrol.HotUpdateCanarySatisfactionStateSatisfied,
+		missioncontrol.HotUpdateCanarySatisfactionStateWaitingOwnerApproval:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
 	if s == nil {
 		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil

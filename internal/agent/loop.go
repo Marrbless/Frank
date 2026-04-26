@@ -30,6 +30,7 @@ var rollbackRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_record)\s+(\
 var hotUpdateGateRecordCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateCanaryRequirementCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_canary_requirement_create)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateCanaryEvidenceCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_canary_evidence_create)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*?))?\s*$`)
+var hotUpdateCanarySatisfactionAuthorityCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_canary_satisfaction_authority_create)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateFromDecisionCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_from_decision)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGatePhaseCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_phase)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateExecuteCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_execute)\s+(\S+)\s+(\S+)\s*$`)
@@ -1856,6 +1857,23 @@ func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error)
 		return true, "", fmt.Errorf("HOT_UPDATE_CANARY_EVIDENCE_CREATE requires job_id, canary_requirement_id, evidence_state, observed_at, and optional reason")
 	}
 
+	hotUpdateCanarySatisfactionAuthorityCreateMatches := hotUpdateCanarySatisfactionAuthorityCreateCommandRE.FindStringSubmatch(trimmed)
+	if len(hotUpdateCanarySatisfactionAuthorityCreateMatches) == 4 {
+		jobID := hotUpdateCanarySatisfactionAuthorityCreateMatches[2]
+		canaryRequirementID := hotUpdateCanarySatisfactionAuthorityCreateMatches[3]
+		record, changed, err := a.taskState.CreateHotUpdateCanarySatisfactionAuthorityFromRequirement(jobID, canaryRequirementID)
+		if err != nil {
+			return true, "", err
+		}
+		if changed {
+			return true, fmt.Sprintf("Created hot-update canary satisfaction authority job=%s canary_requirement=%s authority=%s authority_state=%s owner_approval_required=%t.", jobID, canaryRequirementID, record.CanarySatisfactionAuthorityID, record.State, record.OwnerApprovalRequired), nil
+		}
+		return true, fmt.Sprintf("Selected hot-update canary satisfaction authority job=%s canary_requirement=%s authority=%s authority_state=%s owner_approval_required=%t.", jobID, canaryRequirementID, record.CanarySatisfactionAuthorityID, record.State, record.OwnerApprovalRequired), nil
+	}
+	if isMalformedHotUpdateCanarySatisfactionAuthorityCreateCommand(trimmed) {
+		return true, "", fmt.Errorf("HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE requires job_id and canary_requirement_id")
+	}
+
 	hotUpdateGateFromDecisionMatches := hotUpdateGateFromDecisionCommandRE.FindStringSubmatch(trimmed)
 	if len(hotUpdateGateFromDecisionMatches) == 4 {
 		jobID := hotUpdateGateFromDecisionMatches[2]
@@ -2146,6 +2164,11 @@ func isMalformedHotUpdateCanaryRequirementCreateCommand(content string) bool {
 func isMalformedHotUpdateCanaryEvidenceCreateCommand(content string) bool {
 	fields := strings.Fields(content)
 	return len(fields) > 0 && strings.EqualFold(fields[0], "hot_update_canary_evidence_create")
+}
+
+func isMalformedHotUpdateCanarySatisfactionAuthorityCreateCommand(content string) bool {
+	fields := strings.Fields(content)
+	return len(fields) > 0 && strings.EqualFold(fields[0], "hot_update_canary_satisfaction_authority_create")
 }
 
 func parseHotUpdateCanaryEvidenceObservedAt(value string) (time.Time, error) {

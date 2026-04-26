@@ -2053,6 +2053,342 @@ func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandAllowsMultipleObserved
 	assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t, root)
 }
 
+func TestProcessDirectHotUpdateCanarySatisfactionAuthorityCreateCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root, requirement, evidence := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+	authorityID := missioncontrol.HotUpdateCanarySatisfactionAuthorityIDFromRequirementEvidence(requirement.CanaryRequirementID, evidence.CanaryEvidenceID)
+	before := snapshotLoopHotUpdateCanarySatisfactionAuthoritySideEffects(t, root, requirement, evidence)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	command := "HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE job-1 " + requirement.CanaryRequirementID
+
+	resp, err := ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE first) error = %v", err)
+	}
+	wantCreated := "Created hot-update canary satisfaction authority job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " authority=" + authorityID + " authority_state=authorized owner_approval_required=false."
+	if resp != wantCreated {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE first) response = %q, want %q", resp, wantCreated)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanarySatisfactionAuthorityRecord() error = %v", err)
+	}
+	if record.State != missioncontrol.HotUpdateCanarySatisfactionAuthorityStateAuthorized ||
+		record.SatisfactionState != missioncontrol.HotUpdateCanarySatisfactionStateSatisfied ||
+		record.OwnerApprovalRequired {
+		t.Fatalf("authority state = %#v, want authorized/satisfied/no owner approval", record)
+	}
+	if record.CanaryRequirementID != requirement.CanaryRequirementID || record.SelectedCanaryEvidenceID != evidence.CanaryEvidenceID {
+		t.Fatalf("authority refs = %#v, want requirement %q evidence %q", record, requirement.CanaryRequirementID, evidence.CanaryEvidenceID)
+	}
+	firstAuthorityBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanarySatisfactionAuthorityPath(root, authorityID))
+	if err != nil {
+		t.Fatalf("ReadFile(first authority) error = %v", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want authority audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_satisfaction_authority_create", true, "")
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateCanarySatisfactionAuthorityIdentity == nil {
+		t.Fatal("HotUpdateCanarySatisfactionAuthorityIdentity = nil, want configured identity block")
+	}
+	if summary.HotUpdateCanarySatisfactionAuthorityIdentity.State != "configured" {
+		t.Fatalf("HotUpdateCanarySatisfactionAuthorityIdentity.State = %q, want configured", summary.HotUpdateCanarySatisfactionAuthorityIdentity.State)
+	}
+	if len(summary.HotUpdateCanarySatisfactionAuthorityIdentity.Authorities) != 1 {
+		t.Fatalf("HotUpdateCanarySatisfactionAuthorityIdentity.Authorities len = %d, want 1", len(summary.HotUpdateCanarySatisfactionAuthorityIdentity.Authorities))
+	}
+	gotAuthority := summary.HotUpdateCanarySatisfactionAuthorityIdentity.Authorities[0]
+	if gotAuthority.CanarySatisfactionAuthorityID != authorityID ||
+		gotAuthority.AuthorityState != string(missioncontrol.HotUpdateCanarySatisfactionAuthorityStateAuthorized) ||
+		gotAuthority.OwnerApprovalRequired {
+		t.Fatalf("status authority = %#v, want authorized authority %q", gotAuthority, authorityID)
+	}
+
+	resp, err = ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE second) error = %v", err)
+	}
+	wantSelected := "Selected hot-update canary satisfaction authority job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " authority=" + authorityID + " authority_state=authorized owner_approval_required=false."
+	if resp != wantSelected {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE second) response = %q, want %q", resp, wantSelected)
+	}
+	secondAuthorityBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanarySatisfactionAuthorityPath(root, authorityID))
+	if err != nil {
+		t.Fatalf("ReadFile(second authority) error = %v", err)
+	}
+	if string(firstAuthorityBytes) != string(secondAuthorityBytes) {
+		t.Fatalf("authority file changed on replay\nfirst:\n%s\nsecond:\n%s", string(firstAuthorityBytes), string(secondAuthorityBytes))
+	}
+	replayed, err := missioncontrol.LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanarySatisfactionAuthorityRecord(replay) error = %v", err)
+	}
+	if !replayed.CreatedAt.Equal(record.CreatedAt) {
+		t.Fatalf("replayed CreatedAt = %s, want %s", replayed.CreatedAt, record.CreatedAt)
+	}
+	audits = ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want selected audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_satisfaction_authority_create", true, "")
+
+	assertLoopHotUpdateCanarySatisfactionAuthoritySideEffectsUnchanged(t, root, before)
+	assertLoopHotUpdateCanarySatisfactionAuthorityNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanarySatisfactionAuthorityCreateCommandRecordsWaitingOwnerApprovalWithoutDownstreamRecords(t *testing.T) {
+	t.Parallel()
+
+	root, requirement, evidence := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresOwnerApproval = true
+	}, nil)
+	authorityID := missioncontrol.HotUpdateCanarySatisfactionAuthorityIDFromRequirementEvidence(requirement.CanaryRequirementID, evidence.CanaryEvidenceID)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE job-1 "+requirement.CanaryRequirementID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE) error = %v", err)
+	}
+	want := "Created hot-update canary satisfaction authority job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " authority=" + authorityID + " authority_state=waiting_owner_approval owner_approval_required=true."
+	if resp != want {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE) response = %q, want %q", resp, want)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanarySatisfactionAuthorityRecord() error = %v", err)
+	}
+	if record.State != missioncontrol.HotUpdateCanarySatisfactionAuthorityStateWaitingOwnerApproval ||
+		record.SatisfactionState != missioncontrol.HotUpdateCanarySatisfactionStateWaitingOwnerApproval ||
+		!record.OwnerApprovalRequired {
+		t.Fatalf("authority = %#v, want waiting_owner_approval with owner approval required", record)
+	}
+	assertLoopHotUpdateCanarySatisfactionAuthorityNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanarySatisfactionAuthorityCreateCommandRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	tests := []string{
+		"HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE job-1",
+		"HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE job-1 " + requirement.CanaryRequirementID + " extra",
+	}
+	for _, command := range tests {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want malformed argument rejection", command)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", command, resp)
+			}
+			if !strings.Contains(err.Error(), "HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE requires job_id and canary_requirement_id") {
+				t.Fatalf("ProcessDirect(%s) error = %q, want malformed argument context", command, err)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateCanarySatisfactionAuthorityCreateCommandFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		setup    func(t *testing.T) (string, string, string)
+		wantErr  string
+		wantCode missioncontrol.RejectionCode
+	}
+	tests := []testCase{
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				return root, "other-job", requirement.CanaryRequirementID
+			},
+			wantErr:  "operator command does not match the active job",
+			wantCode: missioncontrol.RejectionCode("E_VALIDATION_FAILED"),
+		},
+		{
+			name: "missing canary requirement",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _ := writeLoopHotUpdateGateControlFixtures(t)
+				return root, "job-1", "hot-update-canary-requirement-missing"
+			},
+			wantErr: missioncontrol.ErrHotUpdateCanaryRequirementRecordNotFound.Error(),
+		},
+		{
+			name: "invalid canary requirement",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				requirement.ResultID = ""
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID), requirement); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(requirement) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "result_id is required",
+		},
+		{
+			name: "no selected passed evidence",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "not_satisfied",
+		},
+		{
+			name: "latest selected evidence failed",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				if _, _, err := missioncontrol.CreateHotUpdateCanaryEvidenceFromRequirement(root, requirement.CanaryRequirementID, missioncontrol.HotUpdateCanaryEvidenceStateFailed, time.Date(2026, 4, 26, 4, 30, 0, 0, time.UTC), "operator", time.Date(2026, 4, 26, 4, 31, 0, 0, time.UTC), "latest failed"); err != nil {
+					t.Fatalf("CreateHotUpdateCanaryEvidenceFromRequirement(failed) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "failed",
+		},
+		{
+			name: "invalid satisfaction assessment",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				bad := missioncontrol.HotUpdateCanaryEvidenceRecord{
+					RecordVersion:       missioncontrol.StoreRecordVersion,
+					CanaryRequirementID: requirement.CanaryRequirementID,
+					ResultID:            requirement.ResultID,
+					RunID:               requirement.RunID,
+					CandidateID:         requirement.CandidateID,
+					EvalSuiteID:         requirement.EvalSuiteID,
+					PromotionPolicyID:   requirement.PromotionPolicyID,
+					BaselinePackID:      requirement.BaselinePackID,
+					CandidatePackID:     "pack-missing",
+					EvidenceState:       missioncontrol.HotUpdateCanaryEvidenceStatePassed,
+					Passed:              true,
+					Reason:              "invalid evidence linkage",
+					ObservedAt:          time.Date(2026, 4, 26, 4, 40, 0, 0, time.UTC),
+					CreatedAt:           time.Date(2026, 4, 26, 4, 41, 0, 0, time.UTC),
+					CreatedBy:           "operator",
+				}
+				bad.CanaryEvidenceID = missioncontrol.HotUpdateCanaryEvidenceIDFromRequirementObservedAt(requirement.CanaryRequirementID, bad.ObservedAt)
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanaryEvidencePath(root, bad.CanaryEvidenceID), bad); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(invalid evidence) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "requires configured canary satisfaction assessment",
+		},
+		{
+			name: "missing linked source record",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				if err := os.Remove(missioncontrol.StoreImprovementRunPath(root, requirement.RunID)); err != nil {
+					t.Fatalf("Remove(run) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "run",
+		},
+		{
+			name: "stale derived eligibility",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _ := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				policy, err := missioncontrol.LoadPromotionPolicyRecord(root, requirement.PromotionPolicyID)
+				if err != nil {
+					t.Fatalf("LoadPromotionPolicyRecord() error = %v", err)
+				}
+				policy.RequiresCanary = false
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StorePromotionPolicyPath(root, policy.PromotionPolicyID), policy); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(policy) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "does not permit hot-update canary requirement",
+		},
+		{
+			name: "divergent duplicate authority",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, evidence := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				ag := newLoopHotUpdateOutcomeAgent(t, root)
+				if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE job-1 "+requirement.CanaryRequirementID, 2*time.Second); err != nil {
+					t.Fatalf("ProcessDirect(initial authority) error = %v", err)
+				}
+				authorityID := missioncontrol.HotUpdateCanarySatisfactionAuthorityIDFromRequirementEvidence(requirement.CanaryRequirementID, evidence.CanaryEvidenceID)
+				record, err := missioncontrol.LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityID)
+				if err != nil {
+					t.Fatalf("LoadHotUpdateCanarySatisfactionAuthorityRecord() error = %v", err)
+				}
+				record.Reason = "different reason"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanarySatisfactionAuthorityPath(root, authorityID), record); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(divergent authority) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "already exists",
+		},
+		{
+			name: "existing deterministic authority fails to load",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, evidence := writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t, nil, nil)
+				authorityID := missioncontrol.HotUpdateCanarySatisfactionAuthorityIDFromRequirementEvidence(requirement.CanaryRequirementID, evidence.CanaryEvidenceID)
+				if err := os.MkdirAll(missioncontrol.StoreHotUpdateCanarySatisfactionAuthoritiesDir(root), 0o755); err != nil {
+					t.Fatalf("MkdirAll(authorities) error = %v", err)
+				}
+				if err := os.WriteFile(missioncontrol.StoreHotUpdateCanarySatisfactionAuthorityPath(root, authorityID), []byte("{"), 0o644); err != nil {
+					t.Fatalf("WriteFile(invalid authority) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID
+			},
+			wantErr: "unexpected EOF",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, jobID, canaryRequirementID := tt.setup(t)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+			resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE "+jobID+" "+canaryRequirementID, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE) error = nil, want fail-closed rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE) error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+			audits := ag.taskState.AuditEvents()
+			if len(audits) == 0 {
+				t.Fatal("AuditEvents() count = 0, want rejected authority audit event")
+			}
+			wantCode := tt.wantCode
+			if wantCode == "" {
+				wantCode = missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")
+			}
+			assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_satisfaction_authority_create", false, wantCode)
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGateFromDecisionCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
 	t.Parallel()
 
@@ -7664,6 +8000,116 @@ func assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t *testing.T, root str
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("path %s exists or errored after hot-update canary evidence command: %v", path, err)
 		}
+	}
+}
+
+func writeLoopHotUpdateCanarySatisfactionAuthorityFixtures(t *testing.T, policyEdit func(*missioncontrol.PromotionPolicyRecord), resultEdit func(*missioncontrol.CandidateResultRecord)) (string, missioncontrol.HotUpdateCanaryRequirementRecord, missioncontrol.HotUpdateCanaryEvidenceRecord) {
+	t.Helper()
+
+	root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, policyEdit, resultEdit)
+	evidence, changed, err := missioncontrol.CreateHotUpdateCanaryEvidenceFromRequirement(root, requirement.CanaryRequirementID, missioncontrol.HotUpdateCanaryEvidenceStatePassed, time.Date(2026, 4, 26, 4, 0, 0, 0, time.UTC), "operator", time.Date(2026, 4, 26, 4, 1, 0, 0, time.UTC), "canary passed")
+	if err != nil {
+		t.Fatalf("CreateHotUpdateCanaryEvidenceFromRequirement() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateCanaryEvidenceFromRequirement() changed = false, want true")
+	}
+	return root, requirement, evidence
+}
+
+type loopHotUpdateCanarySatisfactionAuthoritySideEffects struct {
+	files            map[string][]byte
+	reloadGeneration uint64
+}
+
+func snapshotLoopHotUpdateCanarySatisfactionAuthoritySideEffects(t *testing.T, root string, requirement missioncontrol.HotUpdateCanaryRequirementRecord, evidence missioncontrol.HotUpdateCanaryEvidenceRecord) loopHotUpdateCanarySatisfactionAuthoritySideEffects {
+	t.Helper()
+
+	paths := []string{
+		missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID),
+		missioncontrol.StoreHotUpdateCanaryEvidencePath(root, evidence.CanaryEvidenceID),
+		missioncontrol.StoreCandidateResultPath(root, requirement.ResultID),
+		missioncontrol.StoreImprovementRunPath(root, requirement.RunID),
+		missioncontrol.StoreImprovementCandidatePath(root, requirement.CandidateID),
+		missioncontrol.StoreEvalSuitePath(root, requirement.EvalSuiteID),
+		missioncontrol.StorePromotionPolicyPath(root, requirement.PromotionPolicyID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.BaselinePackID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.CandidatePackID),
+		missioncontrol.StoreActiveRuntimePackPointerPath(root),
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before error = %v", path, err)
+		}
+		files[path] = bytes
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+	return loopHotUpdateCanarySatisfactionAuthoritySideEffects{
+		files:            files,
+		reloadGeneration: pointer.ReloadGeneration,
+	}
+}
+
+func assertLoopHotUpdateCanarySatisfactionAuthoritySideEffectsUnchanged(t *testing.T, root string, before loopHotUpdateCanarySatisfactionAuthoritySideEffects) {
+	t.Helper()
+
+	for path, beforeBytes := range before.files {
+		afterBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after error = %v", path, err)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("source/runtime file %s changed after hot-update canary satisfaction authority command\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if pointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", pointer.ReloadGeneration, before.reloadGeneration)
+	}
+}
+
+func assertLoopHotUpdateCanarySatisfactionAuthorityNoDownstreamRecords(t *testing.T, root string) {
+	t.Helper()
+
+	decisions, err := missioncontrol.ListCandidatePromotionDecisionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() error = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() len = %d, want 0", len(decisions))
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 0 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 0", len(gates))
+	}
+	assertLoopCandidateDecisionGateNoTerminalRecords(t, root)
+	requests, err := missioncontrol.ListCommittedApprovalRequestRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalRequestRecords() error = %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("ListCommittedApprovalRequestRecords() len = %d, want 0", len(requests))
+	}
+	grants, err := missioncontrol.ListCommittedApprovalGrantRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalGrantRecords() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("ListCommittedApprovalGrantRecords() len = %d, want 0", len(grants))
+	}
+	if _, err := os.Stat(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("last-known-good pointer exists or errored after authority command: %v", err)
 	}
 }
 
