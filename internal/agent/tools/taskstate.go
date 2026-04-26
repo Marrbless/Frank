@@ -2370,6 +2370,145 @@ func (s *TaskState) CreateHotUpdateCanaryRequirementFromCandidateResult(jobID st
 	return record, changed, nil
 }
 
+func (s *TaskState) CreateHotUpdateCanaryEvidenceFromRequirement(jobID string, canaryRequirementID string, state missioncontrol.HotUpdateCanaryEvidenceState, observedAt time.Time, reason string) (missioncontrol.HotUpdateCanaryEvidenceRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	const action = "hot_update_canary_evidence_create"
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+		}
+	}
+
+	observedAt = observedAt.UTC()
+	if observedAt.IsZero() {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: "hot-update canary evidence observed_at is required",
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+	}
+	state = missioncontrol.HotUpdateCanaryEvidenceState(strings.TrimSpace(string(state)))
+	if !isTaskStateHotUpdateCanaryEvidenceState(state) {
+		err := missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeStepValidationFailed,
+			Message: fmt.Sprintf("hot-update canary evidence state %q is invalid", state),
+		}
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = taskStateDefaultHotUpdateCanaryEvidenceReason(state)
+	}
+
+	createdAt := now
+	canaryEvidenceID := missioncontrol.HotUpdateCanaryEvidenceIDFromRequirementObservedAt(canaryRequirementID, observedAt)
+	if existing, err := missioncontrol.LoadHotUpdateCanaryEvidenceRecord(root, canaryEvidenceID); err == nil {
+		createdAt = existing.CreatedAt
+	} else if !errors.Is(err, missioncontrol.ErrHotUpdateCanaryEvidenceRecordNotFound) {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+	}
+
+	record, changed, err := missioncontrol.CreateHotUpdateCanaryEvidenceFromRequirement(root, canaryRequirementID, state, observedAt, "operator", createdAt, reason)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateCanaryEvidenceRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, action, nil)
+	return record, changed, nil
+}
+
+func isTaskStateHotUpdateCanaryEvidenceState(state missioncontrol.HotUpdateCanaryEvidenceState) bool {
+	switch state {
+	case missioncontrol.HotUpdateCanaryEvidenceStatePassed,
+		missioncontrol.HotUpdateCanaryEvidenceStateFailed,
+		missioncontrol.HotUpdateCanaryEvidenceStateBlocked,
+		missioncontrol.HotUpdateCanaryEvidenceStateExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateDefaultHotUpdateCanaryEvidenceReason(state missioncontrol.HotUpdateCanaryEvidenceState) string {
+	return "operator recorded hot-update canary evidence " + string(state)
+}
+
 func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
 	if s == nil {
 		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil

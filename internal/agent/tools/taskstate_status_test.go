@@ -1667,7 +1667,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -1827,7 +1827,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -2199,7 +2199,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])

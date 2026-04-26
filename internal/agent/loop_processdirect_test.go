@@ -1652,6 +1652,407 @@ func TestProcessDirectHotUpdateCanaryRequirementCreateCommandFailsClosed(t *test
 	}
 }
 
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+	observedAtRaw := "2026-04-25T21:30:00.123456789-04:00"
+	observedAt, err := time.Parse(time.RFC3339Nano, observedAtRaw)
+	if err != nil {
+		t.Fatalf("Parse(observedAt) error = %v", err)
+	}
+	canaryEvidenceID := missioncontrol.HotUpdateCanaryEvidenceIDFromRequirementObservedAt(requirement.CanaryRequirementID, observedAt)
+	before := snapshotLoopHotUpdateCanaryEvidenceSideEffects(t, root, requirement)
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	command := "HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 " + requirement.CanaryRequirementID + " passed " + observedAtRaw + " manual canary passed"
+
+	resp, err := ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE first) error = %v", err)
+	}
+	wantCreated := "Created hot-update canary evidence job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " canary_evidence=" + canaryEvidenceID + " evidence_state=passed passed=true."
+	if resp != wantCreated {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE first) response = %q, want %q", resp, wantCreated)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateCanaryEvidenceRecord(root, canaryEvidenceID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanaryEvidenceRecord() error = %v", err)
+	}
+	if record.CanaryRequirementID != requirement.CanaryRequirementID {
+		t.Fatalf("HotUpdateCanaryEvidenceRecord.CanaryRequirementID = %q, want %q", record.CanaryRequirementID, requirement.CanaryRequirementID)
+	}
+	if record.EvidenceState != missioncontrol.HotUpdateCanaryEvidenceStatePassed {
+		t.Fatalf("HotUpdateCanaryEvidenceRecord.EvidenceState = %q, want passed", record.EvidenceState)
+	}
+	if !record.Passed {
+		t.Fatal("HotUpdateCanaryEvidenceRecord.Passed = false, want true")
+	}
+	if record.Reason != "manual canary passed" {
+		t.Fatalf("HotUpdateCanaryEvidenceRecord.Reason = %q, want manual canary passed", record.Reason)
+	}
+	if !record.ObservedAt.Equal(observedAt.UTC()) {
+		t.Fatalf("HotUpdateCanaryEvidenceRecord.ObservedAt = %s, want %s", record.ObservedAt, observedAt.UTC())
+	}
+
+	firstEvidenceBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanaryEvidencePath(root, canaryEvidenceID))
+	if err != nil {
+		t.Fatalf("ReadFile(first evidence) error = %v", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want hot-update canary evidence audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_evidence_create", true, "")
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateCanaryEvidenceIdentity == nil {
+		t.Fatal("HotUpdateCanaryEvidenceIdentity = nil, want configured identity block")
+	}
+	if summary.HotUpdateCanaryEvidenceIdentity.State != "configured" {
+		t.Fatalf("HotUpdateCanaryEvidenceIdentity.State = %q, want configured", summary.HotUpdateCanaryEvidenceIdentity.State)
+	}
+	if len(summary.HotUpdateCanaryEvidenceIdentity.Evidence) != 1 {
+		t.Fatalf("HotUpdateCanaryEvidenceIdentity.Evidence len = %d, want 1", len(summary.HotUpdateCanaryEvidenceIdentity.Evidence))
+	}
+	gotEvidence := summary.HotUpdateCanaryEvidenceIdentity.Evidence[0]
+	if gotEvidence.CanaryEvidenceID != canaryEvidenceID {
+		t.Fatalf("status canary_evidence_id = %q, want %q", gotEvidence.CanaryEvidenceID, canaryEvidenceID)
+	}
+	if gotEvidence.EvidenceState != "passed" || !gotEvidence.Passed {
+		t.Fatalf("status evidence_state/passed = %q/%t, want passed/true", gotEvidence.EvidenceState, gotEvidence.Passed)
+	}
+
+	resp, err = ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE second) error = %v", err)
+	}
+	wantSelected := "Selected hot-update canary evidence job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " canary_evidence=" + canaryEvidenceID + " evidence_state=passed passed=true."
+	if resp != wantSelected {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE second) response = %q, want %q", resp, wantSelected)
+	}
+	secondEvidenceBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateCanaryEvidencePath(root, canaryEvidenceID))
+	if err != nil {
+		t.Fatalf("ReadFile(second evidence) error = %v", err)
+	}
+	if string(firstEvidenceBytes) != string(secondEvidenceBytes) {
+		t.Fatalf("hot-update canary evidence file changed on replay\nfirst:\n%s\nsecond:\n%s", string(firstEvidenceBytes), string(secondEvidenceBytes))
+	}
+	audits = ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want selected audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_evidence_create", true, "")
+
+	assertLoopHotUpdateCanaryEvidenceSideEffectsUnchanged(t, root, before)
+	assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandCreatesNonPassedStatesWithDefaultReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []missioncontrol.HotUpdateCanaryEvidenceState{
+		missioncontrol.HotUpdateCanaryEvidenceStateFailed,
+		missioncontrol.HotUpdateCanaryEvidenceStateBlocked,
+		missioncontrol.HotUpdateCanaryEvidenceStateExpired,
+	}
+	for i, state := range tests {
+		i := i
+		state := state
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+
+			root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+			observedAt := time.Date(2026, 4, 26, 1, 0+i, 0, 0, time.UTC)
+			observedAtRaw := observedAt.Format(time.RFC3339)
+			canaryEvidenceID := missioncontrol.HotUpdateCanaryEvidenceIDFromRequirementObservedAt(requirement.CanaryRequirementID, observedAt)
+
+			resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" "+string(state)+" "+observedAtRaw, 2*time.Second)
+			if err != nil {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE %s) error = %v", state, err)
+			}
+			want := "Created hot-update canary evidence job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " canary_evidence=" + canaryEvidenceID + " evidence_state=" + string(state) + " passed=false."
+			if resp != want {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE %s) response = %q, want %q", state, resp, want)
+			}
+			record, err := missioncontrol.LoadHotUpdateCanaryEvidenceRecord(root, canaryEvidenceID)
+			if err != nil {
+				t.Fatalf("LoadHotUpdateCanaryEvidenceRecord(%s) error = %v", state, err)
+			}
+			if record.Passed {
+				t.Fatalf("HotUpdateCanaryEvidenceRecord(%s).Passed = true, want false", state)
+			}
+			wantReason := "operator recorded hot-update canary evidence " + string(state)
+			if record.Reason != wantReason {
+				t.Fatalf("HotUpdateCanaryEvidenceRecord(%s).Reason = %q, want %q", state, record.Reason, wantReason)
+			}
+			assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t, root)
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandRecordsPassedEvidenceForOwnerApprovalRequiredRequirement(t *testing.T) {
+	t.Parallel()
+
+	root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresOwnerApproval = true
+	}, nil)
+	if requirement.EligibilityState != missioncontrol.CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired {
+		t.Fatalf("requirement EligibilityState = %q, want canary_and_owner_approval_required", requirement.EligibilityState)
+	}
+	if !requirement.OwnerApprovalRequired {
+		t.Fatal("requirement OwnerApprovalRequired = false, want true")
+	}
+
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	observedAt := time.Date(2026, 4, 26, 1, 45, 0, 0, time.UTC)
+	canaryEvidenceID := missioncontrol.HotUpdateCanaryEvidenceIDFromRequirementObservedAt(requirement.CanaryRequirementID, observedAt)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" passed "+observedAt.Format(time.RFC3339)+" owner approval still required after canary", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE) error = %v", err)
+	}
+	want := "Created hot-update canary evidence job=job-1 canary_requirement=" + requirement.CanaryRequirementID + " canary_evidence=" + canaryEvidenceID + " evidence_state=passed passed=true."
+	if resp != want {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE) response = %q, want %q", resp, want)
+	}
+	record, err := missioncontrol.LoadHotUpdateCanaryEvidenceRecord(root, canaryEvidenceID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateCanaryEvidenceRecord() error = %v", err)
+	}
+	if !record.Passed {
+		t.Fatal("HotUpdateCanaryEvidenceRecord.Passed = false, want true")
+	}
+	assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandRejectsMalformedArguments(t *testing.T) {
+	t.Parallel()
+
+	root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	tests := []string{
+		"HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1",
+		"HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 " + requirement.CanaryRequirementID,
+		"HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 " + requirement.CanaryRequirementID + " passed",
+	}
+	for _, command := range tests {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want malformed argument rejection", command)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", command, resp)
+			}
+			if !strings.Contains(err.Error(), "HOT_UPDATE_CANARY_EVIDENCE_CREATE requires job_id, canary_requirement_id, evidence_state, observed_at, and optional reason") {
+				t.Fatalf("ProcessDirect(%s) error = %q, want malformed argument context", command, err)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	observedAtRaw := "2026-04-26T02:15:00Z"
+
+	type testCase struct {
+		name     string
+		setup    func(t *testing.T) (string, string, string)
+		wantErr  string
+		wantCode missioncontrol.RejectionCode
+	}
+	tests := []testCase{
+		{
+			name: "invalid observed_at",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				return root, "job-1", requirement.CanaryRequirementID + " passed not-a-time reason"
+			},
+			wantErr:  "observed_at must be RFC3339 or RFC3339Nano",
+			wantCode: "",
+		},
+		{
+			name: "invalid evidence state",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				return root, "job-1", requirement.CanaryRequirementID + " waived " + observedAtRaw + " reason"
+			},
+			wantErr:  "hot-update canary evidence state",
+			wantCode: missioncontrol.RejectionCode("E_VALIDATION_FAILED"),
+		},
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				return root, "other-job", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr:  "operator command does not match the active job",
+			wantCode: missioncontrol.RejectionCode("E_VALIDATION_FAILED"),
+		},
+		{
+			name: "missing canary requirement",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _ := writeLoopHotUpdateGateControlFixtures(t)
+				return root, "job-1", "hot-update-canary-requirement-missing passed " + observedAtRaw + " reason"
+			},
+			wantErr: missioncontrol.ErrHotUpdateCanaryRequirementRecordNotFound.Error(),
+		},
+		{
+			name: "invalid canary requirement",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				requirement.ResultID = ""
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID), requirement); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(requirement) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr: "result_id is required",
+		},
+		{
+			name: "requirement not required",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				requirement.State = "satisfied"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID), requirement); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(requirement) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr: "state must be",
+		},
+		{
+			name: "missing candidate result",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				if err := os.Remove(missioncontrol.StoreCandidateResultPath(root, requirement.ResultID)); err != nil {
+					t.Fatalf("Remove(candidate result) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr: "result_id",
+		},
+		{
+			name: "missing linked records",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				if err := os.Remove(missioncontrol.StoreImprovementRunPath(root, requirement.RunID)); err != nil {
+					t.Fatalf("Remove(improvement run) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr: "run_id",
+		},
+		{
+			name: "stale derived eligibility",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				policy, err := missioncontrol.LoadPromotionPolicyRecord(root, requirement.PromotionPolicyID)
+				if err != nil {
+					t.Fatalf("LoadPromotionPolicyRecord() error = %v", err)
+				}
+				policy.RequiresCanary = false
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StorePromotionPolicyPath(root, policy.PromotionPolicyID), policy); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(policy) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " reason"
+			},
+			wantErr: `promotion eligibility state "eligible"`,
+		},
+		{
+			name: "divergent duplicate state",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				ag := newLoopHotUpdateOutcomeAgent(t, root)
+				if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" passed "+observedAtRaw+" reason", 2*time.Second); err != nil {
+					t.Fatalf("ProcessDirect(initial evidence) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " failed " + observedAtRaw + " reason"
+			},
+			wantErr: "already exists",
+		},
+		{
+			name: "divergent duplicate reason",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+				ag := newLoopHotUpdateOutcomeAgent(t, root)
+				if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" passed "+observedAtRaw+" first reason", 2*time.Second); err != nil {
+					t.Fatalf("ProcessDirect(initial evidence) error = %v", err)
+				}
+				return root, "job-1", requirement.CanaryRequirementID + " passed " + observedAtRaw + " second reason"
+			},
+			wantErr: "already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, jobID, args := tt.setup(t)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+			resp, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE "+jobID+" "+args, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE) error = nil, want fail-closed rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_CANARY_EVIDENCE_CREATE) error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+			if tt.wantCode != "" {
+				audits := ag.taskState.AuditEvents()
+				if len(audits) == 0 {
+					t.Fatal("AuditEvents() count = 0, want rejected hot-update canary evidence audit event")
+				}
+				assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_canary_evidence_create", false, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateCanaryEvidenceCreateCommandAllowsMultipleObservedAt(t *testing.T) {
+	t.Parallel()
+
+	root, requirement := writeLoopHotUpdateCanaryEvidenceFixtures(t, nil, nil)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+	firstObservedAt := "2026-04-26T03:00:00Z"
+	secondObservedAt := "2026-04-26T03:05:00Z"
+
+	if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" failed "+firstObservedAt+" first attempt", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(first evidence) error = %v", err)
+	}
+	if _, err := ag.ProcessDirect("HOT_UPDATE_CANARY_EVIDENCE_CREATE job-1 "+requirement.CanaryRequirementID+" passed "+secondObservedAt+" second attempt", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(second evidence) error = %v", err)
+	}
+	evidence, err := missioncontrol.ListHotUpdateCanaryEvidenceRecords(root)
+	if err != nil {
+		t.Fatalf("ListHotUpdateCanaryEvidenceRecords() error = %v", err)
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("ListHotUpdateCanaryEvidenceRecords() len = %d, want 2", len(evidence))
+	}
+	if evidence[0].CanaryEvidenceID == evidence[1].CanaryEvidenceID {
+		t.Fatalf("canary evidence IDs must differ for distinct observed_at values: %q", evidence[0].CanaryEvidenceID)
+	}
+	assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t, root)
+}
+
 func TestProcessDirectHotUpdateGateFromDecisionCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
 	t.Parallel()
 
@@ -7143,6 +7544,125 @@ func assertLoopHotUpdateCanaryRequirementNoDownstreamRecords(t *testing.T, root 
 	for _, path := range absentPaths {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("path %s exists or errored after hot-update canary requirement command: %v", path, err)
+		}
+	}
+}
+
+func writeLoopHotUpdateCanaryEvidenceFixtures(t *testing.T, policyEdit func(*missioncontrol.PromotionPolicyRecord), resultEdit func(*missioncontrol.CandidateResultRecord)) (string, missioncontrol.HotUpdateCanaryRequirementRecord) {
+	t.Helper()
+
+	root, resultID := writeLoopHotUpdateCanaryRequirementFixtures(t, func(record *missioncontrol.PromotionPolicyRecord) {
+		record.RequiresCanary = true
+		if policyEdit != nil {
+			policyEdit(record)
+		}
+	}, resultEdit)
+	requirement, changed, err := missioncontrol.CreateHotUpdateCanaryRequirementFromCandidateResult(root, resultID, "operator", time.Date(2026, 4, 25, 21, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateCanaryRequirementFromCandidateResult() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateCanaryRequirementFromCandidateResult() changed = false, want true")
+	}
+	return root, requirement
+}
+
+type loopHotUpdateCanaryEvidenceSideEffects struct {
+	files            map[string][]byte
+	reloadGeneration uint64
+}
+
+func snapshotLoopHotUpdateCanaryEvidenceSideEffects(t *testing.T, root string, requirement missioncontrol.HotUpdateCanaryRequirementRecord) loopHotUpdateCanaryEvidenceSideEffects {
+	t.Helper()
+
+	paths := []string{
+		missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID),
+		missioncontrol.StoreCandidateResultPath(root, requirement.ResultID),
+		missioncontrol.StoreImprovementRunPath(root, requirement.RunID),
+		missioncontrol.StoreImprovementCandidatePath(root, requirement.CandidateID),
+		missioncontrol.StoreEvalSuitePath(root, requirement.EvalSuiteID),
+		missioncontrol.StorePromotionPolicyPath(root, requirement.PromotionPolicyID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.BaselinePackID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.CandidatePackID),
+		missioncontrol.StoreActiveRuntimePackPointerPath(root),
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before error = %v", path, err)
+		}
+		files[path] = bytes
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+	return loopHotUpdateCanaryEvidenceSideEffects{
+		files:            files,
+		reloadGeneration: pointer.ReloadGeneration,
+	}
+}
+
+func assertLoopHotUpdateCanaryEvidenceSideEffectsUnchanged(t *testing.T, root string, before loopHotUpdateCanaryEvidenceSideEffects) {
+	t.Helper()
+
+	for path, beforeBytes := range before.files {
+		afterBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after error = %v", path, err)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("source/runtime file %s changed after hot-update canary evidence command\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if pointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", pointer.ReloadGeneration, before.reloadGeneration)
+	}
+}
+
+func assertLoopHotUpdateCanaryEvidenceNoDownstreamRecords(t *testing.T, root string) {
+	t.Helper()
+
+	decisions, err := missioncontrol.ListCandidatePromotionDecisionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() error = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() len = %d, want 0", len(decisions))
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 0 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 0", len(gates))
+	}
+	assertLoopCandidateDecisionGateNoTerminalRecords(t, root)
+	requests, err := missioncontrol.ListCommittedApprovalRequestRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalRequestRecords() error = %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("ListCommittedApprovalRequestRecords() len = %d, want 0", len(requests))
+	}
+	grants, err := missioncontrol.ListCommittedApprovalGrantRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalGrantRecords() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("ListCommittedApprovalGrantRecords() len = %d, want 0", len(grants))
+	}
+	absentPaths := []string{
+		missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root),
+	}
+	for _, path := range absentPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("path %s exists or errored after hot-update canary evidence command: %v", path, err)
 		}
 	}
 }
