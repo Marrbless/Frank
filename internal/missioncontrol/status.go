@@ -42,6 +42,7 @@ type OperatorStatusSummary struct {
 	HotUpdateCanarySatisfactionIdentity          *OperatorHotUpdateCanarySatisfactionIdentityStatus          `json:"hot_update_canary_satisfaction_identity,omitempty"`
 	HotUpdateCanarySatisfactionAuthorityIdentity *OperatorHotUpdateCanarySatisfactionAuthorityIdentityStatus `json:"hot_update_canary_satisfaction_authority_identity,omitempty"`
 	HotUpdateOwnerApprovalRequestIdentity        *OperatorHotUpdateOwnerApprovalRequestIdentityStatus        `json:"hot_update_owner_approval_request_identity,omitempty"`
+	HotUpdateOwnerApprovalDecisionIdentity       *OperatorHotUpdateOwnerApprovalDecisionIdentityStatus       `json:"hot_update_owner_approval_decision_identity,omitempty"`
 	CandidatePromotionDecisionIdentity           *OperatorCandidatePromotionDecisionIdentityStatus           `json:"candidate_promotion_decision_identity,omitempty"`
 	HotUpdateGateIdentity                        *OperatorHotUpdateGateIdentityStatus                        `json:"hot_update_gate_identity,omitempty"`
 	HotUpdateOutcomeIdentity                     *OperatorHotUpdateOutcomeIdentityStatus                     `json:"hot_update_outcome_identity,omitempty"`
@@ -210,6 +211,11 @@ type OperatorHotUpdateCanarySatisfactionAuthorityIdentityStatus struct {
 type OperatorHotUpdateOwnerApprovalRequestIdentityStatus struct {
 	State    string                                        `json:"state"`
 	Requests []OperatorHotUpdateOwnerApprovalRequestStatus `json:"requests,omitempty"`
+}
+
+type OperatorHotUpdateOwnerApprovalDecisionIdentityStatus struct {
+	State     string                                         `json:"state"`
+	Decisions []OperatorHotUpdateOwnerApprovalDecisionStatus `json:"decisions,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeIdentityStatus struct {
@@ -467,6 +473,31 @@ type OperatorHotUpdateOwnerApprovalRequestStatus struct {
 	Reason                        string  `json:"reason,omitempty"`
 	CreatedAt                     *string `json:"created_at,omitempty"`
 	CreatedBy                     string  `json:"created_by,omitempty"`
+	Error                         string  `json:"error,omitempty"`
+}
+
+type OperatorHotUpdateOwnerApprovalDecisionStatus struct {
+	State                         string  `json:"state"`
+	OwnerApprovalDecisionID       string  `json:"owner_approval_decision_id,omitempty"`
+	OwnerApprovalRequestID        string  `json:"owner_approval_request_id,omitempty"`
+	CanarySatisfactionAuthorityID string  `json:"canary_satisfaction_authority_id,omitempty"`
+	CanaryRequirementID           string  `json:"canary_requirement_id,omitempty"`
+	SelectedCanaryEvidenceID      string  `json:"selected_canary_evidence_id,omitempty"`
+	ResultID                      string  `json:"result_id,omitempty"`
+	RunID                         string  `json:"run_id,omitempty"`
+	CandidateID                   string  `json:"candidate_id,omitempty"`
+	EvalSuiteID                   string  `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID             string  `json:"promotion_policy_id,omitempty"`
+	BaselinePackID                string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID               string  `json:"candidate_pack_id,omitempty"`
+	RequestState                  string  `json:"request_state,omitempty"`
+	AuthorityState                string  `json:"authority_state,omitempty"`
+	SatisfactionState             string  `json:"satisfaction_state,omitempty"`
+	OwnerApprovalRequired         bool    `json:"owner_approval_required"`
+	Decision                      string  `json:"decision,omitempty"`
+	Reason                        string  `json:"reason,omitempty"`
+	DecidedAt                     *string `json:"decided_at,omitempty"`
+	DecidedBy                     string  `json:"decided_by,omitempty"`
 	Error                         string  `json:"error,omitempty"`
 }
 
@@ -794,6 +825,16 @@ func WithHotUpdateOwnerApprovalRequestIdentity(summary OperatorStatusSummary, ro
 	return summary
 }
 
+func WithHotUpdateOwnerApprovalDecisionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorHotUpdateOwnerApprovalDecisionIdentityStatus(root)
+	summary.HotUpdateOwnerApprovalDecisionIdentity = &status
+	return summary
+}
+
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -1046,6 +1087,24 @@ func LoadOperatorHotUpdateOwnerApprovalRequestIdentityStatus(root string) Operat
 	return OperatorHotUpdateOwnerApprovalRequestIdentityStatus{
 		State:    state,
 		Requests: requests,
+	}
+}
+
+func LoadOperatorHotUpdateOwnerApprovalDecisionIdentityStatus(root string) OperatorHotUpdateOwnerApprovalDecisionIdentityStatus {
+	decisions, found, invalid, err := loadOperatorHotUpdateOwnerApprovalDecisionStatuses(root)
+	if !found {
+		return OperatorHotUpdateOwnerApprovalDecisionIdentityStatus{State: "not_configured"}
+	}
+	if err != nil {
+		return OperatorHotUpdateOwnerApprovalDecisionIdentityStatus{State: "invalid"}
+	}
+	state := "configured"
+	if invalid {
+		state = "invalid"
+	}
+	return OperatorHotUpdateOwnerApprovalDecisionIdentityStatus{
+		State:     state,
+		Decisions: decisions,
 	}
 }
 
@@ -1505,7 +1564,7 @@ func loadOperatorImprovementCandidateStatuses(root string) ([]OperatorImprovemen
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+		if !entry.IsDir() && !isStoreJSONDataFile(entry.Name()) {
 			continue
 		}
 		names = append(names, entry.Name())
@@ -1584,7 +1643,7 @@ func loadOperatorEvalSuiteStatuses(root string) ([]OperatorEvalSuiteStatus, bool
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+		if !entry.IsDir() && !isStoreJSONDataFile(entry.Name()) {
 			continue
 		}
 		names = append(names, entry.Name())
@@ -2471,6 +2530,101 @@ func operatorHotUpdateOwnerApprovalRequestStatusFromRecord(record HotUpdateOwner
 		Reason:                        record.Reason,
 		CreatedAt:                     formatOperatorStatusTime(record.CreatedAt),
 		CreatedBy:                     record.CreatedBy,
+	}
+}
+
+func loadOperatorHotUpdateOwnerApprovalDecisionStatuses(root string) ([]OperatorHotUpdateOwnerApprovalDecisionStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+
+	entries, err := os.ReadDir(StoreHotUpdateOwnerApprovalDecisionsDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	decisions := make([]OperatorHotUpdateOwnerApprovalDecisionStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		id := strings.TrimSuffix(name, filepath.Ext(name))
+		path := filepath.Join(StoreHotUpdateOwnerApprovalDecisionsDir(root), name)
+		if filepath.Ext(name) == "" {
+			path = filepath.Join(path, "record.json")
+		}
+		status := loadOperatorHotUpdateOwnerApprovalDecisionStatus(root, path, id)
+		if status.State == "invalid" {
+			invalid = true
+		}
+		decisions = append(decisions, status)
+	}
+	return decisions, true, invalid, nil
+}
+
+func loadOperatorHotUpdateOwnerApprovalDecisionStatus(root, path, ownerApprovalDecisionID string) OperatorHotUpdateOwnerApprovalDecisionStatus {
+	status := OperatorHotUpdateOwnerApprovalDecisionStatus{
+		State:                   "invalid",
+		OwnerApprovalDecisionID: strings.TrimSpace(ownerApprovalDecisionID),
+	}
+
+	var record HotUpdateOwnerApprovalDecisionRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+
+	record = NormalizeHotUpdateOwnerApprovalDecisionRecord(record)
+	status = operatorHotUpdateOwnerApprovalDecisionStatusFromRecord(record)
+	if err := ValidateHotUpdateOwnerApprovalDecisionRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateHotUpdateOwnerApprovalDecisionLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorHotUpdateOwnerApprovalDecisionStatusFromRecord(record HotUpdateOwnerApprovalDecisionRecord) OperatorHotUpdateOwnerApprovalDecisionStatus {
+	return OperatorHotUpdateOwnerApprovalDecisionStatus{
+		OwnerApprovalDecisionID:       record.OwnerApprovalDecisionID,
+		OwnerApprovalRequestID:        record.OwnerApprovalRequestID,
+		CanarySatisfactionAuthorityID: record.CanarySatisfactionAuthorityID,
+		CanaryRequirementID:           record.CanaryRequirementID,
+		SelectedCanaryEvidenceID:      record.SelectedCanaryEvidenceID,
+		ResultID:                      record.ResultID,
+		RunID:                         record.RunID,
+		CandidateID:                   record.CandidateID,
+		EvalSuiteID:                   record.EvalSuiteID,
+		PromotionPolicyID:             record.PromotionPolicyID,
+		BaselinePackID:                record.BaselinePackID,
+		CandidatePackID:               record.CandidatePackID,
+		RequestState:                  string(record.RequestState),
+		AuthorityState:                string(record.AuthorityState),
+		SatisfactionState:             string(record.SatisfactionState),
+		OwnerApprovalRequired:         record.OwnerApprovalRequired,
+		Decision:                      string(record.Decision),
+		Reason:                        record.Reason,
+		DecidedAt:                     formatOperatorStatusTime(record.DecidedAt),
+		DecidedBy:                     record.DecidedBy,
 	}
 }
 

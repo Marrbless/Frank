@@ -147,6 +147,7 @@ func formatOperatorStatusReadoutWithDeferredSchedulerTriggers(summary string, mi
 	statusSummary = missioncontrol.WithHotUpdateCanarySatisfactionIdentity(statusSummary, missionStoreRoot)
 	statusSummary = missioncontrol.WithHotUpdateCanarySatisfactionAuthorityIdentity(statusSummary, missionStoreRoot)
 	statusSummary = missioncontrol.WithHotUpdateOwnerApprovalRequestIdentity(statusSummary, missionStoreRoot)
+	statusSummary = missioncontrol.WithHotUpdateOwnerApprovalDecisionIdentity(statusSummary, missionStoreRoot)
 	statusSummary = missioncontrol.WithHotUpdateGateIdentity(statusSummary, missionStoreRoot)
 	statusSummary = missioncontrol.WithHotUpdateOutcomeIdentity(statusSummary, missionStoreRoot)
 	statusSummary = missioncontrol.WithPromotionIdentity(statusSummary, missionStoreRoot)
