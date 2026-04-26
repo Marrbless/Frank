@@ -2746,6 +2746,126 @@ func (s *TaskState) CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAut
 	return record, changed, nil
 }
 
+func (s *TaskState) CreateHotUpdateOwnerApprovalDecisionFromRequest(jobID string, ownerApprovalRequestID string, decision missioncontrol.HotUpdateOwnerApprovalDecision, reason string) (missioncontrol.HotUpdateOwnerApprovalDecisionRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	const action = "hot_update_owner_approval_decision_create"
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+		}
+	}
+
+	requestRef := missioncontrol.NormalizeHotUpdateOwnerApprovalRequestRef(missioncontrol.HotUpdateOwnerApprovalRequestRef{OwnerApprovalRequestID: ownerApprovalRequestID})
+	if err := missioncontrol.ValidateHotUpdateOwnerApprovalRequestRef(requestRef); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+	}
+
+	decision = missioncontrol.HotUpdateOwnerApprovalDecision(strings.TrimSpace(string(decision)))
+	switch decision {
+	case missioncontrol.HotUpdateOwnerApprovalDecisionGranted, missioncontrol.HotUpdateOwnerApprovalDecisionRejected:
+	default:
+		err := fmt.Errorf("mission store hot-update owner approval decision decision %q is invalid", decision)
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+	}
+
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "hot-update owner approval decision " + string(decision)
+	}
+
+	decisionID := missioncontrol.HotUpdateOwnerApprovalDecisionIDFromRequest(requestRef.OwnerApprovalRequestID)
+	decidedAt := now
+	if existing, err := missioncontrol.LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionID); err == nil {
+		decidedAt = existing.DecidedAt
+	} else if !errors.Is(err, missioncontrol.ErrHotUpdateOwnerApprovalDecisionRecordNotFound) {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+	}
+
+	record, changed, err := missioncontrol.CreateHotUpdateOwnerApprovalDecisionFromRequest(root, requestRef.OwnerApprovalRequestID, decision, "operator", decidedAt, reason)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalDecisionRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, action, nil)
+	return record, changed, nil
+}
+
 func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
 	if s == nil {
 		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil

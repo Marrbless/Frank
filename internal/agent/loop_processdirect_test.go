@@ -2754,6 +2754,388 @@ func TestProcessDirectHotUpdateOwnerApprovalRequestCreateCommandFailsClosed(t *t
 	}
 }
 
+func TestProcessDirectHotUpdateOwnerApprovalDecisionCreateCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	root, requirement, evidence, authority, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+	decisionID := missioncontrol.HotUpdateOwnerApprovalDecisionIDFromRequest(request.OwnerApprovalRequestID)
+	before := snapshotLoopHotUpdateOwnerApprovalDecisionSideEffects(t, root, requirement, evidence, authority, request)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	command := "HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE job-1 " + request.OwnerApprovalRequestID + " granted owner approved"
+	resp, err := ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE first) error = %v", err)
+	}
+	wantCreated := "Created hot-update owner approval decision job=job-1 owner_approval_request=" + request.OwnerApprovalRequestID + " owner_approval_decision=" + decisionID + " decision=granted."
+	if resp != wantCreated {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE first) response = %q, want %q", resp, wantCreated)
+	}
+
+	record, err := missioncontrol.LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOwnerApprovalDecisionRecord() error = %v", err)
+	}
+	if record.OwnerApprovalRequestID != request.OwnerApprovalRequestID ||
+		record.CanarySatisfactionAuthorityID != authority.CanarySatisfactionAuthorityID ||
+		record.Decision != missioncontrol.HotUpdateOwnerApprovalDecisionGranted ||
+		record.Reason != "owner approved" ||
+		record.RequestState != missioncontrol.HotUpdateOwnerApprovalRequestStateRequested ||
+		record.AuthorityState != missioncontrol.HotUpdateCanarySatisfactionAuthorityStateWaitingOwnerApproval ||
+		!record.OwnerApprovalRequired {
+		t.Fatalf("decision = %#v, want granted decision for request %q", record, request.OwnerApprovalRequestID)
+	}
+	firstDecisionBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateOwnerApprovalDecisionPath(root, decisionID))
+	if err != nil {
+		t.Fatalf("ReadFile(first decision) error = %v", err)
+	}
+	audits := ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want owner approval decision audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_owner_approval_decision_create", true, "")
+
+	status, err := ag.ProcessDirect("STATUS job-1", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(STATUS) error = %v", err)
+	}
+	var summary missioncontrol.OperatorStatusSummary
+	if err := json.Unmarshal([]byte(status), &summary); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if summary.HotUpdateOwnerApprovalDecisionIdentity == nil {
+		t.Fatal("HotUpdateOwnerApprovalDecisionIdentity = nil, want configured identity block")
+	}
+	if summary.HotUpdateOwnerApprovalDecisionIdentity.State != "configured" {
+		t.Fatalf("HotUpdateOwnerApprovalDecisionIdentity.State = %q, want configured", summary.HotUpdateOwnerApprovalDecisionIdentity.State)
+	}
+	if len(summary.HotUpdateOwnerApprovalDecisionIdentity.Decisions) != 1 {
+		t.Fatalf("HotUpdateOwnerApprovalDecisionIdentity.Decisions len = %d, want 1", len(summary.HotUpdateOwnerApprovalDecisionIdentity.Decisions))
+	}
+	gotDecision := summary.HotUpdateOwnerApprovalDecisionIdentity.Decisions[0]
+	if gotDecision.OwnerApprovalDecisionID != decisionID ||
+		gotDecision.OwnerApprovalRequestID != request.OwnerApprovalRequestID ||
+		gotDecision.Decision != string(missioncontrol.HotUpdateOwnerApprovalDecisionGranted) {
+		t.Fatalf("status decision = %#v, want configured decision %q", gotDecision, decisionID)
+	}
+
+	resp, err = ag.ProcessDirect(command, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE second) error = %v", err)
+	}
+	wantSelected := "Selected hot-update owner approval decision job=job-1 owner_approval_request=" + request.OwnerApprovalRequestID + " owner_approval_decision=" + decisionID + " decision=granted."
+	if resp != wantSelected {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE second) response = %q, want %q", resp, wantSelected)
+	}
+	secondDecisionBytes, err := os.ReadFile(missioncontrol.StoreHotUpdateOwnerApprovalDecisionPath(root, decisionID))
+	if err != nil {
+		t.Fatalf("ReadFile(second decision) error = %v", err)
+	}
+	if string(firstDecisionBytes) != string(secondDecisionBytes) {
+		t.Fatalf("owner approval decision changed on replay\nfirst:\n%s\nsecond:\n%s", string(firstDecisionBytes), string(secondDecisionBytes))
+	}
+	replayed, err := missioncontrol.LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOwnerApprovalDecisionRecord(replay) error = %v", err)
+	}
+	if !replayed.DecidedAt.Equal(record.DecidedAt) {
+		t.Fatalf("replayed DecidedAt = %s, want %s", replayed.DecidedAt, record.DecidedAt)
+	}
+	audits = ag.taskState.AuditEvents()
+	if len(audits) == 0 {
+		t.Fatal("AuditEvents() count = 0, want selected audit event")
+	}
+	assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_owner_approval_decision_create", true, "")
+
+	assertLoopHotUpdateOwnerApprovalDecisionSideEffectsUnchanged(t, root, before)
+	assertLoopHotUpdateOwnerApprovalDecisionNoDownstreamRecords(t, root)
+}
+
+func TestProcessDirectHotUpdateOwnerApprovalDecisionCreateCommandCreatesRejectedWithDefaultReason(t *testing.T) {
+	t.Parallel()
+
+	root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+	decisionID := missioncontrol.HotUpdateOwnerApprovalDecisionIDFromRequest(request.OwnerApprovalRequestID)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	resp, err := ag.ProcessDirect("HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE job-1 "+request.OwnerApprovalRequestID+" rejected", 2*time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE rejected) error = %v", err)
+	}
+	want := "Created hot-update owner approval decision job=job-1 owner_approval_request=" + request.OwnerApprovalRequestID + " owner_approval_decision=" + decisionID + " decision=rejected."
+	if resp != want {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE rejected) response = %q, want %q", resp, want)
+	}
+	record, err := missioncontrol.LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateOwnerApprovalDecisionRecord() error = %v", err)
+	}
+	if record.Decision != missioncontrol.HotUpdateOwnerApprovalDecisionRejected {
+		t.Fatalf("Decision = %q, want rejected", record.Decision)
+	}
+	if record.Reason != "hot-update owner approval decision rejected" {
+		t.Fatalf("Reason = %q, want deterministic rejected default", record.Reason)
+	}
+}
+
+func TestProcessDirectHotUpdateOwnerApprovalDecisionCreateCommandRejectsMalformedArgumentsAndAliases(t *testing.T) {
+	t.Parallel()
+
+	root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+	ag := newLoopHotUpdateOutcomeAgent(t, root)
+
+	malformed := []string{
+		"HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE",
+		"HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE job-1",
+		"HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE job-1 " + request.OwnerApprovalRequestID,
+	}
+	for _, command := range malformed {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(%s) error = nil, want malformed argument rejection", command)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(%s) response = %q, want empty on rejection", command, resp)
+			}
+			if !strings.Contains(err.Error(), "HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE requires job_id, owner_approval_request_id, decision, and optional reason") {
+				t.Fatalf("ProcessDirect(%s) error = %q, want malformed argument context", command, err)
+			}
+		})
+	}
+
+	for _, alias := range []string{"approve", "approved", "deny", "denied", "yes", "no", "maybe"} {
+		alias := alias
+		t.Run(alias, func(t *testing.T) {
+			resp, err := ag.ProcessDirect("HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE job-1 "+request.OwnerApprovalRequestID+" "+alias, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(alias %s) error = nil, want invalid decision rejection", alias)
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(alias %s) response = %q, want empty on rejection", alias, resp)
+			}
+			if !strings.Contains(err.Error(), "decision") {
+				t.Fatalf("ProcessDirect(alias %s) error = %q, want decision context", alias, err)
+			}
+			decisionID := missioncontrol.HotUpdateOwnerApprovalDecisionIDFromRequest(request.OwnerApprovalRequestID)
+			if _, err := missioncontrol.LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionID); err != missioncontrol.ErrHotUpdateOwnerApprovalDecisionRecordNotFound {
+				t.Fatalf("LoadHotUpdateOwnerApprovalDecisionRecord(%s) error = %v, want %v", decisionID, err, missioncontrol.ErrHotUpdateOwnerApprovalDecisionRecordNotFound)
+			}
+		})
+	}
+}
+
+func TestProcessDirectHotUpdateOwnerApprovalDecisionCreateCommandFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name     string
+		setup    func(t *testing.T) (string, string, string)
+		decision missioncontrol.HotUpdateOwnerApprovalDecision
+		reason   string
+		wantErr  string
+		wantCode missioncontrol.RejectionCode
+	}
+	tests := []testCase{
+		{
+			name: "wrong job id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				return root, "other-job", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "operator command does not match the active job",
+			wantCode: missioncontrol.RejectionCode("E_VALIDATION_FAILED"),
+		},
+		{
+			name: "missing owner approval request",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _ := writeLoopHotUpdateGateControlFixtures(t)
+				return root, "job-1", "hot-update-owner-approval-request-missing"
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  missioncontrol.ErrHotUpdateOwnerApprovalRequestRecordNotFound.Error(),
+		},
+		{
+			name: "invalid owner approval request id",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _ := writeLoopHotUpdateGateControlFixtures(t)
+				return root, "job-1", "../bad-request"
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "owner_approval_request_id",
+		},
+		{
+			name: "invalid owner approval request",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				request.ResultID = ""
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateOwnerApprovalRequestPath(root, request.OwnerApprovalRequestID), request); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(request) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "result_id is required",
+		},
+		{
+			name: "request state invalid",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				request.State = missioncontrol.HotUpdateOwnerApprovalRequestState("granted")
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateOwnerApprovalRequestPath(root, request.OwnerApprovalRequestID), request); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(request) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "state",
+		},
+		{
+			name: "missing linked source record",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				if err := os.Remove(missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID)); err != nil {
+					t.Fatalf("Remove(requirement) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "canary requirement",
+		},
+		{
+			name: "stale fresh canary satisfaction",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				_, _, err := missioncontrol.CreateHotUpdateCanaryEvidenceFromRequirement(root, requirement.CanaryRequirementID, missioncontrol.HotUpdateCanaryEvidenceStateFailed, time.Date(2026, 4, 26, 4, 30, 0, 0, time.UTC), "operator", time.Date(2026, 4, 26, 4, 31, 0, 0, time.UTC), "latest failed")
+				if err != nil {
+					t.Fatalf("CreateHotUpdateCanaryEvidenceFromRequirement(failed) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "requires canary satisfaction_state",
+		},
+		{
+			name: "stale fresh eligibility",
+			setup: func(t *testing.T) (string, string, string) {
+				root, requirement, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				policy, err := missioncontrol.LoadPromotionPolicyRecord(root, requirement.PromotionPolicyID)
+				if err != nil {
+					t.Fatalf("LoadPromotionPolicyRecord() error = %v", err)
+				}
+				policy.RequiresCanary = false
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StorePromotionPolicyPath(root, policy.PromotionPolicyID), policy); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(policy) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "does not permit hot-update canary requirement",
+		},
+		{
+			name: "invalid existing deterministic decision",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				decisionID := missioncontrol.HotUpdateOwnerApprovalDecisionIDFromRequest(request.OwnerApprovalRequestID)
+				if err := missioncontrol.WriteStoreFileAtomic(missioncontrol.StoreHotUpdateOwnerApprovalDecisionPath(root, decisionID), []byte("{")); err != nil {
+					t.Fatalf("WriteStoreFileAtomic(invalid decision) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "unexpected EOF",
+		},
+		{
+			name: "divergent duplicate decision",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				record, _, err := missioncontrol.CreateHotUpdateOwnerApprovalDecisionFromRequest(root, request.OwnerApprovalRequestID, missioncontrol.HotUpdateOwnerApprovalDecisionGranted, "operator", time.Date(2026, 4, 26, 4, 30, 0, 0, time.UTC), "approved")
+				if err != nil {
+					t.Fatalf("CreateHotUpdateOwnerApprovalDecisionFromRequest() error = %v", err)
+				}
+				record.Reason = "different reason"
+				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateOwnerApprovalDecisionPath(root, record.OwnerApprovalDecisionID), record); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic(divergent decision) error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "approved",
+			wantErr:  "already exists",
+		},
+		{
+			name: "different decision already decided",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				if _, _, err := missioncontrol.CreateHotUpdateOwnerApprovalDecisionFromRequest(root, request.OwnerApprovalRequestID, missioncontrol.HotUpdateOwnerApprovalDecisionGranted, "operator", time.Date(2026, 4, 26, 4, 30, 0, 0, time.UTC), "approved"); err != nil {
+					t.Fatalf("CreateHotUpdateOwnerApprovalDecisionFromRequest() error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionRejected,
+			reason:   "rejected",
+			wantErr:  "already exists",
+		},
+		{
+			name: "default reason replay against custom reason",
+			setup: func(t *testing.T) (string, string, string) {
+				root, _, _, _, request := writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t)
+				if _, _, err := missioncontrol.CreateHotUpdateOwnerApprovalDecisionFromRequest(root, request.OwnerApprovalRequestID, missioncontrol.HotUpdateOwnerApprovalDecisionGranted, "operator", time.Date(2026, 4, 26, 4, 30, 0, 0, time.UTC), "custom approval reason"); err != nil {
+					t.Fatalf("CreateHotUpdateOwnerApprovalDecisionFromRequest() error = %v", err)
+				}
+				return root, "job-1", request.OwnerApprovalRequestID
+			},
+			decision: missioncontrol.HotUpdateOwnerApprovalDecisionGranted,
+			reason:   "",
+			wantErr:  "already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, jobID, requestID := tt.setup(t)
+			ag := newLoopHotUpdateOutcomeAgent(t, root)
+			command := "HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE " + jobID + " " + requestID + " " + string(tt.decision)
+			if tt.reason != "" {
+				command += " " + tt.reason
+			}
+			resp, err := ag.ProcessDirect(command, 2*time.Second)
+			if err == nil {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE) error = nil, want fail-closed rejection")
+			}
+			if resp != "" {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE) response = %q, want empty on rejection", resp)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ProcessDirect(HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE) error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+			audits := ag.taskState.AuditEvents()
+			if len(audits) == 0 {
+				t.Fatal("AuditEvents() count = 0, want rejected owner approval decision audit event")
+			}
+			wantCode := tt.wantCode
+			if wantCode == "" {
+				wantCode = missioncontrol.RejectionCode("E_STEP_OUT_OF_ORDER")
+			}
+			assertAuditEvent(t, audits[len(audits)-1], "job-1", "build", "hot_update_owner_approval_decision_create", false, wantCode)
+		})
+	}
+}
+
 func TestProcessDirectHotUpdateGateFromDecisionCommandCreatesSelectsAndPreservesSourceRuntimeState(t *testing.T) {
 	t.Parallel()
 
@@ -8492,6 +8874,118 @@ func writeLoopHotUpdateOwnerApprovalRequestAuthorityFixture(t *testing.T) (strin
 		t.Fatal("CreateHotUpdateCanarySatisfactionAuthorityFromRequirement() changed = false, want true")
 	}
 	return root, requirement, evidence, authority
+}
+
+func writeLoopHotUpdateOwnerApprovalDecisionRequestFixture(t *testing.T) (string, missioncontrol.HotUpdateCanaryRequirementRecord, missioncontrol.HotUpdateCanaryEvidenceRecord, missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord, missioncontrol.HotUpdateOwnerApprovalRequestRecord) {
+	t.Helper()
+
+	root, requirement, evidence, authority := writeLoopHotUpdateOwnerApprovalRequestAuthorityFixture(t)
+	request, changed, err := missioncontrol.CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "operator", time.Date(2026, 4, 26, 4, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority() changed = false, want true")
+	}
+	return root, requirement, evidence, authority, request
+}
+
+type loopHotUpdateOwnerApprovalDecisionSideEffects struct {
+	files            map[string][]byte
+	reloadGeneration uint64
+}
+
+func snapshotLoopHotUpdateOwnerApprovalDecisionSideEffects(t *testing.T, root string, requirement missioncontrol.HotUpdateCanaryRequirementRecord, evidence missioncontrol.HotUpdateCanaryEvidenceRecord, authority missioncontrol.HotUpdateCanarySatisfactionAuthorityRecord, request missioncontrol.HotUpdateOwnerApprovalRequestRecord) loopHotUpdateOwnerApprovalDecisionSideEffects {
+	t.Helper()
+
+	paths := []string{
+		missioncontrol.StoreHotUpdateOwnerApprovalRequestPath(root, request.OwnerApprovalRequestID),
+		missioncontrol.StoreHotUpdateCanarySatisfactionAuthorityPath(root, authority.CanarySatisfactionAuthorityID),
+		missioncontrol.StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID),
+		missioncontrol.StoreHotUpdateCanaryEvidencePath(root, evidence.CanaryEvidenceID),
+		missioncontrol.StoreCandidateResultPath(root, requirement.ResultID),
+		missioncontrol.StoreImprovementRunPath(root, requirement.RunID),
+		missioncontrol.StoreImprovementCandidatePath(root, requirement.CandidateID),
+		missioncontrol.StoreEvalSuitePath(root, requirement.EvalSuiteID),
+		missioncontrol.StorePromotionPolicyPath(root, requirement.PromotionPolicyID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.BaselinePackID),
+		missioncontrol.StoreRuntimePackPath(root, requirement.CandidatePackID),
+		missioncontrol.StoreActiveRuntimePackPointerPath(root),
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) before error = %v", path, err)
+		}
+		files[path] = bytes
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+	}
+	return loopHotUpdateOwnerApprovalDecisionSideEffects{
+		files:            files,
+		reloadGeneration: pointer.ReloadGeneration,
+	}
+}
+
+func assertLoopHotUpdateOwnerApprovalDecisionSideEffectsUnchanged(t *testing.T, root string, before loopHotUpdateOwnerApprovalDecisionSideEffects) {
+	t.Helper()
+
+	for path, beforeBytes := range before.files {
+		afterBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) after error = %v", path, err)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("source/runtime file %s changed after hot-update owner approval decision command\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+	pointer, err := missioncontrol.LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+	}
+	if pointer.ReloadGeneration != before.reloadGeneration {
+		t.Fatalf("LoadActiveRuntimePackPointer().ReloadGeneration = %d, want %d", pointer.ReloadGeneration, before.reloadGeneration)
+	}
+}
+
+func assertLoopHotUpdateOwnerApprovalDecisionNoDownstreamRecords(t *testing.T, root string) {
+	t.Helper()
+
+	requests, err := missioncontrol.ListCommittedApprovalRequestRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalRequestRecords() error = %v", err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("ListCommittedApprovalRequestRecords() len = %d, want 0", len(requests))
+	}
+	grants, err := missioncontrol.ListCommittedApprovalGrantRecords(root, "job-1")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCommittedApprovalGrantRecords() error = %v", err)
+	}
+	if len(grants) != 0 {
+		t.Fatalf("ListCommittedApprovalGrantRecords() len = %d, want 0", len(grants))
+	}
+	decisions, err := missioncontrol.ListCandidatePromotionDecisionRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() error = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() len = %d, want 0", len(decisions))
+	}
+	gates, err := missioncontrol.ListHotUpdateGateRecords(root)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("ListHotUpdateGateRecords() error = %v", err)
+	}
+	if len(gates) != 0 {
+		t.Fatalf("ListHotUpdateGateRecords() len = %d, want 0", len(gates))
+	}
+	assertLoopCandidateDecisionGateNoTerminalRecords(t, root)
+	if _, err := os.Stat(missioncontrol.StoreLastKnownGoodRuntimePackPointerPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("last-known-good pointer exists or errored after owner approval decision command: %v", err)
+	}
 }
 
 type loopHotUpdateOwnerApprovalRequestSideEffects struct {
