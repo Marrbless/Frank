@@ -2640,6 +2640,112 @@ func taskStateCanarySatisfactionAuthorityAcceptsAssessmentState(state missioncon
 	}
 }
 
+func (s *TaskState) CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(jobID string, canarySatisfactionAuthorityID string) (missioncontrol.HotUpdateOwnerApprovalRequestRecord, bool, error) {
+	if s == nil {
+		return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, nil
+	}
+
+	now := taskStateTransitionTimestamp(taskStateNowUTC())
+
+	s.mu.Lock()
+	ec := missioncontrol.CloneExecutionContext(s.executionContext)
+	hasExecutionContext := s.hasExecutionContext
+	control := missioncontrol.CloneRuntimeControlContext(&s.runtimeControl)
+	hasRuntimeControl := s.hasRuntimeControl
+	runtimeState := missioncontrol.CloneJobRuntimeState(&s.runtimeState)
+	hasRuntimeState := s.hasRuntimeState
+	root := strings.TrimSpace(s.missionStoreRoot)
+	s.mu.Unlock()
+
+	const action = "hot_update_owner_approval_request_create"
+
+	auditEC := ec
+	if !hasExecutionContext {
+		auditEC = s.runtimeAuditContext(control, runtimeState)
+	}
+
+	if err := missioncontrol.ValidateStoreRoot(root); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+	}
+
+	if hasExecutionContext {
+		if ec.Job == nil || ec.Step == nil || ec.Runtime == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+		if ec.Job.ID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+	} else {
+		if !hasRuntimeState || runtimeState == nil {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires an active mission step",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+		if runtimeState.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+		if !hasRuntimeControl || control == nil || strings.TrimSpace(control.JobID) == "" {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeInvalidRuntimeState,
+				Message: "operator command requires persisted mission control context",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+		if control.JobID != jobID {
+			err := missioncontrol.ValidationError{
+				Code:    missioncontrol.RejectionCodeStepValidationFailed,
+				Message: "operator command does not match the active job",
+			}
+			s.emitRuntimeControlAuditEvent(auditEC, action, err)
+			return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+		}
+	}
+
+	authorityRef := missioncontrol.NormalizeHotUpdateCanarySatisfactionAuthorityRef(missioncontrol.HotUpdateCanarySatisfactionAuthorityRef{CanarySatisfactionAuthorityID: canarySatisfactionAuthorityID})
+	if err := missioncontrol.ValidateHotUpdateCanarySatisfactionAuthorityRef(authorityRef); err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+	}
+
+	requestID := missioncontrol.HotUpdateOwnerApprovalRequestIDFromCanarySatisfactionAuthority(authorityRef.CanarySatisfactionAuthorityID)
+	createdAt := now
+	if existing, err := missioncontrol.LoadHotUpdateOwnerApprovalRequestRecord(root, requestID); err == nil {
+		createdAt = existing.CreatedAt
+	} else if !errors.Is(err, missioncontrol.ErrHotUpdateOwnerApprovalRequestRecordNotFound) {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+	}
+
+	record, changed, err := missioncontrol.CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(root, authorityRef.CanarySatisfactionAuthorityID, "operator", createdAt)
+	if err != nil {
+		s.emitRuntimeControlAuditEvent(auditEC, action, err)
+		return missioncontrol.HotUpdateOwnerApprovalRequestRecord{}, false, err
+	}
+
+	s.emitRuntimeControlAuditEvent(auditEC, action, nil)
+	return record, changed, nil
+}
+
 func (s *TaskState) RecordHotUpdateExecutionReady(jobID string, hotUpdateID string, ttlSeconds int, reason string) (missioncontrol.HotUpdateExecutionSafetyEvidenceRecord, bool, error) {
 	if s == nil {
 		return missioncontrol.HotUpdateExecutionSafetyEvidenceRecord{}, false, nil
