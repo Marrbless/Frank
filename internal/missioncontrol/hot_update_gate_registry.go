@@ -1,6 +1,8 @@
 package missioncontrol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -450,6 +452,108 @@ func CreateHotUpdateGateFromCandidatePromotionDecision(root, promotionDecisionID
 			)
 		}
 		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q already exists with divergent candidate promotion decision authority", record.HotUpdateID)
+	}
+	if !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	if err := StoreHotUpdateGateRecord(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	stored, err := LoadHotUpdateGateRecord(root, record.HotUpdateID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	return stored, true, nil
+}
+
+func HotUpdateGateIDFromCanarySatisfactionAuthority(canarySatisfactionAuthorityID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(canarySatisfactionAuthorityID)))
+	return "hot-update-canary-gate-" + hex.EncodeToString(sum[:])
+}
+
+func CreateHotUpdateGateFromCanarySatisfactionAuthority(root string, canarySatisfactionAuthorityID string, ownerApprovalDecisionID string, createdBy string, createdAt time.Time) (HotUpdateGateRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	authorityRef := NormalizeHotUpdateCanarySatisfactionAuthorityRef(HotUpdateCanarySatisfactionAuthorityRef{CanarySatisfactionAuthorityID: canarySatisfactionAuthorityID})
+	if err := ValidateHotUpdateCanarySatisfactionAuthorityRef(authorityRef); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update canary gate created_by is required")
+	}
+	createdAt = createdAt.UTC()
+	if createdAt.IsZero() {
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update canary gate created_at is required")
+	}
+
+	authority, err := LoadHotUpdateCanarySatisfactionAuthorityRecord(root, authorityRef.CanarySatisfactionAuthorityID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateCanaryAuthoritySource(root, authority); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	approvalRef, expectedEligibility, expectedSatisfaction, err := validateHotUpdateGateCanaryOwnerApprovalBranch(root, authority, ownerApprovalDecisionID)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateCanaryAuthorityFreshness(root, authority, expectedSatisfaction, expectedEligibility); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateCanaryAuthorityRuntimeReadiness(root, authority); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	hotUpdateID := HotUpdateGateIDFromCanarySatisfactionAuthority(authority.CanarySatisfactionAuthorityID)
+	record, err := buildHotUpdateGateRecordFromCandidate(root, hotUpdateID, authority.CandidatePackID, createdBy, createdAt)
+	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	record.CanaryRef = authority.CanarySatisfactionAuthorityID
+	record.ApprovalRef = approvalRef
+	record = NormalizeHotUpdateGateRecord(record)
+	record.RecordVersion = normalizeRecordVersion(record.RecordVersion)
+	if err := ValidateHotUpdateGateRecord(record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := validateHotUpdateGateDerivedLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+
+	existing, err := LoadHotUpdateGateRecord(root, record.HotUpdateID)
+	if err == nil {
+		if reflect.DeepEqual(existing, record) {
+			return existing, false, nil
+		}
+		if existing.CandidatePackID != record.CandidatePackID {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q candidate_pack_id %q does not match canary satisfaction authority candidate_pack_id %q",
+				record.HotUpdateID,
+				existing.CandidatePackID,
+				record.CandidatePackID,
+			)
+		}
+		if existing.CanaryRef != record.CanaryRef {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q canary_ref %q does not match canary satisfaction authority %q",
+				record.HotUpdateID,
+				existing.CanaryRef,
+				record.CanaryRef,
+			)
+		}
+		if existing.ApprovalRef != record.ApprovalRef {
+			return HotUpdateGateRecord{}, false, fmt.Errorf(
+				"mission store hot-update gate %q approval_ref %q does not match owner approval decision %q",
+				record.HotUpdateID,
+				existing.ApprovalRef,
+				record.ApprovalRef,
+			)
+		}
+		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q already exists with divergent canary satisfaction authority", record.HotUpdateID)
 	}
 	if !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
 		return HotUpdateGateRecord{}, false, err
@@ -1006,6 +1110,232 @@ func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord
 	}
 	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
 		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryOwnerApprovalBranch(root string, authority HotUpdateCanarySatisfactionAuthorityRecord, ownerApprovalDecisionID string) (string, string, HotUpdateCanarySatisfactionState, error) {
+	ownerApprovalDecisionID = strings.TrimSpace(ownerApprovalDecisionID)
+	switch authority.State {
+	case HotUpdateCanarySatisfactionAuthorityStateAuthorized:
+		if authority.OwnerApprovalRequired {
+			return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q owner_approval_required must be false for authorized gate creation", authority.CanarySatisfactionAuthorityID)
+		}
+		if authority.SatisfactionState != HotUpdateCanarySatisfactionStateSatisfied {
+			return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q satisfaction_state must be %q for authorized gate creation", authority.CanarySatisfactionAuthorityID, HotUpdateCanarySatisfactionStateSatisfied)
+		}
+		if ownerApprovalDecisionID != "" {
+			return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q does not accept owner approval decision for no-owner-approval gate creation", authority.CanarySatisfactionAuthorityID)
+		}
+		return "", CandidatePromotionEligibilityStateCanaryRequired, HotUpdateCanarySatisfactionStateSatisfied, nil
+	case HotUpdateCanarySatisfactionAuthorityStateWaitingOwnerApproval:
+		if !authority.OwnerApprovalRequired {
+			return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q owner_approval_required must be true for owner-approved gate creation", authority.CanarySatisfactionAuthorityID)
+		}
+		if authority.SatisfactionState != HotUpdateCanarySatisfactionStateWaitingOwnerApproval {
+			return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q satisfaction_state must be %q for owner-approved gate creation", authority.CanarySatisfactionAuthorityID, HotUpdateCanarySatisfactionStateWaitingOwnerApproval)
+		}
+		decisionRef := NormalizeHotUpdateOwnerApprovalDecisionRef(HotUpdateOwnerApprovalDecisionRef{OwnerApprovalDecisionID: ownerApprovalDecisionID})
+		if err := ValidateHotUpdateOwnerApprovalDecisionRef(decisionRef); err != nil {
+			return "", "", "", err
+		}
+		decision, err := LoadHotUpdateOwnerApprovalDecisionRecord(root, decisionRef.OwnerApprovalDecisionID)
+		if err != nil {
+			return "", "", "", err
+		}
+		if decision.Decision != HotUpdateOwnerApprovalDecisionGranted {
+			return "", "", "", fmt.Errorf("mission store hot-update owner approval decision %q decision %q does not permit hot-update canary gate creation", decision.OwnerApprovalDecisionID, decision.Decision)
+		}
+		if err := validateHotUpdateGateOwnerApprovalDecisionMatchesAuthority(decision, authority); err != nil {
+			return "", "", "", err
+		}
+		return decision.OwnerApprovalDecisionID, CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired, HotUpdateCanarySatisfactionStateWaitingOwnerApproval, nil
+	default:
+		return "", "", "", fmt.Errorf("mission store hot-update canary satisfaction authority %q state %q does not permit hot-update canary gate creation", authority.CanarySatisfactionAuthorityID, authority.State)
+	}
+}
+
+func validateHotUpdateGateCanaryAuthorityFreshness(root string, authority HotUpdateCanarySatisfactionAuthorityRecord, expectedSatisfaction HotUpdateCanarySatisfactionState, expectedEligibility string) error {
+	requirement, err := LoadHotUpdateCanaryRequirementRecord(root, authority.CanaryRequirementID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate canary_requirement_id %q: %w", authority.CanaryRequirementID, err)
+	}
+	evidence, err := LoadHotUpdateCanaryEvidenceRecord(root, authority.SelectedCanaryEvidenceID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate selected_canary_evidence_id %q: %w", authority.SelectedCanaryEvidenceID, err)
+	}
+	assessment, err := AssessHotUpdateCanarySatisfaction(root, authority.CanaryRequirementID)
+	if err != nil {
+		return err
+	}
+	if assessment.State != "configured" {
+		return fmt.Errorf("mission store hot-update canary gate requires configured canary satisfaction assessment, found state %q: %s", assessment.State, assessment.Error)
+	}
+	if assessment.SatisfactionState != expectedSatisfaction {
+		return fmt.Errorf("mission store hot-update canary gate requires canary satisfaction_state %q, found %q", expectedSatisfaction, assessment.SatisfactionState)
+	}
+	if err := validateHotUpdateCanarySatisfactionAuthorityMatchesRequirementEvidenceAssessment(authority, requirement, evidence, assessment); err != nil {
+		return err
+	}
+
+	status, err := EvaluateCandidateResultPromotionEligibility(root, authority.ResultID)
+	if err != nil {
+		return err
+	}
+	if status.State != expectedEligibility {
+		return fmt.Errorf("mission store candidate result %q promotion eligibility state %q does not permit hot-update canary gate creation", authority.ResultID, status.State)
+	}
+	if status.RunID != authority.RunID ||
+		status.CandidateID != authority.CandidateID ||
+		status.EvalSuiteID != authority.EvalSuiteID ||
+		status.PromotionPolicyID != authority.PromotionPolicyID ||
+		status.BaselinePackID != authority.BaselinePackID ||
+		status.CandidatePackID != authority.CandidatePackID ||
+		status.OwnerApprovalRequired != authority.OwnerApprovalRequired {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority %q does not match derived promotion eligibility status", authority.CanarySatisfactionAuthorityID)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthorityRuntimeReadiness(root string, authority HotUpdateCanarySatisfactionAuthorityRecord) error {
+	candidatePack, err := LoadRuntimePackRecord(root, authority.CandidatePackID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q: %w", authority.CandidatePackID, err)
+	}
+	if candidatePack.RollbackTargetPackID == "" {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q rollback_target_pack_id is required", candidatePack.PackID)
+	}
+	if _, err := LoadRuntimePackRecord(root, candidatePack.RollbackTargetPackID); err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q rollback_target_pack_id %q: %w", candidatePack.PackID, candidatePack.RollbackTargetPackID, err)
+	}
+
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return err
+	}
+	if activePointer.ActivePackID != authority.BaselinePackID {
+		return fmt.Errorf(
+			"mission store hot-update canary satisfaction authority %q requires active runtime pack pointer active_pack_id %q, found %q",
+			authority.CanarySatisfactionAuthorityID,
+			authority.BaselinePackID,
+			activePointer.ActivePackID,
+		)
+	}
+	if _, err := LoadLastKnownGoodRuntimePackPointer(root); err != nil && !errors.Is(err, ErrLastKnownGoodRuntimePackPointerNotFound) {
+		return err
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthoritySource(root string, authority HotUpdateCanarySatisfactionAuthorityRecord) error {
+	result, err := LoadCandidateResultRecord(root, authority.ResultID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate result_id %q: %w", authority.ResultID, err)
+	}
+	if result.RunID != authority.RunID ||
+		result.CandidateID != authority.CandidateID ||
+		result.EvalSuiteID != authority.EvalSuiteID ||
+		result.PromotionPolicyID != authority.PromotionPolicyID ||
+		result.BaselinePackID != authority.BaselinePackID ||
+		result.CandidatePackID != authority.CandidatePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority %q does not match candidate result %q", authority.CanarySatisfactionAuthorityID, authority.ResultID)
+	}
+	run, err := LoadImprovementRunRecord(root, authority.RunID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate run_id %q: %w", authority.RunID, err)
+	}
+	if err := validateHotUpdateGateCanaryAuthorityRun(authority, run); err != nil {
+		return err
+	}
+	candidate, err := LoadImprovementCandidateRecord(root, authority.CandidateID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_id %q: %w", authority.CandidateID, err)
+	}
+	if err := validateHotUpdateGateCanaryAuthorityCandidate(authority, candidate); err != nil {
+		return err
+	}
+	evalSuite, err := LoadEvalSuiteRecord(root, authority.EvalSuiteID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate eval_suite_id %q: %w", authority.EvalSuiteID, err)
+	}
+	if err := validateHotUpdateGateCanaryAuthorityEvalSuite(authority, evalSuite); err != nil {
+		return err
+	}
+	if _, err := LoadPromotionPolicyRecord(root, authority.PromotionPolicyID); err != nil {
+		return fmt.Errorf("mission store hot-update canary gate promotion_policy_id %q: %w", authority.PromotionPolicyID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, authority.BaselinePackID); err != nil {
+		return fmt.Errorf("mission store hot-update canary gate baseline_pack_id %q: %w", authority.BaselinePackID, err)
+	}
+	if _, err := LoadRuntimePackRecord(root, authority.CandidatePackID); err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q: %w", authority.CandidatePackID, err)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthorityRun(authority HotUpdateCanarySatisfactionAuthorityRecord, run ImprovementRunRecord) error {
+	if run.RunID != authority.RunID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority run_id %q does not match improvement run run_id %q", authority.RunID, run.RunID)
+	}
+	if run.CandidateID != authority.CandidateID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_id %q does not match improvement run candidate_id %q", authority.CandidateID, run.CandidateID)
+	}
+	if run.EvalSuiteID != authority.EvalSuiteID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority eval_suite_id %q does not match improvement run eval_suite_id %q", authority.EvalSuiteID, run.EvalSuiteID)
+	}
+	if run.BaselinePackID != authority.BaselinePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority baseline_pack_id %q does not match improvement run baseline_pack_id %q", authority.BaselinePackID, run.BaselinePackID)
+	}
+	if run.CandidatePackID != authority.CandidatePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_pack_id %q does not match improvement run candidate_pack_id %q", authority.CandidatePackID, run.CandidatePackID)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthorityCandidate(authority HotUpdateCanarySatisfactionAuthorityRecord, candidate ImprovementCandidateRecord) error {
+	if candidate.CandidateID != authority.CandidateID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_id %q does not match improvement candidate candidate_id %q", authority.CandidateID, candidate.CandidateID)
+	}
+	if candidate.BaselinePackID != authority.BaselinePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority baseline_pack_id %q does not match improvement candidate baseline_pack_id %q", authority.BaselinePackID, candidate.BaselinePackID)
+	}
+	if candidate.CandidatePackID != authority.CandidatePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_pack_id %q does not match improvement candidate candidate_pack_id %q", authority.CandidatePackID, candidate.CandidatePackID)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthorityEvalSuite(authority HotUpdateCanarySatisfactionAuthorityRecord, evalSuite EvalSuiteRecord) error {
+	if evalSuite.EvalSuiteID != authority.EvalSuiteID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority eval_suite_id %q does not match eval-suite eval_suite_id %q", authority.EvalSuiteID, evalSuite.EvalSuiteID)
+	}
+	if evalSuite.CandidateID != "" && evalSuite.CandidateID != authority.CandidateID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_id %q does not match eval-suite candidate_id %q", authority.CandidateID, evalSuite.CandidateID)
+	}
+	if evalSuite.BaselinePackID != "" && evalSuite.BaselinePackID != authority.BaselinePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority baseline_pack_id %q does not match eval-suite baseline_pack_id %q", authority.BaselinePackID, evalSuite.BaselinePackID)
+	}
+	if evalSuite.CandidatePackID != "" && evalSuite.CandidatePackID != authority.CandidatePackID {
+		return fmt.Errorf("mission store hot-update canary satisfaction authority candidate_pack_id %q does not match eval-suite candidate_pack_id %q", authority.CandidatePackID, evalSuite.CandidatePackID)
+	}
+	return nil
+}
+
+func validateHotUpdateGateOwnerApprovalDecisionMatchesAuthority(decision HotUpdateOwnerApprovalDecisionRecord, authority HotUpdateCanarySatisfactionAuthorityRecord) error {
+	if decision.CanarySatisfactionAuthorityID != authority.CanarySatisfactionAuthorityID ||
+		decision.CanaryRequirementID != authority.CanaryRequirementID ||
+		decision.SelectedCanaryEvidenceID != authority.SelectedCanaryEvidenceID ||
+		decision.ResultID != authority.ResultID ||
+		decision.RunID != authority.RunID ||
+		decision.CandidateID != authority.CandidateID ||
+		decision.EvalSuiteID != authority.EvalSuiteID ||
+		decision.PromotionPolicyID != authority.PromotionPolicyID ||
+		decision.BaselinePackID != authority.BaselinePackID ||
+		decision.CandidatePackID != authority.CandidatePackID ||
+		decision.AuthorityState != authority.State ||
+		decision.SatisfactionState != authority.SatisfactionState ||
+		decision.OwnerApprovalRequired != authority.OwnerApprovalRequired {
+		return fmt.Errorf("mission store hot-update owner approval decision %q does not match canary satisfaction authority %q", decision.OwnerApprovalDecisionID, authority.CanarySatisfactionAuthorityID)
 	}
 	return nil
 }

@@ -710,6 +710,503 @@ func TestCreateHotUpdateGateFromCandidatePromotionDecisionPreservesSourceAndRunt
 	}
 }
 
+func TestHotUpdateGateIDFromCanarySatisfactionAuthorityIsStableAndFilenameSafe(t *testing.T) {
+	t.Parallel()
+
+	first := HotUpdateGateIDFromCanarySatisfactionAuthority(" authority-1 ")
+	second := HotUpdateGateIDFromCanarySatisfactionAuthority("authority-1")
+	if first != second {
+		t.Fatalf("HotUpdateGateIDFromCanarySatisfactionAuthority() = %q then %q, want stable normalized id", first, second)
+	}
+	if !strings.HasPrefix(first, "hot-update-canary-gate-") {
+		t.Fatalf("HotUpdateGateIDFromCanarySatisfactionAuthority() = %q, want public prefix", first)
+	}
+	if strings.ContainsAny(first, `/\ `) || len(first) != len("hot-update-canary-gate-")+64 {
+		t.Fatalf("HotUpdateGateIDFromCanarySatisfactionAuthority() = %q, want filename-safe full sha256 id", first)
+	}
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityAuthorizedNoOwnerCreatesPreparedGate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC)
+	_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+	rewriteRuntimePackRecord(t, root, authority.CandidatePackID, func(record *RuntimePackRecord) {
+		record.MutableSurfaces = []string{"skills"}
+	})
+
+	got, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, " "+authority.CanarySatisfactionAuthorityID+" ", "", " operator ", now.Add(30*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got.HotUpdateID != HotUpdateGateIDFromCanarySatisfactionAuthority(authority.CanarySatisfactionAuthorityID) {
+		t.Fatalf("HotUpdateID = %q, want deterministic canary authority id", got.HotUpdateID)
+	}
+	if got.CanaryRef != authority.CanarySatisfactionAuthorityID {
+		t.Fatalf("CanaryRef = %q, want %q", got.CanaryRef, authority.CanarySatisfactionAuthorityID)
+	}
+	if got.ApprovalRef != "" {
+		t.Fatalf("ApprovalRef = %q, want empty", got.ApprovalRef)
+	}
+	if got.State != HotUpdateGateStatePrepared || got.Decision != HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("state/decision = %q/%q, want prepared/keep_staged", got.State, got.Decision)
+	}
+	if got.ReloadMode != HotUpdateReloadModeSkillReload {
+		t.Fatalf("ReloadMode = %q, want skill_reload", got.ReloadMode)
+	}
+	if got.PreviousActivePackID != authority.BaselinePackID || got.CandidatePackID != authority.CandidatePackID || got.RollbackTargetPackID != authority.BaselinePackID {
+		t.Fatalf("gate packs = prev:%q candidate:%q rollback:%q, want authority baseline/candidate/rollback",
+			got.PreviousActivePackID, got.CandidatePackID, got.RollbackTargetPackID)
+	}
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityOwnerApprovedCreatesPreparedGate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 29, 10, 30, 0, 0, time.UTC)
+	_, _, authority, _, decision := storeOwnerApprovedCanaryGateFixture(t, root, now, HotUpdateOwnerApprovalDecisionGranted)
+
+	got, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, decision.OwnerApprovalDecisionID, "operator", now.Add(30*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+	if got.CanaryRef != authority.CanarySatisfactionAuthorityID {
+		t.Fatalf("CanaryRef = %q, want %q", got.CanaryRef, authority.CanarySatisfactionAuthorityID)
+	}
+	if got.ApprovalRef != decision.OwnerApprovalDecisionID {
+		t.Fatalf("ApprovalRef = %q, want %q", got.ApprovalRef, decision.OwnerApprovalDecisionID)
+	}
+	if got.State != HotUpdateGateStatePrepared || got.Decision != HotUpdateGateDecisionKeepStaged {
+		t.Fatalf("state/decision = %q/%q, want prepared/keep_staged", got.State, got.Decision)
+	}
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityRejectsBadOwnerApprovalBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("owner approved branch requires decision id", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 11, 0, 0, 0, time.UTC)
+		_, _, authority := storeWaitingOwnerApprovalAuthority(t, root, now)
+		storeCanaryGateActivePointer(t, root, now, authority.BaselinePackID, false)
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want missing decision rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+	})
+
+	t.Run("rejected decision blocks gate", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 11, 15, 0, 0, time.UTC)
+		_, _, authority, _, decision := storeOwnerApprovedCanaryGateFixture(t, root, now, HotUpdateOwnerApprovalDecisionRejected)
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, decision.OwnerApprovalDecisionID, "operator", now.Add(30*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want rejected decision rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), `decision "rejected" does not permit`) {
+			t.Fatalf("rejected decision error = %q, want decision context", err.Error())
+		}
+	})
+
+	t.Run("decision for different authority is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 11, 30, 0, 0, time.UTC)
+		_, _, authority := storeWaitingOwnerApprovalAuthority(t, root, now)
+		storeCanaryGateActivePointer(t, root, now, authority.BaselinePackID, false)
+		_, _, otherAuthority := storeSecondWaitingOwnerApprovalAuthority(t, root, now.Add(time.Hour))
+		request, _, err := CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(root, otherAuthority.CanarySatisfactionAuthorityID, "operator", now.Add(90*time.Minute))
+		if err != nil {
+			t.Fatalf("CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(other) error = %v", err)
+		}
+		decision, _, err := CreateHotUpdateOwnerApprovalDecisionFromRequest(root, request.OwnerApprovalRequestID, HotUpdateOwnerApprovalDecisionGranted, "operator", now.Add(91*time.Minute), "approved")
+		if err != nil {
+			t.Fatalf("CreateHotUpdateOwnerApprovalDecisionFromRequest(other) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, decision.OwnerApprovalDecisionID, "operator", now.Add(92*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want mismatched authority rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), "does not match canary satisfaction authority") {
+			t.Fatalf("mismatched decision error = %q, want authority context", err.Error())
+		}
+	})
+
+	t.Run("no owner branch rejects non-empty decision id", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 11, 45, 0, 0, time.UTC)
+		_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "owner-decision-1", "operator", now.Add(30*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want ambiguous approval rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+	})
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityRejectsStaleCanaryAndEligibility(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stale canary satisfaction", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+		_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+		if _, _, err := CreateHotUpdateCanaryEvidenceFromRequirement(root, authority.CanaryRequirementID, HotUpdateCanaryEvidenceStateFailed, now.Add(40*time.Minute), "operator", now.Add(41*time.Minute), "canary failed later"); err != nil {
+			t.Fatalf("CreateHotUpdateCanaryEvidenceFromRequirement(failed) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(42*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want stale canary rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), "satisfaction_state") {
+			t.Fatalf("stale satisfaction error = %q, want satisfaction context", err.Error())
+		}
+	})
+
+	t.Run("stale eligibility", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 12, 15, 0, 0, time.UTC)
+		_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+		result, err := LoadCandidateResultRecord(root, authority.ResultID)
+		if err != nil {
+			t.Fatalf("LoadCandidateResultRecord() error = %v", err)
+		}
+		result.HoldoutScore = result.BaselineScore
+		if err := WriteStoreJSONAtomic(StoreCandidateResultPath(root, result.ResultID), result); err != nil {
+			t.Fatalf("WriteStoreJSONAtomic(result stale) error = %v", err)
+		}
+
+		_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute))
+		if err == nil {
+			t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want stale eligibility rejection")
+		}
+		if changed {
+			t.Fatal("changed = true, want false")
+		}
+		if !strings.Contains(err.Error(), "promotion eligibility") {
+			t.Fatalf("stale eligibility error = %q, want eligibility context", err.Error())
+		}
+	})
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityRejectsMissingSourceRuntimeAndPointerRecords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		edit func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord)
+		want string
+	}{
+		{name: "missing authority", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreHotUpdateCanarySatisfactionAuthorityPath(root, authority.CanarySatisfactionAuthorityID)); err != nil {
+				t.Fatalf("Remove(authority) error = %v", err)
+			}
+		}, want: ErrHotUpdateCanarySatisfactionAuthorityRecordNotFound.Error()},
+		{name: "missing selected evidence", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreHotUpdateCanaryEvidencePath(root, authority.SelectedCanaryEvidenceID)); err != nil {
+				t.Fatalf("Remove(evidence) error = %v", err)
+			}
+		}, want: "selected_canary_evidence_id"},
+		{name: "missing candidate result", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreCandidateResultPath(root, authority.ResultID)); err != nil {
+				t.Fatalf("Remove(result) error = %v", err)
+			}
+		}, want: "result_id"},
+		{name: "missing improvement run", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreImprovementRunPath(root, authority.RunID)); err != nil {
+				t.Fatalf("Remove(run) error = %v", err)
+			}
+		}, want: "run_id"},
+		{name: "missing improvement candidate", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreImprovementCandidatePath(root, authority.CandidateID)); err != nil {
+				t.Fatalf("Remove(candidate) error = %v", err)
+			}
+		}, want: "candidate_id"},
+		{name: "non-linkable eval suite", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			evalSuite, err := LoadEvalSuiteRecord(root, authority.EvalSuiteID)
+			if err != nil {
+				t.Fatalf("LoadEvalSuiteRecord() error = %v", err)
+			}
+			evalSuite.CandidateID = "candidate-other"
+			if err := WriteStoreJSONAtomic(StoreEvalSuitePath(root, evalSuite.EvalSuiteID), evalSuite); err != nil {
+				t.Fatalf("WriteStoreJSONAtomic(eval suite mismatch) error = %v", err)
+			}
+		}, want: "eval-suite candidate_id"},
+		{name: "missing promotion policy", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StorePromotionPolicyPath(root, authority.PromotionPolicyID)); err != nil {
+				t.Fatalf("Remove(policy) error = %v", err)
+			}
+		}, want: "promotion_policy_id"},
+		{name: "missing baseline pack", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreRuntimePackPath(root, authority.BaselinePackID)); err != nil {
+				t.Fatalf("Remove(baseline pack) error = %v", err)
+			}
+		}, want: "baseline_pack_id"},
+		{name: "missing candidate pack", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreRuntimePackPath(root, authority.CandidatePackID)); err != nil {
+				t.Fatalf("Remove(candidate pack) error = %v", err)
+			}
+		}, want: "candidate_pack_id"},
+		{name: "missing active pointer", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := os.Remove(StoreActiveRuntimePackPointerPath(root)); err != nil {
+				t.Fatalf("Remove(active pointer) error = %v", err)
+			}
+		}, want: ErrActiveRuntimePackPointerNotFound.Error()},
+		{name: "stale active pointer", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			mustStoreRuntimePack(t, root, validRuntimePackRecord(time.Date(2026, 4, 29, 12, 45, 0, 0, time.UTC), func(record *RuntimePackRecord) {
+				record.PackID = "pack-other-active"
+			}))
+			if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+				ActivePackID:        "pack-other-active",
+				LastKnownGoodPackID: authority.BaselinePackID,
+				UpdatedAt:           time.Date(2026, 4, 29, 12, 46, 0, 0, time.UTC),
+				UpdatedBy:           "operator",
+				UpdateRecordRef:     "bootstrap-other",
+				ReloadGeneration:    3,
+			}); err != nil {
+				t.Fatalf("StoreActiveRuntimePackPointer(stale) error = %v", err)
+			}
+		}, want: "requires active runtime pack pointer"},
+		{name: "missing rollback target field", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			rewriteRuntimePackRecord(t, root, authority.CandidatePackID, func(record *RuntimePackRecord) {
+				record.RollbackTargetPackID = ""
+			})
+		}, want: "rollback_target_pack_id is required"},
+		{name: "missing rollback target pack", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			rewriteRuntimePackRecord(t, root, authority.CandidatePackID, func(record *RuntimePackRecord) {
+				record.RollbackTargetPackID = "pack-missing-rollback"
+			})
+		}, want: "pack-missing-rollback"},
+		{name: "invalid present last-known-good pointer", edit: func(t *testing.T, root string, authority HotUpdateCanarySatisfactionAuthorityRecord) {
+			t.Helper()
+			if err := WriteStoreJSONAtomic(StoreLastKnownGoodRuntimePackPointerPath(root), LastKnownGoodRuntimePackPointer{
+				RecordVersion:     StoreRecordVersion,
+				PackID:            "pack-missing-lkg",
+				Basis:             "holdout_pass",
+				VerifiedAt:        time.Date(2026, 4, 29, 12, 47, 0, 0, time.UTC),
+				VerifiedBy:        "operator",
+				RollbackRecordRef: "bootstrap",
+			}); err != nil {
+				t.Fatalf("WriteStoreJSONAtomic(invalid lkg) error = %v", err)
+			}
+		}, want: "pack-missing-lkg"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 4, 29, 12, 30, 0, 0, time.UTC)
+			_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+			tt.edit(t, root, authority)
+
+			_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute))
+			if err == nil {
+				t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want fail-closed rejection")
+			}
+			if changed {
+				t.Fatal("changed = true, want false")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateHotUpdateGateFromCanarySatisfactionAuthorityReplayDuplicatesAndSideEffects(t *testing.T) {
+	t.Parallel()
+
+	t.Run("exact replay is byte stable", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 13, 0, 0, 0, time.UTC)
+		_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+		createdAt := now.Add(30 * time.Minute)
+
+		first, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", createdAt)
+		if err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority(first) error = %v", err)
+		}
+		if !changed {
+			t.Fatal("first changed = false, want true")
+		}
+		firstBytes := mustReadFileBytes(t, StoreHotUpdateGatePath(root, first.HotUpdateID))
+
+		second, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, " "+authority.CanarySatisfactionAuthorityID+" ", "", " operator ", createdAt)
+		if err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority(replay) error = %v", err)
+		}
+		if changed {
+			t.Fatal("replay changed = true, want false")
+		}
+		if !reflect.DeepEqual(second, first) {
+			t.Fatalf("replay = %#v, want %#v", second, first)
+		}
+		assertBytesEqual(t, "hot-update canary gate replay", firstBytes, mustReadFileBytes(t, StoreHotUpdateGatePath(root, first.HotUpdateID)))
+	})
+
+	t.Run("divergent duplicate and mismatched refs fail closed", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			edit func(*HotUpdateGateRecord)
+			want string
+		}{
+			{name: "divergent timestamp", edit: func(record *HotUpdateGateRecord) {
+				record.PreparedAt = record.PreparedAt.Add(time.Minute)
+				record.PhaseUpdatedAt = record.PhaseUpdatedAt.Add(time.Minute)
+			}, want: "already exists with divergent canary satisfaction authority"},
+			{name: "different candidate", edit: func(record *HotUpdateGateRecord) {
+				record.CandidatePackID = "pack-other-candidate"
+				record.RollbackTargetPackID = "pack-base"
+			}, want: "candidate_pack_id"},
+			{name: "mismatched canary ref", edit: func(record *HotUpdateGateRecord) {
+				record.CanaryRef = "other-canary-authority"
+			}, want: "canary_ref"},
+			{name: "mismatched approval ref", edit: func(record *HotUpdateGateRecord) {
+				record.ApprovalRef = "unexpected-approval"
+			}, want: "approval_ref"},
+		}
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				root := t.TempDir()
+				now := time.Date(2026, 4, 29, 13, 30, 0, 0, time.UTC)
+				_, _, authority := storeAuthorizedCanaryGateFixture(t, root, now, false)
+				if tc.name == "different candidate" {
+					mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(40*time.Minute), func(record *RuntimePackRecord) {
+						record.PackID = "pack-other-candidate"
+						record.RollbackTargetPackID = authority.BaselinePackID
+					}))
+				}
+				gate, _, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute))
+				if err != nil {
+					t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority(first) error = %v", err)
+				}
+				tc.edit(&gate)
+				if err := StoreHotUpdateGateRecord(root, gate); err != nil {
+					t.Fatalf("StoreHotUpdateGateRecord(divergent) error = %v", err)
+				}
+
+				_, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute))
+				if err == nil {
+					t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = nil, want duplicate rejection")
+				}
+				if changed {
+					t.Fatal("changed = true, want false")
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("duplicate error = %q, want substring %q", err.Error(), tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("preserves source records and runtime pointers", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		now := time.Date(2026, 4, 29, 14, 0, 0, 0, time.UTC)
+		requirement, evidence, authority := storeAuthorizedCanaryGateFixture(t, root, now, true)
+		paths := []string{
+			StoreCandidateResultPath(root, authority.ResultID),
+			StoreImprovementRunPath(root, authority.RunID),
+			StoreImprovementCandidatePath(root, authority.CandidateID),
+			StoreEvalSuitePath(root, authority.EvalSuiteID),
+			StorePromotionPolicyPath(root, authority.PromotionPolicyID),
+			StoreRuntimePackPath(root, authority.BaselinePackID),
+			StoreRuntimePackPath(root, authority.CandidatePackID),
+			StoreActiveRuntimePackPointerPath(root),
+			StoreLastKnownGoodRuntimePackPointerPath(root),
+			StoreHotUpdateCanaryRequirementPath(root, requirement.CanaryRequirementID),
+			StoreHotUpdateCanaryEvidencePath(root, evidence.CanaryEvidenceID),
+			StoreHotUpdateCanarySatisfactionAuthorityPath(root, authority.CanarySatisfactionAuthorityID),
+		}
+		snapshots := map[string][]byte{}
+		for _, path := range paths {
+			snapshots[path] = mustReadFileBytes(t, path)
+		}
+		beforePointer, err := LoadActiveRuntimePackPointer(root)
+		if err != nil {
+			t.Fatalf("LoadActiveRuntimePackPointer(before) error = %v", err)
+		}
+
+		if _, _, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "", "operator", now.Add(30*time.Minute)); err != nil {
+			t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = %v", err)
+		}
+
+		for path, before := range snapshots {
+			assertBytesEqual(t, path, before, mustReadFileBytes(t, path))
+		}
+		afterPointer, err := LoadActiveRuntimePackPointer(root)
+		if err != nil {
+			t.Fatalf("LoadActiveRuntimePackPointer(after) error = %v", err)
+		}
+		if afterPointer.ReloadGeneration != beforePointer.ReloadGeneration {
+			t.Fatalf("ReloadGeneration = %d, want unchanged %d", afterPointer.ReloadGeneration, beforePointer.ReloadGeneration)
+		}
+		assertNoHotUpdateOwnerApprovalRequestDownstreamRecords(t, root)
+	})
+}
+
 func TestAdvanceHotUpdateGatePhaseValidProgressionAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 
@@ -2335,6 +2832,77 @@ func storeCandidatePromotionDecisionGateFixture(t *testing.T, root string, now t
 		t.Fatal("CreateCandidatePromotionDecisionFromEligibleResult() changed = false, want true")
 	}
 	return decision
+}
+
+func storeAuthorizedCanaryGateFixture(t *testing.T, root string, now time.Time, withLastKnownGood bool) (HotUpdateCanaryRequirementRecord, HotUpdateCanaryEvidenceRecord, HotUpdateCanarySatisfactionAuthorityRecord) {
+	t.Helper()
+
+	requirement := storeCanaryRequirementForEvidence(t, root, now, nil, nil)
+	evidence, _, err := CreateHotUpdateCanaryEvidenceFromRequirement(root, requirement.CanaryRequirementID, HotUpdateCanaryEvidenceStatePassed, now.Add(20*time.Minute), "operator", now.Add(21*time.Minute), "canary passed")
+	if err != nil {
+		t.Fatalf("CreateHotUpdateCanaryEvidenceFromRequirement() error = %v", err)
+	}
+	authority, _, err := CreateHotUpdateCanarySatisfactionAuthorityFromRequirement(root, requirement.CanaryRequirementID, "operator", now.Add(22*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateCanarySatisfactionAuthorityFromRequirement() error = %v", err)
+	}
+	storeCanaryGateActivePointer(t, root, now, authority.BaselinePackID, withLastKnownGood)
+	return requirement, evidence, authority
+}
+
+func storeOwnerApprovedCanaryGateFixture(t *testing.T, root string, now time.Time, decision HotUpdateOwnerApprovalDecision) (HotUpdateCanaryRequirementRecord, HotUpdateCanaryEvidenceRecord, HotUpdateCanarySatisfactionAuthorityRecord, HotUpdateOwnerApprovalRequestRecord, HotUpdateOwnerApprovalDecisionRecord) {
+	t.Helper()
+
+	requirement, evidence, authority := storeWaitingOwnerApprovalAuthority(t, root, now)
+	request, _, err := CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority(root, authority.CanarySatisfactionAuthorityID, "operator", now.Add(23*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOwnerApprovalRequestFromCanarySatisfactionAuthority() error = %v", err)
+	}
+	decisionRecord, _, err := CreateHotUpdateOwnerApprovalDecisionFromRequest(root, request.OwnerApprovalRequestID, decision, "operator", now.Add(24*time.Minute), string(decision))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOwnerApprovalDecisionFromRequest() error = %v", err)
+	}
+	storeCanaryGateActivePointer(t, root, now, authority.BaselinePackID, false)
+	return requirement, evidence, authority, request, decisionRecord
+}
+
+func storeCanaryGateActivePointer(t *testing.T, root string, now time.Time, activePackID string, withLastKnownGood bool) {
+	t.Helper()
+
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        activePackID,
+		LastKnownGoodPackID: activePackID,
+		UpdatedAt:           now.Add(25 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if withLastKnownGood {
+		if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+			PackID:            activePackID,
+			Basis:             "holdout_pass",
+			VerifiedAt:        now.Add(25 * time.Minute),
+			VerifiedBy:        "operator",
+			RollbackRecordRef: "bootstrap",
+		}); err != nil {
+			t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+		}
+	}
+}
+
+func rewriteRuntimePackRecord(t *testing.T, root string, packID string, mutate func(*RuntimePackRecord)) {
+	t.Helper()
+
+	record, err := LoadRuntimePackRecord(root, packID)
+	if err != nil {
+		t.Fatalf("LoadRuntimePackRecord(%s) error = %v", packID, err)
+	}
+	mutate(&record)
+	if err := StoreRuntimePackRecord(root, record); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", packID, err)
+	}
 }
 
 func storeHotUpdateRecoveryNeededFixture(t *testing.T, root string, now time.Time, hotUpdateID string) {
