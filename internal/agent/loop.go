@@ -26,6 +26,7 @@ import (
 var rememberRE = regexp.MustCompile(`(?i)^remember(?:\s+to)?\s+(.+)$`)
 var approvalCommandRE = regexp.MustCompile(`(?i)^\s*(approve|deny)\s+(\S+)\s+(\S+)\s*$`)
 var revokeApprovalCommandRE = regexp.MustCompile(`(?i)^\s*(revoke_approval)\s+(\S+)\s+(\S+)\s*$`)
+var hotUpdateHelpCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_help|help\s+hot_update|help\s+v4)\s*$`)
 var rollbackRecordCommandRE = regexp.MustCompile(`(?i)^\s*(rollback_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateGateRecordCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_gate_record)\s+(\S+)\s+(\S+)\s+(\S+)\s*$`)
 var hotUpdateCanaryRequirementCreateCommandRE = regexp.MustCompile(`(?i)^\s*(hot_update_canary_requirement_create)\s+(\S+)\s+(\S+)\s*$`)
@@ -1627,6 +1628,10 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	if hotUpdateHelpCommandRE.MatchString(strings.TrimSpace(content)) {
+		return hotUpdateOperatorHelpText(), nil
+	}
+
 	if a.taskState != nil {
 		a.taskState.BeginTask(fmt.Sprintf("cli:direct:%d", time.Now().UnixNano()))
 		a.taskState.SetOperatorSession("cli", "direct")
@@ -1748,6 +1753,59 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 	}
 
 	return "Max iterations reached without final response", nil
+}
+
+func hotUpdateOperatorHelpText() string {
+	return strings.TrimSpace(`Frank V4 hot-update direct-command help
+
+Runbook:
+  docs/HOT_UPDATE_OPERATOR_RUNBOOK.md
+
+Inspect state:
+  STATUS <job_id>
+
+Eligible-only hot-update path:
+  HOT_UPDATE_GATE_FROM_DECISION <job_id> <promotion_decision_id>
+  HOT_UPDATE_GATE_RECORD <job_id> <hot_update_id> <candidate_pack_id>
+  HOT_UPDATE_EXECUTION_READY <job_id> <hot_update_id> <ttl_seconds> [reason...]
+  HOT_UPDATE_GATE_PHASE <job_id> <hot_update_id> validated
+  HOT_UPDATE_GATE_PHASE <job_id> <hot_update_id> staged
+  HOT_UPDATE_GATE_EXECUTE <job_id> <hot_update_id>
+  HOT_UPDATE_GATE_RELOAD <job_id> <hot_update_id>
+  HOT_UPDATE_GATE_FAIL <job_id> <hot_update_id> [reason...]
+  HOT_UPDATE_OUTCOME_CREATE <job_id> <hot_update_id>
+  HOT_UPDATE_PROMOTION_CREATE <job_id> <outcome_id>
+  HOT_UPDATE_LKG_RECERTIFY <job_id> <promotion_id>
+
+Canary-required hot-update path:
+  HOT_UPDATE_CANARY_REQUIREMENT_CREATE <job_id> <result_id>
+  HOT_UPDATE_CANARY_EVIDENCE_CREATE <job_id> <canary_requirement_id> <evidence_state> <observed_at> [reason...]
+  HOT_UPDATE_CANARY_SATISFACTION_AUTHORITY_CREATE <job_id> <canary_requirement_id>
+  HOT_UPDATE_OWNER_APPROVAL_REQUEST_CREATE <job_id> <canary_satisfaction_authority_id>
+  HOT_UPDATE_OWNER_APPROVAL_DECISION_CREATE <job_id> <owner_approval_request_id> <decision> [reason...]
+  HOT_UPDATE_CANARY_GATE_CREATE <job_id> <canary_satisfaction_authority_id> [owner_approval_decision_id]
+  HOT_UPDATE_GATE_PHASE <job_id> <hot_update_id> validated
+  HOT_UPDATE_GATE_PHASE <job_id> <hot_update_id> staged
+  HOT_UPDATE_GATE_EXECUTE <job_id> <hot_update_id>
+  HOT_UPDATE_GATE_RELOAD <job_id> <hot_update_id>
+  HOT_UPDATE_OUTCOME_CREATE <job_id> <hot_update_id>
+  HOT_UPDATE_PROMOTION_CREATE <job_id> <outcome_id>
+
+Rollback, rollback-apply, and LKG recovery:
+  ROLLBACK_RECORD <job_id> <promotion_id> <rollback_id>
+  ROLLBACK_APPLY_RECORD <job_id> <rollback_id> <apply_id>
+  ROLLBACK_APPLY_PHASE <job_id> <apply_id> <phase>
+  ROLLBACK_APPLY_EXECUTE <job_id> <apply_id>
+  ROLLBACK_APPLY_RELOAD <job_id> <apply_id>
+  ROLLBACK_APPLY_FAIL <job_id> <apply_id> [reason...]
+  HOT_UPDATE_LKG_RECERTIFY <job_id> <promotion_id>
+
+Notes:
+  CandidatePromotionDecisionRecord remains eligible-only.
+  Canary owner approval uses exact granted or rejected decisions; natural-language yes/no/approve/deny aliases are not canary owner approval authority.
+  Canary-derived gates are guarded before phase advancement, pointer switch, and reload/apply.
+  Outcomes and promotions preserve canary_ref and approval_ref audit lineage.
+  Rollback, rollback-apply, and LKG recertification remain generic recovery flows.`)
 }
 
 func (a *AgentLoop) processOperatorCommand(content string) (bool, string, error) {

@@ -4,6 +4,18 @@ This runbook covers the completed V4 hot-update lifecycle from gate creation thr
 
 Use it during live operator work. Keep the sequence explicit. Later ledger and recertification steps are not automatic side effects of earlier commands.
 
+## Direct-Command Help
+
+Use either static help command when you need the current V4 hot-update command index from the operator channel:
+
+```text
+HOT_UPDATE_HELP
+HELP HOT_UPDATE
+HELP V4
+```
+
+The help response is read-only. It does not require an active mission step, does not create records, and points back to this runbook for the full workflow.
+
 ## Placeholders
 
 - `<job_id>`: active mission job id
