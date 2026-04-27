@@ -96,6 +96,28 @@ type HotUpdateGateRecord struct {
 	FailureReason            string                `json:"failure_reason,omitempty"`
 }
 
+type HotUpdateCanaryGateExecutionReadinessAssessment struct {
+	State                         string                           `json:"state"`
+	HotUpdateID                   string                           `json:"hot_update_id,omitempty"`
+	CanaryRef                     string                           `json:"canary_ref,omitempty"`
+	ApprovalRef                   string                           `json:"approval_ref,omitempty"`
+	CanarySatisfactionAuthorityID string                           `json:"canary_satisfaction_authority_id,omitempty"`
+	OwnerApprovalDecisionID       string                           `json:"owner_approval_decision_id,omitempty"`
+	ResultID                      string                           `json:"result_id,omitempty"`
+	RunID                         string                           `json:"run_id,omitempty"`
+	CandidateID                   string                           `json:"candidate_id,omitempty"`
+	EvalSuiteID                   string                           `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID             string                           `json:"promotion_policy_id,omitempty"`
+	BaselinePackID                string                           `json:"baseline_pack_id,omitempty"`
+	CandidatePackID               string                           `json:"candidate_pack_id,omitempty"`
+	ExpectedEligibilityState      string                           `json:"expected_eligibility_state,omitempty"`
+	SatisfactionState             HotUpdateCanarySatisfactionState `json:"satisfaction_state,omitempty"`
+	OwnerApprovalRequired         bool                             `json:"owner_approval_required"`
+	Ready                         bool                             `json:"ready"`
+	Reason                        string                           `json:"reason,omitempty"`
+	Error                         string                           `json:"error,omitempty"`
+}
+
 var (
 	ErrHotUpdateGateRecordNotFound         = errors.New("mission store hot-update gate record not found")
 	ErrCandidateRuntimePackPointerNotFound = errors.New("mission store candidate runtime pack pointer not found")
@@ -569,6 +591,58 @@ func CreateHotUpdateGateFromCanarySatisfactionAuthority(root string, canarySatis
 	return stored, true, nil
 }
 
+func AssessHotUpdateCanaryGateExecutionReadiness(root string, hotUpdateID string) (HotUpdateCanaryGateExecutionReadinessAssessment, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return HotUpdateCanaryGateExecutionReadinessAssessment{}, err
+	}
+	ref := NormalizeHotUpdateGateRef(HotUpdateGateRef{HotUpdateID: hotUpdateID})
+	if err := ValidateHotUpdateGateRef(ref); err != nil {
+		return HotUpdateCanaryGateExecutionReadinessAssessment{}, err
+	}
+	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
+	if err != nil {
+		return HotUpdateCanaryGateExecutionReadinessAssessment{}, err
+	}
+	assessment := hotUpdateCanaryGateExecutionReadinessAssessmentFromGate(record)
+	if record.CanaryRef == "" {
+		assessment.State = "not_applicable"
+		assessment.Ready = true
+		assessment.Reason = "hot-update gate is not canary-derived"
+		return assessment, nil
+	}
+
+	authority, err := LoadHotUpdateCanarySatisfactionAuthorityRecord(root, record.CanaryRef)
+	if err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+	assessment = hotUpdateCanaryGateExecutionReadinessAssessmentFromGateAndAuthority(record, authority)
+	approvalRef, expectedEligibility, expectedSatisfaction, err := validateHotUpdateGateCanaryOwnerApprovalBranch(root, authority, record.ApprovalRef)
+	if err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+	assessment.OwnerApprovalDecisionID = approvalRef
+	assessment.ExpectedEligibilityState = expectedEligibility
+	assessment.SatisfactionState = expectedSatisfaction
+
+	if err := validateHotUpdateGateCanaryAuthorityMatchesGate(root, record, authority); err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+	if err := validateHotUpdateGateCanaryAuthoritySource(root, authority); err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+	if err := validateHotUpdateGateCanaryAuthorityFreshness(root, authority, expectedSatisfaction, expectedEligibility); err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+	if err := validateHotUpdateGateCanaryExecutionRuntimeReadiness(root, record, authority); err != nil {
+		return hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment, err), err
+	}
+
+	assessment.State = "ready"
+	assessment.Ready = true
+	assessment.Reason = "canary-derived hot-update gate authority is ready"
+	return assessment, nil
+}
+
 func AdvanceHotUpdateGatePhase(root string, hotUpdateID string, nextState HotUpdateGateState, updatedBy string, updatedAt time.Time) (HotUpdateGateRecord, bool, error) {
 	if err := ValidateStoreRoot(root); err != nil {
 		return HotUpdateGateRecord{}, false, err
@@ -605,6 +679,11 @@ func AdvanceHotUpdateGatePhase(root string, hotUpdateID string, nextState HotUpd
 	if !isValidHotUpdateGateAdjacentTransition(record.State, nextState) {
 		return HotUpdateGateRecord{}, false, fmt.Errorf("mission store hot-update gate %q transition %q -> %q is invalid", ref.HotUpdateID, record.State, nextState)
 	}
+	if record.CanaryRef != "" && (nextState == HotUpdateGateStateValidated || nextState == HotUpdateGateStateStaged) {
+		if err := requireHotUpdateCanaryGateExecutionReadiness(root, record); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
+	}
 
 	record.State = nextState
 	record.PhaseUpdatedAt = updatedAt
@@ -638,6 +717,9 @@ func ExecuteHotUpdateGatePointerSwitch(root string, hotUpdateID string, updatedB
 
 	record, err := LoadHotUpdateGateRecord(root, ref.HotUpdateID)
 	if err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := requireHotUpdateCanaryGateExecutionReadiness(root, record); err != nil {
 		return HotUpdateGateRecord{}, false, err
 	}
 	activePointer, err := validateHotUpdateGateExecutionLinkage(root, record)
@@ -1114,6 +1196,76 @@ func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord
 	return nil
 }
 
+func hotUpdateCanaryGateExecutionReadinessAssessmentFromGate(record HotUpdateGateRecord) HotUpdateCanaryGateExecutionReadinessAssessment {
+	return HotUpdateCanaryGateExecutionReadinessAssessment{
+		HotUpdateID:             record.HotUpdateID,
+		CanaryRef:               record.CanaryRef,
+		ApprovalRef:             record.ApprovalRef,
+		OwnerApprovalDecisionID: record.ApprovalRef,
+		BaselinePackID:          record.PreviousActivePackID,
+		CandidatePackID:         record.CandidatePackID,
+	}
+}
+
+func hotUpdateCanaryGateExecutionReadinessAssessmentFromGateAndAuthority(record HotUpdateGateRecord, authority HotUpdateCanarySatisfactionAuthorityRecord) HotUpdateCanaryGateExecutionReadinessAssessment {
+	assessment := hotUpdateCanaryGateExecutionReadinessAssessmentFromGate(record)
+	assessment.CanarySatisfactionAuthorityID = authority.CanarySatisfactionAuthorityID
+	assessment.ResultID = authority.ResultID
+	assessment.RunID = authority.RunID
+	assessment.CandidateID = authority.CandidateID
+	assessment.EvalSuiteID = authority.EvalSuiteID
+	assessment.PromotionPolicyID = authority.PromotionPolicyID
+	assessment.BaselinePackID = authority.BaselinePackID
+	assessment.CandidatePackID = authority.CandidatePackID
+	assessment.ExpectedEligibilityState = authority.EligibilityState
+	assessment.SatisfactionState = authority.SatisfactionState
+	assessment.OwnerApprovalRequired = authority.OwnerApprovalRequired
+	return assessment
+}
+
+func hotUpdateCanaryGateExecutionReadinessAssessmentError(assessment HotUpdateCanaryGateExecutionReadinessAssessment, err error) HotUpdateCanaryGateExecutionReadinessAssessment {
+	assessment.State = "invalid"
+	assessment.Ready = false
+	if err != nil {
+		assessment.Error = err.Error()
+	}
+	return assessment
+}
+
+func requireHotUpdateCanaryGateExecutionReadiness(root string, record HotUpdateGateRecord) error {
+	if strings.TrimSpace(record.CanaryRef) == "" {
+		return nil
+	}
+	assessment, err := AssessHotUpdateCanaryGateExecutionReadiness(root, record.HotUpdateID)
+	if err != nil {
+		return err
+	}
+	if !assessment.Ready {
+		return fmt.Errorf("mission store hot-update gate %q canary execution readiness is not ready: %s", record.HotUpdateID, assessment.Error)
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryAuthorityMatchesGate(root string, record HotUpdateGateRecord, authority HotUpdateCanarySatisfactionAuthorityRecord) error {
+	if record.CanaryRef != authority.CanarySatisfactionAuthorityID {
+		return fmt.Errorf("mission store hot-update gate %q canary_ref %q does not match canary satisfaction authority %q", record.HotUpdateID, record.CanaryRef, authority.CanarySatisfactionAuthorityID)
+	}
+	if record.CandidatePackID != authority.CandidatePackID {
+		return fmt.Errorf("mission store hot-update gate %q candidate_pack_id %q does not match canary satisfaction authority candidate_pack_id %q", record.HotUpdateID, record.CandidatePackID, authority.CandidatePackID)
+	}
+	if record.PreviousActivePackID != authority.BaselinePackID {
+		return fmt.Errorf("mission store hot-update gate %q previous_active_pack_id %q does not match canary satisfaction authority baseline_pack_id %q", record.HotUpdateID, record.PreviousActivePackID, authority.BaselinePackID)
+	}
+	candidatePack, err := LoadRuntimePackRecord(root, authority.CandidatePackID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q: %w", authority.CandidatePackID, err)
+	}
+	if record.RollbackTargetPackID != candidatePack.RollbackTargetPackID {
+		return fmt.Errorf("mission store hot-update gate %q rollback_target_pack_id %q does not match candidate rollback_target_pack_id %q", record.HotUpdateID, record.RollbackTargetPackID, candidatePack.RollbackTargetPackID)
+	}
+	return nil
+}
+
 func validateHotUpdateGateCanaryOwnerApprovalBranch(root string, authority HotUpdateCanarySatisfactionAuthorityRecord, ownerApprovalDecisionID string) (string, string, HotUpdateCanarySatisfactionState, error) {
 	ownerApprovalDecisionID = strings.TrimSpace(ownerApprovalDecisionID)
 	switch authority.State {
@@ -1220,6 +1372,75 @@ func validateHotUpdateGateCanaryAuthorityRuntimeReadiness(root string, authority
 			authority.BaselinePackID,
 			activePointer.ActivePackID,
 		)
+	}
+	if _, err := LoadLastKnownGoodRuntimePackPointer(root); err != nil && !errors.Is(err, ErrLastKnownGoodRuntimePackPointerNotFound) {
+		return err
+	}
+	return nil
+}
+
+func validateHotUpdateGateCanaryExecutionRuntimeReadiness(root string, record HotUpdateGateRecord, authority HotUpdateCanarySatisfactionAuthorityRecord) error {
+	candidatePack, err := LoadRuntimePackRecord(root, authority.CandidatePackID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q: %w", authority.CandidatePackID, err)
+	}
+	if candidatePack.RollbackTargetPackID == "" {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q rollback_target_pack_id is required", candidatePack.PackID)
+	}
+	if record.RollbackTargetPackID != candidatePack.RollbackTargetPackID {
+		return fmt.Errorf(
+			"mission store hot-update gate %q rollback_target_pack_id %q does not match candidate rollback_target_pack_id %q",
+			record.HotUpdateID,
+			record.RollbackTargetPackID,
+			candidatePack.RollbackTargetPackID,
+		)
+	}
+	if _, err := LoadRuntimePackRecord(root, candidatePack.RollbackTargetPackID); err != nil {
+		return fmt.Errorf("mission store hot-update canary gate candidate_pack_id %q rollback_target_pack_id %q: %w", candidatePack.PackID, candidatePack.RollbackTargetPackID, err)
+	}
+
+	activePointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return err
+	}
+	updateRecordRef := hotUpdateGatePointerUpdateRecordRef(record.HotUpdateID)
+	switch record.State {
+	case HotUpdateGateStatePrepared, HotUpdateGateStateValidated, HotUpdateGateStateStaged:
+		if activePointer.ActivePackID != authority.BaselinePackID {
+			return fmt.Errorf(
+				"mission store hot-update canary satisfaction authority %q requires active runtime pack pointer active_pack_id %q before execution, found %q",
+				authority.CanarySatisfactionAuthorityID,
+				authority.BaselinePackID,
+				activePointer.ActivePackID,
+			)
+		}
+	case HotUpdateGateStateReloading, HotUpdateGateStateReloadApplyInProgress, HotUpdateGateStateReloadApplyRecoveryNeeded, HotUpdateGateStateReloadApplySucceeded:
+		if activePointer.ActivePackID != record.CandidatePackID {
+			return fmt.Errorf(
+				"mission store hot-update gate %q requires active runtime pack pointer active_pack_id %q after pointer switch, found %q",
+				record.HotUpdateID,
+				record.CandidatePackID,
+				activePointer.ActivePackID,
+			)
+		}
+		if activePointer.UpdateRecordRef != updateRecordRef {
+			return fmt.Errorf(
+				"mission store hot-update gate %q requires active runtime pack pointer update_record_ref %q after pointer switch, found %q",
+				record.HotUpdateID,
+				updateRecordRef,
+				activePointer.UpdateRecordRef,
+			)
+		}
+		if activePointer.PreviousActivePackID != record.PreviousActivePackID {
+			return fmt.Errorf(
+				"mission store hot-update gate %q requires active runtime pack pointer previous_active_pack_id %q after pointer switch, found %q",
+				record.HotUpdateID,
+				record.PreviousActivePackID,
+				activePointer.PreviousActivePackID,
+			)
+		}
+	default:
+		return fmt.Errorf("mission store hot-update gate %q state %q does not permit canary execution readiness", record.HotUpdateID, record.State)
 	}
 	if _, err := LoadLastKnownGoodRuntimePackPointer(root); err != nil && !errors.Is(err, ErrLastKnownGoodRuntimePackPointerNotFound) {
 		return err
@@ -1419,6 +1640,9 @@ func executeHotUpdateGateReloadApplyWithConvergence(root string, hotUpdateID str
 		)
 	}
 
+	if err := requireHotUpdateCanaryGateExecutionReadiness(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
 	if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
 		return HotUpdateGateRecord{}, false, err
 	}
