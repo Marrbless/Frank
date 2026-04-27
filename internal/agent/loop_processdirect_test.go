@@ -6431,6 +6431,21 @@ func TestProcessDirectRollbackApplyRecordCommandCreatesOrSelectsWorkflowAndPrese
 	if summary.RollbackApplyIdentity.Applies[0].RollbackID != "rollback-1" {
 		t.Fatalf("RollbackApplyIdentity.Applies[0].RollbackID = %q, want rollback-1", summary.RollbackApplyIdentity.Applies[0].RollbackID)
 	}
+	if summary.V4Summary == nil {
+		t.Fatal("V4Summary = nil, want compact recovery summary")
+	}
+	if summary.V4Summary.State != "rollback_apply_recorded" {
+		t.Fatalf("V4Summary.State = %q, want rollback_apply_recorded", summary.V4Summary.State)
+	}
+	if summary.V4Summary.SelectedRollbackID != "rollback-1" {
+		t.Fatalf("V4Summary.SelectedRollbackID = %q, want rollback-1", summary.V4Summary.SelectedRollbackID)
+	}
+	if summary.V4Summary.SelectedRollbackApplyID != "apply-1" {
+		t.Fatalf("V4Summary.SelectedRollbackApplyID = %q, want apply-1", summary.V4Summary.SelectedRollbackApplyID)
+	}
+	if !summary.V4Summary.HasRollback || !summary.V4Summary.HasRollbackApply {
+		t.Fatalf("V4Summary recovery booleans = rollback %t apply %t, want both true", summary.V4Summary.HasRollback, summary.V4Summary.HasRollbackApply)
+	}
 }
 
 func TestProcessDirectRollbackApplyRecordCommandFailsClosedWhenRollbackIsMissing(t *testing.T) {
@@ -6558,6 +6573,18 @@ func TestProcessDirectRollbackApplyPhaseCommandAdvancesWorkflowAndPreservesActiv
 	}
 	if apply.ActivationState != string(missioncontrol.RollbackApplyActivationStateUnchanged) {
 		t.Fatalf("RollbackApplyIdentity.Applies[0].ActivationState = %q, want unchanged", apply.ActivationState)
+	}
+	if summary.V4Summary == nil {
+		t.Fatal("V4Summary = nil, want compact recovery summary")
+	}
+	if summary.V4Summary.State != "rollback_apply_recorded" {
+		t.Fatalf("V4Summary.State = %q, want rollback_apply_recorded", summary.V4Summary.State)
+	}
+	if summary.V4Summary.SelectedRollbackID != "rollback-1" {
+		t.Fatalf("V4Summary.SelectedRollbackID = %q, want rollback-1", summary.V4Summary.SelectedRollbackID)
+	}
+	if summary.V4Summary.SelectedRollbackApplyID != "apply-1" {
+		t.Fatalf("V4Summary.SelectedRollbackApplyID = %q, want apply-1", summary.V4Summary.SelectedRollbackApplyID)
 	}
 }
 
