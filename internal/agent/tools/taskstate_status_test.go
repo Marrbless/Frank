@@ -982,6 +982,15 @@ func TestTaskStateOperatorStatusMatchesCommittedSnapshotForPromotionPolicyAndDec
 	if len(active.CandidatePromotionDecisionIdentity.Decisions) != 1 || active.CandidatePromotionDecisionIdentity.Decisions[0].PromotionDecisionID != decisionID {
 		t.Fatalf("active candidate promotion decisions = %#v, want decision %q", active.CandidatePromotionDecisionIdentity.Decisions, decisionID)
 	}
+	if active.V4Summary == nil {
+		t.Fatal("active V4Summary = nil, want active STATUS parity with committed snapshot")
+	}
+	if !reflect.DeepEqual(active.V4Summary, snapshot.RuntimeSummary.V4Summary) {
+		t.Fatalf("active V4Summary differs from committed snapshot\nactive: %#v\ncommitted: %#v", active.V4Summary, snapshot.RuntimeSummary.V4Summary)
+	}
+	if active.V4Summary.State != "candidate_promotion_decision_recorded" || !active.V4Summary.HasCandidatePromotionDecision {
+		t.Fatalf("active V4Summary = %#v, want candidate promotion decision summary", active.V4Summary)
+	}
 }
 
 func writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t *testing.T, root string, now time.Time) string {
@@ -1879,7 +1888,7 @@ func TestTaskStateOperatorStatusActiveExecutionContextSurfacesFrankZohoMailboxBo
 
 	got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "frank_zoho_mailbox_bootstrap_preflight", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "v4_summary")
 	assertTaskStateResolvedFrankZohoMailboxBootstrapPreflightJSONEnvelope(t, envelope["frank_zoho_mailbox_bootstrap_preflight"])
 	if got.CampaignPreflight != nil {
 		t.Fatalf("CampaignPreflight = %#v, want nil on bootstrap-only path", got.CampaignPreflight)
@@ -2039,7 +2048,7 @@ func TestTaskStateOperatorStatusSurfacesCampaignZohoEmailSendGateOnPersistedPath
 	assertTaskStateReadoutAdapterBoundary(t, summary, false, false)
 
 	envelope := mustTaskStateJSONObject(t, summary)
-	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state")
+	assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_zoho_email_send_gate", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "v4_summary")
 	gateJSON, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any)
 	if !ok {
 		t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])
@@ -2411,7 +2420,7 @@ func TestTaskStateOperatorStatusActiveAndPersistedPathsPreserveAdapterBoundaryCo
 
 		got := mustTaskStateReadoutJSON[missioncontrol.OperatorStatusSummary](t, summary)
 		envelope := mustTaskStateJSONObject(t, summary)
-		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight")
+		assertTaskStateJSONObjectKeys(t, envelope, "active_step_id", "allowed_tools", "campaign_preflight", "campaign_zoho_email_send_gate", "candidate_promotion_decision_identity", "candidate_result_identity", "eval_suite_identity", "hot_update_canary_evidence_identity", "hot_update_canary_requirement_identity", "hot_update_canary_satisfaction_authority_identity", "hot_update_canary_satisfaction_identity", "hot_update_owner_approval_decision_identity", "hot_update_owner_approval_request_identity", "hot_update_gate_identity", "hot_update_outcome_identity", "improvement_candidate_identity", "improvement_run_identity", "job_id", "promotion_identity", "promotion_policy_identity", "rollback_apply_identity", "rollback_identity", "runtime_pack_identity", "state", "treasury_preflight", "v4_summary")
 		assertTaskStateResolvedCampaignPreflightJSONEnvelope(t, envelope["campaign_preflight"])
 		if _, ok := envelope["campaign_zoho_email_send_gate"].(map[string]any); !ok {
 			t.Fatalf("campaign_zoho_email_send_gate = %#v, want object", envelope["campaign_zoho_email_send_gate"])

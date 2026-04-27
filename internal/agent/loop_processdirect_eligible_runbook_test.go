@@ -140,6 +140,28 @@ func assertEligibleRunbookFinalStatus(t *testing.T, summary missioncontrol.Opera
 	if summary.RuntimePackIdentity.LastKnownGood.Basis != "hot_update_promotion:"+promotionID {
 		t.Fatalf("last-known-good basis status = %q, want hot-update promotion basis", summary.RuntimePackIdentity.LastKnownGood.Basis)
 	}
+
+	if summary.V4Summary == nil {
+		t.Fatal("V4Summary = nil, want compact V4 status summary")
+	}
+	if summary.V4Summary.State != "last_known_good_recertified" {
+		t.Fatalf("V4Summary.State = %q, want last_known_good_recertified", summary.V4Summary.State)
+	}
+	if summary.V4Summary.ActivePackID != decision.CandidatePackID || summary.V4Summary.LastKnownGoodPackID != decision.CandidatePackID {
+		t.Fatalf("V4Summary packs = active %q lkg %q, want %q", summary.V4Summary.ActivePackID, summary.V4Summary.LastKnownGoodPackID, decision.CandidatePackID)
+	}
+	if summary.V4Summary.SelectedHotUpdateID != hotUpdateID || summary.V4Summary.SelectedOutcomeID != outcomeID || summary.V4Summary.SelectedPromotionID != promotionID {
+		t.Fatalf("V4Summary selected refs = %#v, want hot_update=%q outcome=%q promotion=%q", summary.V4Summary, hotUpdateID, outcomeID, promotionID)
+	}
+	if !summary.V4Summary.HasCandidatePromotionDecision {
+		t.Fatalf("V4Summary.HasCandidatePromotionDecision = false, want true")
+	}
+	if summary.V4Summary.HasCanaryAuthority || summary.V4Summary.HasOwnerApprovalDecision || summary.V4Summary.HasRollback || summary.V4Summary.HasRollbackApply {
+		t.Fatalf("V4Summary = %#v, want eligible-only path without canary/approval/rollback signals", summary.V4Summary)
+	}
+	if summary.V4Summary.InvalidIdentityCount != 0 || len(summary.V4Summary.Warnings) != 0 {
+		t.Fatalf("V4Summary invalid fields = count %d warnings %#v, want clean summary", summary.V4Summary.InvalidIdentityCount, summary.V4Summary.Warnings)
+	}
 }
 
 func assertEligibleRunbookCandidatePromotionDecisionLedger(t *testing.T, root string, decision missioncontrol.CandidatePromotionDecisionRecord) {

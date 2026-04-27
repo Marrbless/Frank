@@ -345,6 +345,28 @@ func assertCanaryRunbookFinalCommonStatus(t *testing.T, summary missioncontrol.O
 	if promotion.CanaryRef != authorityID || promotion.ApprovalRef != approvalRef {
 		t.Fatalf("promotion lineage = %q/%q, want %q/%q", promotion.CanaryRef, promotion.ApprovalRef, authorityID, approvalRef)
 	}
+
+	if summary.V4Summary == nil {
+		t.Fatal("V4Summary = nil, want compact V4 status summary")
+	}
+	if summary.V4Summary.State != "promoted" {
+		t.Fatalf("V4Summary.State = %q, want promoted", summary.V4Summary.State)
+	}
+	if summary.V4Summary.SelectedHotUpdateID != hotUpdateID || summary.V4Summary.SelectedOutcomeID != outcomeID || summary.V4Summary.SelectedPromotionID != promotionID {
+		t.Fatalf("V4Summary selected refs = %#v, want hot_update=%q outcome=%q promotion=%q", summary.V4Summary, hotUpdateID, outcomeID, promotionID)
+	}
+	if !summary.V4Summary.HasCanaryAuthority {
+		t.Fatalf("V4Summary.HasCanaryAuthority = false, want true")
+	}
+	if summary.V4Summary.HasOwnerApprovalDecision != (approvalRef != "") {
+		t.Fatalf("V4Summary.HasOwnerApprovalDecision = %t, want %t", summary.V4Summary.HasOwnerApprovalDecision, approvalRef != "")
+	}
+	if summary.V4Summary.HasCandidatePromotionDecision || summary.V4Summary.HasRollback || summary.V4Summary.HasRollbackApply {
+		t.Fatalf("V4Summary = %#v, want canary path without candidate decision or rollback signals", summary.V4Summary)
+	}
+	if summary.V4Summary.InvalidIdentityCount != 0 || len(summary.V4Summary.Warnings) != 0 {
+		t.Fatalf("V4Summary invalid fields = count %d warnings %#v, want clean summary", summary.V4Summary.InvalidIdentityCount, summary.V4Summary.Warnings)
+	}
 }
 
 func assertCanaryRunbookOwnerApprovalStatus(t *testing.T, summary missioncontrol.OperatorStatusSummary, requestID, decisionID string) {

@@ -107,6 +107,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	summary = WithPromotionIdentity(summary, root)
 	summary = WithRollbackIdentity(summary, root)
 	summary = WithRollbackApplyIdentity(summary, root)
+	summary = WithV4Summary(summary)
 	snapshot.RuntimeSummary = &summary
 
 	return snapshot, nil

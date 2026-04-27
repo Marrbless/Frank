@@ -145,6 +145,7 @@ STATUS <job_id>
 
 Inspect these sections as the canary path progresses:
 
+- `v4_summary`: compact key state; canary promotions should show `state=promoted`, selected hot-update/outcome/promotion ids, `has_canary_authority=true`, and `has_owner_approval_decision=true` only on the owner-approved branch.
 - `hot_update_canary_requirement_identity`: requirement exists, is valid/configured, and refers to the expected candidate result and policy.
 - `hot_update_canary_evidence_identity`: selected evidence exists, is valid/configured, and records `evidence_state=passed`.
 - `hot_update_canary_satisfaction_identity`: no-owner branch should show `satisfaction_state=satisfied`; owner-approved branch should show `satisfaction_state=waiting_owner_approval`.
@@ -243,6 +244,9 @@ STATUS <job_id>
 
 Confirm:
 
+- `v4_summary.state = hot_update_gate_recorded`
+- `v4_summary.has_candidate_promotion_decision = true`
+- `v4_summary.selected_hot_update_id = <hot_update_id>`
 - `promotion_policy_identity.state = configured`
 - `candidate_promotion_decision_identity.state = configured`
 - selected decision has expected `promotion_decision_id`
@@ -461,6 +465,9 @@ STATUS <job_id>
 
 Confirm:
 
+- `v4_summary.state = last_known_good_recertified`
+- `v4_summary.last_known_good_pack_id = promotion.promoted_pack_id`
+- `v4_summary.selected_promotion_id = <promotion_id>`
 - `runtime_pack_identity.last_known_good.state = configured`
 - `runtime_pack_identity.last_known_good.pack_id = promotion.promoted_pack_id`
 - `runtime_pack_identity.last_known_good.basis = hot_update_promotion:<promotion_id>`

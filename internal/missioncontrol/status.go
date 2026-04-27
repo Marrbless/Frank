@@ -32,6 +32,7 @@ type OperatorStatusSummary struct {
 	ActiveStepID                                 string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                                 []string                                                    `json:"allowed_tools,omitempty"`
 	RuntimePackIdentity                          *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
+	V4Summary                                    *OperatorV4SummaryStatus                                    `json:"v4_summary,omitempty"`
 	ImprovementCandidateIdentity                 *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`
 	EvalSuiteIdentity                            *OperatorEvalSuiteIdentityStatus                            `json:"eval_suite_identity,omitempty"`
 	PromotionPolicyIdentity                      *OperatorPromotionPolicyIdentityStatus                      `json:"promotion_policy_identity,omitempty"`
@@ -72,6 +73,22 @@ type OperatorStatusSummary struct {
 	CampaignZohoEmailSendGate                    *CampaignZohoEmailSendGateDecision                          `json:"campaign_zoho_email_send_gate,omitempty"`
 	FrankZohoSendProof                           []OperatorFrankZohoSendProofStatus                          `json:"frank_zoho_send_proof,omitempty"`
 	Truncation                                   *OperatorStatusTruncation                                   `json:"truncation,omitempty"`
+}
+
+type OperatorV4SummaryStatus struct {
+	State                         string   `json:"state"`
+	ActivePackID                  string   `json:"active_pack_id,omitempty"`
+	LastKnownGoodPackID           string   `json:"last_known_good_pack_id,omitempty"`
+	SelectedHotUpdateID           string   `json:"selected_hot_update_id,omitempty"`
+	SelectedOutcomeID             string   `json:"selected_outcome_id,omitempty"`
+	SelectedPromotionID           string   `json:"selected_promotion_id,omitempty"`
+	HasCandidatePromotionDecision bool     `json:"has_candidate_promotion_decision,omitempty"`
+	HasCanaryAuthority            bool     `json:"has_canary_authority,omitempty"`
+	HasOwnerApprovalDecision      bool     `json:"has_owner_approval_decision,omitempty"`
+	HasRollback                   bool     `json:"has_rollback,omitempty"`
+	HasRollbackApply              bool     `json:"has_rollback_apply,omitempty"`
+	InvalidIdentityCount          int      `json:"invalid_identity_count,omitempty"`
+	Warnings                      []string `json:"warnings,omitempty"`
 }
 
 type OperatorStatusTruncation struct {
@@ -889,6 +906,221 @@ func WithRollbackApplyIdentity(summary OperatorStatusSummary, root string) Opera
 	status := LoadOperatorRollbackApplyIdentityStatus(root)
 	summary.RollbackApplyIdentity = &status
 	return summary
+}
+
+func WithV4Summary(summary OperatorStatusSummary) OperatorStatusSummary {
+	status := BuildOperatorV4SummaryStatus(summary)
+	summary.V4Summary = &status
+	return summary
+}
+
+func BuildOperatorV4SummaryStatus(summary OperatorStatusSummary) OperatorV4SummaryStatus {
+	status := OperatorV4SummaryStatus{State: "not_configured"}
+	configured := false
+	warnings := make([]string, 0)
+
+	if summary.RuntimePackIdentity != nil {
+		active := summary.RuntimePackIdentity.Active
+		status.ActivePackID = active.ActivePackID
+		if active.State != "not_configured" {
+			configured = true
+		}
+		if active.State == "invalid" {
+			status.InvalidIdentityCount++
+			warnings = append(warnings, "runtime_pack_identity.active invalid")
+		}
+
+		lkg := summary.RuntimePackIdentity.LastKnownGood
+		status.LastKnownGoodPackID = lkg.PackID
+		if lkg.State != "not_configured" {
+			configured = true
+		}
+		if lkg.State == "invalid" {
+			status.InvalidIdentityCount++
+			warnings = append(warnings, "runtime_pack_identity.last_known_good invalid")
+		}
+		if strings.HasPrefix(lkg.Basis, "hot_update_promotion:") {
+			status.State = "last_known_good_recertified"
+		}
+	}
+
+	addIdentityState := func(state, name string) bool {
+		switch state {
+		case "configured", "invalid":
+			if state == "invalid" {
+				status.InvalidIdentityCount++
+				warnings = append(warnings, name+" invalid")
+			}
+			return true
+		default:
+			return false
+		}
+	}
+	if summary.ImprovementCandidateIdentity != nil {
+		configured = addIdentityState(summary.ImprovementCandidateIdentity.State, "improvement_candidate_identity") || configured
+	}
+	if summary.EvalSuiteIdentity != nil {
+		configured = addIdentityState(summary.EvalSuiteIdentity.State, "eval_suite_identity") || configured
+	}
+	if summary.PromotionPolicyIdentity != nil {
+		configured = addIdentityState(summary.PromotionPolicyIdentity.State, "promotion_policy_identity") || configured
+	}
+	if summary.ImprovementRunIdentity != nil {
+		configured = addIdentityState(summary.ImprovementRunIdentity.State, "improvement_run_identity") || configured
+	}
+	if summary.CandidateResultIdentity != nil {
+		configured = addIdentityState(summary.CandidateResultIdentity.State, "candidate_result_identity") || configured
+	}
+	if summary.HotUpdateCanaryRequirementIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateCanaryRequirementIdentity.State, "hot_update_canary_requirement_identity") || configured
+	}
+	if summary.HotUpdateCanaryEvidenceIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateCanaryEvidenceIdentity.State, "hot_update_canary_evidence_identity") || configured
+	}
+	if summary.HotUpdateCanarySatisfactionIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateCanarySatisfactionIdentity.State, "hot_update_canary_satisfaction_identity") || configured
+	}
+	if summary.HotUpdateCanarySatisfactionAuthorityIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateCanarySatisfactionAuthorityIdentity.State, "hot_update_canary_satisfaction_authority_identity") || configured
+	}
+	if summary.HotUpdateOwnerApprovalRequestIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateOwnerApprovalRequestIdentity.State, "hot_update_owner_approval_request_identity") || configured
+	}
+	if summary.HotUpdateOwnerApprovalDecisionIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateOwnerApprovalDecisionIdentity.State, "hot_update_owner_approval_decision_identity") || configured
+	}
+	if summary.CandidatePromotionDecisionIdentity != nil {
+		configured = addIdentityState(summary.CandidatePromotionDecisionIdentity.State, "candidate_promotion_decision_identity") || configured
+	}
+	if summary.HotUpdateGateIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateGateIdentity.State, "hot_update_gate_identity") || configured
+	}
+	if summary.HotUpdateOutcomeIdentity != nil {
+		configured = addIdentityState(summary.HotUpdateOutcomeIdentity.State, "hot_update_outcome_identity") || configured
+	}
+	if summary.PromotionIdentity != nil {
+		configured = addIdentityState(summary.PromotionIdentity.State, "promotion_identity") || configured
+	}
+	if summary.RollbackIdentity != nil {
+		configured = addIdentityState(summary.RollbackIdentity.State, "rollback_identity") || configured
+	}
+	if summary.RollbackApplyIdentity != nil {
+		configured = addIdentityState(summary.RollbackApplyIdentity.State, "rollback_apply_identity") || configured
+	}
+
+	if summary.CandidatePromotionDecisionIdentity != nil && len(summary.CandidatePromotionDecisionIdentity.Decisions) > 0 {
+		status.HasCandidatePromotionDecision = true
+		configured = true
+	}
+	if summary.HotUpdateCanarySatisfactionAuthorityIdentity != nil && len(summary.HotUpdateCanarySatisfactionAuthorityIdentity.Authorities) > 0 {
+		status.HasCanaryAuthority = true
+		configured = true
+	}
+	if summary.HotUpdateOwnerApprovalDecisionIdentity != nil && len(summary.HotUpdateOwnerApprovalDecisionIdentity.Decisions) > 0 {
+		status.HasOwnerApprovalDecision = true
+		configured = true
+	}
+
+	if summary.HotUpdateGateIdentity != nil {
+		for _, gate := range summary.HotUpdateGateIdentity.Gates {
+			if strings.TrimSpace(gate.HotUpdateID) != "" {
+				status.SelectedHotUpdateID = gate.HotUpdateID
+				configured = true
+			}
+			if strings.TrimSpace(gate.CanaryRef) != "" {
+				status.HasCanaryAuthority = true
+			}
+			if strings.TrimSpace(gate.ApprovalRef) != "" {
+				status.HasOwnerApprovalDecision = true
+			}
+		}
+	}
+	if summary.HotUpdateOutcomeIdentity != nil {
+		for _, outcome := range summary.HotUpdateOutcomeIdentity.Outcomes {
+			if strings.TrimSpace(outcome.OutcomeID) != "" {
+				status.SelectedOutcomeID = outcome.OutcomeID
+				configured = true
+			}
+			if strings.TrimSpace(outcome.HotUpdateID) != "" {
+				status.SelectedHotUpdateID = outcome.HotUpdateID
+			}
+			if strings.TrimSpace(outcome.CanaryRef) != "" {
+				status.HasCanaryAuthority = true
+			}
+			if strings.TrimSpace(outcome.ApprovalRef) != "" {
+				status.HasOwnerApprovalDecision = true
+			}
+		}
+	}
+	if summary.PromotionIdentity != nil {
+		for _, promotion := range summary.PromotionIdentity.Promotions {
+			if strings.TrimSpace(promotion.PromotionID) != "" {
+				status.SelectedPromotionID = promotion.PromotionID
+				configured = true
+			}
+			if strings.TrimSpace(promotion.HotUpdateID) != "" {
+				status.SelectedHotUpdateID = promotion.HotUpdateID
+			}
+			if strings.TrimSpace(promotion.OutcomeID) != "" {
+				status.SelectedOutcomeID = promotion.OutcomeID
+			}
+			if strings.TrimSpace(promotion.CanaryRef) != "" {
+				status.HasCanaryAuthority = true
+			}
+			if strings.TrimSpace(promotion.ApprovalRef) != "" {
+				status.HasOwnerApprovalDecision = true
+			}
+		}
+	}
+	if summary.RollbackIdentity != nil && len(summary.RollbackIdentity.Rollbacks) > 0 {
+		status.HasRollback = true
+		configured = true
+	}
+	if summary.RollbackApplyIdentity != nil && len(summary.RollbackApplyIdentity.Applies) > 0 {
+		status.HasRollbackApply = true
+		configured = true
+	}
+
+	if status.InvalidIdentityCount > 0 {
+		status.State = "invalid"
+		status.Warnings = warnings
+		return status
+	}
+	if status.HasRollbackApply {
+		status.State = "rollback_apply_recorded"
+		return status
+	}
+	if status.HasRollback {
+		status.State = "rollback_recorded"
+		return status
+	}
+	if status.State == "last_known_good_recertified" {
+		return status
+	}
+	if status.SelectedPromotionID != "" {
+		status.State = "promoted"
+		return status
+	}
+	if status.SelectedOutcomeID != "" {
+		status.State = "hot_update_outcome_recorded"
+		return status
+	}
+	if status.SelectedHotUpdateID != "" {
+		status.State = "hot_update_gate_recorded"
+		return status
+	}
+	if status.HasCanaryAuthority {
+		status.State = "canary_authority_recorded"
+		return status
+	}
+	if status.HasCandidatePromotionDecision {
+		status.State = "candidate_promotion_decision_recorded"
+		return status
+	}
+	if configured {
+		status.State = "configured"
+	}
+	return status
 }
 
 func LoadOperatorRuntimePackIdentityStatus(root string) OperatorRuntimePackIdentityStatus {
