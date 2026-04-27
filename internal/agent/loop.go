@@ -1761,6 +1761,11 @@ func hotUpdateOperatorHelpText() string {
 Runbook:
   docs/HOT_UPDATE_OPERATOR_RUNBOOK.md
 
+Help aliases:
+  HOT_UPDATE_HELP
+  HELP HOT_UPDATE
+  HELP V4
+
 Inspect state:
   STATUS <job_id>
 

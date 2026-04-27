@@ -218,6 +218,14 @@ Rollback, rollback-apply, and LKG should not be blocked by stale canary evidence
 
 ### 1. Record Or Select The Gate
 
+For eligible-only candidate promotion decisions, prefer the decision-derived gate command:
+
+```text
+HOT_UPDATE_GATE_FROM_DECISION <job_id> <promotion_decision_id>
+```
+
+`HOT_UPDATE_GATE_RECORD` remains supported for operator-controlled hot-update workflows that already have an explicit hot-update id and candidate pack id:
+
 ```text
 HOT_UPDATE_GATE_RECORD <job_id> <hot_update_id> <candidate_pack_id>
 ```
@@ -241,7 +249,26 @@ Confirm:
 - gate has expected `previous_active_pack_id`
 - gate has rollback target and reload metadata
 
-### 2. Validate And Stage
+### 2. Record Execution Readiness
+
+When deploy-lock or quiesce evidence is required, record bounded execution readiness before pointer switch or reload/apply:
+
+```text
+HOT_UPDATE_EXECUTION_READY <job_id> <hot_update_id> <ttl_seconds> [reason...]
+```
+
+Status check:
+
+```text
+STATUS <job_id>
+```
+
+Confirm:
+
+- readiness evidence exists for the expected hot-update id
+- readiness has not expired before phase advancement, pointer switch, or reload/apply
+
+### 3. Validate And Stage
 
 ```text
 HOT_UPDATE_GATE_PHASE <job_id> <hot_update_id> validated
@@ -268,7 +295,7 @@ Confirm:
 - active runtime pack is unchanged
 - last-known-good is unchanged
 
-### 3. Execute Pointer Switch
+### 4. Execute Pointer Switch
 
 ```text
 HOT_UPDATE_GATE_EXECUTE <job_id> <hot_update_id>
@@ -293,7 +320,7 @@ Confirm:
 - `reload_generation` changed only as part of this pointer switch
 - `runtime_pack_identity.last_known_good.pack_id` still names the previous LKG
 
-### 4. Reload/Apply
+### 5. Reload/Apply
 
 ```text
 HOT_UPDATE_GATE_RELOAD <job_id> <hot_update_id>
@@ -324,7 +351,7 @@ Also confirm:
 - no promotion is created automatically
 - LKG is not recertified automatically
 
-### 5. Resolve Recovery-Needed
+### 6. Resolve Recovery-Needed
 
 If the gate is `reload_apply_recovery_needed`, choose one path.
 
@@ -358,7 +385,7 @@ Confirm:
 - terminal failure stores `failure_reason = operator_terminal_failure: <reason>`
 - terminal failure requires the same reason for replay
 
-### 6. Create Outcome
+### 7. Create Outcome
 
 ```text
 HOT_UPDATE_OUTCOME_CREATE <job_id> <hot_update_id>
@@ -384,7 +411,7 @@ Confirm:
 - failed outcome reason copies gate failure detail
 - no promotion is created automatically
 
-### 7. Create Promotion
+### 8. Create Promotion
 
 ```text
 HOT_UPDATE_PROMOTION_CREATE <job_id> <outcome_id>
@@ -411,7 +438,7 @@ Confirm:
 - `hot_update_id` links to the gate
 - LKG is not recertified automatically
 
-### 8. Recertify Last-Known-Good
+### 9. Recertify Last-Known-Good
 
 ```text
 HOT_UPDATE_LKG_RECERTIFY <job_id> <promotion_id>
@@ -439,6 +466,20 @@ Confirm:
 - promotion record is unchanged
 - outcome record is unchanged
 - gate record is unchanged
+
+## Generic Recovery Command Index
+
+Rollback, rollback-apply, and LKG recovery remain generic. Use these commands only when the operator is intentionally entering the generic recovery flow:
+
+```text
+ROLLBACK_RECORD <job_id> <promotion_id> <rollback_id>
+ROLLBACK_APPLY_RECORD <job_id> <rollback_id> <apply_id>
+ROLLBACK_APPLY_PHASE <job_id> <apply_id> <phase>
+ROLLBACK_APPLY_EXECUTE <job_id> <apply_id>
+ROLLBACK_APPLY_RELOAD <job_id> <apply_id>
+ROLLBACK_APPLY_FAIL <job_id> <apply_id> [reason...]
+HOT_UPDATE_LKG_RECERTIFY <job_id> <promotion_id>
+```
 
 ## Response Patterns
 
