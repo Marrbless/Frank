@@ -17,6 +17,8 @@ func TestLoadOperatorHotUpdateGateIdentityStatusConfigured(t *testing.T) {
 	storeHotUpdateGateIdentityFixtures(t, root, now)
 	if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(3*time.Minute), func(record *HotUpdateGateRecord) {
 		record.HotUpdateID = "hot-update-2"
+		record.CanaryRef = "hot-update-canary-satisfaction-authority-2"
+		record.ApprovalRef = HotUpdateOwnerApprovalDecisionIDFromRequest("hot-update-owner-approval-request-2")
 		record.CandidatePackID = "pack-candidate"
 		record.PreviousActivePackID = "pack-base"
 		record.RollbackTargetPackID = "pack-base"
@@ -41,6 +43,12 @@ func TestLoadOperatorHotUpdateGateIdentityStatusConfigured(t *testing.T) {
 	gate := got.Gates[0]
 	if gate.HotUpdateID != "hot-update-2" {
 		t.Fatalf("Gates[0].HotUpdateID = %q, want hot-update-2", gate.HotUpdateID)
+	}
+	if gate.CanaryRef != "hot-update-canary-satisfaction-authority-2" {
+		t.Fatalf("Gates[0].CanaryRef = %q, want hot-update-canary-satisfaction-authority-2", gate.CanaryRef)
+	}
+	if gate.ApprovalRef != HotUpdateOwnerApprovalDecisionIDFromRequest("hot-update-owner-approval-request-2") {
+		t.Fatalf("Gates[0].ApprovalRef = %q, want %q", gate.ApprovalRef, HotUpdateOwnerApprovalDecisionIDFromRequest("hot-update-owner-approval-request-2"))
 	}
 	if gate.CandidatePackID != "pack-candidate" {
 		t.Fatalf("Gates[0].CandidatePackID = %q, want pack-candidate", gate.CandidatePackID)

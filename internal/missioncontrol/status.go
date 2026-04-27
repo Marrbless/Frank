@@ -262,6 +262,8 @@ type OperatorHotUpdateOutcomeStatus struct {
 
 type OperatorHotUpdateGateStatus struct {
 	HotUpdateID              string   `json:"hot_update_id,omitempty"`
+	CanaryRef                string   `json:"canary_ref,omitempty"`
+	ApprovalRef              string   `json:"approval_ref,omitempty"`
 	CandidatePackID          string   `json:"candidate_pack_id,omitempty"`
 	PreviousActivePackID     string   `json:"previous_active_pack_id,omitempty"`
 	RollbackTargetPackID     string   `json:"rollback_target_pack_id,omitempty"`
@@ -2692,6 +2694,8 @@ func loadOperatorHotUpdateGateStatus(root, path string) OperatorHotUpdateGateSta
 func operatorHotUpdateGateStatusFromRecord(record HotUpdateGateRecord) OperatorHotUpdateGateStatus {
 	return OperatorHotUpdateGateStatus{
 		HotUpdateID:              record.HotUpdateID,
+		CanaryRef:                record.CanaryRef,
+		ApprovalRef:              record.ApprovalRef,
 		CandidatePackID:          record.CandidatePackID,
 		PreviousActivePackID:     record.PreviousActivePackID,
 		RollbackTargetPackID:     record.RollbackTargetPackID,
