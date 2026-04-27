@@ -39,6 +39,9 @@ func TestLoadOperatorHotUpdateOutcomeIdentityStatusConfigured(t *testing.T) {
 	if outcome.HotUpdateID != "hot-update-1" {
 		t.Fatalf("Outcomes[1].HotUpdateID = %q, want hot-update-1", outcome.HotUpdateID)
 	}
+	if outcome.CanaryRef != "" || outcome.ApprovalRef != "" {
+		t.Fatalf("Outcomes[1] refs = %q/%q, want empty", outcome.CanaryRef, outcome.ApprovalRef)
+	}
 	if outcome.CandidateID != "candidate-1" {
 		t.Fatalf("Outcomes[1].CandidateID = %q, want candidate-1", outcome.CandidateID)
 	}
@@ -71,6 +74,39 @@ func TestLoadOperatorHotUpdateOutcomeIdentityStatusConfigured(t *testing.T) {
 	}
 	if outcome.Error != "" {
 		t.Fatalf("Outcomes[1].Error = %q, want empty", outcome.Error)
+	}
+}
+
+func TestLoadOperatorHotUpdateOutcomeIdentityStatusIncludesCanaryRefs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 27, 19, 30, 0, 0, time.UTC)
+	fixture := storeCanaryHotUpdateTerminalOutcomeFixture(t, root, now, HotUpdateGateStateReloadApplySucceeded, "", true)
+	outcome, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+	}
+
+	got := LoadOperatorHotUpdateOutcomeIdentityStatus(root)
+	if got.State != "configured" {
+		t.Fatalf("State = %q, want configured", got.State)
+	}
+	if len(got.Outcomes) != 1 {
+		t.Fatalf("Outcomes len = %d, want 1", len(got.Outcomes))
+	}
+	status := got.Outcomes[0]
+	if status.OutcomeID != outcome.OutcomeID {
+		t.Fatalf("OutcomeID = %q, want %q", status.OutcomeID, outcome.OutcomeID)
+	}
+	if status.CanaryRef != fixture.authority.CanarySatisfactionAuthorityID {
+		t.Fatalf("CanaryRef = %q, want %q", status.CanaryRef, fixture.authority.CanarySatisfactionAuthorityID)
+	}
+	if status.ApprovalRef != fixture.decision.OwnerApprovalDecisionID {
+		t.Fatalf("ApprovalRef = %q, want %q", status.ApprovalRef, fixture.decision.OwnerApprovalDecisionID)
 	}
 }
 

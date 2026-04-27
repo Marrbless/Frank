@@ -267,6 +267,9 @@ func TestCreateHotUpdateOutcomeFromTerminalGateSucceededCreatesHotUpdatedOutcome
 	if got.CandidateID != "" || got.RunID != "" || got.CandidateResultID != "" {
 		t.Fatalf("optional candidate/run/result refs = %q/%q/%q, want empty", got.CandidateID, got.RunID, got.CandidateResultID)
 	}
+	if got.CanaryRef != "" || got.ApprovalRef != "" {
+		t.Fatalf("audit refs = %q/%q, want empty for non-canary outcome", got.CanaryRef, got.ApprovalRef)
+	}
 
 	loaded, err := LoadHotUpdateOutcomeRecord(root, got.OutcomeID)
 	if err != nil {
@@ -302,6 +305,106 @@ func TestCreateHotUpdateOutcomeFromTerminalGateFailedCopiesFailureDetail(t *test
 	}
 	if got.Reason != failureReason {
 		t.Fatalf("Reason = %q, want copied deterministic failure detail", got.Reason)
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGatePropagatesCanaryAuditLineage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		owner         bool
+		state         HotUpdateGateState
+		failureReason string
+		wantKind      HotUpdateOutcomeKind
+	}{
+		{
+			name:     "no owner success",
+			wantKind: HotUpdateOutcomeKindHotUpdated,
+		},
+		{
+			name:     "owner approved success",
+			owner:    true,
+			wantKind: HotUpdateOutcomeKindHotUpdated,
+		},
+		{
+			name:          "no owner failed",
+			state:         HotUpdateGateStateReloadApplyFailed,
+			failureReason: "operator_terminal_failure: canary terminal failure recorded",
+			wantKind:      HotUpdateOutcomeKindFailed,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			now := time.Date(2026, 5, 1, 12, 30, 0, 0, time.UTC)
+			state := tc.state
+			if state == "" {
+				state = HotUpdateGateStateReloadApplySucceeded
+			}
+			fixture := storeCanaryHotUpdateTerminalOutcomeFixture(t, root, now, state, tc.failureReason, tc.owner)
+			before := snapshotHotUpdateOutcomeSideEffects(t, root, fixture.gate.HotUpdateID)
+			sourceBefore := snapshotCanaryAuditSourceRecords(t, root, fixture)
+
+			got, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", now.Add(31*time.Minute))
+			if err != nil {
+				t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+			}
+			if !changed {
+				t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+			}
+			if got.CanaryRef != fixture.authority.CanarySatisfactionAuthorityID {
+				t.Fatalf("CanaryRef = %q, want %q", got.CanaryRef, fixture.authority.CanarySatisfactionAuthorityID)
+			}
+			if tc.owner {
+				if got.ApprovalRef != fixture.decision.OwnerApprovalDecisionID {
+					t.Fatalf("ApprovalRef = %q, want %q", got.ApprovalRef, fixture.decision.OwnerApprovalDecisionID)
+				}
+			} else if got.ApprovalRef != "" {
+				t.Fatalf("ApprovalRef = %q, want empty", got.ApprovalRef)
+			}
+			if got.OutcomeKind != tc.wantKind {
+				t.Fatalf("OutcomeKind = %q, want %q", got.OutcomeKind, tc.wantKind)
+			}
+			if got.OutcomeKind == HotUpdateOutcomeKindCanaryApplied {
+				t.Fatal("OutcomeKind = canary_applied, want existing hot_updated/failed kinds")
+			}
+
+			assertHotUpdateOutcomeSideEffectsUnchanged(t, root, fixture.gate.HotUpdateID, before)
+			assertCanaryAuditSourceRecordsUnchanged(t, root, fixture, sourceBefore)
+			assertNoHotUpdateOutcomeForbiddenRecords(t, root)
+		})
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateDoesNotReauthorizeCanaryAfterTerminalExecution(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 12, 45, 0, 0, time.UTC)
+	fixture := storeCanaryHotUpdateTerminalOutcomeFixture(t, root, now, HotUpdateGateStateReloadApplySucceeded, "", false)
+
+	staleEvidence := fixture.evidence
+	staleEvidence.EvidenceState = HotUpdateCanaryEvidenceStateFailed
+	staleEvidence.Passed = false
+	staleEvidence.Reason = "drift after terminal execution"
+	if err := WriteStoreJSONAtomic(StoreHotUpdateCanaryEvidencePath(root, staleEvidence.CanaryEvidenceID), staleEvidence); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(stale evidence) error = %v", err)
+	}
+
+	got, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+	}
+	if got.CanaryRef != fixture.authority.CanarySatisfactionAuthorityID {
+		t.Fatalf("CanaryRef = %q, want terminal gate lineage %q", got.CanaryRef, fixture.authority.CanarySatisfactionAuthorityID)
 	}
 }
 
@@ -387,6 +490,76 @@ func TestCreateHotUpdateOutcomeFromTerminalGateReplayIsIdempotentAndDivergentDup
 	}
 	if len(records) != 1 {
 		t.Fatalf("ListHotUpdateOutcomeRecords() len = %d, want 1", len(records))
+	}
+}
+
+func TestCreateHotUpdateOutcomeFromTerminalGateDivergentDuplicateLineageFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 13, 30, 0, 0, time.UTC)
+	fixture := storeCanaryHotUpdateTerminalOutcomeFixture(t, root, now, HotUpdateGateStateReloadApplySucceeded, "", true)
+	createdAt := now.Add(31 * time.Minute)
+
+	first, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(first) error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(first) changed = false, want true")
+	}
+	firstBytes, err := os.ReadFile(StoreHotUpdateOutcomePath(root, first.OutcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(first outcome) error = %v", err)
+	}
+
+	second, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", createdAt)
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(replay) = %#v, want %#v", second, first)
+	}
+	secondBytes, err := os.ReadFile(StoreHotUpdateOutcomePath(root, first.OutcomeID))
+	if err != nil {
+		t.Fatalf("ReadFile(second outcome) error = %v", err)
+	}
+	if string(secondBytes) != string(firstBytes) {
+		t.Fatalf("hot-update outcome file changed on exact replay\nfirst:\n%s\nsecond:\n%s", string(firstBytes), string(secondBytes))
+	}
+
+	divergent := first
+	divergent.CanaryRef = "hot-update-canary-satisfaction-authority-other"
+	writeRawHotUpdateOutcomeRecord(t, root, divergent)
+	_, changed, err = CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", createdAt)
+	if err == nil {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent canary_ref) error = nil, want fail-closed rejection")
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent canary_ref) changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), "canary_ref") {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(divergent canary_ref) error = %q, want canary_ref context", err.Error())
+	}
+
+	if err := WriteStoreJSONAtomic(StoreHotUpdateOutcomePath(root, first.OutcomeID), first); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(restore outcome) error = %v", err)
+	}
+	divergent = first
+	divergent.ApprovalRef = HotUpdateOwnerApprovalDecisionIDFromRequest("hot-update-owner-approval-request-other")
+	writeRawHotUpdateOutcomeRecord(t, root, divergent)
+	_, changed, err = CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", createdAt)
+	if err == nil {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent approval_ref) error = nil, want fail-closed rejection")
+	}
+	if changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate(divergent approval_ref) changed = true, want false")
+	}
+	if !strings.Contains(err.Error(), "approval_ref") {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate(divergent approval_ref) error = %q, want approval_ref context", err.Error())
 	}
 }
 
@@ -573,6 +746,127 @@ func storeHotUpdateTerminalOutcomeFixture(t *testing.T, root string, now time.Ti
 		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
 	}
 	return stored
+}
+
+type canaryTerminalOutcomeFixture struct {
+	requirement HotUpdateCanaryRequirementRecord
+	evidence    HotUpdateCanaryEvidenceRecord
+	authority   HotUpdateCanarySatisfactionAuthorityRecord
+	request     HotUpdateOwnerApprovalRequestRecord
+	decision    HotUpdateOwnerApprovalDecisionRecord
+	gate        HotUpdateGateRecord
+}
+
+func storeCanaryHotUpdateTerminalOutcomeFixture(t *testing.T, root string, now time.Time, state HotUpdateGateState, failureReason string, ownerApproval bool) canaryTerminalOutcomeFixture {
+	t.Helper()
+
+	var fixture canaryTerminalOutcomeFixture
+	approvalRef := ""
+	if ownerApproval {
+		fixture.requirement, fixture.evidence, fixture.authority, fixture.request, fixture.decision = storeOwnerApprovedCanaryGateFixture(t, root, now, HotUpdateOwnerApprovalDecisionGranted)
+		approvalRef = fixture.decision.OwnerApprovalDecisionID
+		if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+			PackID:            fixture.authority.BaselinePackID,
+			Basis:             "holdout_pass",
+			VerifiedAt:        now.Add(25 * time.Minute),
+			VerifiedBy:        "operator",
+			RollbackRecordRef: "bootstrap",
+		}); err != nil {
+			t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+		}
+	} else {
+		fixture.requirement, fixture.evidence, fixture.authority = storeAuthorizedCanaryGateFixture(t, root, now, true)
+	}
+
+	gate, changed, err := CreateHotUpdateGateFromCanarySatisfactionAuthority(root, fixture.authority.CanarySatisfactionAuthorityID, approvalRef, "operator", now.Add(26*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateGateFromCanarySatisfactionAuthority() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateGateFromCanarySatisfactionAuthority() changed = false, want true")
+	}
+	gate.State = state
+	gate.FailureReason = failureReason
+	gate.PhaseUpdatedAt = now.Add(30 * time.Minute)
+	gate.PhaseUpdatedBy = "operator"
+	writeRawHotUpdateGateRecord(t, root, gate)
+
+	stored, err := LoadHotUpdateGateRecord(root, gate.HotUpdateID)
+	if err != nil {
+		t.Fatalf("LoadHotUpdateGateRecord(canary terminal) error = %v", err)
+	}
+	fixture.gate = stored
+	return fixture
+}
+
+func snapshotCanaryAuditSourceRecords(t *testing.T, root string, fixture canaryTerminalOutcomeFixture) map[string][]byte {
+	t.Helper()
+
+	paths := []string{
+		StoreHotUpdateCanaryRequirementPath(root, fixture.requirement.CanaryRequirementID),
+		StoreHotUpdateCanaryEvidencePath(root, fixture.evidence.CanaryEvidenceID),
+		StoreHotUpdateCanarySatisfactionAuthorityPath(root, fixture.authority.CanarySatisfactionAuthorityID),
+	}
+	if fixture.request.OwnerApprovalRequestID != "" {
+		paths = append(paths, StoreHotUpdateOwnerApprovalRequestPath(root, fixture.request.OwnerApprovalRequestID))
+	}
+	if fixture.decision.OwnerApprovalDecisionID != "" {
+		paths = append(paths, StoreHotUpdateOwnerApprovalDecisionPath(root, fixture.decision.OwnerApprovalDecisionID))
+	}
+
+	snapshot := make(map[string][]byte, len(paths))
+	for _, path := range paths {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		snapshot[path] = bytes
+	}
+	return snapshot
+}
+
+func assertCanaryAuditSourceRecordsUnchanged(t *testing.T, root string, fixture canaryTerminalOutcomeFixture, before map[string][]byte) {
+	t.Helper()
+
+	after := snapshotCanaryAuditSourceRecords(t, root, fixture)
+	if len(after) != len(before) {
+		t.Fatalf("canary source snapshot len = %d, want %d", len(after), len(before))
+	}
+	for path, beforeBytes := range before {
+		afterBytes, ok := after[path]
+		if !ok {
+			t.Fatalf("canary source path %s missing after operation", path)
+		}
+		if string(afterBytes) != string(beforeBytes) {
+			t.Fatalf("canary source record changed at %s\nbefore:\n%s\nafter:\n%s", path, string(beforeBytes), string(afterBytes))
+		}
+	}
+}
+
+func assertNoHotUpdateOutcomeForbiddenRecords(t *testing.T, root string) {
+	t.Helper()
+
+	rollbacks, err := ListRollbackRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackRecords() error = %v", err)
+	}
+	if len(rollbacks) != 0 {
+		t.Fatalf("ListRollbackRecords() len = %d, want 0", len(rollbacks))
+	}
+	applies, err := ListRollbackApplyRecords(root)
+	if err != nil {
+		t.Fatalf("ListRollbackApplyRecords() error = %v", err)
+	}
+	if len(applies) != 0 {
+		t.Fatalf("ListRollbackApplyRecords() len = %d, want 0", len(applies))
+	}
+	decisions, err := ListCandidatePromotionDecisionRecords(root)
+	if err != nil {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() error = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("ListCandidatePromotionDecisionRecords() len = %d, want 0", len(decisions))
+	}
 }
 
 type hotUpdateOutcomeSideEffectSnapshot struct {

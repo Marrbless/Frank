@@ -247,6 +247,8 @@ type OperatorHotUpdateOutcomeStatus struct {
 	State             string  `json:"state"`
 	OutcomeID         string  `json:"outcome_id,omitempty"`
 	HotUpdateID       string  `json:"hot_update_id,omitempty"`
+	CanaryRef         string  `json:"canary_ref,omitempty"`
+	ApprovalRef       string  `json:"approval_ref,omitempty"`
 	CandidateID       string  `json:"candidate_id,omitempty"`
 	RunID             string  `json:"run_id,omitempty"`
 	CandidateResultID string  `json:"candidate_result_id,omitempty"`
@@ -289,6 +291,8 @@ type OperatorPromotionStatus struct {
 	LastKnownGoodBasis   string  `json:"last_known_good_basis,omitempty"`
 	HotUpdateID          string  `json:"hot_update_id,omitempty"`
 	OutcomeID            string  `json:"outcome_id,omitempty"`
+	CanaryRef            string  `json:"canary_ref,omitempty"`
+	ApprovalRef          string  `json:"approval_ref,omitempty"`
 	CandidateID          string  `json:"candidate_id,omitempty"`
 	RunID                string  `json:"run_id,omitempty"`
 	CandidateResultID    string  `json:"candidate_result_id,omitempty"`
@@ -2781,6 +2785,8 @@ func operatorHotUpdateOutcomeStatusFromRecord(record HotUpdateOutcomeRecord) Ope
 	return OperatorHotUpdateOutcomeStatus{
 		OutcomeID:         record.OutcomeID,
 		HotUpdateID:       record.HotUpdateID,
+		CanaryRef:         record.CanaryRef,
+		ApprovalRef:       record.ApprovalRef,
 		CandidateID:       record.CandidateID,
 		RunID:             record.RunID,
 		CandidateResultID: record.CandidateResultID,
@@ -2881,6 +2887,8 @@ func operatorPromotionStatusFromRecord(record PromotionRecord) OperatorPromotion
 		LastKnownGoodBasis:   record.LastKnownGoodBasis,
 		HotUpdateID:          record.HotUpdateID,
 		OutcomeID:            record.OutcomeID,
+		CanaryRef:            record.CanaryRef,
+		ApprovalRef:          record.ApprovalRef,
 		CandidateID:          record.CandidateID,
 		RunID:                record.RunID,
 		CandidateResultID:    record.CandidateResultID,

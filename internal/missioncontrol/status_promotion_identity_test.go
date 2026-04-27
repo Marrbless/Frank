@@ -53,6 +53,9 @@ func TestLoadOperatorPromotionIdentityStatusConfigured(t *testing.T) {
 	if promotion.OutcomeID != "outcome-1" {
 		t.Fatalf("Promotions[0].OutcomeID = %q, want outcome-1", promotion.OutcomeID)
 	}
+	if promotion.CanaryRef != "" || promotion.ApprovalRef != "" {
+		t.Fatalf("Promotions[0] refs = %q/%q, want empty", promotion.CanaryRef, promotion.ApprovalRef)
+	}
 	if promotion.CandidateID != "candidate-1" {
 		t.Fatalf("Promotions[0].CandidateID = %q, want candidate-1", promotion.CandidateID)
 	}
@@ -79,6 +82,46 @@ func TestLoadOperatorPromotionIdentityStatusConfigured(t *testing.T) {
 	}
 	if promotion.Error != "" {
 		t.Fatalf("Promotions[0].Error = %q, want empty", promotion.Error)
+	}
+}
+
+func TestLoadOperatorPromotionIdentityStatusIncludesCanaryRefs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 28, 19, 30, 0, 0, time.UTC)
+	fixture := storeCanaryHotUpdateTerminalOutcomeFixture(t, root, now, HotUpdateGateStateReloadApplySucceeded, "", true)
+	outcome, changed, err := CreateHotUpdateOutcomeFromTerminalGate(root, fixture.gate.HotUpdateID, "operator", now.Add(31*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateHotUpdateOutcomeFromTerminalGate() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateHotUpdateOutcomeFromTerminalGate() changed = false, want true")
+	}
+	promotion, changed, err := CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcome.OutcomeID, "operator", now.Add(32*time.Minute))
+	if err != nil {
+		t.Fatalf("CreatePromotionFromSuccessfulHotUpdateOutcome() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreatePromotionFromSuccessfulHotUpdateOutcome() changed = false, want true")
+	}
+
+	got := LoadOperatorPromotionIdentityStatus(root)
+	if got.State != "configured" {
+		t.Fatalf("State = %q, want configured", got.State)
+	}
+	if len(got.Promotions) != 1 {
+		t.Fatalf("Promotions len = %d, want 1", len(got.Promotions))
+	}
+	status := got.Promotions[0]
+	if status.PromotionID != promotion.PromotionID {
+		t.Fatalf("PromotionID = %q, want %q", status.PromotionID, promotion.PromotionID)
+	}
+	if status.CanaryRef != fixture.authority.CanarySatisfactionAuthorityID {
+		t.Fatalf("CanaryRef = %q, want %q", status.CanaryRef, fixture.authority.CanarySatisfactionAuthorityID)
+	}
+	if status.ApprovalRef != fixture.decision.OwnerApprovalDecisionID {
+		t.Fatalf("ApprovalRef = %q, want %q", status.ApprovalRef, fixture.decision.OwnerApprovalDecisionID)
 	}
 }
 

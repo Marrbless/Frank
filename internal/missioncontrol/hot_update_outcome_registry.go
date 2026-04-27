@@ -35,6 +35,8 @@ type HotUpdateOutcomeRecord struct {
 	RecordVersion     int                  `json:"record_version"`
 	OutcomeID         string               `json:"outcome_id"`
 	HotUpdateID       string               `json:"hot_update_id"`
+	CanaryRef         string               `json:"canary_ref,omitempty"`
+	ApprovalRef       string               `json:"approval_ref,omitempty"`
 	CandidateID       string               `json:"candidate_id,omitempty"`
 	RunID             string               `json:"run_id,omitempty"`
 	CandidateResultID string               `json:"candidate_result_id,omitempty"`
@@ -65,6 +67,8 @@ func NormalizeHotUpdateOutcomeRef(ref HotUpdateOutcomeRef) HotUpdateOutcomeRef {
 func NormalizeHotUpdateOutcomeRecord(record HotUpdateOutcomeRecord) HotUpdateOutcomeRecord {
 	record.OutcomeID = strings.TrimSpace(record.OutcomeID)
 	record.HotUpdateID = strings.TrimSpace(record.HotUpdateID)
+	record.CanaryRef = strings.TrimSpace(record.CanaryRef)
+	record.ApprovalRef = strings.TrimSpace(record.ApprovalRef)
 	record.CandidateID = strings.TrimSpace(record.CandidateID)
 	record.RunID = strings.TrimSpace(record.RunID)
 	record.CandidateResultID = strings.TrimSpace(record.CandidateResultID)
@@ -126,6 +130,16 @@ func ValidateHotUpdateOutcomeRecord(record HotUpdateOutcomeRecord) error {
 	}
 	if err := ValidateHotUpdateGateRef(HotUpdateOutcomeGateRef(record)); err != nil {
 		return fmt.Errorf("mission store hot-update outcome hot_update_id %q: %w", record.HotUpdateID, err)
+	}
+	if record.CanaryRef != "" {
+		if err := ValidateHotUpdateCanarySatisfactionAuthorityRef(HotUpdateCanarySatisfactionAuthorityRef{CanarySatisfactionAuthorityID: record.CanaryRef}); err != nil {
+			return fmt.Errorf("mission store hot-update outcome canary_ref %q: %w", record.CanaryRef, err)
+		}
+	}
+	if record.ApprovalRef != "" {
+		if err := ValidateHotUpdateOwnerApprovalDecisionRef(HotUpdateOwnerApprovalDecisionRef{OwnerApprovalDecisionID: record.ApprovalRef}); err != nil {
+			return fmt.Errorf("mission store hot-update outcome approval_ref %q: %w", record.ApprovalRef, err)
+		}
 	}
 	if candidateRef, ok := HotUpdateOutcomeImprovementCandidateRef(record); ok {
 		if err := ValidateImprovementCandidateRef(candidateRef); err != nil {
@@ -264,6 +278,8 @@ func CreateHotUpdateOutcomeFromTerminalGate(root string, hotUpdateID string, cre
 		RecordVersion:   StoreRecordVersion,
 		OutcomeID:       hotUpdateOutcomeIDFromGate(gate.HotUpdateID),
 		HotUpdateID:     gate.HotUpdateID,
+		CanaryRef:       gate.CanaryRef,
+		ApprovalRef:     gate.ApprovalRef,
 		CandidatePackID: gate.CandidatePackID,
 		OutcomeKind:     outcomeKind,
 		Reason:          reason,
@@ -330,6 +346,9 @@ func validateHotUpdateOutcomeLinkage(root string, record HotUpdateOutcomeRecord)
 	gateRecord, err := LoadHotUpdateGateRecord(root, gate.HotUpdateID)
 	if err != nil {
 		return fmt.Errorf("mission store hot-update outcome hot_update_id %q: %w", gate.HotUpdateID, err)
+	}
+	if err := validateHotUpdateOutcomeGateLineage(record, gateRecord); err != nil {
+		return err
 	}
 
 	if packRef, ok := HotUpdateOutcomeCandidatePackRef(record); ok {
@@ -468,6 +487,24 @@ func validateHotUpdateOutcomeLinkage(root string, record HotUpdateOutcomeRecord)
 		}
 	}
 
+	return nil
+}
+
+func validateHotUpdateOutcomeGateLineage(record HotUpdateOutcomeRecord, gate HotUpdateGateRecord) error {
+	if record.CanaryRef != gate.CanaryRef {
+		return fmt.Errorf(
+			"mission store hot-update outcome canary_ref %q does not match hot-update gate canary_ref %q",
+			record.CanaryRef,
+			gate.CanaryRef,
+		)
+	}
+	if record.ApprovalRef != gate.ApprovalRef {
+		return fmt.Errorf(
+			"mission store hot-update outcome approval_ref %q does not match hot-update gate approval_ref %q",
+			record.ApprovalRef,
+			gate.ApprovalRef,
+		)
+	}
 	return nil
 }
 

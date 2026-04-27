@@ -24,6 +24,8 @@ type PromotionRecord struct {
 	LastKnownGoodBasis   string    `json:"last_known_good_basis,omitempty"`
 	HotUpdateID          string    `json:"hot_update_id"`
 	OutcomeID            string    `json:"outcome_id,omitempty"`
+	CanaryRef            string    `json:"canary_ref,omitempty"`
+	ApprovalRef          string    `json:"approval_ref,omitempty"`
 	CandidateID          string    `json:"candidate_id,omitempty"`
 	RunID                string    `json:"run_id,omitempty"`
 	CandidateResultID    string    `json:"candidate_result_id,omitempty"`
@@ -57,6 +59,8 @@ func NormalizePromotionRecord(record PromotionRecord) PromotionRecord {
 	record.LastKnownGoodBasis = strings.TrimSpace(record.LastKnownGoodBasis)
 	record.HotUpdateID = strings.TrimSpace(record.HotUpdateID)
 	record.OutcomeID = strings.TrimSpace(record.OutcomeID)
+	record.CanaryRef = strings.TrimSpace(record.CanaryRef)
+	record.ApprovalRef = strings.TrimSpace(record.ApprovalRef)
 	record.CandidateID = strings.TrimSpace(record.CandidateID)
 	record.RunID = strings.TrimSpace(record.RunID)
 	record.CandidateResultID = strings.TrimSpace(record.CandidateResultID)
@@ -153,6 +157,16 @@ func ValidatePromotionRecord(record PromotionRecord) error {
 	if outcomeRef, ok := PromotionHotUpdateOutcomeRef(record); ok {
 		if err := ValidateHotUpdateOutcomeRef(outcomeRef); err != nil {
 			return fmt.Errorf("mission store promotion outcome_id %q: %w", record.OutcomeID, err)
+		}
+	}
+	if record.CanaryRef != "" {
+		if err := ValidateHotUpdateCanarySatisfactionAuthorityRef(HotUpdateCanarySatisfactionAuthorityRef{CanarySatisfactionAuthorityID: record.CanaryRef}); err != nil {
+			return fmt.Errorf("mission store promotion canary_ref %q: %w", record.CanaryRef, err)
+		}
+	}
+	if record.ApprovalRef != "" {
+		if err := ValidateHotUpdateOwnerApprovalDecisionRef(HotUpdateOwnerApprovalDecisionRef{OwnerApprovalDecisionID: record.ApprovalRef}); err != nil {
+			return fmt.Errorf("mission store promotion approval_ref %q: %w", record.ApprovalRef, err)
 		}
 	}
 	if candidateRef, ok := PromotionImprovementCandidateRef(record); ok {
@@ -282,6 +296,9 @@ func CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, createdBy st
 			gate.CandidatePackID,
 		)
 	}
+	if err := validateHotUpdateOutcomeGateLineage(outcome, gate); err != nil {
+		return PromotionRecord{}, false, err
+	}
 	if strings.TrimSpace(gate.PreviousActivePackID) == "" {
 		return PromotionRecord{}, false, fmt.Errorf("mission store hot-update gate %q previous_active_pack_id is required for promotion creation", gate.HotUpdateID)
 	}
@@ -296,6 +313,8 @@ func CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, createdBy st
 		PreviousActivePackID: gate.PreviousActivePackID,
 		HotUpdateID:          outcome.HotUpdateID,
 		OutcomeID:            outcome.OutcomeID,
+		CanaryRef:            outcome.CanaryRef,
+		ApprovalRef:          outcome.ApprovalRef,
 		CandidateID:          outcome.CandidateID,
 		RunID:                outcome.RunID,
 		CandidateResultID:    outcome.CandidateResultID,
@@ -401,6 +420,20 @@ func validatePromotionLinkage(root string, record PromotionRecord) error {
 			gate.PreviousActivePackID,
 		)
 	}
+	if record.CanaryRef != gate.CanaryRef {
+		return fmt.Errorf(
+			"mission store promotion canary_ref %q does not match hot-update gate canary_ref %q",
+			record.CanaryRef,
+			gate.CanaryRef,
+		)
+	}
+	if record.ApprovalRef != gate.ApprovalRef {
+		return fmt.Errorf(
+			"mission store promotion approval_ref %q does not match hot-update gate approval_ref %q",
+			record.ApprovalRef,
+			gate.ApprovalRef,
+		)
+	}
 
 	if outcomeRef, ok := PromotionHotUpdateOutcomeRef(record); ok {
 		outcome, err := LoadHotUpdateOutcomeRecord(root, outcomeRef.OutcomeID)
@@ -421,6 +454,23 @@ func validatePromotionLinkage(root string, record PromotionRecord) error {
 				outcomeRef.OutcomeID,
 				outcome.CandidatePackID,
 				promotedRef.PackID,
+			)
+		}
+		if err := validateHotUpdateOutcomeGateLineage(outcome, gate); err != nil {
+			return err
+		}
+		if record.CanaryRef != outcome.CanaryRef {
+			return fmt.Errorf(
+				"mission store promotion canary_ref %q does not match hot-update outcome canary_ref %q",
+				record.CanaryRef,
+				outcome.CanaryRef,
+			)
+		}
+		if record.ApprovalRef != outcome.ApprovalRef {
+			return fmt.Errorf(
+				"mission store promotion approval_ref %q does not match hot-update outcome approval_ref %q",
+				record.ApprovalRef,
+				outcome.ApprovalRef,
 			)
 		}
 		if candidateRef, ok := PromotionImprovementCandidateRef(record); ok && outcome.CandidateID != "" && outcome.CandidateID != candidateRef.CandidateID {
