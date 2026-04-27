@@ -494,6 +494,18 @@ ROLLBACK_APPLY_FAIL <job_id> <apply_id> [reason...]
 HOT_UPDATE_LKG_RECERTIFY <job_id> <promotion_id>
 ```
 
+Status check:
+
+```text
+STATUS <job_id>
+```
+
+Confirm:
+
+- `v4_summary.state = rollback_recorded` after rollback record creation, with `selected_rollback_id = <rollback_id>`.
+- `v4_summary.state = rollback_apply_recorded` after rollback-apply record creation or phase/execution updates, with `selected_rollback_id = <rollback_id>` and `selected_rollback_apply_id = <apply_id>`.
+- `rollback_identity` and `rollback_apply_identity` remain the audit authority for recovery linkage, phases, activation state, invalid records, and errors.
+
 ## Response Patterns
 
 - `Recorded...`: a durable gate/workflow record was created.

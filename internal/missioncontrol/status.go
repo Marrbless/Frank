@@ -82,6 +82,8 @@ type OperatorV4SummaryStatus struct {
 	SelectedHotUpdateID           string   `json:"selected_hot_update_id,omitempty"`
 	SelectedOutcomeID             string   `json:"selected_outcome_id,omitempty"`
 	SelectedPromotionID           string   `json:"selected_promotion_id,omitempty"`
+	SelectedRollbackID            string   `json:"selected_rollback_id,omitempty"`
+	SelectedRollbackApplyID       string   `json:"selected_rollback_apply_id,omitempty"`
 	HasCandidatePromotionDecision bool     `json:"has_candidate_promotion_decision,omitempty"`
 	HasCanaryAuthority            bool     `json:"has_canary_authority,omitempty"`
 	HasOwnerApprovalDecision      bool     `json:"has_owner_approval_decision,omitempty"`
@@ -1072,13 +1074,32 @@ func BuildOperatorV4SummaryStatus(summary OperatorStatusSummary) OperatorV4Summa
 			}
 		}
 	}
-	if summary.RollbackIdentity != nil && len(summary.RollbackIdentity.Rollbacks) > 0 {
-		status.HasRollback = true
-		configured = true
+	if summary.RollbackIdentity != nil {
+		for _, rollback := range summary.RollbackIdentity.Rollbacks {
+			if strings.TrimSpace(rollback.RollbackID) != "" {
+				status.SelectedRollbackID = rollback.RollbackID
+				configured = true
+			}
+		}
+		if len(summary.RollbackIdentity.Rollbacks) > 0 {
+			status.HasRollback = true
+			configured = true
+		}
 	}
-	if summary.RollbackApplyIdentity != nil && len(summary.RollbackApplyIdentity.Applies) > 0 {
-		status.HasRollbackApply = true
-		configured = true
+	if summary.RollbackApplyIdentity != nil {
+		for _, apply := range summary.RollbackApplyIdentity.Applies {
+			if strings.TrimSpace(apply.RollbackApplyID) != "" {
+				status.SelectedRollbackApplyID = apply.RollbackApplyID
+				configured = true
+			}
+			if strings.TrimSpace(apply.RollbackID) != "" {
+				status.SelectedRollbackID = apply.RollbackID
+			}
+		}
+		if len(summary.RollbackApplyIdentity.Applies) > 0 {
+			status.HasRollbackApply = true
+			configured = true
+		}
 	}
 
 	if status.InvalidIdentityCount > 0 {

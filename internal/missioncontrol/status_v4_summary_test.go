@@ -64,6 +64,47 @@ func TestOperatorV4SummarySurfacesInvalidIdentityWithoutHidingDetails(t *testing
 	}
 }
 
+func TestOperatorV4SummarySurfacesRecoveryRefs(t *testing.T) {
+	t.Parallel()
+
+	summary := BuildOperatorStatusSummary(JobRuntimeState{
+		JobID: "job-1",
+		State: JobStateRunning,
+	})
+	summary.RollbackIdentity = &OperatorRollbackIdentityStatus{
+		State: "configured",
+		Rollbacks: []OperatorRollbackStatus{{
+			State:      "configured",
+			RollbackID: "rollback-1",
+		}},
+	}
+	summary.RollbackApplyIdentity = &OperatorRollbackApplyIdentityStatus{
+		State: "configured",
+		Applies: []OperatorRollbackApplyStatus{{
+			State:           "configured",
+			RollbackApplyID: "rollback-apply-1",
+			RollbackID:      "rollback-1",
+		}},
+	}
+	summary = WithV4Summary(summary)
+
+	if summary.V4Summary == nil {
+		t.Fatal("V4Summary = nil, want recovery summary")
+	}
+	if summary.V4Summary.State != "rollback_apply_recorded" {
+		t.Fatalf("V4Summary.State = %q, want rollback_apply_recorded", summary.V4Summary.State)
+	}
+	if summary.V4Summary.SelectedRollbackID != "rollback-1" {
+		t.Fatalf("V4Summary.SelectedRollbackID = %q, want rollback-1", summary.V4Summary.SelectedRollbackID)
+	}
+	if summary.V4Summary.SelectedRollbackApplyID != "rollback-apply-1" {
+		t.Fatalf("V4Summary.SelectedRollbackApplyID = %q, want rollback-apply-1", summary.V4Summary.SelectedRollbackApplyID)
+	}
+	if !summary.V4Summary.HasRollback || !summary.V4Summary.HasRollbackApply {
+		t.Fatalf("V4Summary recovery booleans = rollback %t apply %t, want both true", summary.V4Summary.HasRollback, summary.V4Summary.HasRollbackApply)
+	}
+}
+
 func withOperatorV4IdentitySurfaces(summary OperatorStatusSummary, root string) OperatorStatusSummary {
 	summary = WithRuntimePackIdentity(summary, root)
 	summary = WithImprovementCandidateIdentity(summary, root)
