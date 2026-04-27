@@ -243,6 +243,10 @@ STATUS <job_id>
 
 Confirm:
 
+- `promotion_policy_identity.state = configured`
+- `candidate_promotion_decision_identity.state = configured`
+- selected decision has expected `promotion_decision_id`
+- selected decision has `eligibility_state = eligible`
 - `hot_update_gate_identity.state = configured`
 - gate has expected `hot_update_id`
 - gate has expected `candidate_pack_id`
