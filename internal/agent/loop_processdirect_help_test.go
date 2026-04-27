@@ -41,6 +41,8 @@ func TestProcessDirectHotUpdateHelpListsV4LifecycleCommands(t *testing.T) {
 	for _, want := range []string{
 		"docs/HOT_UPDATE_OPERATOR_RUNBOOK.md",
 		"STATUS <job_id>",
+		"v4_summary gives compact V4 lifecycle state",
+		"detailed identity sections remain audit authority",
 		"HOT_UPDATE_GATE_FROM_DECISION <job_id> <promotion_decision_id>",
 		"HOT_UPDATE_EXECUTION_READY <job_id> <hot_update_id> <ttl_seconds> [reason...]",
 		"HOT_UPDATE_CANARY_REQUIREMENT_CREATE <job_id> <result_id>",

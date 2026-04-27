@@ -1768,6 +1768,7 @@ Help aliases:
 
 Inspect state:
   STATUS <job_id>
+  v4_summary gives compact V4 lifecycle state; detailed identity sections remain audit authority.
 
 Eligible-only hot-update path:
   HOT_UPDATE_GATE_FROM_DECISION <job_id> <promotion_decision_id>

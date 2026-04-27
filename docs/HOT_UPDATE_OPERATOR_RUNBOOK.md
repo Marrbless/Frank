@@ -16,6 +16,8 @@ HELP V4
 
 The help response is read-only. It does not require an active mission step, does not create records, and points back to this runbook for the full workflow.
 
+The help response names `STATUS <job_id>` and `v4_summary` as the compact orientation surface. Use `v4_summary` for key lifecycle state; detailed identity sections remain audit authority for invalid-record details and full lifecycle lineage.
+
 ## Placeholders
 
 - `<job_id>`: active mission job id

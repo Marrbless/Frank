@@ -924,7 +924,7 @@ func TestTaskStateOperatorStatusMatchesCommittedSnapshotForPromotionPolicyAndDec
 	t.Parallel()
 
 	root := t.TempDir()
-	now := time.Date(2026, 4, 27, 22, 45, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	decisionID := writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t, root, now)
 
 	job := testTaskStateJob()

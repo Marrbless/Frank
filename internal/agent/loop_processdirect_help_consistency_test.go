@@ -42,6 +42,7 @@ func TestProcessDirectHotUpdateHelpRunbookAndParserStayConsistent(t *testing.T) 
 	assertHelpAndRunbookInvariant(t, help, runbook, "canary execution guards", "Canary-derived gates are guarded before phase advancement", "Canary-derived gates are guarded by readiness checks")
 	assertHelpAndRunbookInvariant(t, help, runbook, "outcome promotion audit lineage", "Outcomes and promotions preserve canary_ref and approval_ref audit lineage", "Outcome and promotion records preserve audit lineage by copying `canary_ref` and `approval_ref`")
 	assertHelpAndRunbookInvariant(t, help, runbook, "generic rollback LKG recovery", "Rollback, rollback-apply, and LKG recertification remain generic recovery flows", "Rollback and rollback-apply remain generic recovery flows", "LKG recertification remains generic")
+	assertHelpAndRunbookInvariant(t, help, runbook, "compact V4 summary status", "v4_summary gives compact V4 lifecycle state", "`v4_summary`: compact key state", "detailed identity sections remain audit authority")
 }
 
 func canonicalV4DirectCommandSurfaces() []v4DirectCommandSurface {
