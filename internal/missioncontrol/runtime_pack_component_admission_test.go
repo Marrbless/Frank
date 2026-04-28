@@ -55,8 +55,24 @@ func TestAssessRuntimePackComponentAdmissionBlocksUndeclaredAndImmutableSurfaces
 					record.DeclaredSurfaces = []string{"authority"}
 				}
 			},
-			wantCode:   RejectionCodeV4ForbiddenSurfaceChange,
-			wantReason: `declared surface "authority" is immutable`,
+			wantCode:   RejectionCodeV4PolicyMutationForbidden,
+			wantReason: `frozen policy surface "authority"`,
+		},
+		{
+			name: "extension policy surface",
+			componentEdit: func(record *RuntimePackComponentRecord) {
+				if record.Kind == RuntimePackComponentKindExtensionPack {
+					record.DeclaredSurfaces = []string{"autonomy_policy"}
+				}
+			},
+			packEdit: func(record *RuntimePackRecord) {
+				record.MutableSurfaces = append(record.MutableSurfaces, "autonomy_policy")
+			},
+			gateEdit: func(record *HotUpdateGateRecord) {
+				record.TargetSurfaces = append(record.TargetSurfaces, "autonomy_policy")
+			},
+			wantCode:   RejectionCodeV4PolicyMutationForbidden,
+			wantReason: `frozen policy surface "autonomy"`,
 		},
 		{
 			name: "surface not targeted by gate",

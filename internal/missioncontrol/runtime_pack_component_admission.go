@@ -108,6 +108,9 @@ func assessSingleRuntimePackComponentAdmission(gate HotUpdateGateRecord, candida
 	if len(component.DeclaredSurfaces) == 0 {
 		return block(RejectionCodeV4MutationScopeViolation, "component declared_surfaces are required")
 	}
+	if declaration, ok := findFrozenPolicySurfaceDeclaration(component.DeclaredSurfaces); ok {
+		return block(RejectionCodeV4PolicyMutationForbidden, policySurfaceMutationBlockerSummary("component declared surface", declaration))
+	}
 	for _, surface := range component.DeclaredSurfaces {
 		if runtimePackStringSetContains(candidate.ImmutableSurfaces, surface) {
 			return block(RejectionCodeV4ForbiddenSurfaceChange, fmt.Sprintf("component declared surface %q is immutable for candidate pack", surface))

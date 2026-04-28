@@ -98,12 +98,21 @@ func ValidateRuntimeExtensionPackRecord(record RuntimeExtensionPackRecord) error
 		if tool.ToolName == "" {
 			return fmt.Errorf("mission store runtime extension pack declared_tools[%d].tool_name is required", index)
 		}
+		if declaration, ok := findFrozenPolicySurfaceDeclaration(tool.PermissionRefs); ok {
+			return fmt.Errorf("mission store runtime extension pack %q rejected: %s", record.ExtensionPackID, policySurfaceMutationBlockerSummary(fmt.Sprintf("declared_tools[%d].permission_refs", index), declaration))
+		}
 	}
 	if len(record.DeclaredEvents) == 0 {
 		return fmt.Errorf("mission store runtime extension pack declared_events are required")
 	}
 	if len(record.DeclaredPermissions) == 0 {
 		return fmt.Errorf("mission store runtime extension pack declared_permissions are required")
+	}
+	if declaration, ok := findFrozenPolicySurfaceDeclaration(record.DeclaredPermissions); ok {
+		return fmt.Errorf("mission store runtime extension pack %q rejected: %s", record.ExtensionPackID, policySurfaceMutationBlockerSummary("declared permission", declaration))
+	}
+	if declaration, ok := findFrozenPolicySurfaceDeclaration(record.ExternalSideEffects); ok {
+		return fmt.Errorf("mission store runtime extension pack %q rejected: %s", record.ExtensionPackID, policySurfaceMutationBlockerSummary("external side effect", declaration))
 	}
 	if record.CompatibilityContractRef == "" {
 		return fmt.Errorf("mission store runtime extension pack compatibility_contract_ref is required")

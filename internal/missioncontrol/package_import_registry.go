@@ -127,6 +127,9 @@ func ValidatePackageImportRecord(record PackageImportRecord) error {
 	if len(record.DeclaredSurfaces) == 0 {
 		return fmt.Errorf("mission store package import declared_surfaces are required")
 	}
+	if declaration, ok := findFrozenPolicySurfaceDeclaration(record.DeclaredSurfaces); ok {
+		return fmt.Errorf("mission store package import %q rejected: %s", record.ImportID, policySurfaceMutationBlockerSummary("declared surface", declaration))
+	}
 	if record.ActivationState != PackageImportActivationStateCandidateOnly {
 		return fmt.Errorf("mission store package import activation_state must be %q", PackageImportActivationStateCandidateOnly)
 	}

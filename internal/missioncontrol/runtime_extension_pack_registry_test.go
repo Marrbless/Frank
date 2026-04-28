@@ -95,6 +95,12 @@ func TestRuntimeExtensionPackRecordValidationFailsClosed(t *testing.T) {
 		{name: "missing tools", edit: func(record *RuntimeExtensionPackRecord) { record.DeclaredTools = nil }, want: "declared_tools are required"},
 		{name: "missing events", edit: func(record *RuntimeExtensionPackRecord) { record.DeclaredEvents = nil }, want: "declared_events are required"},
 		{name: "missing permissions", edit: func(record *RuntimeExtensionPackRecord) { record.DeclaredPermissions = nil }, want: "declared_permissions are required"},
+		{name: "policy permission", edit: func(record *RuntimeExtensionPackRecord) {
+			record.DeclaredPermissions = []string{"local_read", "approval_syntax.write"}
+		}, want: string(RejectionCodeV4PolicyMutationForbidden)},
+		{name: "policy tool permission", edit: func(record *RuntimeExtensionPackRecord) {
+			record.DeclaredTools[0].PermissionRefs = []string{"autonomy_predicate_write"}
+		}, want: string(RejectionCodeV4PolicyMutationForbidden)},
 		{name: "missing compatibility", edit: func(record *RuntimeExtensionPackRecord) { record.CompatibilityContractRef = " " }, want: "compatibility_contract_ref is required"},
 		{name: "not hot reloadable", edit: func(record *RuntimeExtensionPackRecord) { record.HotReloadable = false }, want: "hot_reloadable must be true"},
 	}

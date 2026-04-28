@@ -113,6 +113,13 @@ func TestPackageImportRecordRejectsInvalidShapeAndAuthorityGrants(t *testing.T) 
 			},
 			want: string(RejectionCodeV4PackageAuthorityGrantForbidden),
 		},
+		{
+			name: "policy surface declaration",
+			edit: func(record *PackageImportRecord) {
+				record.DeclaredSurfaces = []string{"skills", "treasury_policy"}
+			},
+			want: string(RejectionCodeV4PolicyMutationForbidden),
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,6 +147,9 @@ func TestPackageImportRecordRejectsInvalidShapeAndAuthorityGrants(t *testing.T) 
 						t.Fatalf("StorePackageImportRecord() error = %q, want authority kind %q", err.Error(), want)
 					}
 				}
+			}
+			if strings.Contains(tt.want, string(RejectionCodeV4PolicyMutationForbidden)) && !strings.Contains(err.Error(), "treasury_policy") {
+				t.Fatalf("StorePackageImportRecord() error = %q, want frozen policy declaration", err.Error())
 			}
 			if _, err := LoadPackageImportRecord(root, "donor-import-1"); !errors.Is(err, ErrPackageImportRecordNotFound) {
 				t.Fatalf("LoadPackageImportRecord() error = %v, want not found after rejected import", err)
