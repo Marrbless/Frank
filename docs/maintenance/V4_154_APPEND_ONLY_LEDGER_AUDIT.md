@@ -22,12 +22,9 @@ The acceptance target is `docs/FRANK_V4_SPEC.md` Acceptance Criterion 17: histor
 
 ## Remaining Implementation Rows
 
-The remaining V4 matrix rows must continue this pattern as they add new capabilities:
+No V4 matrix rows remain open after `SF-007`.
 
-- `SF-007`: phone deployment profile/host capability records.
-- `SF-007`: phone deployment profile/host capability records.
-
-These rows remain tracked separately in the matrix. AC-017 is complete for the ledger rule itself because the implemented lifecycle outcomes now have durable append-only/idempotent record coverage or are explicitly current-state pointers guarded by append-only lifecycle records.
+AC-017 is complete for the ledger rule itself because the implemented lifecycle outcomes now have durable append-only/idempotent record coverage or are explicitly current-state pointers guarded by append-only lifecycle records.
 
 ## Non-Goals
 
