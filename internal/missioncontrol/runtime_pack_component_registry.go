@@ -32,6 +32,9 @@ type RuntimePackComponentRecord struct {
 	ParentComponentID string                   `json:"parent_component_id,omitempty"`
 	ContentRef        string                   `json:"content_ref"`
 	ContentSHA256     string                   `json:"content_sha256"`
+	SurfaceClass      string                   `json:"surface_class,omitempty"`
+	DeclaredSurfaces  []string                 `json:"declared_surfaces,omitempty"`
+	HotReloadable     bool                     `json:"hot_reloadable,omitempty"`
 	SourceSummary     string                   `json:"source_summary"`
 	ProvenanceRef     string                   `json:"provenance_ref"`
 	CreatedAt         time.Time                `json:"created_at"`
@@ -67,6 +70,8 @@ func NormalizeRuntimePackComponentRecord(record RuntimePackComponentRecord) Runt
 	record.ParentComponentID = strings.TrimSpace(record.ParentComponentID)
 	record.ContentRef = strings.TrimSpace(record.ContentRef)
 	record.ContentSHA256 = strings.ToLower(strings.TrimSpace(record.ContentSHA256))
+	record.SurfaceClass = strings.TrimSpace(record.SurfaceClass)
+	record.DeclaredSurfaces = normalizeRuntimePackStrings(record.DeclaredSurfaces)
 	record.SourceSummary = strings.TrimSpace(record.SourceSummary)
 	record.ProvenanceRef = strings.TrimSpace(record.ProvenanceRef)
 	record.CreatedAt = record.CreatedAt.UTC()
