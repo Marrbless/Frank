@@ -1,4 +1,6 @@
-.PHONY: build, clean
+.PHONY: build build-all linux_amd64 linux_arm64 mac_arm64 linux_amd64_lite linux_arm64_lite mac_arm64_lite android_arm64_lite clean
+
+build: build-all
 
 build-all: linux_amd64 linux_arm64 mac_arm64 linux_amd64_lite linux_arm64_lite mac_arm64_lite
 		@echo "All builds completed."
@@ -21,5 +23,8 @@ linux_arm64_lite:
 mac_arm64_lite:
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -tags lite -o picobot_mac_arm64_lite ./cmd/picobot
 
+android_arm64_lite:
+	GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -tags lite -o picobot_android_arm64_lite ./cmd/picobot
+
 clean:
-	rm -f picobot_linux_amd64 picobot_linux_arm64 picobot_mac_arm64 picobot_linux_amd64_lite picobot_linux_arm64_lite picobot_mac_arm64_lite
+	rm -f picobot_linux_amd64 picobot_linux_arm64 picobot_mac_arm64 picobot_linux_amd64_lite picobot_linux_arm64_lite picobot_mac_arm64_lite picobot_android_arm64_lite

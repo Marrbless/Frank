@@ -32,6 +32,17 @@ Picobot runs happily on a **$5/mo VPS**, a Raspberry Pi, or even an old Android 
 
 ## Quick Start — 30 seconds
 
+### Frank v1.0 Private Phone Release
+
+This private Frank release is intended to be cloned from `Marrbless/Frank` onto trusted machines and an Android phone runtime.
+
+For the Samsung Galaxy S21 Ultra deployment path, start here:
+
+- [ANDROID_PHONE_DEPLOYMENT.md](docs/ANDROID_PHONE_DEPLOYMENT.md)
+- [RELEASE_V1_0.md](docs/RELEASE_V1_0.md)
+
+Recommended first phone setup: Termux, lite build, no SIM, Tailscale always-on VPN, owner-allowlisted channel, and mission-control gateway only after the basic gateway is proven.
+
 ### Docker Run
 
 ```sh
@@ -258,6 +269,18 @@ GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o picobot ./cmd/picobot
 
 Works on any Linux with 256MB RAM. No runtime dependencies. Just copy the binary and run.
 
+For Android/Termux, build on the phone:
+
+```sh
+go build -tags lite -ldflags="-s -w" -o picobot ./cmd/picobot
+```
+
+Or cross-compile the lite Android ARM64 binary from a host with Go's Android target available:
+
+```sh
+make android_arm64_lite
+```
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -308,6 +331,8 @@ Want to contribute? **Open an issue** or **PR** with your ideas!
 ## Docs
 
 - [CANONICAL_RUNTIME_TRUTH.md](docs/CANONICAL_RUNTIME_TRUTH.md) — current canonical runtime/repo truth and routing for Frank work
+- [ANDROID_PHONE_DEPLOYMENT.md](docs/ANDROID_PHONE_DEPLOYMENT.md) — Android/Termux phone deployment guide
+- [RELEASE_V1_0.md](docs/RELEASE_V1_0.md) — Frank v1.0 release notes
 - [HOW_TO_START.md](docs/HOW_TO_START.md) — step-by-step getting started guide
 - [CONFIG.md](docs/CONFIG.md) — full configuration reference
 - [DEVELOPMENT.md](docs/DEVELOPMENT.md) — development, testing, and Docker publishing

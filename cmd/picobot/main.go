@@ -30,7 +30,7 @@ import (
 	"github.com/local/picobot/internal/providers"
 )
 
-const version = "0.2.1"
+const version = "1.0.0"
 
 var gatewayLogNow = time.Now
 var newGatewayLogTicker = func(interval time.Duration) *time.Ticker {
