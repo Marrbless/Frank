@@ -8,7 +8,8 @@ Garbage Day is repo maintenance and health work. It is not Frank V4 implementati
 - Round 2 repo diagnosis: completed in this directory as a repo-wide patient chart.
 - V4 completion: recorded at `frank-v4-full-spec-complete`.
 - Post-V4 kickoff: started in [POST_V4_GARBAGE_DAY_KICKOFF.md](./POST_V4_GARBAGE_DAY_KICKOFF.md).
-- Current controller: [POST_V4_GARBAGE_DAY_MATRIX.md](./POST_V4_GARBAGE_DAY_MATRIX.md).
+- Post-V4 controller: [POST_V4_GARBAGE_DAY_MATRIX.md](./POST_V4_GARBAGE_DAY_MATRIX.md) is complete.
+- Current repo-wide controller: [REPO_WIDE_GARBAGE_CAMPAIGN_MATRIX.md](./REPO_WIDE_GARBAGE_CAMPAIGN_MATRIX.md).
 - Treatment: authorized only as bounded, non-destructive maintenance slices from the current controller.
 
 ## Documents
@@ -18,6 +19,9 @@ Garbage Day is repo maintenance and health work. It is not Frank V4 implementati
 - Round 2 repo diagnosis: [ROUND_2_REPO_DIAGNOSIS.md](./ROUND_2_REPO_DIAGNOSIS.md)
 - Post-V4 kickoff: [POST_V4_GARBAGE_DAY_KICKOFF.md](./POST_V4_GARBAGE_DAY_KICKOFF.md)
 - Post-V4 matrix: [POST_V4_GARBAGE_DAY_MATRIX.md](./POST_V4_GARBAGE_DAY_MATRIX.md)
+- Maintenance artifact retention policy: [MAINTENANCE_ARTIFACT_RETENTION.md](./MAINTENANCE_ARTIFACT_RETENTION.md)
+- Repo-wide Garbage Campaign assessment: [REPO_WIDE_GARBAGE_CAMPAIGN_ASSESSMENT.md](./REPO_WIDE_GARBAGE_CAMPAIGN_ASSESSMENT.md)
+- Repo-wide Garbage Campaign matrix: [REPO_WIDE_GARBAGE_CAMPAIGN_MATRIX.md](./REPO_WIDE_GARBAGE_CAMPAIGN_MATRIX.md)
 
 ## Guardrails
 
