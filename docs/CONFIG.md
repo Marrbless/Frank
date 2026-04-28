@@ -433,10 +433,12 @@ The workspace directory (default `~/.picobot/workspace`) contains files that sha
 | `AGENTS.md` | Agent instructions, rules, guidelines | You (once) |
 | `USER.md` | Your profile — name, timezone, preferences | You (once) |
 | `TOOLS.md` | Tool reference documentation | You (once) |
-| `HEARTBEAT.md` | Periodic tasks checked every `heartbeatIntervalS` seconds | You / Agent |
+| `HEARTBEAT.md` | Explicit periodic tasks checked every `heartbeatIntervalS` seconds | You / Agent |
 | `memory/MEMORY.md` | Long-term memory | Agent (via write_memory tool) |
 | `memory/YYYY-MM-DD.md` | Daily notes | Agent (via write_memory tool) |
 | `skills/` | Skill packages | Agent (via skill tools) or you manually |
+
+`HEARTBEAT.md` is task-driven. The gateway reads explicit task lines from the `## Periodic Tasks` section and ignores comments, headings, and the default onboarding template. Leave the section empty when no scheduled work should run.
 
 ---
 

@@ -67,11 +67,18 @@ func sendChannelNotification(hub *chat.Hub, channel, chatID, content string) {
 	if isSystemChannel(channel) {
 		return
 	}
+	sendAgentReply(hub, channel, chatID, content)
+}
+
+func sendAgentReply(hub *chat.Hub, channel, chatID, content string) {
+	if isSystemChannel(channel) {
+		return
+	}
 	out := chat.Outbound{Channel: channel, ChatID: chatID, Content: content}
 	select {
 	case hub.Out <- out:
 	default:
-		log.Println("sendChannelNotification: outbound channel full, dropping notification")
+		log.Println("Outbound channel full, dropping message")
 	}
 }
 
@@ -1392,12 +1399,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							log.Printf("error saving session: %v", saveErr)
 						}
 					}
-					out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: content}
-					select {
-					case a.hub.Out <- out:
-					default:
-						log.Println("Outbound channel full, dropping message")
-					}
+					sendAgentReply(a.hub, msg.Channel, msg.ChatID, content)
 					continue
 				}
 				if handled, content, err := a.taskState.ApplyNaturalApprovalDecision(msg.Content); handled {
@@ -1412,12 +1414,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 							log.Printf("error saving session: %v", saveErr)
 						}
 					}
-					out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: content}
-					select {
-					case a.hub.Out <- out:
-					default:
-						log.Println("Outbound channel full, dropping message")
-					}
+					sendAgentReply(a.hub, msg.Channel, msg.ChatID, content)
 					continue
 				}
 				if inputKind, err := a.taskState.ApplyWaitingUserInput(msg.Content); err != nil {
@@ -1438,12 +1435,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 					log.Printf("error appending to memory: %v", err)
 					response = "I couldn't remember that because saving memory failed."
 				}
-				out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: response}
-				select {
-				case a.hub.Out <- out:
-				default:
-					log.Println("Outbound channel full, dropping message")
-				}
+				sendAgentReply(a.hub, msg.Channel, msg.ChatID, response)
 
 				if !isSystemChannel(msg.Channel) {
 					sess := a.sessions.GetOrCreate(msg.Channel + ":" + msg.ChatID)
@@ -1609,12 +1601,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				}
 			}
 
-			out := chat.Outbound{Channel: msg.Channel, ChatID: msg.ChatID, Content: finalContent}
-			select {
-			case a.hub.Out <- out:
-			default:
-				log.Println("Outbound channel full, dropping message")
-			}
+			sendAgentReply(a.hub, msg.Channel, msg.ChatID, finalContent)
 
 		default:
 			time.Sleep(100 * time.Millisecond)

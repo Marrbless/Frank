@@ -183,3 +183,5 @@ go build -tags lite -ldflags="-s -w" -o picobot ./cmd/picobot
 ```
 
 Back up `~/.picobot` regularly. It contains local config, memory, skills, mission state, and channel setup.
+
+`~/.picobot/workspace/HEARTBEAT.md` should contain only real scheduled tasks under `## Periodic Tasks`. The default template is ignored by current releases, but keeping the section empty is still the lowest-cost idle mode.

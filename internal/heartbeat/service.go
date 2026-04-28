@@ -30,8 +30,8 @@ func StartHeartbeat(ctx context.Context, workspace string, interval time.Duratio
 					// file doesn't exist or can't be read — skip silently
 					continue
 				}
-				content := strings.TrimSpace(string(data))
-				if content == "" {
+				tasks := extractHeartbeatTasks(string(data))
+				if tasks == "" {
 					continue
 				}
 
@@ -41,9 +41,54 @@ func StartHeartbeat(ctx context.Context, workspace string, interval time.Duratio
 					Channel:  "heartbeat",
 					ChatID:   "system",
 					SenderID: "heartbeat",
-					Content:  "[HEARTBEAT CHECK] Review and execute any pending tasks from HEARTBEAT.md:\n\n" + content,
+					Content:  "[HEARTBEAT CHECK] Review and execute the explicit pending tasks from HEARTBEAT.md. If no task remains actionable, stop silently and do not send a status response.\n\n" + tasks,
 				}
 			}
 		}
 	}()
+}
+
+func extractHeartbeatTasks(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+
+	lines := strings.Split(content, "\n")
+	start := 0
+	for i, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(line), "## Periodic Tasks") {
+			start = i + 1
+			break
+		}
+	}
+
+	var tasks []string
+	inComment := false
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if inComment {
+			if strings.Contains(trimmed, "-->") {
+				inComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") {
+			if !strings.Contains(trimmed, "-->") {
+				inComment = true
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		tasks = append(tasks, strings.TrimRight(line, " \t"))
+	}
+
+	return strings.TrimSpace(strings.Join(tasks, "\n"))
 }
