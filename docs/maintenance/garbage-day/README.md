@@ -6,13 +6,18 @@ Garbage Day is repo maintenance and health work. It is not Frank V4 implementati
 
 - Phase 1 cleanup passes: completed earlier and reconciled here into a durable before/after surface.
 - Round 2 repo diagnosis: completed in this directory as a repo-wide patient chart.
-- Treatment: not authorized by these reports alone.
+- V4 completion: recorded at `frank-v4-full-spec-complete`.
+- Post-V4 kickoff: started in [POST_V4_GARBAGE_DAY_KICKOFF.md](./POST_V4_GARBAGE_DAY_KICKOFF.md).
+- Current controller: [POST_V4_GARBAGE_DAY_MATRIX.md](./POST_V4_GARBAGE_DAY_MATRIX.md).
+- Treatment: authorized only as bounded, non-destructive maintenance slices from the current controller.
 
 ## Documents
 
 - Phase 1 before/after: [PHASE_1_BEFORE_AFTER.md](./PHASE_1_BEFORE_AFTER.md)
 - Phase 1 artifact index: [PHASE_1_ARTIFACT_INDEX.md](./PHASE_1_ARTIFACT_INDEX.md)
 - Round 2 repo diagnosis: [ROUND_2_REPO_DIAGNOSIS.md](./ROUND_2_REPO_DIAGNOSIS.md)
+- Post-V4 kickoff: [POST_V4_GARBAGE_DAY_KICKOFF.md](./POST_V4_GARBAGE_DAY_KICKOFF.md)
+- Post-V4 matrix: [POST_V4_GARBAGE_DAY_MATRIX.md](./POST_V4_GARBAGE_DAY_MATRIX.md)
 
 ## Guardrails
 
