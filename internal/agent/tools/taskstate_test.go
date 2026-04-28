@@ -6532,6 +6532,7 @@ func storeTaskStateHotUpdateRuntimePackFixtures(t *testing.T, root string, now t
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreActiveRuntimePackPointer(root, missioncontrol.ActiveRuntimePackPointer{
 		RecordVersion:       missioncontrol.StoreRecordVersion,
 		ActivePackID:        "pack-base",

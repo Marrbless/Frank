@@ -669,6 +669,21 @@ func mustStoreRuntimePack(t *testing.T, root string, record RuntimePackRecord) {
 		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", record.PackID, err)
 	}
 	mustStoreRuntimePackComponentRefs(t, root, record)
+	mustStoreRuntimeExtensionPackRef(t, root, record.ExtensionPackRef)
+}
+
+func mustStoreRuntimeExtensionPackRef(t *testing.T, root string, extensionPackID string) {
+	t.Helper()
+
+	if _, err := LoadRuntimeExtensionPackRecord(root, extensionPackID); err == nil {
+		return
+	} else if !errors.Is(err, ErrRuntimeExtensionPackRecordNotFound) {
+		t.Fatalf("LoadRuntimeExtensionPackRecord(%s) error = %v", extensionPackID, err)
+	}
+	_, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), extensionPackID, nil))
+	if err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(%s) error = %v", extensionPackID, err)
+	}
 }
 
 func storeHotUpdatePromotionForLastKnownGoodRecertFixture(t *testing.T, root string, now time.Time) (PromotionRecord, HotUpdateOutcomeRecord, HotUpdateGateRecord) {

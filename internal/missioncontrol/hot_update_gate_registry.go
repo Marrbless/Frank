@@ -273,6 +273,9 @@ func StoreHotUpdateGateRecord(root string, record HotUpdateGateRecord) error {
 	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
 		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
 	}
+	if err := requireHotUpdateGateExtensionPermissionAdmission(root, record); err != nil {
+		return err
+	}
 	return WriteStoreJSONAtomic(StoreHotUpdateGatePath(root, record.HotUpdateID), record)
 }
 
@@ -1193,7 +1196,43 @@ func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord
 	if _, err := LoadRuntimePackRecord(root, record.RollbackTargetPackID); err != nil {
 		return fmt.Errorf("mission store hot-update gate rollback_target_pack_id %q: %w", record.RollbackTargetPackID, err)
 	}
+	if err := requireHotUpdateGateExtensionPermissionAdmission(root, record); err != nil {
+		return err
+	}
 	return nil
+}
+
+func requireHotUpdateGateExtensionPermissionAdmission(root string, record HotUpdateGateRecord) error {
+	previousPack, err := LoadRuntimePackRecord(root, record.PreviousActivePackID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update gate previous_active_pack_id %q extension assessment: %w", record.PreviousActivePackID, err)
+	}
+	candidatePack, err := LoadRuntimePackRecord(root, record.CandidatePackID)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update gate candidate_pack_id %q extension assessment: %w", record.CandidatePackID, err)
+	}
+	if previousPack.ExtensionPackRef == candidatePack.ExtensionPackRef {
+		return nil
+	}
+	assessment, err := AssessRuntimeExtensionPermissionWidening(root, previousPack.ExtensionPackRef, candidatePack.ExtensionPackRef)
+	if err != nil {
+		return fmt.Errorf("mission store hot-update gate %q extension permission assessment: %w", record.HotUpdateID, err)
+	}
+	if assessment.State != RuntimeExtensionPermissionAssessmentStateAllowed {
+		return fmt.Errorf("mission store hot-update gate %q extension permission assessment blocked: %s", record.HotUpdateID, hotUpdateGateExtensionBlockerSummary(assessment.Blockers))
+	}
+	return nil
+}
+
+func hotUpdateGateExtensionBlockerSummary(blockers []RuntimeExtensionPermissionBlocker) string {
+	if len(blockers) == 0 {
+		return "extension permission assessment is blocked"
+	}
+	parts := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		parts = append(parts, fmt.Sprintf("%s: %s", blocker.Code, blocker.Reason))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func hotUpdateCanaryGateExecutionReadinessAssessmentFromGate(record HotUpdateGateRecord) HotUpdateCanaryGateExecutionReadinessAssessment {

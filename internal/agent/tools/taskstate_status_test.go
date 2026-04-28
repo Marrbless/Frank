@@ -268,6 +268,7 @@ func TestTaskStateOperatorStatusSurfacesHotUpdateGateIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "stage candidate for read-only status",
@@ -473,6 +474,7 @@ func TestTaskStateOperatorStatusSurfacesImprovementRunIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "stage candidate for read-only status",
@@ -631,6 +633,7 @@ func TestTaskStateOperatorStatusSurfacesEvalSuiteIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "stage candidate for read-only status",
@@ -775,6 +778,7 @@ func TestTaskStateOperatorStatusSurfacesCandidateResultIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "stage candidate for read-only status",
@@ -1163,6 +1167,14 @@ func storeTaskStateRuntimeExtensionPack(t *testing.T, root string, extensionPack
 	}
 }
 
+func storeTaskStateRuntimeExtensionPackRefs(t *testing.T, root string, now time.Time, extensionPackIDs ...string) {
+	t.Helper()
+
+	for i, extensionPackID := range extensionPackIDs {
+		storeTaskStateRuntimeExtensionPack(t, root, extensionPackID, now.Add(time.Duration(i)*time.Second))
+	}
+}
+
 func TestTaskStateOperatorStatusSurfacesHotUpdateOutcomeIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -1204,6 +1216,7 @@ func TestTaskStateOperatorStatusSurfacesHotUpdateOutcomeIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "stage candidate for read-only status",
@@ -1409,6 +1422,7 @@ func TestTaskStateOperatorStatusSurfacesPromotionIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "promote candidate pack",
@@ -1637,6 +1651,7 @@ func TestTaskStateOperatorStatusSurfacesRollbackIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPackRefs(t, root, now, "extension-base", "extension-candidate")
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 		HotUpdateID:              "hot-update-1",
 		Objective:                "promote candidate pack",

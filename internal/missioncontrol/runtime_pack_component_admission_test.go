@@ -154,6 +154,9 @@ func storeRuntimePackComponentAdmissionFixture(t *testing.T, root string, now ti
 	if err := StoreRuntimePackRecord(root, base); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
 	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now, "extension-pack-root", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(extension-pack-root) error = %v", err)
+	}
 	candidate := validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
 		record.PackID = "pack-candidate"
 		record.ParentPackID = "pack-base"
@@ -170,6 +173,9 @@ func storeRuntimePackComponentAdmissionFixture(t *testing.T, root string, now ti
 	})
 	if err := StoreRuntimePackRecord(root, candidate); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
+	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(time.Minute), "extension-pack-candidate", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(extension-pack-candidate) error = %v", err)
 	}
 
 	storeRuntimePackAdmissionComponent(t, root, now, RuntimePackComponentKindPromptPack, "prompt-pack-candidate", "prompts", componentEdit)

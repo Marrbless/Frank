@@ -3954,6 +3954,7 @@ func TestProcessDirectHotUpdateGateFromDecisionCommandFailsClosed(t *testing.T) 
 				}); err != nil {
 					t.Fatalf("StoreRuntimePackRecord(pack-other-candidate) error = %v", err)
 				}
+				mustStoreLoopRuntimeExtensionPackRef(t, root, "extension-other-candidate")
 				decision.CandidatePackID = "pack-other-candidate"
 				if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreCandidatePromotionDecisionPath(root, decision.PromotionDecisionID), decision); err != nil {
 					t.Fatalf("WriteStoreJSONAtomic(decision mismatch) error = %v", err)
@@ -4005,6 +4006,7 @@ func TestProcessDirectHotUpdateGateFromDecisionCommandFailsClosed(t *testing.T) 
 				}); err != nil {
 					t.Fatalf("StoreRuntimePackRecord(pack-other-candidate) error = %v", err)
 				}
+				mustStoreLoopRuntimeExtensionPackRef(t, root, "extension-other-candidate")
 				if err := missioncontrol.StoreHotUpdateGateRecord(root, missioncontrol.HotUpdateGateRecord{
 					HotUpdateID:              "hot-update-" + decision.PromotionDecisionID,
 					Objective:                "operator requested hot-update gate for different candidate",

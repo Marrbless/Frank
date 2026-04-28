@@ -1670,6 +1670,67 @@ func TestCanaryGateLifecycleGuardsAllowValidCanaryGate(t *testing.T) {
 	}
 }
 
+func TestEnsureHotUpdateGateRecordFromCandidateRejectsExtensionPermissionWidening(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 11, 9, 0, 0, 0, time.UTC)
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now, "extension-pack-base", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(base) error = %v", err)
+	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(time.Minute), "extension-pack-candidate-widening", func(record *RuntimeExtensionPackRecord) {
+		record.ParentExtensionPackID = "extension-pack-base"
+		record.DeclaredTools = append(record.DeclaredTools, RuntimeExtensionToolDeclaration{
+			ToolName:             "post_public_update",
+			PermissionRefs:       []string{"network_post"},
+			ExternalSideEffect:   true,
+			CompatibilitySummary: "adds public network post",
+		})
+		record.DeclaredPermissions = append(record.DeclaredPermissions, "network_post")
+		record.ExternalSideEffects = []string{"public_network_post"}
+		record.ChangeSummary = "widen extension permissions"
+	})); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(candidate) error = %v", err)
+	}
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(2*time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+		record.ExtensionPackRef = "extension-pack-base"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(3*time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.MutableSurfaces = []string{"extensions"}
+		record.ExtensionPackRef = "extension-pack-candidate-widening"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(4 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	got, changed, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-extension-widening", "pack-candidate", "operator", now.Add(5*time.Minute))
+	if err == nil {
+		t.Fatal("EnsureHotUpdateGateRecordFromCandidate() error = nil, want extension widening rejection")
+	}
+	if changed || !reflect.DeepEqual(got, HotUpdateGateRecord{}) {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() = %#v changed %t, want zero/false", got, changed)
+	}
+	for _, want := range []string{"extension permission assessment blocked", string(RejectionCodeV4ExtensionPermissionWidening), "network_post", "post_public_update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+	if _, err := LoadHotUpdateGateRecord(root, "hot-update-extension-widening"); !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v, want not found after rejected admission", err)
+	}
+}
+
 func TestAdvanceHotUpdateGatePhaseValidProgressionAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 
@@ -2248,6 +2309,9 @@ func TestExecuteHotUpdateGateReloadApplyRequiresRuntimePackComponents(t *testing
 	})
 	if err := StoreRuntimePackRecord(root, candidate); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(candidate) error = %v", err)
+	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(time.Minute), "extension-pack-missing", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(extension-pack-missing) error = %v", err)
 	}
 	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
 		ActivePackID:        "pack-base",
