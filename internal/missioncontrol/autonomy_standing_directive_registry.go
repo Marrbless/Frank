@@ -518,6 +518,30 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		return WakeCycleRecord{}, false, fmt.Errorf("standing directive %q selected mission_family %q requires execution_plane %q", directive.StandingDirectiveID, selectedMissionFamily, requiredPlane)
 	}
 
+	if pause, active, err := LoadActiveRepeatedFailurePauseForBudget(root, directive.BudgetRef); err != nil {
+		return WakeCycleRecord{}, false, err
+	} else if active {
+		record := WakeCycleRecord{
+			WakeCycleID:            WakeCycleIDFromDirectiveStartedAt(directive.StandingDirectiveID, startedAt),
+			StartedAt:              startedAt,
+			CompletedAt:            startedAt,
+			Trigger:                WakeCycleTriggerStandingDirective,
+			SelectedDirectiveID:    directive.StandingDirectiveID,
+			SelectedJobID:          strings.TrimSpace(selectedJobID),
+			SelectedMissionFamily:  selectedMissionFamily,
+			SelectedExecutionPlane: selectedExecutionPlane,
+			SelectedExecutionHost:  selectedExecutionHost,
+			Decision:               WakeCycleDecisionBlocked,
+			BlockedReasons:         []string{string(RejectionCodeV4RepeatedFailurePause) + ": " + pause.PauseID},
+			NextWakeAt:             startedAt.Add(time.Duration(directive.Schedule.IntervalSeconds) * time.Second),
+			AutonomyEnvelopeRef:    directive.AutonomyEnvelopeRef,
+			BudgetRef:              directive.BudgetRef,
+			CreatedAt:              startedAt,
+			CreatedBy:              createdBy,
+		}
+		return StoreWakeCycleRecord(root, record)
+	}
+
 	requestedDebits := []AutonomyBudgetDebitRecord{{
 		BudgetID:  directive.BudgetRef,
 		DebitKind: AutonomyBudgetDebitKindCandidateMutation,

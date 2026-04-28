@@ -24,7 +24,7 @@ The acceptance target is `docs/FRANK_V4_SPEC.md` Acceptance Criterion 17: histor
 
 The remaining V4 matrix rows must continue this pattern as they add new capabilities:
 
-- `AC-036` through `AC-037`: autonomy failure-pause and owner-pause records.
+- `AC-037`: autonomy owner-pause records.
 - `SF-007`: phone deployment profile/host capability records.
 
 These rows remain tracked separately in the matrix. AC-017 is complete for the ledger rule itself because the implemented lifecycle outcomes now have durable append-only/idempotent record coverage or are explicitly current-state pointers guarded by append-only lifecycle records.

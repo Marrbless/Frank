@@ -269,12 +269,15 @@ type OperatorRollbackApplyIdentityStatus struct {
 }
 
 type OperatorAutonomyIdentityStatus struct {
-	State                   string                            `json:"state"`
-	Budgets                 []OperatorAutonomyBudgetStatus    `json:"budgets,omitempty"`
-	StandingDirectives      []OperatorStandingDirectiveStatus `json:"standing_directives,omitempty"`
-	WakeCycles              []OperatorWakeCycleStatus         `json:"wake_cycles,omitempty"`
-	LastNoEligibleError     string                            `json:"last_no_eligible_error,omitempty"`
-	LastBudgetExceededError string                            `json:"last_budget_exceeded_error,omitempty"`
+	State                         string                            `json:"state"`
+	Budgets                       []OperatorAutonomyBudgetStatus    `json:"budgets,omitempty"`
+	StandingDirectives            []OperatorStandingDirectiveStatus `json:"standing_directives,omitempty"`
+	WakeCycles                    []OperatorWakeCycleStatus         `json:"wake_cycles,omitempty"`
+	Failures                      []OperatorAutonomyFailureStatus   `json:"failures,omitempty"`
+	Pauses                        []OperatorAutonomyPauseStatus     `json:"pauses,omitempty"`
+	LastNoEligibleError           string                            `json:"last_no_eligible_error,omitempty"`
+	LastBudgetExceededError       string                            `json:"last_budget_exceeded_error,omitempty"`
+	LastRepeatedFailurePauseError string                            `json:"last_repeated_failure_pause_error,omitempty"`
 }
 
 type OperatorAutonomyBudgetStatus struct {
@@ -336,6 +339,35 @@ type OperatorWakeCycleStatus struct {
 	CreatedAt              *string  `json:"created_at,omitempty"`
 	CreatedBy              string   `json:"created_by,omitempty"`
 	Error                  string   `json:"error,omitempty"`
+}
+
+type OperatorAutonomyFailureStatus struct {
+	State               string  `json:"state"`
+	FailureID           string  `json:"failure_id,omitempty"`
+	WakeCycleID         string  `json:"wake_cycle_id,omitempty"`
+	StandingDirectiveID string  `json:"standing_directive_id,omitempty"`
+	BudgetID            string  `json:"budget_id,omitempty"`
+	FailureKind         string  `json:"failure_kind,omitempty"`
+	Reason              string  `json:"reason,omitempty"`
+	OccurredAt          *string `json:"occurred_at,omitempty"`
+	CreatedAt           *string `json:"created_at,omitempty"`
+	CreatedBy           string  `json:"created_by,omitempty"`
+	Error               string  `json:"error,omitempty"`
+}
+
+type OperatorAutonomyPauseStatus struct {
+	State               string   `json:"state"`
+	PauseID             string   `json:"pause_id,omitempty"`
+	BudgetID            string   `json:"budget_id,omitempty"`
+	StandingDirectiveID string   `json:"standing_directive_id,omitempty"`
+	PauseKind           string   `json:"pause_kind,omitempty"`
+	PauseState          string   `json:"pause_state,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	FailureIDs          []string `json:"failure_ids,omitempty"`
+	PausedAt            *string  `json:"paused_at,omitempty"`
+	CreatedAt           *string  `json:"created_at,omitempty"`
+	CreatedBy           string   `json:"created_by,omitempty"`
+	Error               string   `json:"error,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeStatus struct {
@@ -1567,20 +1599,26 @@ func LoadOperatorAutonomyIdentityStatus(root string) OperatorAutonomyIdentitySta
 	budgets, budgetsFound, budgetsInvalid, budgetsErr := loadOperatorAutonomyBudgetStatuses(root)
 	directives, directivesFound, directivesInvalid, directivesErr := loadOperatorStandingDirectiveStatuses(root)
 	wakeCycles, wakeCyclesFound, wakeCyclesInvalid, wakeCyclesErr := loadOperatorWakeCycleStatuses(root)
-	if !budgetsFound && !directivesFound && !wakeCyclesFound {
+	failures, failuresFound, failuresInvalid, failuresErr := loadOperatorAutonomyFailureStatuses(root)
+	pauses, pausesFound, pausesInvalid, pausesErr := loadOperatorAutonomyPauseStatuses(root)
+	if !budgetsFound && !directivesFound && !wakeCyclesFound && !failuresFound && !pausesFound {
 		return OperatorAutonomyIdentityStatus{State: "not_configured"}
 	}
 	state := "configured"
-	if budgetsErr != nil || directivesErr != nil || wakeCyclesErr != nil || budgetsInvalid || directivesInvalid || wakeCyclesInvalid {
+	if budgetsErr != nil || directivesErr != nil || wakeCyclesErr != nil || failuresErr != nil || pausesErr != nil ||
+		budgetsInvalid || directivesInvalid || wakeCyclesInvalid || failuresInvalid || pausesInvalid {
 		state = "invalid"
 	}
 	return OperatorAutonomyIdentityStatus{
-		State:                   state,
-		Budgets:                 budgets,
-		StandingDirectives:      directives,
-		WakeCycles:              wakeCycles,
-		LastNoEligibleError:     operatorAutonomyLastNoEligibleError(wakeCycles),
-		LastBudgetExceededError: operatorAutonomyLastBudgetExceededError(wakeCycles),
+		State:                         state,
+		Budgets:                       budgets,
+		StandingDirectives:            directives,
+		WakeCycles:                    wakeCycles,
+		Failures:                      failures,
+		Pauses:                        pauses,
+		LastNoEligibleError:           operatorAutonomyLastNoEligibleError(wakeCycles),
+		LastBudgetExceededError:       operatorAutonomyLastBudgetExceededError(wakeCycles),
+		LastRepeatedFailurePauseError: operatorAutonomyLastRepeatedFailurePauseError(pauses),
 	}
 }
 
@@ -1656,6 +1694,159 @@ func operatorAutonomyBudgetStatusFromRecord(record AutonomyBudgetRecord) Operato
 		CreatedAt:                    formatOperatorStatusTime(record.CreatedAt),
 		UpdatedAt:                    formatOperatorStatusTime(record.UpdatedAt),
 		CreatedBy:                    record.CreatedBy,
+	}
+}
+
+func loadOperatorAutonomyFailureStatuses(root string) ([]OperatorAutonomyFailureStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+	entries, err := os.ReadDir(StoreAutonomyFailuresDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	statuses := make([]OperatorAutonomyFailureStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorAutonomyFailureStatus(root, filepath.Join(StoreAutonomyFailuresDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, true, invalid, nil
+}
+
+func loadOperatorAutonomyFailureStatus(root, path string) OperatorAutonomyFailureStatus {
+	status := OperatorAutonomyFailureStatus{
+		State:     "invalid",
+		FailureID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record AutonomyFailureRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	record = NormalizeAutonomyFailureRecord(record)
+	status = operatorAutonomyFailureStatusFromRecord(record)
+	if err := ValidateAutonomyFailureRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateAutonomyFailureLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorAutonomyFailureStatusFromRecord(record AutonomyFailureRecord) OperatorAutonomyFailureStatus {
+	return OperatorAutonomyFailureStatus{
+		FailureID:           record.FailureID,
+		WakeCycleID:         record.WakeCycleID,
+		StandingDirectiveID: record.StandingDirectiveID,
+		BudgetID:            record.BudgetID,
+		FailureKind:         string(record.FailureKind),
+		Reason:              record.Reason,
+		OccurredAt:          formatOperatorStatusTime(record.OccurredAt),
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
+	}
+}
+
+func loadOperatorAutonomyPauseStatuses(root string) ([]OperatorAutonomyPauseStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+	entries, err := os.ReadDir(StoreAutonomyPausesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	statuses := make([]OperatorAutonomyPauseStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorAutonomyPauseStatus(root, filepath.Join(StoreAutonomyPausesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, true, invalid, nil
+}
+
+func loadOperatorAutonomyPauseStatus(root, path string) OperatorAutonomyPauseStatus {
+	status := OperatorAutonomyPauseStatus{
+		State:   "invalid",
+		PauseID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record AutonomyPauseRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	record = NormalizeAutonomyPauseRecord(record)
+	status = operatorAutonomyPauseStatusFromRecord(record)
+	if err := ValidateAutonomyPauseRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	if err := validateAutonomyPauseLinkage(root, record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorAutonomyPauseStatusFromRecord(record AutonomyPauseRecord) OperatorAutonomyPauseStatus {
+	return OperatorAutonomyPauseStatus{
+		PauseID:             record.PauseID,
+		BudgetID:            record.BudgetID,
+		StandingDirectiveID: record.StandingDirectiveID,
+		PauseKind:           string(record.PauseKind),
+		PauseState:          string(record.State),
+		Reason:              record.Reason,
+		FailureIDs:          append([]string(nil), record.FailureIDs...),
+		PausedAt:            formatOperatorStatusTime(record.PausedAt),
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
 	}
 }
 
@@ -1834,6 +2025,16 @@ func operatorAutonomyLastBudgetExceededError(wakeCycles []OperatorWakeCycleStatu
 		status := wakeCycles[i]
 		if containsAutonomyReason(status.BlockedReasons, string(RejectionCodeV4AutonomyBudgetExceeded)) {
 			return string(RejectionCodeV4AutonomyBudgetExceeded)
+		}
+	}
+	return ""
+}
+
+func operatorAutonomyLastRepeatedFailurePauseError(pauses []OperatorAutonomyPauseStatus) string {
+	for i := len(pauses) - 1; i >= 0; i-- {
+		status := pauses[i]
+		if status.PauseKind == string(AutonomyPauseKindRepeatedFailure) && containsAutonomyReason([]string{status.Reason}, string(RejectionCodeV4RepeatedFailurePause)) {
+			return string(RejectionCodeV4RepeatedFailurePause)
 		}
 	}
 	return ""

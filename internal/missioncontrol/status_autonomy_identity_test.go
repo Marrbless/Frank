@@ -157,6 +157,42 @@ func TestLoadOperatorAutonomyIdentityStatusSurfacesBudgetAndBudgetExceeded(t *te
 	}
 }
 
+func TestLoadOperatorAutonomyIdentityStatusSurfacesRepeatedFailurePause(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 19, 45, 0, 0, time.UTC)
+	directive := storeAutonomyFailurePauseDirective(t, root, now, 1)
+	wake := storeAutonomyFailurePauseWakeCycle(t, root, directive, now)
+	failure, pause, _, err := RecordAutonomyFailureFromWakeCycle(root, wake.WakeCycleID, AutonomyFailureKindWakeCycle, "wake failed", "autonomy-loop", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("RecordAutonomyFailureFromWakeCycle() error = %v", err)
+	}
+	if pause == nil {
+		t.Fatal("pause = nil, want repeated-failure pause")
+	}
+
+	got := LoadOperatorAutonomyIdentityStatus(root)
+	if got.State != "configured" {
+		t.Fatalf("State = %q, want configured", got.State)
+	}
+	if got.LastRepeatedFailurePauseError != string(RejectionCodeV4RepeatedFailurePause) {
+		t.Fatalf("LastRepeatedFailurePauseError = %q, want %s", got.LastRepeatedFailurePauseError, RejectionCodeV4RepeatedFailurePause)
+	}
+	if len(got.Failures) != 1 || got.Failures[0].FailureID != failure.FailureID {
+		t.Fatalf("Failures = %#v, want failure %q", got.Failures, failure.FailureID)
+	}
+	if got.Failures[0].WakeCycleID != wake.WakeCycleID || got.Failures[0].BudgetID != directive.BudgetRef {
+		t.Fatalf("failure status = %#v, want wake/budget linkage", got.Failures[0])
+	}
+	if len(got.Pauses) != 1 || got.Pauses[0].PauseID != pause.PauseID {
+		t.Fatalf("Pauses = %#v, want pause %q", got.Pauses, pause.PauseID)
+	}
+	if got.Pauses[0].PauseKind != string(AutonomyPauseKindRepeatedFailure) || got.Pauses[0].PauseState != string(AutonomyPauseStateActive) {
+		t.Fatalf("pause status = %#v, want active repeated-failure pause", got.Pauses[0])
+	}
+}
+
 func TestLoadOperatorAutonomyIdentityStatusReadOnly(t *testing.T) {
 	t.Parallel()
 
