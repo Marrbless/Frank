@@ -741,6 +741,11 @@ func storeHotUpdateTerminalOutcomeFixture(t *testing.T, root string, now time.Ti
 	if err := StoreHotUpdateGateRecord(root, gate); err != nil {
 		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
 	}
+	if state == HotUpdateGateStateReloadApplySucceeded {
+		if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, hotUpdateID, HotUpdateSmokeCheckStatePassed, now.Add(9*time.Minute), "operator", now.Add(9*time.Minute+30*time.Second), "terminal hot-update smoke passed"); err != nil {
+			t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+		}
+	}
 	stored, err := LoadHotUpdateGateRecord(root, hotUpdateID)
 	if err != nil {
 		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
@@ -790,6 +795,11 @@ func storeCanaryHotUpdateTerminalOutcomeFixture(t *testing.T, root string, now t
 	gate.PhaseUpdatedAt = now.Add(30 * time.Minute)
 	gate.PhaseUpdatedBy = "operator"
 	writeRawHotUpdateGateRecord(t, root, gate)
+	if state == HotUpdateGateStateReloadApplySucceeded {
+		if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, gate.HotUpdateID, HotUpdateSmokeCheckStatePassed, now.Add(29*time.Minute), "operator", now.Add(29*time.Minute+30*time.Second), "terminal canary hot-update smoke passed"); err != nil {
+			t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+		}
+	}
 
 	stored, err := LoadHotUpdateGateRecord(root, gate.HotUpdateID)
 	if err != nil {

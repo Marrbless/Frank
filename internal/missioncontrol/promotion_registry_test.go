@@ -819,6 +819,9 @@ func TestCreatePromotionFromSuccessfulHotUpdateOutcomeCopiesOptionalRefsWhenPres
 	root := t.TempDir()
 	now := time.Date(2026, 5, 4, 15, 0, 0, 0, time.UTC)
 	storeHotUpdateOutcomeFixtures(t, root, now)
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, "hot-update-1", HotUpdateSmokeCheckStatePassed, now.Add(7*time.Minute+30*time.Second), "operator", now.Add(7*time.Minute+45*time.Second), "optional ref promotion smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+	}
 
 	outcome := validHotUpdateOutcomeRecord(now.Add(8*time.Minute), func(record *HotUpdateOutcomeRecord) {
 		record.OutcomeID = "hot-update-outcome-hot-update-1"

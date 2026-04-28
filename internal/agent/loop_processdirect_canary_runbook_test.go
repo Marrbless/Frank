@@ -63,6 +63,7 @@ func TestProcessDirectCanaryRunbookNoOwnerBranchThroughPromotion(t *testing.T) {
 	}
 	executedPointerBytes := mustLoopReadFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))
 
+	recordLoopHotUpdateSmokeCheck(t, root, hotUpdateID, observedAt.Add(10*time.Minute))
 	runCanaryRunbookCommand(t, ag, "HOT_UPDATE_GATE_RELOAD job-1 "+hotUpdateID)
 	assertCanaryRunbookPointerBytes(t, root, executedPointerBytes)
 	assertCanaryRunbookLKG(t, root, initialLKGBytes, initialLKGFound)
@@ -145,6 +146,7 @@ func TestProcessDirectCanaryRunbookOwnerApprovedBranchThroughPromotion(t *testin
 	}
 	executedPointerBytes := mustLoopReadFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))
 
+	recordLoopHotUpdateSmokeCheck(t, root, hotUpdateID, observedAt.Add(10*time.Minute))
 	runCanaryRunbookCommand(t, ag, "HOT_UPDATE_GATE_RELOAD job-1 "+hotUpdateID)
 	assertCanaryRunbookPointerBytes(t, root, executedPointerBytes)
 	assertCanaryRunbookLKG(t, root, initialLKGBytes, initialLKGFound)

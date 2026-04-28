@@ -292,6 +292,11 @@ type OperatorHotUpdateGateStatus struct {
 	SurfaceClasses           []string `json:"surface_classes,omitempty"`
 	ReloadMode               string   `json:"reload_mode,omitempty"`
 	CompatibilityContractRef string   `json:"compatibility_contract_ref,omitempty"`
+	SmokeCheckRefs           []string `json:"smoke_check_refs,omitempty"`
+	SelectedSmokeCheckID     string   `json:"selected_smoke_check_id,omitempty"`
+	SmokeReadinessState      string   `json:"smoke_readiness_state,omitempty"`
+	SmokeReady               bool     `json:"smoke_ready"`
+	SmokeReadinessReason     string   `json:"smoke_readiness_reason,omitempty"`
 	PreparedAt               *string  `json:"prepared_at,omitempty"`
 	PhaseUpdatedAt           *string  `json:"phase_updated_at,omitempty"`
 	PhaseUpdatedBy           string   `json:"phase_updated_by,omitempty"`
@@ -2945,6 +2950,12 @@ func loadOperatorHotUpdateGateStatus(root, path string) OperatorHotUpdateGateSta
 		status.Error = err.Error()
 		return status
 	}
+	assessment, err := AssessHotUpdateSmokeReadiness(root, record.HotUpdateID)
+	status = applyHotUpdateSmokeReadinessStatus(status, assessment)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
 	return status
 }
 
@@ -2960,6 +2971,7 @@ func operatorHotUpdateGateStatusFromRecord(record HotUpdateGateRecord) OperatorH
 		SurfaceClasses:           append([]string(nil), record.SurfaceClasses...),
 		ReloadMode:               string(record.ReloadMode),
 		CompatibilityContractRef: record.CompatibilityContractRef,
+		SmokeCheckRefs:           append([]string(nil), record.SmokeCheckRefs...),
 		PreparedAt:               formatOperatorStatusTime(record.PreparedAt),
 		PhaseUpdatedAt:           formatOperatorStatusTime(record.PhaseUpdatedAt),
 		PhaseUpdatedBy:           record.PhaseUpdatedBy,
@@ -2967,6 +2979,18 @@ func operatorHotUpdateGateStatusFromRecord(record HotUpdateGateRecord) OperatorH
 		Decision:                 string(record.Decision),
 		FailureReason:            record.FailureReason,
 	}
+}
+
+func applyHotUpdateSmokeReadinessStatus(status OperatorHotUpdateGateStatus, assessment HotUpdateSmokeReadinessAssessment) OperatorHotUpdateGateStatus {
+	status.SmokeCheckRefs = append([]string(nil), assessment.SmokeCheckRefs...)
+	status.SelectedSmokeCheckID = assessment.SelectedSmokeCheckID
+	status.SmokeReadinessState = assessment.State
+	status.SmokeReady = assessment.Ready
+	status.SmokeReadinessReason = assessment.Reason
+	if assessment.Error != "" {
+		status.Error = assessment.Error
+	}
+	return status
 }
 
 func loadOperatorHotUpdateOutcomeStatuses(root string) ([]OperatorHotUpdateOutcomeStatus, bool, bool, error) {

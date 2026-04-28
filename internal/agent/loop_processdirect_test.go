@@ -4459,6 +4459,7 @@ func TestProcessDirectHotUpdateGateReloadCommandRecordsConvergenceResultWithoutF
 	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %v", err)
 	}
+	recordLoopHotUpdateSmokeCheck(t, root, "hot-update-1", now.Add(6*time.Minute+30*time.Second))
 
 	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
 	if err != nil {
@@ -4649,6 +4650,7 @@ func TestProcessDirectHotUpdateGateReloadCommandReplayIgnoresLaterActiveLiveJob(
 	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_EXECUTE) error = %v", err)
 	}
+	recordLoopHotUpdateSmokeCheck(t, root, "hot-update-1", now.Add(30*time.Second))
 	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD first) error = %v", err)
 	}
@@ -4736,6 +4738,7 @@ func TestProcessDirectHotUpdateGateReloadCommandRetriesFromRecoveryNeeded(t *tes
 	if err := missioncontrol.WriteStoreJSONAtomic(missioncontrol.StoreHotUpdateGatePath(root, "hot-update-1"), record); err != nil {
 		t.Fatalf("WriteStoreJSONAtomic(reload_apply_recovery_needed) error = %v", err)
 	}
+	recordLoopHotUpdateSmokeCheck(t, root, "hot-update-1", recoveryAt.Add(2*time.Minute+30*time.Second))
 
 	beforePointerBytes, err := os.ReadFile(missioncontrol.StoreActiveRuntimePackPointerPath(root))
 	if err != nil {
@@ -5399,7 +5402,7 @@ func TestProcessDirectHotUpdateOutcomeCreateCommandCreatesHotUpdatedOutcomeAndIs
 	writeLoopHotUpdateLastKnownGoodPointer(t, root)
 
 	ag := newLoopHotUpdateOutcomeAgent(t, root)
-	prepareLoopHotUpdateSucceededGate(t, ag)
+	prepareLoopHotUpdateSucceededGate(t, root, ag)
 
 	before := snapshotLoopHotUpdateOutcomeCreateSideEffects(t, root, "hot-update-1")
 
@@ -5643,7 +5646,7 @@ func TestProcessDirectHotUpdatePromotionCreateCommandCreatesPromotionAndIsReplay
 	writeLoopHotUpdateLastKnownGoodPointer(t, root)
 
 	ag := newLoopHotUpdateOutcomeAgent(t, root)
-	prepareLoopHotUpdateSucceededGate(t, ag)
+	prepareLoopHotUpdateSucceededGate(t, root, ag)
 	if _, err := ag.ProcessDirect("HOT_UPDATE_OUTCOME_CREATE job-1 hot-update-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(HOT_UPDATE_OUTCOME_CREATE) error = %v", err)
 	}
@@ -5944,7 +5947,7 @@ func TestProcessDirectHotUpdateLKGRecertifyCommandRecertifiesFromPromotionAndIsR
 	writeLoopHotUpdateLastKnownGoodPointer(t, root)
 
 	ag := newLoopHotUpdateOutcomeAgent(t, root)
-	prepareLoopHotUpdateSucceededGate(t, ag)
+	prepareLoopHotUpdateSucceededGate(t, root, ag)
 	if _, err := ag.ProcessDirect("HOT_UPDATE_OUTCOME_CREATE job-1 hot-update-1", 2*time.Second); err != nil {
 		t.Fatalf("ProcessDirect(HOT_UPDATE_OUTCOME_CREATE) error = %v", err)
 	}
@@ -9994,7 +9997,7 @@ func newLoopHotUpdateOutcomeAgent(t *testing.T, root string) *AgentLoop {
 	return ag
 }
 
-func prepareLoopHotUpdateSucceededGate(t *testing.T, ag *AgentLoop) {
+func prepareLoopHotUpdateSucceededGate(t *testing.T, root string, ag *AgentLoop) {
 	t.Helper()
 
 	commands := []string{
@@ -10002,12 +10005,15 @@ func prepareLoopHotUpdateSucceededGate(t *testing.T, ag *AgentLoop) {
 		"HOT_UPDATE_GATE_PHASE job-1 hot-update-1 validated",
 		"HOT_UPDATE_GATE_PHASE job-1 hot-update-1 staged",
 		"HOT_UPDATE_GATE_EXECUTE job-1 hot-update-1",
-		"HOT_UPDATE_GATE_RELOAD job-1 hot-update-1",
 	}
 	for _, command := range commands {
 		if _, err := ag.ProcessDirect(command, 2*time.Second); err != nil {
 			t.Fatalf("ProcessDirect(%s) error = %v", command, err)
 		}
+	}
+	recordLoopHotUpdateSmokeCheck(t, root, "hot-update-1", time.Date(2026, 4, 22, 12, 2, 30, 0, time.UTC))
+	if _, err := ag.ProcessDirect("HOT_UPDATE_GATE_RELOAD job-1 hot-update-1", 2*time.Second); err != nil {
+		t.Fatalf("ProcessDirect(HOT_UPDATE_GATE_RELOAD job-1 hot-update-1) error = %v", err)
 	}
 }
 
@@ -10050,11 +10056,22 @@ func storeLoopHotUpdateTerminalGate(t *testing.T, root string, hotUpdateID strin
 	if err := missioncontrol.StoreHotUpdateGateRecord(root, record); err != nil {
 		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
 	}
+	if state == missioncontrol.HotUpdateGateStateReloadApplySucceeded {
+		recordLoopHotUpdateSmokeCheck(t, root, hotUpdateID, now.Add(90*time.Second))
+	}
 	stored, err := missioncontrol.LoadHotUpdateGateRecord(root, hotUpdateID)
 	if err != nil {
 		t.Fatalf("LoadHotUpdateGateRecord() error = %v", err)
 	}
 	return stored
+}
+
+func recordLoopHotUpdateSmokeCheck(t *testing.T, root string, hotUpdateID string, observedAt time.Time) {
+	t.Helper()
+
+	if _, _, err := missioncontrol.CreateHotUpdateSmokeCheckFromGate(root, hotUpdateID, missioncontrol.HotUpdateSmokeCheckStatePassed, observedAt, "operator", observedAt.Add(15*time.Second), "loop fixture smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate(%s) error = %v", hotUpdateID, err)
+	}
 }
 
 type loopHotUpdateOutcomeCreateSideEffects struct {

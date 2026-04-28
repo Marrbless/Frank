@@ -51,6 +51,7 @@ func TestProcessDirectEligibleRunbookFromDecisionThroughLastKnownGood(t *testing
 	executedPointerBytes := mustLoopReadFile(t, missioncontrol.StoreActiveRuntimePackPointerPath(root))
 	assertEligibleRunbookLKGBytes(t, root, initialLKGBytes)
 
+	recordLoopHotUpdateSmokeCheck(t, root, hotUpdateID, now.Add(7*time.Minute))
 	runCanaryRunbookCommand(t, ag, "HOT_UPDATE_GATE_RELOAD job-1 "+hotUpdateID)
 	assertCanaryRunbookPointerBytes(t, root, executedPointerBytes)
 	assertEligibleRunbookLKGBytes(t, root, initialLKGBytes)

@@ -1651,6 +1651,9 @@ func TestCanaryGateLifecycleGuardsAllowValidCanaryGate(t *testing.T) {
 	if !changed || executed.State != HotUpdateGateStateReloading {
 		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() = %#v changed %t, want reloading true", executed, changed)
 	}
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, gate.HotUpdateID, HotUpdateSmokeCheckStatePassed, now.Add(33*time.Minute+30*time.Second), "operator", now.Add(33*time.Minute+45*time.Second), "canary gate smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+	}
 	reloaded, changed, err := ExecuteHotUpdateGateReloadApply(root, gate.HotUpdateID, "operator", now.Add(34*time.Minute))
 	if err != nil {
 		t.Fatalf("ExecuteHotUpdateGateReloadApply() error = %v", err)
@@ -2146,6 +2149,9 @@ func TestExecuteHotUpdateGateReloadApplyHappyPathPreservesPointerAndLastKnownGoo
 	if _, _, err := ExecuteHotUpdateGatePointerSwitch(root, "hot-update-reload-success", "operator", now.Add(6*time.Minute)); err != nil {
 		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() error = %v", err)
 	}
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, "hot-update-reload-success", HotUpdateSmokeCheckStatePassed, now.Add(6*time.Minute+30*time.Second), "operator", now.Add(6*time.Minute+45*time.Second), "reload smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+	}
 
 	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
 	if err != nil {
@@ -2267,6 +2273,9 @@ func TestExecuteHotUpdateGateReloadApplyRecordsFailureWithoutMutatingPointer(t *
 	}
 	if _, _, err := ExecuteHotUpdateGatePointerSwitch(root, "hot-update-reload-failed", "operator", now.Add(6*time.Minute)); err != nil {
 		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() error = %v", err)
+	}
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, "hot-update-reload-failed", HotUpdateSmokeCheckStatePassed, now.Add(6*time.Minute+30*time.Second), "operator", now.Add(6*time.Minute+45*time.Second), "reload smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
 	}
 
 	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
@@ -3183,7 +3192,7 @@ func validHotUpdateGateRecord(now time.Time, mutate func(*HotUpdateGateRecord)) 
 		ReloadMode:               HotUpdateReloadModeSkillReload,
 		CompatibilityContractRef: "compat-v1",
 		EvalEvidenceRefs:         []string{"eval/train"},
-		SmokeCheckRefs:           []string{"smoke/run-1"},
+		SmokeCheckRefs:           nil,
 		CanaryRef:                "",
 		ApprovalRef:              "",
 		BudgetRef:                "",
@@ -3384,5 +3393,8 @@ func storeHotUpdateRecoveryNeededFixture(t *testing.T, root string, now time.Tim
 	record.PhaseUpdatedBy = "operator"
 	if err := StoreHotUpdateGateRecord(root, record); err != nil {
 		t.Fatalf("StoreHotUpdateGateRecord(reload_apply_recovery_needed) error = %v", err)
+	}
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, hotUpdateID, HotUpdateSmokeCheckStatePassed, now.Add(9*time.Minute+30*time.Second), "operator", now.Add(9*time.Minute+45*time.Second), "retry smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
 	}
 }

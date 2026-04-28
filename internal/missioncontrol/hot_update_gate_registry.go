@@ -1617,6 +1617,9 @@ func executeHotUpdateGateReloadApplyWithConvergence(root string, hotUpdateID str
 		if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
 			return HotUpdateGateRecord{}, false, err
 		}
+		if err := requireHotUpdateSmokeReadiness(root, record); err != nil {
+			return HotUpdateGateRecord{}, false, err
+		}
 		return record, false, nil
 	case HotUpdateGateStateReloadApplyFailed:
 		return HotUpdateGateRecord{}, false, fmt.Errorf(
@@ -1644,6 +1647,9 @@ func executeHotUpdateGateReloadApplyWithConvergence(root string, hotUpdateID str
 		return HotUpdateGateRecord{}, false, err
 	}
 	if err := validateHotUpdateGateReloadApplyLinkage(root, record); err != nil {
+		return HotUpdateGateRecord{}, false, err
+	}
+	if err := requireHotUpdateSmokeReadiness(root, record); err != nil {
 		return HotUpdateGateRecord{}, false, err
 	}
 

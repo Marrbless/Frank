@@ -219,6 +219,52 @@ func TestLoadOperatorHotUpdateGateIdentityStatusSurfacesTerminalFailureDetailAnd
 	}
 }
 
+func TestLoadOperatorHotUpdateGateIdentityStatusSurfacesSmokeReadinessBlocker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	storeHotUpdateGateIdentityFixtures(t, root, now)
+	if err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(3*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = "hot-update-smoke-status"
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.SmokeCheckRefs = nil
+	})); err != nil {
+		t.Fatalf("StoreHotUpdateGateRecord() error = %v", err)
+	}
+
+	missing := LoadOperatorHotUpdateGateIdentityStatus(root)
+	if missing.State != "configured" || len(missing.Gates) != 1 {
+		t.Fatalf("missing smoke status = %#v, want one configured gate", missing)
+	}
+	gate := missing.Gates[0]
+	if gate.Error != "" {
+		t.Fatalf("missing smoke gate.Error = %q, want empty status blocker", gate.Error)
+	}
+	if gate.SmokeReady || gate.SmokeReadinessState != "missing" || !strings.Contains(gate.SmokeReadinessReason, string(RejectionCodeV4SmokeCheckRequired)) {
+		t.Fatalf("missing smoke gate status = %#v, want visible E_SMOKE_CHECK_REQUIRED blocker", gate)
+	}
+
+	smoke, _, err := CreateHotUpdateSmokeCheckFromGate(root, "hot-update-smoke-status", HotUpdateSmokeCheckStateFailed, now.Add(4*time.Minute), "operator", now.Add(5*time.Minute), "status smoke failed")
+	if err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+	}
+
+	failed := LoadOperatorHotUpdateGateIdentityStatus(root)
+	if failed.State != "configured" || len(failed.Gates) != 1 {
+		t.Fatalf("failed smoke status = %#v, want one configured gate", failed)
+	}
+	gate = failed.Gates[0]
+	if gate.Error != "" {
+		t.Fatalf("failed smoke gate.Error = %q, want empty status blocker", gate.Error)
+	}
+	if gate.SmokeReady || gate.SmokeReadinessState != "failed" || gate.SelectedSmokeCheckID != smoke.SmokeCheckID || !strings.Contains(gate.SmokeReadinessReason, string(RejectionCodeV4SmokeCheckFailed)) {
+		t.Fatalf("failed smoke gate status = %#v, want visible E_SMOKE_CHECK_FAILED blocker", gate)
+	}
+}
+
 func TestLoadOperatorHotUpdateGateIdentityStatusNotConfigured(t *testing.T) {
 	t.Parallel()
 

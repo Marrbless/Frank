@@ -258,6 +258,9 @@ func CreateHotUpdateOutcomeFromTerminalGate(root string, hotUpdateID string, cre
 	reason := ""
 	switch gate.State {
 	case HotUpdateGateStateReloadApplySucceeded:
+		if err := requireHotUpdateSmokeReadiness(root, gate); err != nil {
+			return HotUpdateOutcomeRecord{}, false, err
+		}
 		outcomeKind = HotUpdateOutcomeKindHotUpdated
 		reason = "hot update reload/apply succeeded"
 	case HotUpdateGateStateReloadApplyFailed:

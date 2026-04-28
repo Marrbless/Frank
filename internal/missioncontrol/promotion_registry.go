@@ -299,6 +299,9 @@ func CreatePromotionFromSuccessfulHotUpdateOutcome(root, outcomeID, createdBy st
 	if err := validateHotUpdateOutcomeGateLineage(outcome, gate); err != nil {
 		return PromotionRecord{}, false, err
 	}
+	if err := requireHotUpdateSmokeReadiness(root, gate); err != nil {
+		return PromotionRecord{}, false, err
+	}
 	if strings.TrimSpace(gate.PreviousActivePackID) == "" {
 		return PromotionRecord{}, false, fmt.Errorf("mission store hot-update gate %q previous_active_pack_id is required for promotion creation", gate.HotUpdateID)
 	}
