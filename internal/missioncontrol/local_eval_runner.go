@@ -29,9 +29,13 @@ type LocalEvalRunnerSpec struct {
 }
 
 type LocalEvalRunnerResult struct {
-	CandidateResult CandidateResultRecord               `json:"candidate_result"`
-	Eligibility     CandidatePromotionEligibilityStatus `json:"eligibility"`
-	Created         bool                                `json:"created"`
+	CandidateResult          CandidateResultRecord               `json:"candidate_result"`
+	Eligibility              CandidatePromotionEligibilityStatus `json:"eligibility"`
+	Outcome                  ImprovementAttemptOutcomeRecord     `json:"outcome"`
+	PromotionDecision        *CandidatePromotionDecisionRecord   `json:"promotion_decision,omitempty"`
+	Created                  bool                                `json:"created"`
+	OutcomeCreated           bool                                `json:"outcome_created"`
+	PromotionDecisionCreated bool                                `json:"promotion_decision_created,omitempty"`
 }
 
 func RunLocalDeterministicEval(root string, spec LocalEvalRunnerSpec) (LocalEvalRunnerResult, error) {
@@ -116,10 +120,18 @@ func RunLocalDeterministicEval(root string, spec LocalEvalRunnerSpec) (LocalEval
 	if err != nil {
 		return LocalEvalRunnerResult{}, err
 	}
+	outcome, promotionDecision, outcomeCreated, promotionDecisionCreated, err := CreateImprovementAttemptOutcomeFromCandidateResult(root, stored.ResultID, spec.CreatedBy, spec.CreatedAt)
+	if err != nil {
+		return LocalEvalRunnerResult{}, err
+	}
 	return LocalEvalRunnerResult{
-		CandidateResult: stored,
-		Eligibility:     eligibility,
-		Created:         created,
+		CandidateResult:          stored,
+		Eligibility:              eligibility,
+		Outcome:                  outcome,
+		PromotionDecision:        promotionDecision,
+		Created:                  created,
+		OutcomeCreated:           outcomeCreated,
+		PromotionDecisionCreated: promotionDecisionCreated,
 	}, nil
 }
 

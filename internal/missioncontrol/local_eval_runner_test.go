@@ -49,6 +49,21 @@ func TestRunLocalDeterministicEvalCreatesCandidateResultAndEligibility(t *testin
 	if got.Eligibility.State != CandidatePromotionEligibilityStateEligible {
 		t.Fatalf("Eligibility.State = %q, want eligible: %#v", got.Eligibility.State, got.Eligibility)
 	}
+	if !got.OutcomeCreated {
+		t.Fatal("OutcomeCreated = false, want true")
+	}
+	if got.Outcome.Decision != ImprovementRunDecisionKeep {
+		t.Fatalf("Outcome.Decision = %q, want keep", got.Outcome.Decision)
+	}
+	if got.Outcome.PromotionDecisionID != "candidate-promotion-decision-result-run-root" {
+		t.Fatalf("Outcome.PromotionDecisionID = %q, want candidate promotion decision ref", got.Outcome.PromotionDecisionID)
+	}
+	if got.PromotionDecision == nil {
+		t.Fatal("PromotionDecision = nil, want eligible promotion decision")
+	}
+	if !got.PromotionDecisionCreated {
+		t.Fatal("PromotionDecisionCreated = false, want true")
+	}
 
 	replayed, err := RunLocalDeterministicEval(root, spec)
 	if err != nil {
@@ -59,6 +74,12 @@ func TestRunLocalDeterministicEvalCreatesCandidateResultAndEligibility(t *testin
 	}
 	if replayed.CandidateResult.ResultID != got.CandidateResult.ResultID {
 		t.Fatalf("replay ResultID = %q, want %q", replayed.CandidateResult.ResultID, got.CandidateResult.ResultID)
+	}
+	if replayed.OutcomeCreated {
+		t.Fatal("replay OutcomeCreated = true, want false")
+	}
+	if replayed.PromotionDecisionCreated {
+		t.Fatal("replay PromotionDecisionCreated = true, want false")
 	}
 
 	spec.HoldoutScore = 0.55
@@ -97,8 +118,56 @@ func TestRunLocalDeterministicEvalSurfacesHoldoutRejectedEligibility(t *testing.
 	if got.Eligibility.State != CandidatePromotionEligibilityStateRejected {
 		t.Fatalf("Eligibility.State = %q, want rejected", got.Eligibility.State)
 	}
+	if got.Outcome.Decision != ImprovementRunDecisionBlocked {
+		t.Fatalf("Outcome.Decision = %q, want blocked", got.Outcome.Decision)
+	}
+	if got.Outcome.PromotionDecisionID != "" {
+		t.Fatalf("Outcome.PromotionDecisionID = %q, want empty for blocked outcome", got.Outcome.PromotionDecisionID)
+	}
+	if got.PromotionDecision != nil {
+		t.Fatalf("PromotionDecision = %#v, want nil for blocked outcome", got.PromotionDecision)
+	}
 	if !containsLocalEvalBlockingReason(got.Eligibility.BlockingReasons, "holdout") {
 		t.Fatalf("BlockingReasons = %#v, want holdout blocker", got.Eligibility.BlockingReasons)
+	}
+}
+
+func TestRunLocalDeterministicEvalRecordsDiscardOutcome(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 2, 10, 30, 0, 0, time.UTC)
+	storeLocalEvalRunnerFixtures(t, root, now)
+
+	got, err := RunLocalDeterministicEval(root, LocalEvalRunnerSpec{
+		ResultID:           "result-discarded",
+		RunID:              "run-root",
+		PromotionPolicyID:  "promotion-policy-local",
+		BaselineScore:      0.52,
+		TrainScore:         0.78,
+		HoldoutScore:       0.74,
+		ComplexityScore:    0.21,
+		CompatibilityScore: 0.93,
+		ResourceScore:      0.67,
+		RegressionFlags:    []string{"none"},
+		Decision:           ImprovementRunDecisionDiscard,
+		CreatedAt:          now.Add(8 * time.Minute),
+		CreatedBy:          "local-runner",
+	})
+	if err != nil {
+		t.Fatalf("RunLocalDeterministicEval() error = %v", err)
+	}
+	if got.Eligibility.State != CandidatePromotionEligibilityStateRejected {
+		t.Fatalf("Eligibility.State = %q, want rejected", got.Eligibility.State)
+	}
+	if got.Outcome.Decision != ImprovementRunDecisionDiscard {
+		t.Fatalf("Outcome.Decision = %q, want discard", got.Outcome.Decision)
+	}
+	if got.Outcome.PromotionDecisionID != "" {
+		t.Fatalf("Outcome.PromotionDecisionID = %q, want empty for discard", got.Outcome.PromotionDecisionID)
+	}
+	if got.PromotionDecision != nil {
+		t.Fatalf("PromotionDecision = %#v, want nil for discard", got.PromotionDecision)
 	}
 }
 
