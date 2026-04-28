@@ -117,6 +117,46 @@ func TestLoadOperatorAutonomyIdentityStatusInvalidDoesNotHideValidWakeCycles(t *
 	}
 }
 
+func TestLoadOperatorAutonomyIdentityStatusSurfacesBudgetAndBudgetExceeded(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 19, 30, 0, 0, time.UTC)
+	directive := validStandingDirectiveRecord(now.Add(-time.Hour), "standing-directive-budget", func(record *StandingDirectiveRecord) {
+		record.Schedule.DueAt = now.Add(-time.Minute)
+	})
+	if _, _, err := StoreStandingDirectiveRecord(root, directive); err != nil {
+		t.Fatalf("StoreStandingDirectiveRecord() error = %v", err)
+	}
+	budget := storeAutonomyBudgetForDirective(t, root, now.Add(-time.Hour), directive, func(record *AutonomyBudgetRecord) {
+		record.MaxCandidateMutationsPerDay = 0
+	})
+	blocked, _, err := CreateWakeCycleProposalFromStandingDirective(root, directive.StandingDirectiveID, "mission-proposal-1", MissionFamilyAutonomousMissionProposal, ExecutionPlaneLiveRuntime, ExecutionHostPhone, "autonomy-loop", now)
+	if err != nil {
+		t.Fatalf("CreateWakeCycleProposalFromStandingDirective() error = %v", err)
+	}
+
+	got := LoadOperatorAutonomyIdentityStatus(root)
+	if got.State != "configured" {
+		t.Fatalf("State = %q, want configured", got.State)
+	}
+	if got.LastBudgetExceededError != string(RejectionCodeV4AutonomyBudgetExceeded) {
+		t.Fatalf("LastBudgetExceededError = %q, want %s", got.LastBudgetExceededError, RejectionCodeV4AutonomyBudgetExceeded)
+	}
+	if len(got.Budgets) != 1 || got.Budgets[0].BudgetID != budget.BudgetID {
+		t.Fatalf("Budgets = %#v, want budget %q", got.Budgets, budget.BudgetID)
+	}
+	if got.Budgets[0].MaxCandidateMutationsPerDay != 0 || got.Budgets[0].ResetWindow != string(AutonomyBudgetResetWindowDailyUTC) {
+		t.Fatalf("budget status = %#v, want exhausted daily budget", got.Budgets[0])
+	}
+	if len(got.WakeCycles) != 1 || got.WakeCycles[0].WakeCycleID != blocked.WakeCycleID {
+		t.Fatalf("WakeCycles = %#v, want blocked wake cycle %q", got.WakeCycles, blocked.WakeCycleID)
+	}
+	if got.WakeCycles[0].Decision != string(WakeCycleDecisionBlocked) || !containsAutonomyReason(got.WakeCycles[0].BlockedReasons, string(RejectionCodeV4AutonomyBudgetExceeded)) {
+		t.Fatalf("wake cycle status = %#v, want budget exceeded blocker", got.WakeCycles[0])
+	}
+}
+
 func TestLoadOperatorAutonomyIdentityStatusReadOnly(t *testing.T) {
 	t.Parallel()
 

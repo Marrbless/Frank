@@ -164,6 +164,7 @@ func TestCreateWakeCycleProposalFromStandingDirectiveCreatesDueMissionProposal(t
 	if _, _, err := StoreStandingDirectiveRecord(root, directive); err != nil {
 		t.Fatalf("StoreStandingDirectiveRecord() error = %v", err)
 	}
+	storeAutonomyBudgetForDirective(t, root, now.Add(-time.Hour), directive, nil)
 
 	record, changed, err := CreateWakeCycleProposalFromStandingDirective(
 		root,
@@ -199,8 +200,11 @@ func TestCreateWakeCycleProposalFromStandingDirectiveCreatesDueMissionProposal(t
 	if record.AutonomyEnvelopeRef != directive.AutonomyEnvelopeRef || record.BudgetRef != directive.BudgetRef {
 		t.Fatalf("envelope/budget refs = %q/%q, want %q/%q", record.AutonomyEnvelopeRef, record.BudgetRef, directive.AutonomyEnvelopeRef, directive.BudgetRef)
 	}
-	if len(record.BudgetDebits) != 0 || len(record.BlockedReasons) != 0 {
-		t.Fatalf("budget debits/blocked reasons = %#v/%#v, want empty", record.BudgetDebits, record.BlockedReasons)
+	if len(record.BudgetDebits) != 1 || record.BudgetDebits[0].BudgetID != directive.BudgetRef || record.BudgetDebits[0].DebitKind != AutonomyBudgetDebitKindCandidateMutation {
+		t.Fatalf("budget debits = %#v, want candidate mutation debit for %q", record.BudgetDebits, directive.BudgetRef)
+	}
+	if len(record.BlockedReasons) != 0 {
+		t.Fatalf("blocked reasons = %#v, want empty", record.BlockedReasons)
 	}
 
 	loaded, err := LoadWakeCycleRecord(root, record.WakeCycleID)
@@ -229,6 +233,56 @@ func TestCreateWakeCycleProposalFromStandingDirectiveCreatesDueMissionProposal(t
 	}
 	if !reflect.DeepEqual(replayed, record) {
 		t.Fatalf("CreateWakeCycleProposalFromStandingDirective(replay) = %#v, want %#v", replayed, record)
+	}
+}
+
+func TestCreateWakeCycleProposalFromStandingDirectiveRecordsBudgetBlocker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 12, 30, 0, 0, time.UTC)
+	directive := validStandingDirectiveRecord(now.Add(-2*time.Hour), "standing-directive-budget-exhausted", func(record *StandingDirectiveRecord) {
+		record.Schedule.DueAt = now.Add(-time.Minute)
+	})
+	if _, _, err := StoreStandingDirectiveRecord(root, directive); err != nil {
+		t.Fatalf("StoreStandingDirectiveRecord() error = %v", err)
+	}
+	storeAutonomyBudgetForDirective(t, root, now.Add(-time.Hour), directive, func(record *AutonomyBudgetRecord) {
+		record.MaxCandidateMutationsPerDay = 0
+	})
+
+	record, changed, err := CreateWakeCycleProposalFromStandingDirective(
+		root,
+		directive.StandingDirectiveID,
+		"mission-proposal-1",
+		MissionFamilyAutonomousMissionProposal,
+		ExecutionPlaneLiveRuntime,
+		ExecutionHostPhone,
+		"autonomy-loop",
+		now,
+	)
+	if err != nil {
+		t.Fatalf("CreateWakeCycleProposalFromStandingDirective() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateWakeCycleProposalFromStandingDirective() changed = false, want true")
+	}
+	if record.Decision != WakeCycleDecisionBlocked {
+		t.Fatalf("Decision = %q, want blocked", record.Decision)
+	}
+	if len(record.BudgetDebits) != 0 {
+		t.Fatalf("BudgetDebits = %#v, want empty because debit was blocked", record.BudgetDebits)
+	}
+	if len(record.BlockedReasons) != 1 || !strings.Contains(record.BlockedReasons[0], string(RejectionCodeV4AutonomyBudgetExceeded)) {
+		t.Fatalf("BlockedReasons = %#v, want budget exceeded", record.BlockedReasons)
+	}
+
+	loaded, err := LoadWakeCycleRecord(root, record.WakeCycleID)
+	if err != nil {
+		t.Fatalf("LoadWakeCycleRecord() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, record) {
+		t.Fatalf("LoadWakeCycleRecord() = %#v, want %#v", loaded, record)
 	}
 }
 
@@ -314,6 +368,7 @@ func TestCreateWakeCycleProposalFromStandingDirectiveRejectsIneligibleSelection(
 			if _, _, err := StoreStandingDirectiveRecord(root, directive); err != nil {
 				t.Fatalf("StoreStandingDirectiveRecord() error = %v", err)
 			}
+			storeAutonomyBudgetForDirective(t, root, now.Add(-time.Hour), directive, nil)
 
 			jobID := tc.jobID
 			if jobID == "" {

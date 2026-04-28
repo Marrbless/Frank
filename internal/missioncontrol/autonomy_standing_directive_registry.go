@@ -303,11 +303,17 @@ func ValidateAutonomyBudgetDebitRecord(record AutonomyBudgetDebitRecord) error {
 	if record.DebitKind == "" {
 		return fmt.Errorf("wake cycle budget debit debit_kind is required")
 	}
+	if !isValidAutonomyBudgetDebitKind(record.DebitKind) {
+		return fmt.Errorf("wake cycle budget debit debit_kind %q is invalid", record.DebitKind)
+	}
 	if record.Amount <= 0 {
 		return fmt.Errorf("wake cycle budget debit amount must be positive")
 	}
 	if record.Unit == "" {
 		return fmt.Errorf("wake cycle budget debit unit is required")
+	}
+	if !isValidAutonomyBudgetDebitUnitForKind(record.DebitKind, record.Unit) {
+		return fmt.Errorf("wake cycle budget debit unit %q is invalid for debit_kind %q", record.Unit, record.DebitKind)
 	}
 	return nil
 }
@@ -366,6 +372,9 @@ func ValidateWakeCycleRecord(record WakeCycleRecord) error {
 	}
 	if record.Decision == WakeCycleDecisionNoEligible {
 		return validateWakeCycleNoEligible(record)
+	}
+	if record.Decision == WakeCycleDecisionBlocked {
+		return validateWakeCycleBlocked(record)
 	}
 	return nil
 }
@@ -509,6 +518,17 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		return WakeCycleRecord{}, false, fmt.Errorf("standing directive %q selected mission_family %q requires execution_plane %q", directive.StandingDirectiveID, selectedMissionFamily, requiredPlane)
 	}
 
+	requestedDebits := []AutonomyBudgetDebitRecord{{
+		BudgetID:  directive.BudgetRef,
+		DebitKind: AutonomyBudgetDebitKindCandidateMutation,
+		Amount:    1,
+		Unit:      AutonomyBudgetDebitUnitCount,
+	}}
+	budgetAssessment, err := AssessAutonomyBudgetForDebits(root, directive.BudgetRef, requestedDebits, startedAt)
+	if err != nil {
+		return WakeCycleRecord{}, false, err
+	}
+
 	record := WakeCycleRecord{
 		WakeCycleID:            WakeCycleIDFromDirectiveStartedAt(directive.StandingDirectiveID, startedAt),
 		StartedAt:              startedAt,
@@ -520,13 +540,18 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		SelectedExecutionPlane: selectedExecutionPlane,
 		SelectedExecutionHost:  selectedExecutionHost,
 		Decision:               WakeCycleDecisionMissionProposed,
-		BudgetDebits:           nil,
+		BudgetDebits:           requestedDebits,
 		BlockedReasons:         nil,
 		NextWakeAt:             startedAt.Add(time.Duration(directive.Schedule.IntervalSeconds) * time.Second),
 		AutonomyEnvelopeRef:    directive.AutonomyEnvelopeRef,
 		BudgetRef:              directive.BudgetRef,
 		CreatedAt:              startedAt,
 		CreatedBy:              createdBy,
+	}
+	if !budgetAssessment.Allowed {
+		record.Decision = WakeCycleDecisionBlocked
+		record.BudgetDebits = nil
+		record.BlockedReasons = []string{budgetAssessment.Reason}
 	}
 	return StoreWakeCycleRecord(root, record)
 }
@@ -633,6 +658,16 @@ func validateWakeCycleNoEligible(record WakeCycleRecord) error {
 	}
 	if !containsString(record.BlockedReasons, string(RejectionCodeV4NoEligibleAutonomousAction)) {
 		return fmt.Errorf("mission store wake cycle blocked_reasons must include %s for decision %q", RejectionCodeV4NoEligibleAutonomousAction, record.Decision)
+	}
+	return nil
+}
+
+func validateWakeCycleBlocked(record WakeCycleRecord) error {
+	if len(record.BlockedReasons) == 0 {
+		return fmt.Errorf("mission store wake cycle blocked_reasons are required for decision %q", record.Decision)
+	}
+	if containsAutonomyReason(record.BlockedReasons, string(RejectionCodeV4AutonomyBudgetExceeded)) && record.BudgetRef == "" {
+		return fmt.Errorf("mission store wake cycle budget_ref is required for %s", RejectionCodeV4AutonomyBudgetExceeded)
 	}
 	return nil
 }
@@ -754,6 +789,17 @@ func containsString(values []string, want string) bool {
 	want = strings.TrimSpace(want)
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAutonomyReason(values []string, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == want || strings.HasPrefix(value, want+":") {
 			return true
 		}
 	}
