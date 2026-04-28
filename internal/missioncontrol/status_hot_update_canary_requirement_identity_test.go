@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,9 @@ func TestLoadOperatorHotUpdateCanaryRequirementIdentityStatusConfigured(t *testi
 	}
 	if requirement.EligibilityState != CandidatePromotionEligibilityStateCanaryRequired {
 		t.Fatalf("Requirements[0].EligibilityState = %q, want canary_required", requirement.EligibilityState)
+	}
+	if !reflect.DeepEqual(requirement.CanaryScopeJobRefs, []string{"run-result"}) || !reflect.DeepEqual(requirement.CanaryScopeSurfaces, []string{"prompts", "skills"}) {
+		t.Fatalf("Requirements[0] canary scope = jobs %#v surfaces %#v, want run-result/prompts+skills", requirement.CanaryScopeJobRefs, requirement.CanaryScopeSurfaces)
 	}
 	if !requirement.RequiredByPolicy {
 		t.Fatal("Requirements[0].RequiredByPolicy = false, want true")

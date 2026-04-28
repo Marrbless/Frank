@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,15 @@ func TestLoadOperatorHotUpdateCanarySatisfactionIdentityStatusConfigured(t *test
 	}
 	if status.EvidenceState != string(HotUpdateCanaryEvidenceStatePassed) || !status.Passed {
 		t.Fatalf("evidence state/pass = %q/%v, want passed/true", status.EvidenceState, status.Passed)
+	}
+	if !reflect.DeepEqual(status.CanaryScopeJobRefs, requirement.CanaryScopeJobRefs) || !reflect.DeepEqual(status.CanaryScopeSurfaces, requirement.CanaryScopeSurfaces) {
+		t.Fatalf("canary scope = jobs %#v surfaces %#v, want requirement scope jobs %#v surfaces %#v", status.CanaryScopeJobRefs, status.CanaryScopeSurfaces, requirement.CanaryScopeJobRefs, requirement.CanaryScopeSurfaces)
+	}
+	if status.EvidenceSource != string(HotUpdateCanaryEvidenceSourceOperatorRecorded) || status.AutomaticTrafficExercised {
+		t.Fatalf("evidence source/traffic = %q/%v, want operator_recorded/false", status.EvidenceSource, status.AutomaticTrafficExercised)
+	}
+	if !reflect.DeepEqual(status.ExercisedJobRefs, requirement.CanaryScopeJobRefs) || !reflect.DeepEqual(status.ExercisedSurfaces, requirement.CanaryScopeSurfaces) {
+		t.Fatalf("exercised scope = jobs %#v surfaces %#v, want requirement scope jobs %#v surfaces %#v", status.ExercisedJobRefs, status.ExercisedSurfaces, requirement.CanaryScopeJobRefs, requirement.CanaryScopeSurfaces)
 	}
 	if status.ObservedAt == nil || *status.ObservedAt != "2026-04-26T20:20:00Z" {
 		t.Fatalf("ObservedAt = %#v, want 2026-04-26T20:20:00Z", status.ObservedAt)

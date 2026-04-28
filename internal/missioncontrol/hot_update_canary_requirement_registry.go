@@ -33,6 +33,8 @@ type HotUpdateCanaryRequirementRecord struct {
 	BaselinePackID        string                          `json:"baseline_pack_id"`
 	CandidatePackID       string                          `json:"candidate_pack_id"`
 	EligibilityState      string                          `json:"eligibility_state"`
+	CanaryScopeJobRefs    []string                        `json:"canary_scope_job_refs"`
+	CanaryScopeSurfaces   []string                        `json:"canary_scope_surfaces"`
 	RequiredByPolicy      bool                            `json:"required_by_policy"`
 	OwnerApprovalRequired bool                            `json:"owner_approval_required"`
 	State                 HotUpdateCanaryRequirementState `json:"state"`
@@ -70,6 +72,8 @@ func NormalizeHotUpdateCanaryRequirementRecord(record HotUpdateCanaryRequirement
 	record.BaselinePackID = strings.TrimSpace(record.BaselinePackID)
 	record.CandidatePackID = strings.TrimSpace(record.CandidatePackID)
 	record.EligibilityState = strings.TrimSpace(record.EligibilityState)
+	record.CanaryScopeJobRefs = normalizeHotUpdateCanaryScopeRefs(record.CanaryScopeJobRefs)
+	record.CanaryScopeSurfaces = normalizeHotUpdateCanaryScopeRefs(record.CanaryScopeSurfaces)
 	record.State = HotUpdateCanaryRequirementState(strings.TrimSpace(string(record.State)))
 	record.Reason = strings.TrimSpace(record.Reason)
 	record.CreatedAt = record.CreatedAt.UTC()
@@ -142,6 +146,12 @@ func ValidateHotUpdateCanaryRequirementRecord(record HotUpdateCanaryRequirementR
 	}
 	if !isValidHotUpdateCanaryRequirementEligibilityState(record.EligibilityState) {
 		return fmt.Errorf("mission store hot-update canary requirement eligibility_state %q is invalid", record.EligibilityState)
+	}
+	if err := validateHotUpdateCanaryScopeRefs("mission store hot-update canary requirement", "canary_scope_job_refs", record.CanaryScopeJobRefs); err != nil {
+		return err
+	}
+	if err := validateHotUpdateCanaryScopeRefs("mission store hot-update canary requirement", "canary_scope_surfaces", record.CanaryScopeSurfaces); err != nil {
+		return err
 	}
 	if !record.RequiredByPolicy {
 		return fmt.Errorf("mission store hot-update canary requirement required_by_policy must be true")
@@ -278,6 +288,10 @@ func CreateHotUpdateCanaryRequirementFromCandidateResult(root, resultID, created
 	if !isValidHotUpdateCanaryRequirementEligibilityState(status.State) {
 		return HotUpdateCanaryRequirementRecord{}, false, fmt.Errorf("mission store candidate result %q promotion eligibility state %q does not permit hot-update canary requirement", resultRef.ResultID, status.State)
 	}
+	candidatePack, err := LoadRuntimePackRecord(root, status.CandidatePackID)
+	if err != nil {
+		return HotUpdateCanaryRequirementRecord{}, false, fmt.Errorf("mission store hot-update canary requirement candidate_pack_id %q: %w", status.CandidatePackID, err)
+	}
 
 	record := NormalizeHotUpdateCanaryRequirementRecord(HotUpdateCanaryRequirementRecord{
 		RecordVersion:         StoreRecordVersion,
@@ -290,6 +304,8 @@ func CreateHotUpdateCanaryRequirementFromCandidateResult(root, resultID, created
 		BaselinePackID:        status.BaselinePackID,
 		CandidatePackID:       status.CandidatePackID,
 		EligibilityState:      status.State,
+		CanaryScopeJobRefs:    []string{status.RunID},
+		CanaryScopeSurfaces:   candidatePack.MutableSurfaces,
 		RequiredByPolicy:      true,
 		OwnerApprovalRequired: status.State == CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired,
 		State:                 HotUpdateCanaryRequirementStateRequired,

@@ -29,6 +29,12 @@ func TestValidateHotUpdateCanaryRequirementRecordRejectsMissingRequiredFields(t 
 		{name: "invalid eligibility state", edit: func(record *HotUpdateCanaryRequirementRecord) {
 			record.EligibilityState = CandidatePromotionEligibilityStateEligible
 		}, want: "eligibility_state"},
+		{name: "missing canary scope job refs", edit: func(record *HotUpdateCanaryRequirementRecord) {
+			record.CanaryScopeJobRefs = nil
+		}, want: "canary_scope_job_refs are required"},
+		{name: "missing canary scope surfaces", edit: func(record *HotUpdateCanaryRequirementRecord) {
+			record.CanaryScopeSurfaces = nil
+		}, want: "canary_scope_surfaces are required"},
 		{name: "required by policy", edit: func(record *HotUpdateCanaryRequirementRecord) { record.RequiredByPolicy = false }, want: "required_by_policy must be true"},
 		{name: "state required", edit: func(record *HotUpdateCanaryRequirementRecord) { record.State = "satisfied" }, want: `state must be "required"`},
 		{name: "reason", edit: func(record *HotUpdateCanaryRequirementRecord) { record.Reason = "" }, want: "reason is required"},
@@ -123,6 +129,9 @@ func TestCreateHotUpdateCanaryRequirementFromCandidateResultCanaryAndOwnerApprov
 	}
 	if record.EligibilityState != CandidatePromotionEligibilityStateCanaryAndOwnerApprovalRequired {
 		t.Fatalf("EligibilityState = %q, want canary_and_owner_approval_required", record.EligibilityState)
+	}
+	if !reflect.DeepEqual(record.CanaryScopeJobRefs, []string{"run-result"}) || !reflect.DeepEqual(record.CanaryScopeSurfaces, []string{"prompts", "skills"}) {
+		t.Fatalf("canary scope = jobs %#v surfaces %#v, want run-result/prompts+skills", record.CanaryScopeJobRefs, record.CanaryScopeSurfaces)
 	}
 	if !record.OwnerApprovalRequired {
 		t.Fatal("OwnerApprovalRequired = false, want true")
@@ -443,6 +452,8 @@ func validHotUpdateCanaryRequirementRecord(now time.Time, mutate func(*HotUpdate
 		BaselinePackID:        "pack-base",
 		CandidatePackID:       "pack-candidate",
 		EligibilityState:      CandidatePromotionEligibilityStateCanaryRequired,
+		CanaryScopeJobRefs:    []string{"run-result"},
+		CanaryScopeSurfaces:   []string{"prompts", "skills"},
 		RequiredByPolicy:      true,
 		OwnerApprovalRequired: false,
 		State:                 HotUpdateCanaryRequirementStateRequired,

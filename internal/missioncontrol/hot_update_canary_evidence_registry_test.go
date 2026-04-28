@@ -40,6 +40,18 @@ func TestValidateHotUpdateCanaryEvidenceRecordRejectsMissingRequiredFields(t *te
 		{name: "deterministic id mismatch", edit: func(record *HotUpdateCanaryEvidenceRecord) {
 			record.CanaryEvidenceID = "hot-update-canary-evidence-other"
 		}, want: "does not match deterministic canary_evidence_id"},
+		{name: "invalid evidence source", edit: func(record *HotUpdateCanaryEvidenceRecord) {
+			record.EvidenceSource = "trafficish"
+		}, want: "evidence_source"},
+		{name: "operator evidence cannot claim automatic traffic", edit: func(record *HotUpdateCanaryEvidenceRecord) {
+			record.AutomaticTrafficExercised = true
+		}, want: "automatic_traffic_exercised must be false"},
+		{name: "missing exercised job refs", edit: func(record *HotUpdateCanaryEvidenceRecord) {
+			record.ExercisedJobRefs = nil
+		}, want: "exercised_job_refs are required"},
+		{name: "missing exercised surfaces", edit: func(record *HotUpdateCanaryEvidenceRecord) {
+			record.ExercisedSurfaces = nil
+		}, want: "exercised_surfaces are required"},
 	}
 
 	for _, tt := range tests {
@@ -119,6 +131,12 @@ func TestCreateHotUpdateCanaryEvidenceFromRequirementCreatesAllStates(t *testing
 			if record.Passed != tt.passed {
 				t.Fatalf("Passed = %v, want %v", record.Passed, tt.passed)
 			}
+			if record.EvidenceSource != HotUpdateCanaryEvidenceSourceOperatorRecorded || record.AutomaticTrafficExercised {
+				t.Fatalf("evidence source/automatic traffic = %q/%v, want operator_recorded/false", record.EvidenceSource, record.AutomaticTrafficExercised)
+			}
+			if !reflect.DeepEqual(record.ExercisedJobRefs, requirement.CanaryScopeJobRefs) || !reflect.DeepEqual(record.ExercisedSurfaces, requirement.CanaryScopeSurfaces) {
+				t.Fatalf("exercised scope = jobs %#v surfaces %#v, want requirement scope jobs %#v surfaces %#v", record.ExercisedJobRefs, record.ExercisedSurfaces, requirement.CanaryScopeJobRefs, requirement.CanaryScopeSurfaces)
+			}
 			if record.Reason != "canary observation recorded" {
 				t.Fatalf("Reason = %q, want trimmed reason", record.Reason)
 			}
@@ -134,6 +152,64 @@ func TestCreateHotUpdateCanaryEvidenceFromRequirementCreatesAllStates(t *testing
 			}
 			if !reflect.DeepEqual(loaded, record) {
 				t.Fatalf("loaded = %#v, want %#v", loaded, record)
+			}
+		})
+	}
+}
+
+func TestStoreHotUpdateCanaryEvidenceRecordRejectsScopeExceeded(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 25, 16, 30, 0, 0, time.UTC)
+	requirement := storeCanaryRequirementForEvidence(t, root, now, nil, nil)
+
+	tests := []struct {
+		name string
+		edit func(*HotUpdateCanaryEvidenceRecord)
+		want string
+	}{
+		{
+			name: "job",
+			edit: func(record *HotUpdateCanaryEvidenceRecord) {
+				record.ExercisedJobRefs = []string{"run-result", "live-job-out-of-scope"}
+			},
+			want: "exercised_job_refs value \"live-job-out-of-scope\" exceeds canary scope",
+		},
+		{
+			name: "surface",
+			edit: func(record *HotUpdateCanaryEvidenceRecord) {
+				record.ExercisedSurfaces = []string{"prompts", "treasury_policy"}
+			},
+			want: "exercised_surfaces value \"treasury_policy\" exceeds canary scope",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			record := validHotUpdateCanaryEvidenceRecord(now.Add(time.Duration(len(tc.name))*time.Minute), func(record *HotUpdateCanaryEvidenceRecord) {
+				record.CanaryRequirementID = requirement.CanaryRequirementID
+				record.CanaryEvidenceID = HotUpdateCanaryEvidenceIDFromRequirementObservedAt(requirement.CanaryRequirementID, record.ObservedAt)
+				record.ResultID = requirement.ResultID
+				record.RunID = requirement.RunID
+				record.CandidateID = requirement.CandidateID
+				record.EvalSuiteID = requirement.EvalSuiteID
+				record.PromotionPolicyID = requirement.PromotionPolicyID
+				record.BaselinePackID = requirement.BaselinePackID
+				record.CandidatePackID = requirement.CandidatePackID
+				record.ExercisedJobRefs = requirement.CanaryScopeJobRefs
+				record.ExercisedSurfaces = requirement.CanaryScopeSurfaces
+				tc.edit(record)
+			})
+			if _, changed, err := StoreHotUpdateCanaryEvidenceRecord(root, record); err == nil {
+				t.Fatal("StoreHotUpdateCanaryEvidenceRecord() error = nil, want scope rejection")
+			} else if changed {
+				t.Fatal("StoreHotUpdateCanaryEvidenceRecord() changed = true, want false")
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("StoreHotUpdateCanaryEvidenceRecord() error = %q, want substring %q", err.Error(), tc.want)
 			}
 		})
 	}
@@ -432,6 +508,9 @@ func validHotUpdateCanaryEvidenceRecord(observedAt time.Time, mutate func(*HotUp
 		PromotionPolicyID:   "promotion-policy-result",
 		BaselinePackID:      "pack-base",
 		CandidatePackID:     "pack-candidate",
+		EvidenceSource:      HotUpdateCanaryEvidenceSourceOperatorRecorded,
+		ExercisedJobRefs:    []string{"run-result"},
+		ExercisedSurfaces:   []string{"prompts", "skills"},
 		EvidenceState:       HotUpdateCanaryEvidenceStatePassed,
 		Passed:              true,
 		Reason:              "canary passed",

@@ -24,22 +24,26 @@ type HotUpdateCanaryEvidenceRef struct {
 }
 
 type HotUpdateCanaryEvidenceRecord struct {
-	RecordVersion       int                          `json:"record_version"`
-	CanaryEvidenceID    string                       `json:"canary_evidence_id"`
-	CanaryRequirementID string                       `json:"canary_requirement_id"`
-	ResultID            string                       `json:"result_id"`
-	RunID               string                       `json:"run_id"`
-	CandidateID         string                       `json:"candidate_id"`
-	EvalSuiteID         string                       `json:"eval_suite_id"`
-	PromotionPolicyID   string                       `json:"promotion_policy_id"`
-	BaselinePackID      string                       `json:"baseline_pack_id"`
-	CandidatePackID     string                       `json:"candidate_pack_id"`
-	EvidenceState       HotUpdateCanaryEvidenceState `json:"evidence_state"`
-	Passed              bool                         `json:"passed"`
-	Reason              string                       `json:"reason"`
-	ObservedAt          time.Time                    `json:"observed_at"`
-	CreatedAt           time.Time                    `json:"created_at"`
-	CreatedBy           string                       `json:"created_by"`
+	RecordVersion             int                           `json:"record_version"`
+	CanaryEvidenceID          string                        `json:"canary_evidence_id"`
+	CanaryRequirementID       string                        `json:"canary_requirement_id"`
+	ResultID                  string                        `json:"result_id"`
+	RunID                     string                        `json:"run_id"`
+	CandidateID               string                        `json:"candidate_id"`
+	EvalSuiteID               string                        `json:"eval_suite_id"`
+	PromotionPolicyID         string                        `json:"promotion_policy_id"`
+	BaselinePackID            string                        `json:"baseline_pack_id"`
+	CandidatePackID           string                        `json:"candidate_pack_id"`
+	EvidenceSource            HotUpdateCanaryEvidenceSource `json:"evidence_source"`
+	AutomaticTrafficExercised bool                          `json:"automatic_traffic_exercised"`
+	ExercisedJobRefs          []string                      `json:"exercised_job_refs"`
+	ExercisedSurfaces         []string                      `json:"exercised_surfaces"`
+	EvidenceState             HotUpdateCanaryEvidenceState  `json:"evidence_state"`
+	Passed                    bool                          `json:"passed"`
+	Reason                    string                        `json:"reason"`
+	ObservedAt                time.Time                     `json:"observed_at"`
+	CreatedAt                 time.Time                     `json:"created_at"`
+	CreatedBy                 string                        `json:"created_by"`
 }
 
 var ErrHotUpdateCanaryEvidenceRecordNotFound = errors.New("mission store hot-update canary evidence record not found")
@@ -73,6 +77,9 @@ func NormalizeHotUpdateCanaryEvidenceRecord(record HotUpdateCanaryEvidenceRecord
 	record.PromotionPolicyID = strings.TrimSpace(record.PromotionPolicyID)
 	record.BaselinePackID = strings.TrimSpace(record.BaselinePackID)
 	record.CandidatePackID = strings.TrimSpace(record.CandidatePackID)
+	record.EvidenceSource = HotUpdateCanaryEvidenceSource(strings.TrimSpace(string(record.EvidenceSource)))
+	record.ExercisedJobRefs = normalizeHotUpdateCanaryScopeRefs(record.ExercisedJobRefs)
+	record.ExercisedSurfaces = normalizeHotUpdateCanaryScopeRefs(record.ExercisedSurfaces)
 	record.EvidenceState = HotUpdateCanaryEvidenceState(strings.TrimSpace(string(record.EvidenceState)))
 	record.Reason = strings.TrimSpace(record.Reason)
 	record.ObservedAt = record.ObservedAt.UTC()
@@ -153,6 +160,21 @@ func ValidateHotUpdateCanaryEvidenceRecord(record HotUpdateCanaryEvidenceRecord)
 	}
 	if record.CanaryEvidenceID != HotUpdateCanaryEvidenceIDFromRequirementObservedAt(record.CanaryRequirementID, record.ObservedAt) {
 		return fmt.Errorf("mission store hot-update canary evidence canary_evidence_id %q does not match deterministic canary_evidence_id %q", record.CanaryEvidenceID, HotUpdateCanaryEvidenceIDFromRequirementObservedAt(record.CanaryRequirementID, record.ObservedAt))
+	}
+	if !isValidHotUpdateCanaryEvidenceSource(record.EvidenceSource) {
+		return fmt.Errorf("mission store hot-update canary evidence evidence_source %q is invalid", record.EvidenceSource)
+	}
+	if record.EvidenceSource == HotUpdateCanaryEvidenceSourceOperatorRecorded && record.AutomaticTrafficExercised {
+		return fmt.Errorf("mission store hot-update canary evidence automatic_traffic_exercised must be false when evidence_source is %q", HotUpdateCanaryEvidenceSourceOperatorRecorded)
+	}
+	if record.EvidenceSource == HotUpdateCanaryEvidenceSourceAutomaticTraffic && !record.AutomaticTrafficExercised {
+		return fmt.Errorf("mission store hot-update canary evidence automatic_traffic_exercised must be true when evidence_source is %q", HotUpdateCanaryEvidenceSourceAutomaticTraffic)
+	}
+	if err := validateHotUpdateCanaryScopeRefs("mission store hot-update canary evidence", "exercised_job_refs", record.ExercisedJobRefs); err != nil {
+		return err
+	}
+	if err := validateHotUpdateCanaryScopeRefs("mission store hot-update canary evidence", "exercised_surfaces", record.ExercisedSurfaces); err != nil {
+		return err
 	}
 	if !isValidHotUpdateCanaryEvidenceState(record.EvidenceState) {
 		return fmt.Errorf("mission store hot-update canary evidence evidence_state %q is invalid", record.EvidenceState)
@@ -281,6 +303,9 @@ func CreateHotUpdateCanaryEvidenceFromRequirement(root, canaryRequirementID stri
 		PromotionPolicyID:   requirement.PromotionPolicyID,
 		BaselinePackID:      requirement.BaselinePackID,
 		CandidatePackID:     requirement.CandidatePackID,
+		EvidenceSource:      HotUpdateCanaryEvidenceSourceOperatorRecorded,
+		ExercisedJobRefs:    requirement.CanaryScopeJobRefs,
+		ExercisedSurfaces:   requirement.CanaryScopeSurfaces,
 		EvidenceState:       state,
 		Passed:              state == HotUpdateCanaryEvidenceStatePassed,
 		Reason:              reason,
@@ -322,6 +347,12 @@ func validateHotUpdateCanaryEvidenceLinkage(root string, record HotUpdateCanaryE
 		record.BaselinePackID != requirement.BaselinePackID ||
 		record.CandidatePackID != requirement.CandidatePackID {
 		return fmt.Errorf("mission store hot-update canary evidence %q does not match hot-update canary requirement %q", record.CanaryEvidenceID, record.CanaryRequirementID)
+	}
+	if ref, ok := hotUpdateCanaryScopeContainsAll(requirement.CanaryScopeJobRefs, record.ExercisedJobRefs); !ok {
+		return fmt.Errorf("mission store hot-update canary evidence %q exercised_job_refs value %q exceeds canary scope", record.CanaryEvidenceID, ref)
+	}
+	if ref, ok := hotUpdateCanaryScopeContainsAll(requirement.CanaryScopeSurfaces, record.ExercisedSurfaces); !ok {
+		return fmt.Errorf("mission store hot-update canary evidence %q exercised_surfaces value %q exceeds canary scope", record.CanaryEvidenceID, ref)
 	}
 
 	result, err := LoadCandidateResultRecord(root, record.ResultID)

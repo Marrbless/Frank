@@ -23,24 +23,30 @@ const (
 )
 
 type HotUpdateCanarySatisfactionAssessment struct {
-	State                    string                           `json:"state"`
-	CanaryRequirementID      string                           `json:"canary_requirement_id,omitempty"`
-	SelectedCanaryEvidenceID string                           `json:"selected_canary_evidence_id,omitempty"`
-	ResultID                 string                           `json:"result_id,omitempty"`
-	RunID                    string                           `json:"run_id,omitempty"`
-	CandidateID              string                           `json:"candidate_id,omitempty"`
-	EvalSuiteID              string                           `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID        string                           `json:"promotion_policy_id,omitempty"`
-	BaselinePackID           string                           `json:"baseline_pack_id,omitempty"`
-	CandidatePackID          string                           `json:"candidate_pack_id,omitempty"`
-	EligibilityState         string                           `json:"eligibility_state,omitempty"`
-	OwnerApprovalRequired    bool                             `json:"owner_approval_required"`
-	SatisfactionState        HotUpdateCanarySatisfactionState `json:"satisfaction_state,omitempty"`
-	EvidenceState            HotUpdateCanaryEvidenceState     `json:"evidence_state,omitempty"`
-	Passed                   bool                             `json:"passed"`
-	ObservedAt               time.Time                        `json:"observed_at,omitempty"`
-	Reason                   string                           `json:"reason,omitempty"`
-	Error                    string                           `json:"error,omitempty"`
+	State                     string                           `json:"state"`
+	CanaryRequirementID       string                           `json:"canary_requirement_id,omitempty"`
+	SelectedCanaryEvidenceID  string                           `json:"selected_canary_evidence_id,omitempty"`
+	ResultID                  string                           `json:"result_id,omitempty"`
+	RunID                     string                           `json:"run_id,omitempty"`
+	CandidateID               string                           `json:"candidate_id,omitempty"`
+	EvalSuiteID               string                           `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID         string                           `json:"promotion_policy_id,omitempty"`
+	BaselinePackID            string                           `json:"baseline_pack_id,omitempty"`
+	CandidatePackID           string                           `json:"candidate_pack_id,omitempty"`
+	EligibilityState          string                           `json:"eligibility_state,omitempty"`
+	CanaryScopeJobRefs        []string                         `json:"canary_scope_job_refs,omitempty"`
+	CanaryScopeSurfaces       []string                         `json:"canary_scope_surfaces,omitempty"`
+	OwnerApprovalRequired     bool                             `json:"owner_approval_required"`
+	SatisfactionState         HotUpdateCanarySatisfactionState `json:"satisfaction_state,omitempty"`
+	EvidenceSource            HotUpdateCanaryEvidenceSource    `json:"evidence_source,omitempty"`
+	AutomaticTrafficExercised bool                             `json:"automatic_traffic_exercised,omitempty"`
+	ExercisedJobRefs          []string                         `json:"exercised_job_refs,omitempty"`
+	ExercisedSurfaces         []string                         `json:"exercised_surfaces,omitempty"`
+	EvidenceState             HotUpdateCanaryEvidenceState     `json:"evidence_state,omitempty"`
+	Passed                    bool                             `json:"passed"`
+	ObservedAt                time.Time                        `json:"observed_at,omitempty"`
+	Reason                    string                           `json:"reason,omitempty"`
+	Error                     string                           `json:"error,omitempty"`
 }
 
 type hotUpdateCanarySatisfactionEvidenceCandidate struct {
@@ -92,6 +98,10 @@ func assessHotUpdateCanarySatisfactionForRequirement(root string, requirement Ho
 	assessment := hotUpdateCanaryBaseSatisfactionAssessment(requirement)
 	assessment.State = "configured"
 	assessment.SelectedCanaryEvidenceID = selected.CanaryEvidenceID
+	assessment.EvidenceSource = selected.EvidenceSource
+	assessment.AutomaticTrafficExercised = selected.AutomaticTrafficExercised
+	assessment.ExercisedJobRefs = append([]string(nil), selected.ExercisedJobRefs...)
+	assessment.ExercisedSurfaces = append([]string(nil), selected.ExercisedSurfaces...)
 	assessment.EvidenceState = selected.EvidenceState
 	assessment.Passed = selected.Passed
 	assessment.ObservedAt = selected.ObservedAt
@@ -128,6 +138,8 @@ func hotUpdateCanaryBaseSatisfactionAssessment(requirement HotUpdateCanaryRequir
 		BaselinePackID:        requirement.BaselinePackID,
 		CandidatePackID:       requirement.CandidatePackID,
 		EligibilityState:      requirement.EligibilityState,
+		CanaryScopeJobRefs:    append([]string(nil), requirement.CanaryScopeJobRefs...),
+		CanaryScopeSurfaces:   append([]string(nil), requirement.CanaryScopeSurfaces...),
 		OwnerApprovalRequired: requirement.OwnerApprovalRequired,
 	}
 }
@@ -174,6 +186,10 @@ func hotUpdateCanaryInvalidSatisfactionAssessmentFromEvidence(requirement HotUpd
 		assessment.CandidatePackID = record.CandidatePackID
 	}
 	assessment.EvidenceState = record.EvidenceState
+	assessment.EvidenceSource = record.EvidenceSource
+	assessment.AutomaticTrafficExercised = record.AutomaticTrafficExercised
+	assessment.ExercisedJobRefs = append([]string(nil), record.ExercisedJobRefs...)
+	assessment.ExercisedSurfaces = append([]string(nil), record.ExercisedSurfaces...)
 	assessment.Passed = record.Passed
 	assessment.ObservedAt = record.ObservedAt
 	assessment.Reason = record.Reason

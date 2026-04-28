@@ -406,64 +406,76 @@ type OperatorCandidatePromotionDecisionStatus struct {
 }
 
 type OperatorHotUpdateCanaryRequirementStatus struct {
-	State                 string  `json:"state"`
-	CanaryRequirementID   string  `json:"canary_requirement_id,omitempty"`
-	ResultID              string  `json:"result_id,omitempty"`
-	RunID                 string  `json:"run_id,omitempty"`
-	CandidateID           string  `json:"candidate_id,omitempty"`
-	EvalSuiteID           string  `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID     string  `json:"promotion_policy_id,omitempty"`
-	BaselinePackID        string  `json:"baseline_pack_id,omitempty"`
-	CandidatePackID       string  `json:"candidate_pack_id,omitempty"`
-	EligibilityState      string  `json:"eligibility_state,omitempty"`
-	RequiredByPolicy      bool    `json:"required_by_policy"`
-	OwnerApprovalRequired bool    `json:"owner_approval_required"`
-	RequirementState      string  `json:"requirement_state,omitempty"`
-	Reason                string  `json:"reason,omitempty"`
-	CreatedAt             *string `json:"created_at,omitempty"`
-	CreatedBy             string  `json:"created_by,omitempty"`
-	Error                 string  `json:"error,omitempty"`
+	State                 string   `json:"state"`
+	CanaryRequirementID   string   `json:"canary_requirement_id,omitempty"`
+	ResultID              string   `json:"result_id,omitempty"`
+	RunID                 string   `json:"run_id,omitempty"`
+	CandidateID           string   `json:"candidate_id,omitempty"`
+	EvalSuiteID           string   `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID     string   `json:"promotion_policy_id,omitempty"`
+	BaselinePackID        string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID       string   `json:"candidate_pack_id,omitempty"`
+	EligibilityState      string   `json:"eligibility_state,omitempty"`
+	CanaryScopeJobRefs    []string `json:"canary_scope_job_refs,omitempty"`
+	CanaryScopeSurfaces   []string `json:"canary_scope_surfaces,omitempty"`
+	RequiredByPolicy      bool     `json:"required_by_policy"`
+	OwnerApprovalRequired bool     `json:"owner_approval_required"`
+	RequirementState      string   `json:"requirement_state,omitempty"`
+	Reason                string   `json:"reason,omitempty"`
+	CreatedAt             *string  `json:"created_at,omitempty"`
+	CreatedBy             string   `json:"created_by,omitempty"`
+	Error                 string   `json:"error,omitempty"`
 }
 
 type OperatorHotUpdateCanaryEvidenceStatus struct {
-	State               string  `json:"state"`
-	CanaryEvidenceID    string  `json:"canary_evidence_id,omitempty"`
-	CanaryRequirementID string  `json:"canary_requirement_id,omitempty"`
-	ResultID            string  `json:"result_id,omitempty"`
-	RunID               string  `json:"run_id,omitempty"`
-	CandidateID         string  `json:"candidate_id,omitempty"`
-	EvalSuiteID         string  `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID   string  `json:"promotion_policy_id,omitempty"`
-	BaselinePackID      string  `json:"baseline_pack_id,omitempty"`
-	CandidatePackID     string  `json:"candidate_pack_id,omitempty"`
-	EvidenceState       string  `json:"evidence_state,omitempty"`
-	Passed              bool    `json:"passed"`
-	Reason              string  `json:"reason,omitempty"`
-	ObservedAt          *string `json:"observed_at,omitempty"`
-	CreatedAt           *string `json:"created_at,omitempty"`
-	CreatedBy           string  `json:"created_by,omitempty"`
-	Error               string  `json:"error,omitempty"`
+	State                     string   `json:"state"`
+	CanaryEvidenceID          string   `json:"canary_evidence_id,omitempty"`
+	CanaryRequirementID       string   `json:"canary_requirement_id,omitempty"`
+	ResultID                  string   `json:"result_id,omitempty"`
+	RunID                     string   `json:"run_id,omitempty"`
+	CandidateID               string   `json:"candidate_id,omitempty"`
+	EvalSuiteID               string   `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID         string   `json:"promotion_policy_id,omitempty"`
+	BaselinePackID            string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID           string   `json:"candidate_pack_id,omitempty"`
+	EvidenceSource            string   `json:"evidence_source,omitempty"`
+	AutomaticTrafficExercised bool     `json:"automatic_traffic_exercised,omitempty"`
+	ExercisedJobRefs          []string `json:"exercised_job_refs,omitempty"`
+	ExercisedSurfaces         []string `json:"exercised_surfaces,omitempty"`
+	EvidenceState             string   `json:"evidence_state,omitempty"`
+	Passed                    bool     `json:"passed"`
+	Reason                    string   `json:"reason,omitempty"`
+	ObservedAt                *string  `json:"observed_at,omitempty"`
+	CreatedAt                 *string  `json:"created_at,omitempty"`
+	CreatedBy                 string   `json:"created_by,omitempty"`
+	Error                     string   `json:"error,omitempty"`
 }
 
 type OperatorHotUpdateCanarySatisfactionStatus struct {
-	State                    string  `json:"state"`
-	CanaryRequirementID      string  `json:"canary_requirement_id,omitempty"`
-	SelectedCanaryEvidenceID string  `json:"selected_canary_evidence_id,omitempty"`
-	ResultID                 string  `json:"result_id,omitempty"`
-	RunID                    string  `json:"run_id,omitempty"`
-	CandidateID              string  `json:"candidate_id,omitempty"`
-	EvalSuiteID              string  `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID        string  `json:"promotion_policy_id,omitempty"`
-	BaselinePackID           string  `json:"baseline_pack_id,omitempty"`
-	CandidatePackID          string  `json:"candidate_pack_id,omitempty"`
-	EligibilityState         string  `json:"eligibility_state,omitempty"`
-	OwnerApprovalRequired    bool    `json:"owner_approval_required"`
-	SatisfactionState        string  `json:"satisfaction_state,omitempty"`
-	EvidenceState            string  `json:"evidence_state,omitempty"`
-	Passed                   bool    `json:"passed"`
-	ObservedAt               *string `json:"observed_at,omitempty"`
-	Reason                   string  `json:"reason,omitempty"`
-	Error                    string  `json:"error,omitempty"`
+	State                     string   `json:"state"`
+	CanaryRequirementID       string   `json:"canary_requirement_id,omitempty"`
+	SelectedCanaryEvidenceID  string   `json:"selected_canary_evidence_id,omitempty"`
+	ResultID                  string   `json:"result_id,omitempty"`
+	RunID                     string   `json:"run_id,omitempty"`
+	CandidateID               string   `json:"candidate_id,omitempty"`
+	EvalSuiteID               string   `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID         string   `json:"promotion_policy_id,omitempty"`
+	BaselinePackID            string   `json:"baseline_pack_id,omitempty"`
+	CandidatePackID           string   `json:"candidate_pack_id,omitempty"`
+	EligibilityState          string   `json:"eligibility_state,omitempty"`
+	CanaryScopeJobRefs        []string `json:"canary_scope_job_refs,omitempty"`
+	CanaryScopeSurfaces       []string `json:"canary_scope_surfaces,omitempty"`
+	OwnerApprovalRequired     bool     `json:"owner_approval_required"`
+	SatisfactionState         string   `json:"satisfaction_state,omitempty"`
+	EvidenceSource            string   `json:"evidence_source,omitempty"`
+	AutomaticTrafficExercised bool     `json:"automatic_traffic_exercised,omitempty"`
+	ExercisedJobRefs          []string `json:"exercised_job_refs,omitempty"`
+	ExercisedSurfaces         []string `json:"exercised_surfaces,omitempty"`
+	EvidenceState             string   `json:"evidence_state,omitempty"`
+	Passed                    bool     `json:"passed"`
+	ObservedAt                *string  `json:"observed_at,omitempty"`
+	Reason                    string   `json:"reason,omitempty"`
+	Error                     string   `json:"error,omitempty"`
 }
 
 type OperatorHotUpdateCanarySatisfactionAuthorityStatus struct {
@@ -2400,6 +2412,8 @@ func operatorHotUpdateCanaryRequirementStatusFromRecord(record HotUpdateCanaryRe
 		BaselinePackID:        record.BaselinePackID,
 		CandidatePackID:       record.CandidatePackID,
 		EligibilityState:      record.EligibilityState,
+		CanaryScopeJobRefs:    append([]string(nil), record.CanaryScopeJobRefs...),
+		CanaryScopeSurfaces:   append([]string(nil), record.CanaryScopeSurfaces...),
 		RequiredByPolicy:      record.RequiredByPolicy,
 		OwnerApprovalRequired: record.OwnerApprovalRequired,
 		RequirementState:      string(record.State),
@@ -2476,21 +2490,25 @@ func loadOperatorHotUpdateCanaryEvidenceStatus(root, path string) OperatorHotUpd
 
 func operatorHotUpdateCanaryEvidenceStatusFromRecord(record HotUpdateCanaryEvidenceRecord) OperatorHotUpdateCanaryEvidenceStatus {
 	return OperatorHotUpdateCanaryEvidenceStatus{
-		CanaryEvidenceID:    record.CanaryEvidenceID,
-		CanaryRequirementID: record.CanaryRequirementID,
-		ResultID:            record.ResultID,
-		RunID:               record.RunID,
-		CandidateID:         record.CandidateID,
-		EvalSuiteID:         record.EvalSuiteID,
-		PromotionPolicyID:   record.PromotionPolicyID,
-		BaselinePackID:      record.BaselinePackID,
-		CandidatePackID:     record.CandidatePackID,
-		EvidenceState:       string(record.EvidenceState),
-		Passed:              record.Passed,
-		Reason:              record.Reason,
-		ObservedAt:          formatOperatorStatusTime(record.ObservedAt),
-		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
-		CreatedBy:           record.CreatedBy,
+		CanaryEvidenceID:          record.CanaryEvidenceID,
+		CanaryRequirementID:       record.CanaryRequirementID,
+		ResultID:                  record.ResultID,
+		RunID:                     record.RunID,
+		CandidateID:               record.CandidateID,
+		EvalSuiteID:               record.EvalSuiteID,
+		PromotionPolicyID:         record.PromotionPolicyID,
+		BaselinePackID:            record.BaselinePackID,
+		CandidatePackID:           record.CandidatePackID,
+		EvidenceSource:            string(record.EvidenceSource),
+		AutomaticTrafficExercised: record.AutomaticTrafficExercised,
+		ExercisedJobRefs:          append([]string(nil), record.ExercisedJobRefs...),
+		ExercisedSurfaces:         append([]string(nil), record.ExercisedSurfaces...),
+		EvidenceState:             string(record.EvidenceState),
+		Passed:                    record.Passed,
+		Reason:                    record.Reason,
+		ObservedAt:                formatOperatorStatusTime(record.ObservedAt),
+		CreatedAt:                 formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:                 record.CreatedBy,
 	}
 }
 
@@ -2605,30 +2623,38 @@ func operatorHotUpdateCanarySatisfactionStatusFromRequirement(record HotUpdateCa
 		BaselinePackID:        record.BaselinePackID,
 		CandidatePackID:       record.CandidatePackID,
 		EligibilityState:      record.EligibilityState,
+		CanaryScopeJobRefs:    append([]string(nil), record.CanaryScopeJobRefs...),
+		CanaryScopeSurfaces:   append([]string(nil), record.CanaryScopeSurfaces...),
 		OwnerApprovalRequired: record.OwnerApprovalRequired,
 	}
 }
 
 func operatorHotUpdateCanarySatisfactionStatusFromAssessment(assessment HotUpdateCanarySatisfactionAssessment) OperatorHotUpdateCanarySatisfactionStatus {
 	return OperatorHotUpdateCanarySatisfactionStatus{
-		State:                    assessment.State,
-		CanaryRequirementID:      assessment.CanaryRequirementID,
-		SelectedCanaryEvidenceID: assessment.SelectedCanaryEvidenceID,
-		ResultID:                 assessment.ResultID,
-		RunID:                    assessment.RunID,
-		CandidateID:              assessment.CandidateID,
-		EvalSuiteID:              assessment.EvalSuiteID,
-		PromotionPolicyID:        assessment.PromotionPolicyID,
-		BaselinePackID:           assessment.BaselinePackID,
-		CandidatePackID:          assessment.CandidatePackID,
-		EligibilityState:         assessment.EligibilityState,
-		OwnerApprovalRequired:    assessment.OwnerApprovalRequired,
-		SatisfactionState:        string(assessment.SatisfactionState),
-		EvidenceState:            string(assessment.EvidenceState),
-		Passed:                   assessment.Passed,
-		ObservedAt:               formatOperatorStatusTime(assessment.ObservedAt),
-		Reason:                   assessment.Reason,
-		Error:                    assessment.Error,
+		State:                     assessment.State,
+		CanaryRequirementID:       assessment.CanaryRequirementID,
+		SelectedCanaryEvidenceID:  assessment.SelectedCanaryEvidenceID,
+		ResultID:                  assessment.ResultID,
+		RunID:                     assessment.RunID,
+		CandidateID:               assessment.CandidateID,
+		EvalSuiteID:               assessment.EvalSuiteID,
+		PromotionPolicyID:         assessment.PromotionPolicyID,
+		BaselinePackID:            assessment.BaselinePackID,
+		CandidatePackID:           assessment.CandidatePackID,
+		EligibilityState:          assessment.EligibilityState,
+		CanaryScopeJobRefs:        append([]string(nil), assessment.CanaryScopeJobRefs...),
+		CanaryScopeSurfaces:       append([]string(nil), assessment.CanaryScopeSurfaces...),
+		OwnerApprovalRequired:     assessment.OwnerApprovalRequired,
+		SatisfactionState:         string(assessment.SatisfactionState),
+		EvidenceSource:            string(assessment.EvidenceSource),
+		AutomaticTrafficExercised: assessment.AutomaticTrafficExercised,
+		ExercisedJobRefs:          append([]string(nil), assessment.ExercisedJobRefs...),
+		ExercisedSurfaces:         append([]string(nil), assessment.ExercisedSurfaces...),
+		EvidenceState:             string(assessment.EvidenceState),
+		Passed:                    assessment.Passed,
+		ObservedAt:                formatOperatorStatusTime(assessment.ObservedAt),
+		Reason:                    assessment.Reason,
+		Error:                     assessment.Error,
 	}
 }
 

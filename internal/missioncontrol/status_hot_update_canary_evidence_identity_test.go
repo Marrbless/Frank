@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,12 @@ func TestLoadOperatorHotUpdateCanaryEvidenceIdentityStatusConfigured(t *testing.
 	}
 	if !status.Passed {
 		t.Fatal("Evidence[0].Passed = false, want true")
+	}
+	if status.EvidenceSource != string(HotUpdateCanaryEvidenceSourceOperatorRecorded) || status.AutomaticTrafficExercised {
+		t.Fatalf("Evidence[0] source/traffic = %q/%v, want operator_recorded/false", status.EvidenceSource, status.AutomaticTrafficExercised)
+	}
+	if !reflect.DeepEqual(status.ExercisedJobRefs, requirement.CanaryScopeJobRefs) || !reflect.DeepEqual(status.ExercisedSurfaces, requirement.CanaryScopeSurfaces) {
+		t.Fatalf("Evidence[0] exercised scope = jobs %#v surfaces %#v, want requirement scope jobs %#v surfaces %#v", status.ExercisedJobRefs, status.ExercisedSurfaces, requirement.CanaryScopeJobRefs, requirement.CanaryScopeSurfaces)
 	}
 	if status.Reason != "canary passed" {
 		t.Fatalf("Evidence[0].Reason = %q, want canary passed", status.Reason)
