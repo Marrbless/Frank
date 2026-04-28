@@ -13,8 +13,9 @@ import (
 type ImprovementWorkspaceRunOutcome string
 
 const (
-	ImprovementWorkspaceRunOutcomeCrashed ImprovementWorkspaceRunOutcome = "crashed"
-	ImprovementWorkspaceRunOutcomeFailed  ImprovementWorkspaceRunOutcome = "failed"
+	ImprovementWorkspaceRunOutcomeSucceeded ImprovementWorkspaceRunOutcome = "succeeded"
+	ImprovementWorkspaceRunOutcomeCrashed   ImprovementWorkspaceRunOutcome = "crashed"
+	ImprovementWorkspaceRunOutcomeFailed    ImprovementWorkspaceRunOutcome = "failed"
 )
 
 type ImprovementWorkspaceActivePointerSnapshot struct {
@@ -128,7 +129,7 @@ func ValidateImprovementWorkspaceRunRecord(record ImprovementWorkspaceRunRecord)
 	if !isValidImprovementWorkspaceRunOutcome(record.Outcome) {
 		return fmt.Errorf("mission store improvement workspace run outcome %q is invalid", record.Outcome)
 	}
-	if record.FailureReason == "" {
+	if record.Outcome != ImprovementWorkspaceRunOutcomeSucceeded && record.FailureReason == "" {
 		return fmt.Errorf("mission store improvement workspace run failure_reason is required")
 	}
 	if record.StartedAt.IsZero() {
@@ -266,7 +267,7 @@ func validateImprovementWorkspaceRunLinkage(root string, record ImprovementWorks
 
 func isValidImprovementWorkspaceRunOutcome(outcome ImprovementWorkspaceRunOutcome) bool {
 	switch outcome {
-	case ImprovementWorkspaceRunOutcomeCrashed, ImprovementWorkspaceRunOutcomeFailed:
+	case ImprovementWorkspaceRunOutcomeSucceeded, ImprovementWorkspaceRunOutcomeCrashed, ImprovementWorkspaceRunOutcomeFailed:
 		return true
 	default:
 		return false
