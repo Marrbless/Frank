@@ -92,6 +92,45 @@ func TestStoreImprovementWorkspaceRunRecordRejectsActivePointerDrift(t *testing.
 	assertBytesEqual(t, "active runtime-pack pointer after drift rejection", mutatedBytes, mustReadFileBytes(t, StoreActiveRuntimePackPointerPath(root)))
 }
 
+func TestStoreImprovementWorkspaceRunRecordDivergentDuplicateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 26, 11, 30, 0, 0, time.UTC)
+	storeImprovementWorkspaceRunFixtures(t, root, now)
+	pointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		t.Fatalf("LoadActiveRuntimePackPointer() error = %v", err)
+	}
+	snapshot := ImprovementWorkspaceActivePointerSnapshotFromPointer(pointer)
+
+	record := validImprovementWorkspaceRunRecord(now.Add(7*time.Minute), func(record *ImprovementWorkspaceRunRecord) {
+		record.ActivePointerAtStart = snapshot
+		record.ActivePointerAtCompletion = snapshot
+	})
+	if _, _, err := StoreImprovementWorkspaceRunRecord(root, record); err != nil {
+		t.Fatalf("StoreImprovementWorkspaceRunRecord(first) error = %v", err)
+	}
+
+	divergent := record
+	divergent.FailureReason = "different failure detail"
+	_, _, err = StoreImprovementWorkspaceRunRecord(root, divergent)
+	if err == nil {
+		t.Fatal("StoreImprovementWorkspaceRunRecord(divergent) error = nil, want duplicate rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store improvement workspace run "workspace-run-1" already exists`) {
+		t.Fatalf("StoreImprovementWorkspaceRunRecord(divergent) error = %q, want duplicate context", err.Error())
+	}
+
+	stored, err := LoadImprovementWorkspaceRunRecord(root, "workspace-run-1")
+	if err != nil {
+		t.Fatalf("LoadImprovementWorkspaceRunRecord() error = %v", err)
+	}
+	if stored.FailureReason != "local deterministic workspace crash fixture" {
+		t.Fatalf("FailureReason = %q, want original failure reason", stored.FailureReason)
+	}
+}
+
 func TestStoreImprovementWorkspaceRunRecordValidationFailsClosed(t *testing.T) {
 	t.Parallel()
 
