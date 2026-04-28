@@ -1731,6 +1731,58 @@ func TestEnsureHotUpdateGateRecordFromCandidateRejectsExtensionPermissionWidenin
 	}
 }
 
+func TestStoreHotUpdateGateRecordRejectsPreviousActivePointerMismatch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-active"
+		record.ExtensionPackRef = "extension-active"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-fake-previous"
+		record.ExtensionPackRef = "extension-candidate"
+	}))
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now.Add(2*time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-active"
+		record.RollbackTargetPackID = "pack-active"
+		record.MutableSurfaces = []string{"extensions"}
+		record.ExtensionPackRef = "extension-candidate"
+	}))
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-active",
+		LastKnownGoodPackID: "pack-active",
+		UpdatedAt:           now.Add(3 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    1,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	err := StoreHotUpdateGateRecord(root, validHotUpdateGateRecord(now.Add(4*time.Minute), func(record *HotUpdateGateRecord) {
+		record.HotUpdateID = "hot-update-fake-previous"
+		record.CandidatePackID = "pack-candidate"
+		record.PreviousActivePackID = "pack-fake-previous"
+		record.RollbackTargetPackID = "pack-active"
+		record.TargetSurfaces = []string{"extensions"}
+		record.ReloadMode = HotUpdateReloadModeExtensionReload
+	}))
+	if err == nil {
+		t.Fatal("StoreHotUpdateGateRecord() error = nil, want active pointer mismatch rejection")
+	}
+	for _, want := range []string{"previous_active_pack_id", "pack-fake-previous", "active runtime pack pointer active_pack_id", "pack-active"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("StoreHotUpdateGateRecord() error = %q, want substring %q", err.Error(), want)
+		}
+	}
+	if _, err := LoadHotUpdateGateRecord(root, "hot-update-fake-previous"); !errors.Is(err, ErrHotUpdateGateRecordNotFound) {
+		t.Fatalf("LoadHotUpdateGateRecord() error = %v, want not found after rejected admission", err)
+	}
+}
+
 func TestAdvanceHotUpdateGatePhaseValidProgressionAndPreservesActiveRuntimePackPointer(t *testing.T) {
 	t.Parallel()
 

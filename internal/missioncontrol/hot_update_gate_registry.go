@@ -1203,6 +1203,9 @@ func validateHotUpdateGateDerivedLinkage(root string, record HotUpdateGateRecord
 }
 
 func requireHotUpdateGateExtensionPermissionAdmission(root string, record HotUpdateGateRecord) error {
+	if err := requireHotUpdateGateActivePointerBaseline(root, record); err != nil {
+		return err
+	}
 	previousPack, err := LoadRuntimePackRecord(root, record.PreviousActivePackID)
 	if err != nil {
 		return fmt.Errorf("mission store hot-update gate previous_active_pack_id %q extension assessment: %w", record.PreviousActivePackID, err)
@@ -1220,6 +1223,26 @@ func requireHotUpdateGateExtensionPermissionAdmission(root string, record HotUpd
 	}
 	if assessment.State != RuntimeExtensionPermissionAssessmentStateAllowed {
 		return fmt.Errorf("mission store hot-update gate %q extension permission assessment blocked: %s", record.HotUpdateID, hotUpdateGateExtensionBlockerSummary(assessment.Blockers))
+	}
+	return nil
+}
+
+func requireHotUpdateGateActivePointerBaseline(root string, record HotUpdateGateRecord) error {
+	if record.State != HotUpdateGateStatePrepared {
+		return nil
+	}
+	pointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		if errors.Is(err, ErrActiveRuntimePackPointerNotFound) {
+			return nil
+		}
+		return fmt.Errorf("mission store hot-update gate %q active runtime pack pointer extension assessment: %w", record.HotUpdateID, err)
+	}
+	if pointer.ActivePackID == record.CandidatePackID {
+		return nil
+	}
+	if pointer.ActivePackID != record.PreviousActivePackID {
+		return fmt.Errorf("mission store hot-update gate %q previous_active_pack_id %q does not match active runtime pack pointer active_pack_id %q", record.HotUpdateID, record.PreviousActivePackID, pointer.ActivePackID)
 	}
 	return nil
 }
