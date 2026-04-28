@@ -11,6 +11,14 @@ import (
 	"github.com/local/picobot/internal/missioncontrol"
 )
 
+const (
+	taskStateEvalRubricSHA256        = "1111111111111111111111111111111111111111111111111111111111111111"
+	taskStateEvalTrainCorpusSHA256   = "2222222222222222222222222222222222222222222222222222222222222222"
+	taskStateEvalHoldoutCorpusSHA256 = "3333333333333333333333333333333333333333333333333333333333333333"
+	taskStateEvalEvaluatorSHA256     = "4444444444444444444444444444444444444444444444444444444444444444"
+	taskStateEvalFrozenContentRef    = "freeze/eval-suite-1"
+)
+
 func writeDeferredSchedulerTriggerForTaskStateStatusTest(t *testing.T, root string, filename string, payload map[string]any) {
 	t.Helper()
 
@@ -507,19 +515,24 @@ func TestTaskStateOperatorStatusSurfacesImprovementRunIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric://default",
-		TrainCorpusRef:    "corpus://train",
-		HoldoutCorpusRef:  "corpus://holdout",
-		EvaluatorRef:      "evaluator://default",
-		NegativeCaseCount: 2,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(-time.Minute),
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		NegativeCaseCount:   2,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(-time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -666,19 +679,24 @@ func TestTaskStateOperatorStatusSurfacesEvalSuiteIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric://default",
-		TrainCorpusRef:    "corpus://train",
-		HoldoutCorpusRef:  "corpus://holdout",
-		EvaluatorRef:      "evaluator://default",
-		NegativeCaseCount: 2,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now,
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		NegativeCaseCount:   2,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now,
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -728,6 +746,21 @@ func TestTaskStateOperatorStatusSurfacesEvalSuiteIdentity(t *testing.T) {
 	}
 	if suite.EvaluatorRef != "evaluator://default" {
 		t.Fatalf("EvalSuiteIdentity.Suites[0].EvaluatorRef = %q, want evaluator://default", suite.EvaluatorRef)
+	}
+	if suite.RubricSHA256 != taskStateEvalRubricSHA256 {
+		t.Fatalf("EvalSuiteIdentity.Suites[0].RubricSHA256 = %q, want %q", suite.RubricSHA256, taskStateEvalRubricSHA256)
+	}
+	if suite.TrainCorpusSHA256 != taskStateEvalTrainCorpusSHA256 {
+		t.Fatalf("EvalSuiteIdentity.Suites[0].TrainCorpusSHA256 = %q, want %q", suite.TrainCorpusSHA256, taskStateEvalTrainCorpusSHA256)
+	}
+	if suite.HoldoutCorpusSHA256 != taskStateEvalHoldoutCorpusSHA256 {
+		t.Fatalf("EvalSuiteIdentity.Suites[0].HoldoutCorpusSHA256 = %q, want %q", suite.HoldoutCorpusSHA256, taskStateEvalHoldoutCorpusSHA256)
+	}
+	if suite.EvaluatorSHA256 != taskStateEvalEvaluatorSHA256 {
+		t.Fatalf("EvalSuiteIdentity.Suites[0].EvaluatorSHA256 = %q, want %q", suite.EvaluatorSHA256, taskStateEvalEvaluatorSHA256)
+	}
+	if suite.FrozenContentRef != taskStateEvalFrozenContentRef {
+		t.Fatalf("EvalSuiteIdentity.Suites[0].FrozenContentRef = %q, want %q", suite.FrozenContentRef, taskStateEvalFrozenContentRef)
 	}
 	if !suite.FrozenForRun {
 		t.Fatal("EvalSuiteIdentity.Suites[0].FrozenForRun = false, want true")
@@ -811,19 +844,24 @@ func TestTaskStateOperatorStatusSurfacesCandidateResultIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric://default",
-		TrainCorpusRef:    "corpus://train",
-		HoldoutCorpusRef:  "corpus://holdout",
-		EvaluatorRef:      "evaluator://default",
-		NegativeCaseCount: 2,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(-time.Minute),
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		NegativeCaseCount:   2,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(-time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -1054,20 +1092,25 @@ func writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t *testing.T, root s
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		RecordVersion:     missioncontrol.StoreRecordVersion,
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric://default",
-		TrainCorpusRef:    "corpus://train",
-		HoldoutCorpusRef:  "corpus://holdout",
-		EvaluatorRef:      "evaluator://default",
-		NegativeCaseCount: 2,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(-4 * time.Minute),
-		CreatedBy:         "operator",
+		RecordVersion:       missioncontrol.StoreRecordVersion,
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		NegativeCaseCount:   2,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(-4 * time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -1249,19 +1292,24 @@ func TestTaskStateOperatorStatusSurfacesHotUpdateOutcomeIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric://default",
-		TrainCorpusRef:    "corpus://train",
-		HoldoutCorpusRef:  "corpus://holdout",
-		EvaluatorRef:      "evaluator://default",
-		NegativeCaseCount: 2,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(-time.Minute),
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		NegativeCaseCount:   2,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(-time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -1452,17 +1500,22 @@ func TestTaskStateOperatorStatusSurfacesPromotionIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:      "eval-suite-1",
-		CandidateID:      "candidate-1",
-		BaselinePackID:   "pack-base",
-		CandidatePackID:  "pack-candidate",
-		RubricRef:        "rubric://default",
-		TrainCorpusRef:   "corpus://train",
-		HoldoutCorpusRef: "corpus://holdout",
-		EvaluatorRef:     "evaluator://default",
-		FrozenForRun:     true,
-		CreatedAt:        now.Add(-70 * time.Second),
-		CreatedBy:        "operator",
+		EvalSuiteID:         "eval-suite-1",
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		FrozenForRun:        true,
+		CreatedAt:           now.Add(-70 * time.Second),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -1681,17 +1734,22 @@ func TestTaskStateOperatorStatusSurfacesRollbackIdentity(t *testing.T) {
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:      "eval-suite-1",
-		CandidateID:      "candidate-1",
-		BaselinePackID:   "pack-base",
-		CandidatePackID:  "pack-candidate",
-		RubricRef:        "rubric://default",
-		TrainCorpusRef:   "corpus://train",
-		HoldoutCorpusRef: "corpus://holdout",
-		EvaluatorRef:     "evaluator://default",
-		FrozenForRun:     true,
-		CreatedAt:        now.Add(-130 * time.Second),
-		CreatedBy:        "operator",
+		EvalSuiteID:         "eval-suite-1",
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		RubricRef:           "rubric://default",
+		RubricSHA256:        taskStateEvalRubricSHA256,
+		TrainCorpusRef:      "corpus://train",
+		TrainCorpusSHA256:   taskStateEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "corpus://holdout",
+		HoldoutCorpusSHA256: taskStateEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator://default",
+		EvaluatorSHA256:     taskStateEvalEvaluatorSHA256,
+		FrozenContentRef:    taskStateEvalFrozenContentRef,
+		FrozenForRun:        true,
+		CreatedAt:           now.Add(-130 * time.Second),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}

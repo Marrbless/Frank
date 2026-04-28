@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,20 +18,25 @@ type EvalSuiteRef struct {
 }
 
 type EvalSuiteRecord struct {
-	RecordVersion     int       `json:"record_version"`
-	EvalSuiteID       string    `json:"eval_suite_id"`
-	RubricRef         string    `json:"rubric_ref"`
-	TrainCorpusRef    string    `json:"train_corpus_ref"`
-	HoldoutCorpusRef  string    `json:"holdout_corpus_ref"`
-	EvaluatorRef      string    `json:"evaluator_ref"`
-	NegativeCaseCount int       `json:"negative_case_count"`
-	BoundaryCaseCount int       `json:"boundary_case_count"`
-	FrozenForRun      bool      `json:"frozen_for_run"`
-	CandidateID       string    `json:"candidate_id,omitempty"`
-	BaselinePackID    string    `json:"baseline_pack_id,omitempty"`
-	CandidatePackID   string    `json:"candidate_pack_id,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	CreatedBy         string    `json:"created_by"`
+	RecordVersion       int       `json:"record_version"`
+	EvalSuiteID         string    `json:"eval_suite_id"`
+	RubricRef           string    `json:"rubric_ref"`
+	RubricSHA256        string    `json:"rubric_sha256"`
+	TrainCorpusRef      string    `json:"train_corpus_ref"`
+	TrainCorpusSHA256   string    `json:"train_corpus_sha256"`
+	HoldoutCorpusRef    string    `json:"holdout_corpus_ref"`
+	HoldoutCorpusSHA256 string    `json:"holdout_corpus_sha256"`
+	EvaluatorRef        string    `json:"evaluator_ref"`
+	EvaluatorSHA256     string    `json:"evaluator_sha256"`
+	FrozenContentRef    string    `json:"frozen_content_ref"`
+	NegativeCaseCount   int       `json:"negative_case_count"`
+	BoundaryCaseCount   int       `json:"boundary_case_count"`
+	FrozenForRun        bool      `json:"frozen_for_run"`
+	CandidateID         string    `json:"candidate_id,omitempty"`
+	BaselinePackID      string    `json:"baseline_pack_id,omitempty"`
+	CandidatePackID     string    `json:"candidate_pack_id,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	CreatedBy           string    `json:"created_by"`
 }
 
 var ErrEvalSuiteRecordNotFound = errors.New("mission store eval-suite record not found")
@@ -51,9 +57,14 @@ func NormalizeEvalSuiteRef(ref EvalSuiteRef) EvalSuiteRef {
 func NormalizeEvalSuiteRecord(record EvalSuiteRecord) EvalSuiteRecord {
 	record.EvalSuiteID = strings.TrimSpace(record.EvalSuiteID)
 	record.RubricRef = strings.TrimSpace(record.RubricRef)
+	record.RubricSHA256 = strings.ToLower(strings.TrimSpace(record.RubricSHA256))
 	record.TrainCorpusRef = strings.TrimSpace(record.TrainCorpusRef)
+	record.TrainCorpusSHA256 = strings.ToLower(strings.TrimSpace(record.TrainCorpusSHA256))
 	record.HoldoutCorpusRef = strings.TrimSpace(record.HoldoutCorpusRef)
+	record.HoldoutCorpusSHA256 = strings.ToLower(strings.TrimSpace(record.HoldoutCorpusSHA256))
 	record.EvaluatorRef = strings.TrimSpace(record.EvaluatorRef)
+	record.EvaluatorSHA256 = strings.ToLower(strings.TrimSpace(record.EvaluatorSHA256))
+	record.FrozenContentRef = strings.TrimSpace(record.FrozenContentRef)
 	record.CandidateID = strings.TrimSpace(record.CandidateID)
 	record.BaselinePackID = strings.TrimSpace(record.BaselinePackID)
 	record.CandidatePackID = strings.TrimSpace(record.CandidatePackID)
@@ -100,17 +111,35 @@ func ValidateEvalSuiteRecord(record EvalSuiteRecord) error {
 	if record.RubricRef == "" {
 		return fmt.Errorf("mission store eval-suite rubric_ref is required")
 	}
+	if err := validateEvalSuiteSHA256("rubric_sha256", record.RubricSHA256); err != nil {
+		return err
+	}
 	if record.TrainCorpusRef == "" {
 		return fmt.Errorf("mission store eval-suite train_corpus_ref is required")
+	}
+	if err := validateEvalSuiteSHA256("train_corpus_sha256", record.TrainCorpusSHA256); err != nil {
+		return err
 	}
 	if record.HoldoutCorpusRef == "" {
 		return fmt.Errorf("mission store eval-suite holdout_corpus_ref is required")
 	}
+	if err := validateEvalSuiteSHA256("holdout_corpus_sha256", record.HoldoutCorpusSHA256); err != nil {
+		return err
+	}
 	if record.TrainCorpusRef == record.HoldoutCorpusRef {
 		return fmt.Errorf("mission store eval-suite train_corpus_ref and holdout_corpus_ref must be distinct")
 	}
+	if record.TrainCorpusSHA256 == record.HoldoutCorpusSHA256 {
+		return fmt.Errorf("mission store eval-suite train_corpus_sha256 and holdout_corpus_sha256 must be distinct")
+	}
 	if record.EvaluatorRef == "" {
 		return fmt.Errorf("mission store eval-suite evaluator_ref is required")
+	}
+	if err := validateEvalSuiteSHA256("evaluator_sha256", record.EvaluatorSHA256); err != nil {
+		return err
+	}
+	if record.FrozenContentRef == "" {
+		return fmt.Errorf("mission store eval-suite frozen_content_ref is required")
 	}
 	if record.NegativeCaseCount < 0 {
 		return fmt.Errorf("mission store eval-suite negative_case_count must be non-negative")
@@ -288,6 +317,19 @@ func validateEvalSuiteIdentifierField(surface, fieldName, value string) error {
 		default:
 			return fmt.Errorf("%s %s %q is invalid", surface, fieldName, normalized)
 		}
+	}
+	return nil
+}
+
+func validateEvalSuiteSHA256(fieldName, value string) error {
+	if value == "" {
+		return fmt.Errorf("mission store eval-suite %s is required", fieldName)
+	}
+	if len(value) != 64 {
+		return fmt.Errorf("mission store eval-suite %s %q is invalid", fieldName, value)
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("mission store eval-suite %s %q is invalid", fieldName, value)
 	}
 	return nil
 }

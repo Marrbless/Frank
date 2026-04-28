@@ -163,19 +163,24 @@ type OperatorPromotionPolicyStatus struct {
 }
 
 type OperatorEvalSuiteStatus struct {
-	State            string  `json:"state"`
-	EvalSuiteID      string  `json:"eval_suite_id,omitempty"`
-	CandidateID      string  `json:"candidate_id,omitempty"`
-	BaselinePackID   string  `json:"baseline_pack_id,omitempty"`
-	CandidatePackID  string  `json:"candidate_pack_id,omitempty"`
-	RubricRef        string  `json:"rubric_ref,omitempty"`
-	TrainCorpusRef   string  `json:"train_corpus_ref,omitempty"`
-	HoldoutCorpusRef string  `json:"holdout_corpus_ref,omitempty"`
-	EvaluatorRef     string  `json:"evaluator_ref,omitempty"`
-	FrozenForRun     bool    `json:"frozen_for_run,omitempty"`
-	CreatedAt        *string `json:"created_at,omitempty"`
-	CreatedBy        string  `json:"created_by,omitempty"`
-	Error            string  `json:"error,omitempty"`
+	State               string  `json:"state"`
+	EvalSuiteID         string  `json:"eval_suite_id,omitempty"`
+	CandidateID         string  `json:"candidate_id,omitempty"`
+	BaselinePackID      string  `json:"baseline_pack_id,omitempty"`
+	CandidatePackID     string  `json:"candidate_pack_id,omitempty"`
+	RubricRef           string  `json:"rubric_ref,omitempty"`
+	RubricSHA256        string  `json:"rubric_sha256,omitempty"`
+	TrainCorpusRef      string  `json:"train_corpus_ref,omitempty"`
+	TrainCorpusSHA256   string  `json:"train_corpus_sha256,omitempty"`
+	HoldoutCorpusRef    string  `json:"holdout_corpus_ref,omitempty"`
+	HoldoutCorpusSHA256 string  `json:"holdout_corpus_sha256,omitempty"`
+	EvaluatorRef        string  `json:"evaluator_ref,omitempty"`
+	EvaluatorSHA256     string  `json:"evaluator_sha256,omitempty"`
+	FrozenContentRef    string  `json:"frozen_content_ref,omitempty"`
+	FrozenForRun        bool    `json:"frozen_for_run,omitempty"`
+	CreatedAt           *string `json:"created_at,omitempty"`
+	CreatedBy           string  `json:"created_by,omitempty"`
+	Error               string  `json:"error,omitempty"`
 }
 
 type OperatorImprovementRunIdentityStatus struct {
@@ -1959,17 +1964,22 @@ func loadOperatorEvalSuiteStatus(root, path string) OperatorEvalSuiteStatus {
 
 func operatorEvalSuiteStatusFromRecord(record EvalSuiteRecord) OperatorEvalSuiteStatus {
 	return OperatorEvalSuiteStatus{
-		EvalSuiteID:      record.EvalSuiteID,
-		CandidateID:      record.CandidateID,
-		BaselinePackID:   record.BaselinePackID,
-		CandidatePackID:  record.CandidatePackID,
-		RubricRef:        record.RubricRef,
-		TrainCorpusRef:   record.TrainCorpusRef,
-		HoldoutCorpusRef: record.HoldoutCorpusRef,
-		EvaluatorRef:     record.EvaluatorRef,
-		FrozenForRun:     record.FrozenForRun,
-		CreatedAt:        formatOperatorStatusTime(record.CreatedAt),
-		CreatedBy:        record.CreatedBy,
+		EvalSuiteID:         record.EvalSuiteID,
+		CandidateID:         record.CandidateID,
+		BaselinePackID:      record.BaselinePackID,
+		CandidatePackID:     record.CandidatePackID,
+		RubricRef:           record.RubricRef,
+		RubricSHA256:        record.RubricSHA256,
+		TrainCorpusRef:      record.TrainCorpusRef,
+		TrainCorpusSHA256:   record.TrainCorpusSHA256,
+		HoldoutCorpusRef:    record.HoldoutCorpusRef,
+		HoldoutCorpusSHA256: record.HoldoutCorpusSHA256,
+		EvaluatorRef:        record.EvaluatorRef,
+		EvaluatorSHA256:     record.EvaluatorSHA256,
+		FrozenContentRef:    record.FrozenContentRef,
+		FrozenForRun:        record.FrozenForRun,
+		CreatedAt:           formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:           record.CreatedBy,
 	}
 }
 

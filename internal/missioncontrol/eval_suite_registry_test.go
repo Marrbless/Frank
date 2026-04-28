@@ -41,6 +41,7 @@ func TestEvalSuiteRecordRoundTripAndList(t *testing.T) {
 		record.TrainCorpusRef = "corpus/train-b"
 		record.HoldoutCorpusRef = "corpus/holdout-b"
 		record.EvaluatorRef = "evaluator/b"
+		record.FrozenContentRef = "freeze/eval-suite-b"
 		record.NegativeCaseCount = 2
 		record.BoundaryCaseCount = 1
 		record.CandidateID = ""
@@ -58,6 +59,11 @@ func TestEvalSuiteRecordRoundTripAndList(t *testing.T) {
 		record.TrainCorpusRef = " corpus/train-a "
 		record.HoldoutCorpusRef = " corpus/holdout-a "
 		record.EvaluatorRef = " evaluator/a "
+		record.RubricSHA256 = strings.ToUpper(record.RubricSHA256)
+		record.TrainCorpusSHA256 = strings.ToUpper(record.TrainCorpusSHA256)
+		record.HoldoutCorpusSHA256 = strings.ToUpper(record.HoldoutCorpusSHA256)
+		record.EvaluatorSHA256 = strings.ToUpper(record.EvaluatorSHA256)
+		record.FrozenContentRef = " freeze/eval-suite-a "
 		record.NegativeCaseCount = 5
 		record.BoundaryCaseCount = 3
 		record.CandidateID = " candidate-1 "
@@ -80,6 +86,11 @@ func TestEvalSuiteRecordRoundTripAndList(t *testing.T) {
 	want.TrainCorpusRef = "corpus/train-a"
 	want.HoldoutCorpusRef = "corpus/holdout-a"
 	want.EvaluatorRef = "evaluator/a"
+	want.RubricSHA256 = strings.ToLower(want.RubricSHA256)
+	want.TrainCorpusSHA256 = strings.ToLower(want.TrainCorpusSHA256)
+	want.HoldoutCorpusSHA256 = strings.ToLower(want.HoldoutCorpusSHA256)
+	want.EvaluatorSHA256 = strings.ToLower(want.EvaluatorSHA256)
+	want.FrozenContentRef = "freeze/eval-suite-a"
 	want.CandidateID = "candidate-1"
 	want.BaselinePackID = "pack-base"
 	want.CandidatePackID = "pack-candidate"
@@ -153,6 +164,7 @@ func TestEvalSuiteDivergentDuplicateFailsClosed(t *testing.T) {
 	err := StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
 		record.EvalSuiteID = "eval-suite-immutable"
 		record.HoldoutCorpusRef = "corpus/holdout-mutated"
+		record.HoldoutCorpusSHA256 = "5555555555555555555555555555555555555555555555555555555555555555"
 		record.CandidateID = ""
 		record.BaselinePackID = ""
 		record.CandidatePackID = ""
@@ -203,6 +215,24 @@ func TestEvalSuiteValidationFailsClosed(t *testing.T) {
 			want: "mission store eval-suite rubric_ref is required",
 		},
 		{
+			name: "missing rubric sha",
+			run: func() error {
+				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+					record.RubricSHA256 = " "
+				}))
+			},
+			want: "mission store eval-suite rubric_sha256 is required",
+		},
+		{
+			name: "invalid evaluator sha",
+			run: func() error {
+				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+					record.EvaluatorSHA256 = "not-a-sha"
+				}))
+			},
+			want: `mission store eval-suite evaluator_sha256 "not-a-sha" is invalid`,
+		},
+		{
 			name: "negative case count",
 			run: func() error {
 				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
@@ -228,6 +258,24 @@ func TestEvalSuiteValidationFailsClosed(t *testing.T) {
 				}))
 			},
 			want: "mission store eval-suite train_corpus_ref and holdout_corpus_ref must be distinct",
+		},
+		{
+			name: "train holdout sha same",
+			run: func() error {
+				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+					record.HoldoutCorpusSHA256 = record.TrainCorpusSHA256
+				}))
+			},
+			want: "mission store eval-suite train_corpus_sha256 and holdout_corpus_sha256 must be distinct",
+		},
+		{
+			name: "missing frozen content ref",
+			run: func() error {
+				return StoreEvalSuiteRecord(root, validEvalSuiteRecord(now, func(record *EvalSuiteRecord) {
+					record.FrozenContentRef = " "
+				}))
+			},
+			want: "mission store eval-suite frozen_content_ref is required",
 		},
 	}
 
@@ -340,19 +388,24 @@ func TestLoadEvalSuiteRecordNotFound(t *testing.T) {
 
 func validEvalSuiteRecord(now time.Time, mutate func(*EvalSuiteRecord)) EvalSuiteRecord {
 	record := EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-root",
-		RubricRef:         "rubric/root",
-		TrainCorpusRef:    "corpus/train-root",
-		HoldoutCorpusRef:  "corpus/holdout-root",
-		EvaluatorRef:      "evaluator/root",
-		NegativeCaseCount: 1,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "",
-		BaselinePackID:    "",
-		CandidatePackID:   "",
-		CreatedAt:         now,
-		CreatedBy:         "system",
+		EvalSuiteID:         "eval-suite-root",
+		RubricRef:           "rubric/root",
+		RubricSHA256:        "1111111111111111111111111111111111111111111111111111111111111111",
+		TrainCorpusRef:      "corpus/train-root",
+		TrainCorpusSHA256:   "2222222222222222222222222222222222222222222222222222222222222222",
+		HoldoutCorpusRef:    "corpus/holdout-root",
+		HoldoutCorpusSHA256: "3333333333333333333333333333333333333333333333333333333333333333",
+		EvaluatorRef:        "evaluator/root",
+		EvaluatorSHA256:     "4444444444444444444444444444444444444444444444444444444444444444",
+		FrozenContentRef:    "freeze/eval-suite-root",
+		NegativeCaseCount:   1,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "",
+		BaselinePackID:      "",
+		CandidatePackID:     "",
+		CreatedAt:           now,
+		CreatedBy:           "system",
 	}
 	if mutate != nil {
 		mutate(&record)

@@ -16,6 +16,14 @@ import (
 	"github.com/local/picobot/internal/providers"
 )
 
+const (
+	loopEvalRubricSHA256        = "1111111111111111111111111111111111111111111111111111111111111111"
+	loopEvalTrainCorpusSHA256   = "2222222222222222222222222222222222222222222222222222222222222222"
+	loopEvalHoldoutCorpusSHA256 = "3333333333333333333333333333333333333333333333333333333333333333"
+	loopEvalEvaluatorSHA256     = "4444444444444444444444444444444444444444444444444444444444444444"
+	loopEvalFrozenContentRef    = "freeze/eval-suite-1"
+)
+
 // provider that issues a write_memory tool call on first Chat, and returns a final reply on second
 type writeMemoryCallingProvider struct {
 	calls int
@@ -9025,19 +9033,24 @@ func writeLoopHotUpdateCanaryRequirementFixtures(t *testing.T, policyEdit func(*
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric-v1",
-		TrainCorpusRef:    "train-corpus-v1",
-		HoldoutCorpusRef:  "holdout-corpus-v1",
-		EvaluatorRef:      "evaluator-v1",
-		NegativeCaseCount: 1,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(2 * time.Minute),
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric-v1",
+		RubricSHA256:        loopEvalRubricSHA256,
+		TrainCorpusRef:      "train-corpus-v1",
+		TrainCorpusSHA256:   loopEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "holdout-corpus-v1",
+		HoldoutCorpusSHA256: loopEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator-v1",
+		EvaluatorSHA256:     loopEvalEvaluatorSHA256,
+		FrozenContentRef:    loopEvalFrozenContentRef,
+		NegativeCaseCount:   1,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(2 * time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}
@@ -9794,19 +9807,24 @@ func writeLoopCandidatePromotionDecisionGateFixtures(t *testing.T, withLastKnown
 		t.Fatalf("StoreImprovementCandidateRecord() error = %v", err)
 	}
 	if err := missioncontrol.StoreEvalSuiteRecord(root, missioncontrol.EvalSuiteRecord{
-		EvalSuiteID:       "eval-suite-1",
-		RubricRef:         "rubric-v1",
-		TrainCorpusRef:    "train-corpus-v1",
-		HoldoutCorpusRef:  "holdout-corpus-v1",
-		EvaluatorRef:      "evaluator-v1",
-		NegativeCaseCount: 1,
-		BoundaryCaseCount: 1,
-		FrozenForRun:      true,
-		CandidateID:       "candidate-1",
-		BaselinePackID:    "pack-base",
-		CandidatePackID:   "pack-candidate",
-		CreatedAt:         now.Add(2 * time.Minute),
-		CreatedBy:         "operator",
+		EvalSuiteID:         "eval-suite-1",
+		RubricRef:           "rubric-v1",
+		RubricSHA256:        loopEvalRubricSHA256,
+		TrainCorpusRef:      "train-corpus-v1",
+		TrainCorpusSHA256:   loopEvalTrainCorpusSHA256,
+		HoldoutCorpusRef:    "holdout-corpus-v1",
+		HoldoutCorpusSHA256: loopEvalHoldoutCorpusSHA256,
+		EvaluatorRef:        "evaluator-v1",
+		EvaluatorSHA256:     loopEvalEvaluatorSHA256,
+		FrozenContentRef:    loopEvalFrozenContentRef,
+		NegativeCaseCount:   1,
+		BoundaryCaseCount:   1,
+		FrozenForRun:        true,
+		CandidateID:         "candidate-1",
+		BaselinePackID:      "pack-base",
+		CandidatePackID:     "pack-candidate",
+		CreatedAt:           now.Add(2 * time.Minute),
+		CreatedBy:           "operator",
 	}); err != nil {
 		t.Fatalf("StoreEvalSuiteRecord() error = %v", err)
 	}

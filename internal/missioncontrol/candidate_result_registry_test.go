@@ -398,6 +398,44 @@ func TestCandidateResultStoreDoesNotMutateLinkedRecordsOrRuntimePointers(t *test
 	}
 }
 
+func TestCandidateResultRejectsMutatedEvalSuiteContentIdentity(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 24, 13, 50, 0, 0, time.UTC)
+	storeImprovementRunFixtures(t, root, now)
+	if err := StoreImprovementRunRecord(root, validImprovementRunRecord(now.Add(5*time.Minute), func(record *ImprovementRunRecord) {
+		record.RunID = "run-result"
+	})); err != nil {
+		t.Fatalf("StoreImprovementRunRecord() error = %v", err)
+	}
+	if err := StorePromotionPolicyRecord(root, validPromotionPolicyRecord(now.Add(6*time.Minute), func(record *PromotionPolicyRecord) {
+		record.PromotionPolicyID = "promotion-policy-result"
+	})); err != nil {
+		t.Fatalf("StorePromotionPolicyRecord() error = %v", err)
+	}
+	suite, err := LoadEvalSuiteRecord(root, "eval-suite-1")
+	if err != nil {
+		t.Fatalf("LoadEvalSuiteRecord() error = %v", err)
+	}
+	suite.EvaluatorSHA256 = "not-a-sha"
+	if err := WriteStoreJSONAtomic(StoreEvalSuitePath(root, suite.EvalSuiteID), suite); err != nil {
+		t.Fatalf("WriteStoreJSONAtomic(mutated eval suite) error = %v", err)
+	}
+
+	err = StoreCandidateResultRecord(root, validCandidateResultRecord(now.Add(7*time.Minute), func(record *CandidateResultRecord) {
+		record.ResultID = "result-mutated-eval"
+		record.RunID = "run-result"
+		record.PromotionPolicyID = "promotion-policy-result"
+	}))
+	if err == nil {
+		t.Fatal("StoreCandidateResultRecord() error = nil, want eval-suite content identity rejection")
+	}
+	if !strings.Contains(err.Error(), `mission store eval-suite evaluator_sha256 "not-a-sha" is invalid`) {
+		t.Fatalf("StoreCandidateResultRecord() error = %q, want eval-suite content identity rejection", err.Error())
+	}
+}
+
 func TestEvaluateCandidateResultPromotionEligibilityFailClosed(t *testing.T) {
 	t.Parallel()
 

@@ -15,9 +15,14 @@ func TestLoadOperatorEvalSuiteIdentityStatusConfigured(t *testing.T) {
 	if err := StoreEvalSuiteRecord(root, validEvalSuiteRecord(now.Add(5*time.Minute), func(record *EvalSuiteRecord) {
 		record.EvalSuiteID = "eval-suite-2"
 		record.RubricRef = "rubric://holdout-v2"
+		record.RubricSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		record.TrainCorpusRef = "corpus://train-v2"
+		record.TrainCorpusSHA256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		record.HoldoutCorpusRef = "corpus://holdout-v2"
+		record.HoldoutCorpusSHA256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 		record.EvaluatorRef = "evaluator://frozen-v2"
+		record.EvaluatorSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		record.FrozenContentRef = "freeze/eval-suite-v2"
 		record.NegativeCaseCount = 4
 		record.BoundaryCaseCount = 2
 		record.FrozenForRun = true
@@ -63,6 +68,21 @@ func TestLoadOperatorEvalSuiteIdentityStatusConfigured(t *testing.T) {
 	}
 	if suite.EvaluatorRef != "evaluator://frozen-v2" {
 		t.Fatalf("Suites[1].EvaluatorRef = %q, want evaluator://frozen-v2", suite.EvaluatorRef)
+	}
+	if suite.RubricSHA256 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("Suites[1].RubricSHA256 = %q, want rubric content identity", suite.RubricSHA256)
+	}
+	if suite.TrainCorpusSHA256 != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("Suites[1].TrainCorpusSHA256 = %q, want train corpus content identity", suite.TrainCorpusSHA256)
+	}
+	if suite.HoldoutCorpusSHA256 != "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
+		t.Fatalf("Suites[1].HoldoutCorpusSHA256 = %q, want holdout corpus content identity", suite.HoldoutCorpusSHA256)
+	}
+	if suite.EvaluatorSHA256 != "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" {
+		t.Fatalf("Suites[1].EvaluatorSHA256 = %q, want evaluator content identity", suite.EvaluatorSHA256)
+	}
+	if suite.FrozenContentRef != "freeze/eval-suite-v2" {
+		t.Fatalf("Suites[1].FrozenContentRef = %q, want freeze/eval-suite-v2", suite.FrozenContentRef)
 	}
 	if !suite.FrozenForRun {
 		t.Fatal("Suites[1].FrozenForRun = false, want true")
