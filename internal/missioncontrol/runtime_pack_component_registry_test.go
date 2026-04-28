@@ -253,10 +253,10 @@ func TestResolveActiveRuntimePackComponentsUsesCommittedActivePointerOnly(t *tes
 	})
 	mustStoreRuntimePack(t, root, active)
 	mustStoreRuntimePack(t, root, candidate)
-	storeRuntimePackComponentFixture(t, root, now, RuntimePackComponentKindPromptPack, "prompt-pack-active")
-	storeRuntimePackComponentFixture(t, root, now, RuntimePackComponentKindSkillPack, "skill-pack-active")
-	storeRuntimePackComponentFixture(t, root, now, RuntimePackComponentKindManifestPack, "manifest-pack-active")
-	storeRuntimePackComponentFixture(t, root, now, RuntimePackComponentKindExtensionPack, "extension-pack-active")
+	mustStoreRuntimePackComponentFixtureAllowReplay(t, root, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), RuntimePackComponentKindPromptPack, "prompt-pack-active")
+	mustStoreRuntimePackComponentFixtureAllowReplay(t, root, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), RuntimePackComponentKindSkillPack, "skill-pack-active")
+	mustStoreRuntimePackComponentFixtureAllowReplay(t, root, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), RuntimePackComponentKindManifestPack, "manifest-pack-active")
+	mustStoreRuntimePackComponentFixtureAllowReplay(t, root, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), RuntimePackComponentKindExtensionPack, "extension-pack-active")
 	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
 		ActivePackID:         "pack-active",
 		PreviousActivePackID: "pack-candidate",
@@ -306,6 +306,25 @@ func storeRuntimePackComponentFixture(t *testing.T, root string, now time.Time, 
 	}
 	if !changed {
 		t.Fatalf("StoreRuntimePackComponentRecord(%s/%s) changed = false, want true", kind, componentID)
+	}
+	return record
+}
+
+func mustStoreRuntimePackComponentRefs(t *testing.T, root string, record RuntimePackRecord) {
+	t.Helper()
+
+	componentCreatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, ref := range RuntimePackComponentRefs(record) {
+		mustStoreRuntimePackComponentFixtureAllowReplay(t, root, componentCreatedAt, ref.Kind, ref.ComponentID)
+	}
+}
+
+func mustStoreRuntimePackComponentFixtureAllowReplay(t *testing.T, root string, now time.Time, kind RuntimePackComponentKind, componentID string) RuntimePackComponentRecord {
+	t.Helper()
+
+	record, _, err := StoreRuntimePackComponentRecord(root, validRuntimePackComponentRecord(now, kind, componentID, nil))
+	if err != nil {
+		t.Fatalf("StoreRuntimePackComponentRecord(%s/%s) error = %v", kind, componentID, err)
 	}
 	return record
 }

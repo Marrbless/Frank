@@ -1834,9 +1834,10 @@ func validateCandidatePromotionDecisionEvalSuiteAuthority(decision CandidateProm
 	return nil
 }
 
-// hotUpdateGateRestartStyleConvergence models the smallest bounded reload/apply
+// hotUpdateGateRestartStyleConvergence models the bounded local reload/apply
 // convergence step available today: re-resolve the already-switched active
-// runtime-pack pointer and verify that the candidate pack is still active.
+// runtime-pack pointer, verify that the candidate pack is still active, and
+// load the active pack's local component metadata.
 func hotUpdateGateRestartStyleConvergence(root string, record HotUpdateGateRecord) error {
 	activePointer, err := LoadActiveRuntimePackPointer(root)
 	if err != nil {
@@ -1858,7 +1859,7 @@ func hotUpdateGateRestartStyleConvergence(root string, record HotUpdateGateRecor
 			activePointer.UpdateRecordRef,
 		)
 	}
-	resolved, err := ResolveActiveRuntimePackRecord(root)
+	resolved, _, err := ResolveActiveRuntimePackComponents(root)
 	if err != nil {
 		return err
 	}

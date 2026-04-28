@@ -668,6 +668,7 @@ func mustStoreRuntimePack(t *testing.T, root string, record RuntimePackRecord) {
 	if err := StoreRuntimePackRecord(root, record); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", record.PackID, err)
 	}
+	mustStoreRuntimePackComponentRefs(t, root, record)
 }
 
 func storeHotUpdatePromotionForLastKnownGoodRecertFixture(t *testing.T, root string, now time.Time) (PromotionRecord, HotUpdateOutcomeRecord, HotUpdateGateRecord) {

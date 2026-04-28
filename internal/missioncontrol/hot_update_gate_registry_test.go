@@ -2229,6 +2229,107 @@ func TestExecuteHotUpdateGateReloadApplyHappyPathPreservesPointerAndLastKnownGoo
 	}
 }
 
+func TestExecuteHotUpdateGateReloadApplyRequiresRuntimePackComponents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	mustStoreRuntimePack(t, root, validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-base"
+	}))
+	candidate := validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.ParentPackID = "pack-base"
+		record.RollbackTargetPackID = "pack-base"
+		record.PromptPackRef = "prompt-pack-missing"
+		record.SkillPackRef = "skill-pack-missing"
+		record.ManifestRef = "manifest-pack-missing"
+		record.ExtensionPackRef = "extension-pack-missing"
+	})
+	if err := StoreRuntimePackRecord(root, candidate); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(candidate) error = %v", err)
+	}
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-base",
+		LastKnownGoodPackID: "pack-base",
+		UpdatedAt:           now.Add(2 * time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "bootstrap",
+		ReloadGeneration:    2,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(2 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "bootstrap",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+
+	if _, _, err := EnsureHotUpdateGateRecordFromCandidate(root, "hot-update-reload-missing-components", "pack-candidate", "operator", now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("EnsureHotUpdateGateRecordFromCandidate() error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-missing-components", HotUpdateGateStateValidated, "operator", now.Add(4*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceHotUpdateGatePhase(root, "hot-update-reload-missing-components", HotUpdateGateStateStaged, "operator", now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("AdvanceHotUpdateGatePhase(staged) error = %v", err)
+	}
+	if _, _, err := ExecuteHotUpdateGatePointerSwitch(root, "hot-update-reload-missing-components", "operator", now.Add(6*time.Minute)); err != nil {
+		t.Fatalf("ExecuteHotUpdateGatePointerSwitch() error = %v", err)
+	}
+	if _, _, err := CreateHotUpdateSmokeCheckFromGate(root, "hot-update-reload-missing-components", HotUpdateSmokeCheckStatePassed, now.Add(6*time.Minute+30*time.Second), "operator", now.Add(6*time.Minute+45*time.Second), "reload smoke passed"); err != nil {
+		t.Fatalf("CreateHotUpdateSmokeCheckFromGate() error = %v", err)
+	}
+
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+	beforeLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good before) error = %v", err)
+	}
+
+	record, changed, err := ExecuteHotUpdateGateReloadApply(root, "hot-update-reload-missing-components", "operator", now.Add(7*time.Minute))
+	if err == nil {
+		t.Fatal("ExecuteHotUpdateGateReloadApply() error = nil, want missing component failure")
+	}
+	if !changed {
+		t.Fatal("ExecuteHotUpdateGateReloadApply() changed = false, want failed phase record")
+	}
+	if !errors.Is(err, ErrRuntimePackComponentRecordNotFound) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply() error = %v, want %v", err, ErrRuntimePackComponentRecordNotFound)
+	}
+	if !strings.Contains(err.Error(), `mission store runtime pack prompt_pack_ref "prompt-pack-missing"`) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply() error = %q, want missing prompt component context", err.Error())
+	}
+	if record.State != HotUpdateGateStateReloadApplyFailed {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().State = %q, want reload_apply_failed", record.State)
+	}
+	if !strings.Contains(record.FailureReason, `prompt_pack_ref "prompt-pack-missing"`) {
+		t.Fatalf("ExecuteHotUpdateGateReloadApply().FailureReason = %q, want prompt component context", record.FailureReason)
+	}
+
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer file changed during failed reload/apply\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+	afterLKGBytes, err := os.ReadFile(StoreLastKnownGoodRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(last-known-good after) error = %v", err)
+	}
+	if string(beforeLKGBytes) != string(afterLKGBytes) {
+		t.Fatalf("last-known-good pointer file changed during failed reload/apply\nbefore:\n%s\nafter:\n%s", string(beforeLKGBytes), string(afterLKGBytes))
+	}
+}
+
 func TestExecuteHotUpdateGateReloadApplyRecordsFailureWithoutMutatingPointer(t *testing.T) {
 	t.Parallel()
 

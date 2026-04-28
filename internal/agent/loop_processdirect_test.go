@@ -8854,7 +8854,7 @@ func writeLoopRollbackPromotionFixtures(t *testing.T) (string, missioncontrol.Ac
 	root := t.TempDir()
 	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
 
-	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+	mustStoreLoopRuntimePackRecord(t, root, missioncontrol.RuntimePackRecord{
 		PackID:                   "pack-base",
 		CreatedAt:                now.Add(-4 * time.Minute),
 		Channel:                  "phone",
@@ -8868,10 +8868,8 @@ func writeLoopRollbackPromotionFixtures(t *testing.T) (string, missioncontrol.Ac
 		ImmutableSurfaces:        []string{"policy", "authority"},
 		SurfaceClasses:           []string{"class_1"},
 		CompatibilityContractRef: "compat-v1",
-	}); err != nil {
-		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
-	}
-	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+	})
+	mustStoreLoopRuntimePackRecord(t, root, missioncontrol.RuntimePackRecord{
 		PackID:                   "pack-candidate",
 		ParentPackID:             "pack-base",
 		RollbackTargetPackID:     "pack-base",
@@ -8887,9 +8885,7 @@ func writeLoopRollbackPromotionFixtures(t *testing.T) (string, missioncontrol.Ac
 		ImmutableSurfaces:        []string{"policy", "authority"},
 		SurfaceClasses:           []string{"class_1"},
 		CompatibilityContractRef: "compat-v1",
-	}); err != nil {
-		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
-	}
+	})
 
 	wantPointer := missioncontrol.ActiveRuntimePackPointer{
 		ActivePackID:         "pack-candidate",
@@ -8960,7 +8956,7 @@ func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol
 	root := t.TempDir()
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 
-	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+	mustStoreLoopRuntimePackRecord(t, root, missioncontrol.RuntimePackRecord{
 		PackID:                   "pack-base",
 		CreatedAt:                now.Add(-4 * time.Minute),
 		Channel:                  "phone",
@@ -8974,10 +8970,8 @@ func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol
 		ImmutableSurfaces:        []string{"policy", "authority"},
 		SurfaceClasses:           []string{"class_1"},
 		CompatibilityContractRef: "compat-v1",
-	}); err != nil {
-		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
-	}
-	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+	})
+	mustStoreLoopRuntimePackRecord(t, root, missioncontrol.RuntimePackRecord{
 		PackID:                   "pack-candidate",
 		ParentPackID:             "pack-base",
 		RollbackTargetPackID:     "pack-base",
@@ -8993,9 +8987,7 @@ func writeLoopHotUpdateGateControlFixtures(t *testing.T) (string, missioncontrol
 		ImmutableSurfaces:        []string{"policy", "authority"},
 		SurfaceClasses:           []string{"class_1"},
 		CompatibilityContractRef: "compat-v1",
-	}); err != nil {
-		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
-	}
+	})
 
 	wantPointer := missioncontrol.ActiveRuntimePackPointer{
 		ActivePackID:        "pack-base",
@@ -10238,7 +10230,7 @@ func mustStoreLoopRuntimePack(t *testing.T, root string, packID string) {
 	t.Helper()
 
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
-	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
+	mustStoreLoopRuntimePackRecord(t, root, missioncontrol.RuntimePackRecord{
 		PackID:                   packID,
 		ParentPackID:             "pack-base",
 		RollbackTargetPackID:     "pack-base",
@@ -10254,8 +10246,36 @@ func mustStoreLoopRuntimePack(t *testing.T, root string, packID string) {
 		ImmutableSurfaces:        []string{"policy", "authority"},
 		SurfaceClasses:           []string{"class_1"},
 		CompatibilityContractRef: "compat-v1",
-	}); err != nil {
-		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", packID, err)
+	})
+}
+
+func mustStoreLoopRuntimePackRecord(t *testing.T, root string, record missioncontrol.RuntimePackRecord) {
+	t.Helper()
+
+	if err := missioncontrol.StoreRuntimePackRecord(root, record); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", record.PackID, err)
+	}
+	mustStoreLoopRuntimePackComponentRefs(t, root, record)
+}
+
+func mustStoreLoopRuntimePackComponentRefs(t *testing.T, root string, record missioncontrol.RuntimePackRecord) {
+	t.Helper()
+
+	componentCreatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, ref := range missioncontrol.RuntimePackComponentRefs(record) {
+		_, _, err := missioncontrol.StoreRuntimePackComponentRecord(root, missioncontrol.RuntimePackComponentRecord{
+			Kind:          ref.Kind,
+			ComponentID:   ref.ComponentID,
+			ContentRef:    "local-fixture://" + ref.ComponentID,
+			ContentSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			SourceSummary: string(ref.Kind) + " metadata fixture",
+			ProvenanceRef: "fixture:" + ref.ComponentID,
+			CreatedAt:     componentCreatedAt,
+			CreatedBy:     "operator",
+		})
+		if err != nil {
+			t.Fatalf("StoreRuntimePackComponentRecord(%s/%s) error = %v", ref.Kind, ref.ComponentID, err)
+		}
 	}
 }
 
