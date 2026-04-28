@@ -50,6 +50,7 @@ type OperatorStatusSummary struct {
 	PromotionIdentity                            *OperatorPromotionIdentityStatus                            `json:"promotion_identity,omitempty"`
 	RollbackIdentity                             *OperatorRollbackIdentityStatus                             `json:"rollback_identity,omitempty"`
 	RollbackApplyIdentity                        *OperatorRollbackApplyIdentityStatus                        `json:"rollback_apply_identity,omitempty"`
+	AutonomyIdentity                             *OperatorAutonomyIdentityStatus                             `json:"autonomy_identity,omitempty"`
 	DeferredSchedulerTriggers                    []OperatorDeferredSchedulerTriggerStatus                    `json:"deferred_scheduler_triggers,omitempty"`
 	CampaignPreflight                            *ResolvedExecutionContextCampaignPreflight                  `json:"campaign_preflight,omitempty"`
 	TreasuryPreflight                            *ResolvedExecutionContextTreasuryPreflight                  `json:"treasury_preflight,omitempty"`
@@ -265,6 +266,56 @@ type OperatorRollbackIdentityStatus struct {
 type OperatorRollbackApplyIdentityStatus struct {
 	State   string                        `json:"state"`
 	Applies []OperatorRollbackApplyStatus `json:"applies,omitempty"`
+}
+
+type OperatorAutonomyIdentityStatus struct {
+	State               string                            `json:"state"`
+	StandingDirectives  []OperatorStandingDirectiveStatus `json:"standing_directives,omitempty"`
+	WakeCycles          []OperatorWakeCycleStatus         `json:"wake_cycles,omitempty"`
+	LastNoEligibleError string                            `json:"last_no_eligible_error,omitempty"`
+}
+
+type OperatorStandingDirectiveStatus struct {
+	State                  string   `json:"state"`
+	StandingDirectiveID    string   `json:"standing_directive_id,omitempty"`
+	Objective              string   `json:"objective,omitempty"`
+	AllowedMissionFamilies []string `json:"allowed_mission_families,omitempty"`
+	AllowedExecutionPlanes []string `json:"allowed_execution_planes,omitempty"`
+	AllowedExecutionHosts  []string `json:"allowed_execution_hosts,omitempty"`
+	AutonomyEnvelopeRef    string   `json:"autonomy_envelope_ref,omitempty"`
+	BudgetRef              string   `json:"budget_ref,omitempty"`
+	ScheduleKind           string   `json:"schedule_kind,omitempty"`
+	DueAt                  *string  `json:"due_at,omitempty"`
+	IntervalSeconds        int64    `json:"interval_seconds,omitempty"`
+	SuccessCriteria        []string `json:"success_criteria,omitempty"`
+	StopConditions         []string `json:"stop_conditions,omitempty"`
+	OwnerPauseState        string   `json:"owner_pause_state,omitempty"`
+	DirectiveState         string   `json:"directive_state,omitempty"`
+	CreatedAt              *string  `json:"created_at,omitempty"`
+	UpdatedAt              *string  `json:"updated_at,omitempty"`
+	CreatedBy              string   `json:"created_by,omitempty"`
+	Error                  string   `json:"error,omitempty"`
+}
+
+type OperatorWakeCycleStatus struct {
+	State                  string   `json:"state"`
+	WakeCycleID            string   `json:"wake_cycle_id,omitempty"`
+	StartedAt              *string  `json:"started_at,omitempty"`
+	CompletedAt            *string  `json:"completed_at,omitempty"`
+	Trigger                string   `json:"trigger,omitempty"`
+	SelectedDirectiveID    string   `json:"selected_directive_id,omitempty"`
+	SelectedJobID          string   `json:"selected_job_id,omitempty"`
+	SelectedMissionFamily  string   `json:"selected_mission_family,omitempty"`
+	SelectedExecutionPlane string   `json:"selected_execution_plane,omitempty"`
+	SelectedExecutionHost  string   `json:"selected_execution_host,omitempty"`
+	Decision               string   `json:"decision,omitempty"`
+	BlockedReasons         []string `json:"blocked_reasons,omitempty"`
+	NextWakeAt             *string  `json:"next_wake_at,omitempty"`
+	AutonomyEnvelopeRef    string   `json:"autonomy_envelope_ref,omitempty"`
+	BudgetRef              string   `json:"budget_ref,omitempty"`
+	CreatedAt              *string  `json:"created_at,omitempty"`
+	CreatedBy              string   `json:"created_by,omitempty"`
+	Error                  string   `json:"error,omitempty"`
 }
 
 type OperatorHotUpdateOutcomeStatus struct {
@@ -932,6 +983,16 @@ func WithRollbackApplyIdentity(summary OperatorStatusSummary, root string) Opera
 	return summary
 }
 
+func WithAutonomyIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return summary
+	}
+	status := LoadOperatorAutonomyIdentityStatus(root)
+	summary.AutonomyIdentity = &status
+	return summary
+}
+
 func WithV4Summary(summary OperatorStatusSummary) OperatorStatusSummary {
 	status := BuildOperatorV4SummaryStatus(summary)
 	summary.V4Summary = &status
@@ -1030,6 +1091,9 @@ func BuildOperatorV4SummaryStatus(summary OperatorStatusSummary) OperatorV4Summa
 	}
 	if summary.RollbackApplyIdentity != nil {
 		configured = addIdentityState(summary.RollbackApplyIdentity.State, "rollback_apply_identity") || configured
+	}
+	if summary.AutonomyIdentity != nil {
+		configured = addIdentityState(summary.AutonomyIdentity.State, "autonomy_identity") || configured
 	}
 
 	if summary.CandidatePromotionDecisionIdentity != nil && len(summary.CandidatePromotionDecisionIdentity.Decisions) > 0 {
@@ -1477,6 +1541,194 @@ func LoadOperatorRollbackApplyIdentityStatus(root string) OperatorRollbackApplyI
 		State:   state,
 		Applies: applies,
 	}
+}
+
+func LoadOperatorAutonomyIdentityStatus(root string) OperatorAutonomyIdentityStatus {
+	directives, directivesFound, directivesInvalid, directivesErr := loadOperatorStandingDirectiveStatuses(root)
+	wakeCycles, wakeCyclesFound, wakeCyclesInvalid, wakeCyclesErr := loadOperatorWakeCycleStatuses(root)
+	if !directivesFound && !wakeCyclesFound {
+		return OperatorAutonomyIdentityStatus{State: "not_configured"}
+	}
+	state := "configured"
+	if directivesErr != nil || wakeCyclesErr != nil || directivesInvalid || wakeCyclesInvalid {
+		state = "invalid"
+	}
+	return OperatorAutonomyIdentityStatus{
+		State:               state,
+		StandingDirectives:  directives,
+		WakeCycles:          wakeCycles,
+		LastNoEligibleError: operatorAutonomyLastNoEligibleError(wakeCycles),
+	}
+}
+
+func loadOperatorStandingDirectiveStatuses(root string) ([]OperatorStandingDirectiveStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+	entries, err := os.ReadDir(StoreStandingDirectivesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	statuses := make([]OperatorStandingDirectiveStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorStandingDirectiveStatus(filepath.Join(StoreStandingDirectivesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, true, invalid, nil
+}
+
+func loadOperatorStandingDirectiveStatus(path string) OperatorStandingDirectiveStatus {
+	status := OperatorStandingDirectiveStatus{
+		State:               "invalid",
+		StandingDirectiveID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record StandingDirectiveRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	record = NormalizeStandingDirectiveRecord(record)
+	status = operatorStandingDirectiveStatusFromRecord(record)
+	if err := ValidateStandingDirectiveRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorStandingDirectiveStatusFromRecord(record StandingDirectiveRecord) OperatorStandingDirectiveStatus {
+	return OperatorStandingDirectiveStatus{
+		StandingDirectiveID:    record.StandingDirectiveID,
+		Objective:              record.Objective,
+		AllowedMissionFamilies: append([]string(nil), record.AllowedMissionFamilies...),
+		AllowedExecutionPlanes: append([]string(nil), record.AllowedExecutionPlanes...),
+		AllowedExecutionHosts:  append([]string(nil), record.AllowedExecutionHosts...),
+		AutonomyEnvelopeRef:    record.AutonomyEnvelopeRef,
+		BudgetRef:              record.BudgetRef,
+		ScheduleKind:           string(record.Schedule.Kind),
+		DueAt:                  formatOperatorStatusTime(record.Schedule.DueAt),
+		IntervalSeconds:        record.Schedule.IntervalSeconds,
+		SuccessCriteria:        append([]string(nil), record.SuccessCriteria...),
+		StopConditions:         append([]string(nil), record.StopConditions...),
+		OwnerPauseState:        string(record.OwnerPauseState),
+		DirectiveState:         string(record.State),
+		CreatedAt:              formatOperatorStatusTime(record.CreatedAt),
+		UpdatedAt:              formatOperatorStatusTime(record.UpdatedAt),
+		CreatedBy:              record.CreatedBy,
+	}
+}
+
+func loadOperatorWakeCycleStatuses(root string) ([]OperatorWakeCycleStatus, bool, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return nil, true, false, err
+	}
+	entries, err := os.ReadDir(StoreWakeCyclesDir(root))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, false, nil
+		}
+		return nil, true, false, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isStoreJSONDataFile(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return nil, false, false, nil
+	}
+	sort.Strings(names)
+
+	statuses := make([]OperatorWakeCycleStatus, 0, len(names))
+	invalid := false
+	for _, name := range names {
+		status := loadOperatorWakeCycleStatus(filepath.Join(StoreWakeCyclesDir(root), name))
+		if status.State == "invalid" {
+			invalid = true
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, true, invalid, nil
+}
+
+func loadOperatorWakeCycleStatus(path string) OperatorWakeCycleStatus {
+	status := OperatorWakeCycleStatus{
+		State:       "invalid",
+		WakeCycleID: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+	}
+
+	var record WakeCycleRecord
+	if err := LoadStoreJSON(path, &record); err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	record = NormalizeWakeCycleRecord(record)
+	status = operatorWakeCycleStatusFromRecord(record)
+	if err := ValidateWakeCycleRecord(record); err != nil {
+		status.State = "invalid"
+		status.Error = err.Error()
+		return status
+	}
+	status.State = "configured"
+	return status
+}
+
+func operatorWakeCycleStatusFromRecord(record WakeCycleRecord) OperatorWakeCycleStatus {
+	return OperatorWakeCycleStatus{
+		WakeCycleID:            record.WakeCycleID,
+		StartedAt:              formatOperatorStatusTime(record.StartedAt),
+		CompletedAt:            formatOperatorStatusTime(record.CompletedAt),
+		Trigger:                string(record.Trigger),
+		SelectedDirectiveID:    record.SelectedDirectiveID,
+		SelectedJobID:          record.SelectedJobID,
+		SelectedMissionFamily:  record.SelectedMissionFamily,
+		SelectedExecutionPlane: record.SelectedExecutionPlane,
+		SelectedExecutionHost:  record.SelectedExecutionHost,
+		Decision:               string(record.Decision),
+		BlockedReasons:         append([]string(nil), record.BlockedReasons...),
+		NextWakeAt:             formatOperatorStatusTime(record.NextWakeAt),
+		AutonomyEnvelopeRef:    record.AutonomyEnvelopeRef,
+		BudgetRef:              record.BudgetRef,
+		CreatedAt:              formatOperatorStatusTime(record.CreatedAt),
+		CreatedBy:              record.CreatedBy,
+	}
+}
+
+func operatorAutonomyLastNoEligibleError(wakeCycles []OperatorWakeCycleStatus) string {
+	for i := len(wakeCycles) - 1; i >= 0; i-- {
+		status := wakeCycles[i]
+		if status.Decision != string(WakeCycleDecisionNoEligible) {
+			continue
+		}
+		if containsString(status.BlockedReasons, string(RejectionCodeV4NoEligibleAutonomousAction)) {
+			return string(RejectionCodeV4NoEligibleAutonomousAction)
+		}
+	}
+	return ""
 }
 
 func EffectiveAllowedTools(job *Job, step *Step) []string {

@@ -138,6 +138,17 @@ func TestWakeCycleIDFromDirectiveStartedAt(t *testing.T) {
 	}
 }
 
+func TestWakeCycleIDFromNoEligibleStartedAt(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 5, 15, 9, 30, 45, 123456789, time.FixedZone("offset", -4*60*60))
+	got := WakeCycleIDFromNoEligibleStartedAt(startedAt)
+	want := "wake-cycle-no-eligible-20260515T133045123456789Z"
+	if got != want {
+		t.Fatalf("WakeCycleIDFromNoEligibleStartedAt() = %q, want %q", got, want)
+	}
+}
+
 func TestCreateWakeCycleProposalFromStandingDirectiveCreatesDueMissionProposal(t *testing.T) {
 	t.Parallel()
 
@@ -331,6 +342,100 @@ func TestCreateWakeCycleProposalFromStandingDirectiveRejectsIneligibleSelection(
 				t.Fatalf("CreateWakeCycleProposalFromStandingDirective() error = %q, want substring %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+func TestCreateNoEligibleAutonomousActionHeartbeatCreatesDurableIdleHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 15, 0, 0, 0, time.UTC)
+	record, changed, err := CreateNoEligibleAutonomousActionHeartbeat(root, " autonomy-loop ", now, now.Add(15*time.Minute))
+	if err != nil {
+		t.Fatalf("CreateNoEligibleAutonomousActionHeartbeat() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("CreateNoEligibleAutonomousActionHeartbeat() changed = false, want true")
+	}
+	if record.WakeCycleID != WakeCycleIDFromNoEligibleStartedAt(now) {
+		t.Fatalf("WakeCycleID = %q, want deterministic no-eligible id", record.WakeCycleID)
+	}
+	if record.Trigger != WakeCycleTriggerIdleHeartbeat || record.Decision != WakeCycleDecisionNoEligible {
+		t.Fatalf("trigger/decision = %q/%q, want idle_heartbeat/no_eligible", record.Trigger, record.Decision)
+	}
+	if !reflect.DeepEqual(record.BlockedReasons, []string{string(RejectionCodeV4NoEligibleAutonomousAction)}) {
+		t.Fatalf("BlockedReasons = %#v, want E_NO_ELIGIBLE_AUTONOMOUS_ACTION", record.BlockedReasons)
+	}
+	if record.SelectedDirectiveID != "" || record.SelectedJobID != "" || record.SelectedMissionFamily != "" || record.SelectedExecutionPlane != "" || record.SelectedExecutionHost != "" {
+		t.Fatalf("selected fields = %#v, want empty for heartbeat", record)
+	}
+	if record.CreatedBy != "autonomy-loop" {
+		t.Fatalf("CreatedBy = %q, want autonomy-loop", record.CreatedBy)
+	}
+
+	loaded, err := LoadWakeCycleRecord(root, record.WakeCycleID)
+	if err != nil {
+		t.Fatalf("LoadWakeCycleRecord() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, record) {
+		t.Fatalf("LoadWakeCycleRecord() = %#v, want %#v", loaded, record)
+	}
+
+	replayed, changed, err := CreateNoEligibleAutonomousActionHeartbeat(root, record.CreatedBy, now, record.NextWakeAt)
+	if err != nil {
+		t.Fatalf("CreateNoEligibleAutonomousActionHeartbeat(replay) error = %v", err)
+	}
+	if changed {
+		t.Fatal("CreateNoEligibleAutonomousActionHeartbeat(replay) changed = true, want false")
+	}
+	if !reflect.DeepEqual(replayed, record) {
+		t.Fatalf("CreateNoEligibleAutonomousActionHeartbeat(replay) = %#v, want %#v", replayed, record)
+	}
+}
+
+func TestCreateNoEligibleAutonomousActionHeartbeatRejectsDueDirective(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 16, 0, 0, 0, time.UTC)
+	directive := validStandingDirectiveRecord(now.Add(-time.Hour), "standing-directive-due", func(record *StandingDirectiveRecord) {
+		record.Schedule.DueAt = now.Add(-time.Minute)
+	})
+	if _, _, err := StoreStandingDirectiveRecord(root, directive); err != nil {
+		t.Fatalf("StoreStandingDirectiveRecord() error = %v", err)
+	}
+
+	if _, _, err := CreateNoEligibleAutonomousActionHeartbeat(root, "autonomy-loop", now, now.Add(15*time.Minute)); err == nil {
+		t.Fatal("CreateNoEligibleAutonomousActionHeartbeat() error = nil, want due directive rejection")
+	} else if !strings.Contains(err.Error(), "eligible autonomous action exists") {
+		t.Fatalf("CreateNoEligibleAutonomousActionHeartbeat() error = %q, want due directive context", err.Error())
+	}
+}
+
+func TestCreateNoEligibleAutonomousActionHeartbeatAllowsOnlyNotDueOrPausedDirectives(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 16, 30, 0, 0, time.UTC)
+	records := []StandingDirectiveRecord{
+		validStandingDirectiveRecord(now.Add(-time.Hour), "standing-directive-not-due", func(record *StandingDirectiveRecord) {
+			record.Schedule.DueAt = now.Add(time.Hour)
+		}),
+		validStandingDirectiveRecord(now.Add(-time.Hour), "standing-directive-paused", func(record *StandingDirectiveRecord) {
+			record.OwnerPauseState = StandingDirectiveOwnerPauseStatePaused
+		}),
+		validStandingDirectiveRecord(now.Add(-time.Hour), "standing-directive-retired", func(record *StandingDirectiveRecord) {
+			record.State = StandingDirectiveStateRetired
+		}),
+	}
+	for _, record := range records {
+		if _, _, err := StoreStandingDirectiveRecord(root, record); err != nil {
+			t.Fatalf("StoreStandingDirectiveRecord(%s) error = %v", record.StandingDirectiveID, err)
+		}
+	}
+
+	if _, _, err := CreateNoEligibleAutonomousActionHeartbeat(root, "autonomy-loop", now, now.Add(15*time.Minute)); err != nil {
+		t.Fatalf("CreateNoEligibleAutonomousActionHeartbeat() error = %v", err)
 	}
 }
 

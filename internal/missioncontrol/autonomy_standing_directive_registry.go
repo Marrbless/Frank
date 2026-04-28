@@ -35,6 +35,7 @@ type WakeCycleTrigger string
 
 const (
 	WakeCycleTriggerStandingDirective WakeCycleTrigger = "standing_directive"
+	WakeCycleTriggerIdleHeartbeat     WakeCycleTrigger = "idle_heartbeat"
 )
 
 type WakeCycleDecision string
@@ -135,6 +136,12 @@ func WakeCycleIDFromDirectiveStartedAt(standingDirectiveID string, startedAt tim
 	startedAt = startedAt.UTC()
 	startedAtCompact := strings.ReplaceAll(startedAt.Format("20060102T150405.000000000Z"), ".", "")
 	return "wake-cycle-" + strings.TrimSpace(standingDirectiveID) + "-" + startedAtCompact
+}
+
+func WakeCycleIDFromNoEligibleStartedAt(startedAt time.Time) string {
+	startedAt = startedAt.UTC()
+	startedAtCompact := strings.ReplaceAll(startedAt.Format("20060102T150405.000000000Z"), ".", "")
+	return "wake-cycle-no-eligible-" + startedAtCompact
 }
 
 func NormalizeStandingDirectiveRef(ref StandingDirectiveRef) StandingDirectiveRef {
@@ -335,6 +342,9 @@ func ValidateWakeCycleRecord(record WakeCycleRecord) error {
 	if record.NextWakeAt.IsZero() {
 		return fmt.Errorf("mission store wake cycle next_wake_at is required")
 	}
+	if record.NextWakeAt.Before(record.StartedAt) {
+		return fmt.Errorf("mission store wake cycle next_wake_at must not be before started_at")
+	}
 	if record.CreatedAt.IsZero() {
 		return fmt.Errorf("mission store wake cycle created_at is required")
 	}
@@ -353,6 +363,9 @@ func ValidateWakeCycleRecord(record WakeCycleRecord) error {
 	}
 	if record.Decision == WakeCycleDecisionMissionProposed {
 		return validateWakeCycleMissionProposal(record)
+	}
+	if record.Decision == WakeCycleDecisionNoEligible {
+		return validateWakeCycleNoEligible(record)
 	}
 	return nil
 }
@@ -518,6 +531,50 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 	return StoreWakeCycleRecord(root, record)
 }
 
+func CreateNoEligibleAutonomousActionHeartbeat(root, createdBy string, startedAt, nextWakeAt time.Time) (WakeCycleRecord, bool, error) {
+	if err := ValidateStoreRoot(root); err != nil {
+		return WakeCycleRecord{}, false, err
+	}
+	startedAt = startedAt.UTC()
+	nextWakeAt = nextWakeAt.UTC()
+	if startedAt.IsZero() {
+		return WakeCycleRecord{}, false, fmt.Errorf("mission store wake cycle started_at is required")
+	}
+	if nextWakeAt.IsZero() {
+		return WakeCycleRecord{}, false, fmt.Errorf("mission store wake cycle next_wake_at is required")
+	}
+	if nextWakeAt.Before(startedAt) {
+		return WakeCycleRecord{}, false, fmt.Errorf("mission store wake cycle next_wake_at must not be before started_at")
+	}
+
+	directives, err := ListStandingDirectiveRecords(root)
+	if err != nil {
+		return WakeCycleRecord{}, false, err
+	}
+	for _, directive := range directives {
+		if standingDirectiveHasEligibleWake(directive, startedAt) {
+			return WakeCycleRecord{}, false, fmt.Errorf("eligible autonomous action exists for standing directive %q", directive.StandingDirectiveID)
+		}
+	}
+
+	record := WakeCycleRecord{
+		WakeCycleID:         WakeCycleIDFromNoEligibleStartedAt(startedAt),
+		StartedAt:           startedAt,
+		CompletedAt:         startedAt,
+		Trigger:             WakeCycleTriggerIdleHeartbeat,
+		Decision:            WakeCycleDecisionNoEligible,
+		BlockedReasons:      []string{string(RejectionCodeV4NoEligibleAutonomousAction)},
+		NextWakeAt:          nextWakeAt,
+		CreatedAt:           startedAt,
+		CreatedBy:           createdBy,
+		BudgetDebits:        nil,
+		SelectedJobID:       "",
+		AutonomyEnvelopeRef: "",
+		BudgetRef:           "",
+	}
+	return StoreWakeCycleRecord(root, record)
+}
+
 func loadStandingDirectiveRecordFile(path string) (StandingDirectiveRecord, error) {
 	var record StandingDirectiveRecord
 	if err := LoadStoreJSON(path, &record); err != nil {
@@ -565,6 +622,33 @@ func validateWakeCycleMissionProposal(record WakeCycleRecord) error {
 		return fmt.Errorf("mission store wake cycle blocked_reasons must be empty for decision %q", record.Decision)
 	}
 	return nil
+}
+
+func validateWakeCycleNoEligible(record WakeCycleRecord) error {
+	if record.Trigger != WakeCycleTriggerIdleHeartbeat {
+		return fmt.Errorf("mission store wake cycle trigger must be %q for decision %q", WakeCycleTriggerIdleHeartbeat, record.Decision)
+	}
+	if record.SelectedDirectiveID != "" || record.SelectedJobID != "" || record.SelectedMissionFamily != "" || record.SelectedExecutionPlane != "" || record.SelectedExecutionHost != "" {
+		return fmt.Errorf("mission store wake cycle selected fields must be empty for decision %q", record.Decision)
+	}
+	if !containsString(record.BlockedReasons, string(RejectionCodeV4NoEligibleAutonomousAction)) {
+		return fmt.Errorf("mission store wake cycle blocked_reasons must include %s for decision %q", RejectionCodeV4NoEligibleAutonomousAction, record.Decision)
+	}
+	return nil
+}
+
+func standingDirectiveHasEligibleWake(record StandingDirectiveRecord, startedAt time.Time) bool {
+	record = NormalizeStandingDirectiveRecord(record)
+	if record.State != StandingDirectiveStateActive {
+		return false
+	}
+	if record.OwnerPauseState == StandingDirectiveOwnerPauseStatePaused {
+		return false
+	}
+	if !isValidStandingDirectiveScheduleKind(record.Schedule.Kind) {
+		return false
+	}
+	return !startedAt.Before(record.Schedule.DueAt)
 }
 
 func validateStandingDirectiveMissionFamilies(values []string) error {
@@ -650,7 +734,7 @@ func isValidStandingDirectiveScheduleKind(kind StandingDirectiveScheduleKind) bo
 
 func isValidWakeCycleTrigger(trigger WakeCycleTrigger) bool {
 	switch trigger {
-	case WakeCycleTriggerStandingDirective:
+	case WakeCycleTriggerStandingDirective, WakeCycleTriggerIdleHeartbeat:
 		return true
 	default:
 		return false
