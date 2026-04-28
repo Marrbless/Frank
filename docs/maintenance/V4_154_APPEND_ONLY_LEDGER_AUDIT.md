@@ -24,7 +24,6 @@ The acceptance target is `docs/FRANK_V4_SPEC.md` Acceptance Criterion 17: histor
 
 The remaining V4 matrix rows must continue this pattern as they add new capabilities:
 
-- `AC-018`: repeated-crash rollback/quarantine records.
 - `AC-020`: decision-complete runner outcome records.
 - `AC-024`: policy-surface scanner/import rejection records if new record families are introduced.
 - `AC-025`: canary scope truthfulness read model fields.
