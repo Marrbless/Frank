@@ -193,6 +193,42 @@ func TestLoadOperatorAutonomyIdentityStatusSurfacesRepeatedFailurePause(t *testi
 	}
 }
 
+func TestLoadOperatorAutonomyIdentityStatusSurfacesOwnerPause(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 15, 19, 50, 0, 0, time.UTC)
+	directive := storeAutonomyOwnerPauseDirective(t, root, now, MissionFamilyApplyHotUpdate, ExecutionPlaneHotUpdateGate)
+	pause, _, err := StoreAutonomyOwnerPauseRecord(root, validAutonomyOwnerPauseRecord(now, directive, nil))
+	if err != nil {
+		t.Fatalf("StoreAutonomyOwnerPauseRecord() error = %v", err)
+	}
+	blocked, _, err := CreateWakeCycleProposalFromStandingDirective(root, directive.StandingDirectiveID, "hot-update-proposal", MissionFamilyApplyHotUpdate, ExecutionPlaneHotUpdateGate, ExecutionHostPhone, "autonomy-loop", now)
+	if err != nil {
+		t.Fatalf("CreateWakeCycleProposalFromStandingDirective() error = %v", err)
+	}
+
+	got := LoadOperatorAutonomyIdentityStatus(root)
+	if got.State != "configured" {
+		t.Fatalf("State = %q, want configured", got.State)
+	}
+	if got.LastOwnerPauseError != string(RejectionCodeV4AutonomyPaused) {
+		t.Fatalf("LastOwnerPauseError = %q, want %s", got.LastOwnerPauseError, RejectionCodeV4AutonomyPaused)
+	}
+	if len(got.OwnerPauses) != 1 || got.OwnerPauses[0].OwnerPauseID != pause.OwnerPauseID {
+		t.Fatalf("OwnerPauses = %#v, want pause %q", got.OwnerPauses, pause.OwnerPauseID)
+	}
+	if got.OwnerPauses[0].AuthorityRef != "owner-control:manual-pause-1" || !got.OwnerPauses[0].AppliesToHotUpdates {
+		t.Fatalf("owner pause status = %#v, want explicit authority and hot-update scope", got.OwnerPauses[0])
+	}
+	if len(got.WakeCycles) != 1 || got.WakeCycles[0].WakeCycleID != blocked.WakeCycleID {
+		t.Fatalf("WakeCycles = %#v, want blocked wake %q", got.WakeCycles, blocked.WakeCycleID)
+	}
+	if !containsAutonomyReason(got.WakeCycles[0].BlockedReasons, string(RejectionCodeV4AutonomyPaused)) {
+		t.Fatalf("wake cycle status = %#v, want autonomy paused blocker", got.WakeCycles[0])
+	}
+}
+
 func TestLoadOperatorAutonomyIdentityStatusReadOnly(t *testing.T) {
 	t.Parallel()
 

@@ -518,6 +518,32 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		return WakeCycleRecord{}, false, fmt.Errorf("standing directive %q selected mission_family %q requires execution_plane %q", directive.StandingDirectiveID, selectedMissionFamily, requiredPlane)
 	}
 
+	if isHotUpdateMissionFamily(selectedMissionFamily) {
+		if ownerPause, active, err := LoadActiveAutonomyOwnerPauseForBudget(root, directive.BudgetRef); err != nil {
+			return WakeCycleRecord{}, false, err
+		} else if active {
+			record := WakeCycleRecord{
+				WakeCycleID:            WakeCycleIDFromDirectiveStartedAt(directive.StandingDirectiveID, startedAt),
+				StartedAt:              startedAt,
+				CompletedAt:            startedAt,
+				Trigger:                WakeCycleTriggerStandingDirective,
+				SelectedDirectiveID:    directive.StandingDirectiveID,
+				SelectedJobID:          strings.TrimSpace(selectedJobID),
+				SelectedMissionFamily:  selectedMissionFamily,
+				SelectedExecutionPlane: selectedExecutionPlane,
+				SelectedExecutionHost:  selectedExecutionHost,
+				Decision:               WakeCycleDecisionBlocked,
+				BlockedReasons:         []string{string(RejectionCodeV4AutonomyPaused) + ": " + ownerPause.OwnerPauseID},
+				NextWakeAt:             startedAt.Add(time.Duration(directive.Schedule.IntervalSeconds) * time.Second),
+				AutonomyEnvelopeRef:    directive.AutonomyEnvelopeRef,
+				BudgetRef:              directive.BudgetRef,
+				CreatedAt:              startedAt,
+				CreatedBy:              createdBy,
+			}
+			return StoreWakeCycleRecord(root, record)
+		}
+	}
+
 	if pause, active, err := LoadActiveRepeatedFailurePauseForBudget(root, directive.BudgetRef); err != nil {
 		return WakeCycleRecord{}, false, err
 	} else if active {
@@ -542,12 +568,7 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		return StoreWakeCycleRecord(root, record)
 	}
 
-	requestedDebits := []AutonomyBudgetDebitRecord{{
-		BudgetID:  directive.BudgetRef,
-		DebitKind: AutonomyBudgetDebitKindCandidateMutation,
-		Amount:    1,
-		Unit:      AutonomyBudgetDebitUnitCount,
-	}}
+	requestedDebits := autonomyBudgetDebitsForMissionFamily(directive.BudgetRef, selectedMissionFamily)
 	budgetAssessment, err := AssessAutonomyBudgetForDebits(root, directive.BudgetRef, requestedDebits, startedAt)
 	if err != nil {
 		return WakeCycleRecord{}, false, err
@@ -828,6 +849,24 @@ func containsAutonomyReason(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func isHotUpdateMissionFamily(family string) bool {
+	requiredPlane, ok := requiredExecutionPlaneForMissionFamily(strings.TrimSpace(family))
+	return ok && requiredPlane == ExecutionPlaneHotUpdateGate
+}
+
+func autonomyBudgetDebitsForMissionFamily(budgetID, missionFamily string) []AutonomyBudgetDebitRecord {
+	debitKind := AutonomyBudgetDebitKindCandidateMutation
+	if isHotUpdateMissionFamily(missionFamily) {
+		debitKind = AutonomyBudgetDebitKindHotUpdate
+	}
+	return []AutonomyBudgetDebitRecord{{
+		BudgetID:  strings.TrimSpace(budgetID),
+		DebitKind: debitKind,
+		Amount:    1,
+		Unit:      AutonomyBudgetDebitUnitCount,
+	}}
 }
 
 func validateAutonomyIdentifierField(surface, fieldName, value string) error {
