@@ -328,17 +328,49 @@ func TestLoadCommittedActiveRuntimePackForRestartRequiresCommittedActiveComponen
 	} else if !strings.Contains(err.Error(), `mission store runtime pack extension_pack_ref "extension-pack-active"`) {
 		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() error = %q, want active extension ref context", err.Error())
 	}
+}
 
-	storeRuntimePackComponentFixture(t, root, now.Add(4*time.Minute), RuntimePackComponentKindExtensionPack, "extension-pack-active")
-	load, err := LoadCommittedActiveRuntimePackForRestart(root)
+func TestStoreRuntimePackComponentRecordRejectsAdhocActivePackRef(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 7, 15, 0, 0, 0, time.UTC)
+	active := validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-active"
+		record.PromptPackRef = "prompt-pack-active"
+	})
+	if err := StoreRuntimePackRecord(root, active); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(active) error = %v", err)
+	}
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:        "pack-active",
+		LastKnownGoodPackID: "pack-active",
+		UpdatedAt:           now.Add(time.Minute),
+		UpdatedBy:           "operator",
+		UpdateRecordRef:     "hot_update:test",
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	activeComponent := validRuntimePackComponentRecord(now.Add(2*time.Minute), RuntimePackComponentKindPromptPack, "prompt-pack-active", nil)
+	if _, changed, err := StoreRuntimePackComponentRecord(root, activeComponent); err == nil {
+		t.Fatal("StoreRuntimePackComponentRecord(active component) error = nil, want ad hoc mutation rejection")
+	} else if changed {
+		t.Fatal("StoreRuntimePackComponentRecord(active component) changed = true, want false")
+	} else if !strings.Contains(err.Error(), string(RejectionCodeV4ActivePackAdhocMutationForbidden)) {
+		t.Fatalf("StoreRuntimePackComponentRecord(active component) error = %q, want %s", err.Error(), RejectionCodeV4ActivePackAdhocMutationForbidden)
+	}
+	if _, err := LoadRuntimePackComponentRecord(root, RuntimePackComponentKindPromptPack, "prompt-pack-active"); !errors.Is(err, ErrRuntimePackComponentRecordNotFound) {
+		t.Fatalf("LoadRuntimePackComponentRecord(active component) error = %v, want not found after rejection", err)
+	}
+
+	inactiveComponent := validRuntimePackComponentRecord(now.Add(3*time.Minute), RuntimePackComponentKindPromptPack, "prompt-pack-candidate", nil)
+	stored, changed, err := StoreRuntimePackComponentRecord(root, inactiveComponent)
 	if err != nil {
-		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() error = %v", err)
+		t.Fatalf("StoreRuntimePackComponentRecord(inactive component) error = %v", err)
 	}
-	if load.ActivePointer.ActivePackID != "pack-active" || load.RuntimePack.PackID != "pack-active" {
-		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() active = pointer %q pack %q, want pack-active", load.ActivePointer.ActivePackID, load.RuntimePack.PackID)
-	}
-	if load.Components.ExtensionPack.ComponentID != "extension-pack-active" {
-		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() extension = %q, want extension-pack-active", load.Components.ExtensionPack.ComponentID)
+	if !changed || stored.ComponentID != "prompt-pack-candidate" {
+		t.Fatalf("StoreRuntimePackComponentRecord(inactive component) = %#v changed=%v, want stored candidate component", stored, changed)
 	}
 }
 

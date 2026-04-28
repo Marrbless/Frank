@@ -172,6 +172,9 @@ func StoreRuntimePackComponentRecord(root string, record RuntimePackComponentRec
 	if !errors.Is(err, os.ErrNotExist) {
 		return RuntimePackComponentRecord{}, false, err
 	}
+	if err := rejectRuntimePackComponentActiveAdhocMutation(root, record); err != nil {
+		return RuntimePackComponentRecord{}, false, err
+	}
 	if err := WriteStoreJSONAtomic(path, record); err != nil {
 		return RuntimePackComponentRecord{}, false, err
 	}

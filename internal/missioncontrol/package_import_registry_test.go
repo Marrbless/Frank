@@ -182,6 +182,36 @@ func TestPackageImportRecordRequiresCandidateOnlyLinkage(t *testing.T) {
 	}
 }
 
+func TestPackageImportRecordRejectsActivePackCandidateImport(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 12, 12, 0, 0, 0, time.UTC)
+	storePackageImportCandidateFixture(t, root, now)
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(3 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "hot_update:test",
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	record := validPackageImportRecord(now.Add(4*time.Minute), nil)
+	if _, changed, err := StorePackageImportRecord(root, record); err == nil {
+		t.Fatal("StorePackageImportRecord(active candidate pack) error = nil, want ad hoc active-pack rejection")
+	} else if changed {
+		t.Fatal("StorePackageImportRecord(active candidate pack) changed = true, want false")
+	} else if !strings.Contains(err.Error(), string(RejectionCodeV4ActivePackAdhocMutationForbidden)) {
+		t.Fatalf("StorePackageImportRecord(active candidate pack) error = %q, want %s", err.Error(), RejectionCodeV4ActivePackAdhocMutationForbidden)
+	}
+	if _, err := LoadPackageImportRecord(root, record.ImportID); !errors.Is(err, ErrPackageImportRecordNotFound) {
+		t.Fatalf("LoadPackageImportRecord() error = %v, want not found after rejected active import", err)
+	}
+}
+
 func TestLoadPackageImportRecordRejectsMalformedStoredRecord(t *testing.T) {
 	t.Parallel()
 

@@ -163,6 +163,9 @@ func StorePackageImportRecord(root string, record PackageImportRecord) (PackageI
 	if err := validatePackageImportCandidateLinkage(root, record); err != nil {
 		return PackageImportRecord{}, false, err
 	}
+	if err := rejectPackageImportActiveAdhocMutation(root, record); err != nil {
+		return PackageImportRecord{}, false, err
+	}
 
 	path := StorePackageImportPath(root, record.ImportID)
 	existing, err := loadPackageImportRecordFile(root, path)
