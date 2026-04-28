@@ -48,6 +48,12 @@ type ResolvedRuntimePackComponents struct {
 	ExtensionPack RuntimePackComponentRecord `json:"extension_pack"`
 }
 
+type CommittedActiveRuntimePackLoad struct {
+	ActivePointer ActiveRuntimePackPointer      `json:"active_pointer"`
+	RuntimePack   RuntimePackRecord             `json:"runtime_pack"`
+	Components    ResolvedRuntimePackComponents `json:"components"`
+}
+
 var ErrRuntimePackComponentRecordNotFound = errors.New("mission store runtime pack component record not found")
 
 func StoreRuntimePackComponentsDir(root string, kind RuntimePackComponentKind) string {
@@ -236,15 +242,31 @@ func ResolveRuntimePackComponents(root string, record RuntimePackRecord) (Resolv
 }
 
 func ResolveActiveRuntimePackComponents(root string) (RuntimePackRecord, ResolvedRuntimePackComponents, error) {
-	record, err := ResolveActiveRuntimePackRecord(root)
+	load, err := LoadCommittedActiveRuntimePackForRestart(root)
 	if err != nil {
 		return RuntimePackRecord{}, ResolvedRuntimePackComponents{}, err
+	}
+	return load.RuntimePack, load.Components, nil
+}
+
+func LoadCommittedActiveRuntimePackForRestart(root string) (CommittedActiveRuntimePackLoad, error) {
+	pointer, err := LoadActiveRuntimePackPointer(root)
+	if err != nil {
+		return CommittedActiveRuntimePackLoad{}, err
+	}
+	record, err := LoadRuntimePackRecord(root, pointer.ActivePackID)
+	if err != nil {
+		return CommittedActiveRuntimePackLoad{}, err
 	}
 	components, err := ResolveRuntimePackComponents(root, record)
 	if err != nil {
-		return RuntimePackRecord{}, ResolvedRuntimePackComponents{}, err
+		return CommittedActiveRuntimePackLoad{}, err
 	}
-	return record, components, nil
+	return CommittedActiveRuntimePackLoad{
+		ActivePointer: pointer,
+		RuntimePack:   record,
+		Components:    components,
+	}, nil
 }
 
 func loadRuntimePackComponentRecordFile(path string) (RuntimePackComponentRecord, error) {

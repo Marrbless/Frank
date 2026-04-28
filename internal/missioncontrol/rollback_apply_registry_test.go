@@ -905,6 +905,80 @@ func TestExecuteRollbackApplyReloadApplyHappyPathPreservesPointerAndLastKnownGoo
 	}
 }
 
+func TestExecuteRollbackApplyReloadApplyRequiresTargetPackComponents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 4, 30, 16, 45, 0, 0, time.UTC)
+	storeRollbackFixtures(t, root, now)
+	if err := StoreRollbackRecord(root, validRollbackRecord(now.Add(12*time.Minute), func(record *RollbackRecord) {
+		record.RollbackID = "rollback-reload-missing-component"
+		record.CreatedBy = "operator"
+	})); err != nil {
+		t.Fatalf("StoreRollbackRecord() error = %v", err)
+	}
+	if _, err := CreateRollbackApplyRecordFromRollback(root, "apply-reload-missing-component", "rollback-reload-missing-component", "operator", now.Add(13*time.Minute)); err != nil {
+		t.Fatalf("CreateRollbackApplyRecordFromRollback() error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-reload-missing-component", RollbackApplyPhaseValidated, "operator", now.Add(14*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(validated) error = %v", err)
+	}
+	if _, _, err := AdvanceRollbackApplyPhase(root, "apply-reload-missing-component", RollbackApplyPhaseReadyToApply, "operator", now.Add(15*time.Minute)); err != nil {
+		t.Fatalf("AdvanceRollbackApplyPhase(ready_to_apply) error = %v", err)
+	}
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-candidate",
+		PreviousActivePackID: "pack-base",
+		LastKnownGoodPackID:  "pack-base",
+		UpdatedAt:            now.Add(15 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "promotion:promotion-1",
+		ReloadGeneration:     7,
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+	if _, _, err := ExecuteRollbackApplyPointerSwitch(root, "apply-reload-missing-component", "operator", now.Add(16*time.Minute)); err != nil {
+		t.Fatalf("ExecuteRollbackApplyPointerSwitch() error = %v", err)
+	}
+	if err := StoreLastKnownGoodRuntimePackPointer(root, LastKnownGoodRuntimePackPointer{
+		PackID:            "pack-base",
+		Basis:             "holdout_pass",
+		VerifiedAt:        now.Add(17 * time.Minute),
+		VerifiedBy:        "operator",
+		RollbackRecordRef: "rollback-reload-missing-component",
+	}); err != nil {
+		t.Fatalf("StoreLastKnownGoodRuntimePackPointer() error = %v", err)
+	}
+	if err := os.Remove(StoreRuntimePackComponentPath(root, RuntimePackComponentKindExtensionPack, "extension-pack-root")); err != nil {
+		t.Fatalf("Remove(extension component) error = %v", err)
+	}
+	beforePointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer before) error = %v", err)
+	}
+
+	record, changed, err := ExecuteRollbackApplyReloadApply(root, "apply-reload-missing-component", "operator", now.Add(18*time.Minute))
+	if err == nil {
+		t.Fatal("ExecuteRollbackApplyReloadApply() error = nil, want missing component failure")
+	}
+	if !changed {
+		t.Fatal("ExecuteRollbackApplyReloadApply() changed = false, want failed apply record")
+	}
+	if record.Phase != RollbackApplyPhaseReloadApplyFailed {
+		t.Fatalf("ExecuteRollbackApplyReloadApply().Phase = %q, want reload_apply_failed", record.Phase)
+	}
+	if !strings.Contains(record.ExecutionError, `mission store runtime pack extension_pack_ref "extension-pack-root"`) {
+		t.Fatalf("ExecuteRollbackApplyReloadApply().ExecutionError = %q, want missing target component context", record.ExecutionError)
+	}
+	afterPointerBytes, err := os.ReadFile(StoreActiveRuntimePackPointerPath(root))
+	if err != nil {
+		t.Fatalf("ReadFile(active pointer after) error = %v", err)
+	}
+	if string(beforePointerBytes) != string(afterPointerBytes) {
+		t.Fatalf("active runtime pack pointer changed during missing component failure\nbefore:\n%s\nafter:\n%s", string(beforePointerBytes), string(afterPointerBytes))
+	}
+}
+
 func TestExecuteRollbackApplyReloadApplyRecordsFailureWithoutMutatingPointer(t *testing.T) {
 	t.Parallel()
 

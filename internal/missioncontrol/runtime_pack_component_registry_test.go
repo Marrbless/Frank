@@ -280,6 +280,68 @@ func TestResolveActiveRuntimePackComponentsUsesCommittedActivePointerOnly(t *tes
 	}
 }
 
+func TestLoadCommittedActiveRuntimePackForRestartRequiresCommittedActiveComponents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC)
+	active := validRuntimePackRecord(now, func(record *RuntimePackRecord) {
+		record.PackID = "pack-active"
+		record.PromptPackRef = "prompt-pack-active"
+		record.SkillPackRef = "skill-pack-active"
+		record.ManifestRef = "manifest-pack-active"
+		record.ExtensionPackRef = "extension-pack-active"
+	})
+	candidate := validRuntimePackRecord(now.Add(time.Minute), func(record *RuntimePackRecord) {
+		record.PackID = "pack-candidate"
+		record.PromptPackRef = "prompt-pack-candidate"
+		record.SkillPackRef = "skill-pack-candidate"
+		record.ManifestRef = "manifest-pack-candidate"
+		record.ExtensionPackRef = "extension-pack-candidate"
+		record.RollbackTargetPackID = "pack-active"
+	})
+	if err := StoreRuntimePackRecord(root, active); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(active) error = %v", err)
+	}
+	if err := StoreRuntimePackRecord(root, candidate); err != nil {
+		t.Fatalf("StoreRuntimePackRecord(candidate) error = %v", err)
+	}
+	mustStoreRuntimePackComponentRefs(t, root, candidate)
+	storeRuntimePackComponentFixture(t, root, now.Add(2*time.Minute), RuntimePackComponentKindPromptPack, "prompt-pack-active")
+	storeRuntimePackComponentFixture(t, root, now.Add(2*time.Minute), RuntimePackComponentKindSkillPack, "skill-pack-active")
+	storeRuntimePackComponentFixture(t, root, now.Add(2*time.Minute), RuntimePackComponentKindManifestPack, "manifest-pack-active")
+	if err := StoreActiveRuntimePackPointer(root, ActiveRuntimePackPointer{
+		ActivePackID:         "pack-active",
+		PreviousActivePackID: "pack-candidate",
+		LastKnownGoodPackID:  "pack-active",
+		UpdatedAt:            now.Add(3 * time.Minute),
+		UpdatedBy:            "operator",
+		UpdateRecordRef:      "restart-read:fixture",
+	}); err != nil {
+		t.Fatalf("StoreActiveRuntimePackPointer() error = %v", err)
+	}
+
+	if _, err := LoadCommittedActiveRuntimePackForRestart(root); err == nil {
+		t.Fatal("LoadCommittedActiveRuntimePackForRestart() error = nil, want missing committed active component rejection")
+	} else if !errors.Is(err, ErrRuntimePackComponentRecordNotFound) {
+		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() error = %v, want %v", err, ErrRuntimePackComponentRecordNotFound)
+	} else if !strings.Contains(err.Error(), `mission store runtime pack extension_pack_ref "extension-pack-active"`) {
+		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() error = %q, want active extension ref context", err.Error())
+	}
+
+	storeRuntimePackComponentFixture(t, root, now.Add(4*time.Minute), RuntimePackComponentKindExtensionPack, "extension-pack-active")
+	load, err := LoadCommittedActiveRuntimePackForRestart(root)
+	if err != nil {
+		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() error = %v", err)
+	}
+	if load.ActivePointer.ActivePackID != "pack-active" || load.RuntimePack.PackID != "pack-active" {
+		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() active = pointer %q pack %q, want pack-active", load.ActivePointer.ActivePackID, load.RuntimePack.PackID)
+	}
+	if load.Components.ExtensionPack.ComponentID != "extension-pack-active" {
+		t.Fatalf("LoadCommittedActiveRuntimePackForRestart() extension = %q, want extension-pack-active", load.Components.ExtensionPack.ComponentID)
+	}
+}
+
 func validRuntimePackComponentRecord(now time.Time, kind RuntimePackComponentKind, componentID string, mutate func(*RuntimePackComponentRecord)) RuntimePackComponentRecord {
 	record := RuntimePackComponentRecord{
 		Kind:          kind,

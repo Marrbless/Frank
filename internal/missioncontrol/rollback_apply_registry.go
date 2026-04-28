@@ -801,8 +801,9 @@ func rollbackApplyTerminalFailureExecutionError(reason string) string {
 }
 
 // rollbackApplyRestartStyleConvergence models the smallest bounded reload/apply
-// convergence step available today: a fresh resolution of the already-switched
-// active runtime-pack pointer and its target pack record.
+// convergence step available today: a fresh restart-style resolution of the
+// already-switched active runtime-pack pointer, target pack record, and local
+// component metadata.
 func rollbackApplyRestartStyleConvergence(root string, record RollbackApplyRecord, rollback RollbackRecord) error {
 	activePointer, err := LoadActiveRuntimePackPointer(root)
 	if err != nil {
@@ -824,15 +825,15 @@ func rollbackApplyRestartStyleConvergence(root string, record RollbackApplyRecor
 			activePointer.UpdateRecordRef,
 		)
 	}
-	resolved, err := ResolveActiveRuntimePackRecord(root)
+	load, err := LoadCommittedActiveRuntimePackForRestart(root)
 	if err != nil {
 		return err
 	}
-	if resolved.PackID != rollback.TargetPackID {
+	if load.RuntimePack.PackID != rollback.TargetPackID {
 		return fmt.Errorf(
 			"mission store rollback apply %q convergence resolved active pack %q, want %q",
 			record.ApplyID,
-			resolved.PackID,
+			load.RuntimePack.PackID,
 			rollback.TargetPackID,
 		)
 	}
