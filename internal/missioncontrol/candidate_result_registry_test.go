@@ -610,6 +610,58 @@ func TestEvaluateCandidateResultPromotionEligibilityStates(t *testing.T) {
 	}
 }
 
+func TestEvaluateCandidateResultPromotionEligibilityBlocksExtensionPermissionWidening(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-extension-widening"
+	})
+	rewriteRuntimePackRecord(t, root, "pack-base", func(record *RuntimePackRecord) {
+		record.ExtensionPackRef = "extension-pack-base"
+	})
+	rewriteRuntimePackRecord(t, root, "pack-candidate", func(record *RuntimePackRecord) {
+		record.ExtensionPackRef = "extension-pack-candidate"
+	})
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(8*time.Minute), "extension-pack-base", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(base) error = %v", err)
+	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(9*time.Minute), "extension-pack-candidate", func(record *RuntimeExtensionPackRecord) {
+		record.ParentExtensionPackID = "extension-pack-base"
+		record.DeclaredPermissions = []string{"local_read", "network_post"}
+		record.DeclaredTools = append(record.DeclaredTools, RuntimeExtensionToolDeclaration{
+			ToolName:           "post_public_update",
+			PermissionRefs:     []string{"network_post"},
+			ExternalSideEffect: true,
+		})
+		record.ChangeSummary = "candidate adds external posting tool"
+	})); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(candidate) error = %v", err)
+	}
+
+	status, err := EvaluateCandidateResultPromotionEligibility(root, "result-extension-widening")
+	if err != nil {
+		t.Fatalf("EvaluateCandidateResultPromotionEligibility() error = %v", err)
+	}
+	if status.State != CandidatePromotionEligibilityStateRejected {
+		t.Fatalf("State = %q, want rejected; status = %#v", status.State, status)
+	}
+	if status.ExtensionPermissionAssessment == nil {
+		t.Fatal("ExtensionPermissionAssessment = nil, want blocker assessment")
+	}
+	if status.ExtensionPermissionAssessment.State != RuntimeExtensionPermissionAssessmentStateBlocked {
+		t.Fatalf("ExtensionPermissionAssessment.State = %q, want blocked", status.ExtensionPermissionAssessment.State)
+	}
+	blocking := strings.Join(status.BlockingReasons, "\n")
+	if !strings.Contains(blocking, string(RejectionCodeV4ExtensionPermissionWidening)) {
+		t.Fatalf("BlockingReasons = %#v, want %s", status.BlockingReasons, RejectionCodeV4ExtensionPermissionWidening)
+	}
+	if !strings.Contains(blocking, "network_post") || !strings.Contains(blocking, "post_public_update") {
+		t.Fatalf("BlockingReasons = %#v, want widened permission and external tool", status.BlockingReasons)
+	}
+}
+
 func TestEvaluateCandidateResultPromotionEligibilityDoesNotMutateLinkedRecordsOrRuntimePointers(t *testing.T) {
 	t.Parallel()
 

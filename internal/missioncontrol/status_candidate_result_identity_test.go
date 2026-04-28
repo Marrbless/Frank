@@ -104,6 +104,54 @@ func TestLoadOperatorCandidateResultIdentityStatusConfigured(t *testing.T) {
 	}
 }
 
+func TestLoadOperatorCandidateResultIdentityStatusSurfacesExtensionPermissionBlockers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	now := time.Date(2026, 5, 11, 11, 0, 0, 0, time.UTC)
+	storeCandidatePromotionEligibilityFixtures(t, root, now, nil, func(record *CandidateResultRecord) {
+		record.ResultID = "result-extension-status"
+	})
+	rewriteRuntimePackRecord(t, root, "pack-base", func(record *RuntimePackRecord) {
+		record.ExtensionPackRef = "extension-pack-base"
+	})
+	rewriteRuntimePackRecord(t, root, "pack-candidate", func(record *RuntimePackRecord) {
+		record.ExtensionPackRef = "extension-pack-candidate"
+	})
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(8*time.Minute), "extension-pack-base", nil)); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(base) error = %v", err)
+	}
+	if _, _, err := StoreRuntimeExtensionPackRecord(root, validRuntimeExtensionPackRecord(now.Add(9*time.Minute), "extension-pack-candidate", func(record *RuntimeExtensionPackRecord) {
+		record.ParentExtensionPackID = "extension-pack-base"
+		record.CompatibilityContractRef = "compat-v2"
+		record.ChangeSummary = "candidate changes extension compatibility"
+	})); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(candidate) error = %v", err)
+	}
+
+	got := LoadOperatorCandidateResultIdentityStatus(root)
+	if got.State != "configured" || len(got.Results) != 1 {
+		t.Fatalf("status = %#v, want one configured result", got)
+	}
+	eligibility := got.Results[0].PromotionEligibility
+	if eligibility == nil {
+		t.Fatal("PromotionEligibility = nil, want eligibility with extension blocker")
+	}
+	if eligibility.State != CandidatePromotionEligibilityStateRejected {
+		t.Fatalf("PromotionEligibility.State = %q, want rejected; eligibility = %#v", eligibility.State, eligibility)
+	}
+	if eligibility.ExtensionPermissionAssessment == nil {
+		t.Fatal("ExtensionPermissionAssessment = nil, want compatibility blocker")
+	}
+	if eligibility.ExtensionPermissionAssessment.State != RuntimeExtensionPermissionAssessmentStateBlocked {
+		t.Fatalf("ExtensionPermissionAssessment.State = %q, want blocked", eligibility.ExtensionPermissionAssessment.State)
+	}
+	blocking := strings.Join(eligibility.BlockingReasons, "\n")
+	if !strings.Contains(blocking, string(RejectionCodeV4ExtensionCompatibilityRequired)) || !strings.Contains(blocking, "compat-v2") {
+		t.Fatalf("BlockingReasons = %#v, want compatibility blocker", eligibility.BlockingReasons)
+	}
+}
+
 func TestLoadOperatorCandidateResultIdentityStatusNotConfigured(t *testing.T) {
 	t.Parallel()
 

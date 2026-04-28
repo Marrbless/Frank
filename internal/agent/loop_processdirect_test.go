@@ -10256,6 +10256,7 @@ func mustStoreLoopRuntimePackRecord(t *testing.T, root string, record missioncon
 		t.Fatalf("StoreRuntimePackRecord(%s) error = %v", record.PackID, err)
 	}
 	mustStoreLoopRuntimePackComponentRefs(t, root, record)
+	mustStoreLoopRuntimeExtensionPackRef(t, root, record.ExtensionPackRef)
 }
 
 func mustStoreLoopRuntimePackComponentRefs(t *testing.T, root string, record missioncontrol.RuntimePackRecord) {
@@ -10276,6 +10277,27 @@ func mustStoreLoopRuntimePackComponentRefs(t *testing.T, root string, record mis
 		if err != nil {
 			t.Fatalf("StoreRuntimePackComponentRecord(%s/%s) error = %v", ref.Kind, ref.ComponentID, err)
 		}
+	}
+}
+
+func mustStoreLoopRuntimeExtensionPackRef(t *testing.T, root string, extensionPackID string) {
+	t.Helper()
+
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, _, err := missioncontrol.StoreRuntimeExtensionPackRecord(root, missioncontrol.RuntimeExtensionPackRecord{
+		ExtensionPackID:          extensionPackID,
+		Extensions:               []string{"loop-fixture-extension"},
+		DeclaredTools:            []missioncontrol.RuntimeExtensionToolDeclaration{{ToolName: "loop_fixture_tool", PermissionRefs: []string{"local_state_read"}}},
+		DeclaredEvents:           []string{"loop_fixture_event"},
+		DeclaredPermissions:      []string{"local_state_read"},
+		CompatibilityContractRef: "compat-v1",
+		HotReloadable:            true,
+		ChangeSummary:            "loop fixture extension metadata",
+		CreatedAt:                createdAt,
+		CreatedBy:                "operator",
+	})
+	if err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(%s) error = %v", extensionPackID, err)
 	}
 }
 

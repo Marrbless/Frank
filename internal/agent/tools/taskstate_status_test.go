@@ -1014,6 +1014,7 @@ func writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t *testing.T, root s
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-base) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPack(t, root, "extension-base", now.Add(-7*time.Minute))
 	if err := missioncontrol.StoreRuntimePackRecord(root, missioncontrol.RuntimePackRecord{
 		RecordVersion:            missioncontrol.StoreRecordVersion,
 		PackID:                   "pack-candidate",
@@ -1034,6 +1035,7 @@ func writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t *testing.T, root s
 	}); err != nil {
 		t.Fatalf("StoreRuntimePackRecord(pack-candidate) error = %v", err)
 	}
+	storeTaskStateRuntimeExtensionPack(t, root, "extension-candidate", now.Add(-6*time.Minute))
 	if err := missioncontrol.StoreImprovementCandidateRecord(root, missioncontrol.ImprovementCandidateRecord{
 		RecordVersion:       missioncontrol.StoreRecordVersion,
 		CandidateID:         "candidate-1",
@@ -1139,6 +1141,26 @@ func writeTaskStateStatusPromotionPolicyAndDecisionFixtures(t *testing.T, root s
 		t.Fatal("CreateCandidatePromotionDecisionFromEligibleResult() changed = false, want true")
 	}
 	return decision.PromotionDecisionID
+}
+
+func storeTaskStateRuntimeExtensionPack(t *testing.T, root string, extensionPackID string, createdAt time.Time) {
+	t.Helper()
+
+	if _, _, err := missioncontrol.StoreRuntimeExtensionPackRecord(root, missioncontrol.RuntimeExtensionPackRecord{
+		RecordVersion:            missioncontrol.StoreRecordVersion,
+		ExtensionPackID:          extensionPackID,
+		Extensions:               []string{"taskstate-fixture-extension"},
+		DeclaredTools:            []missioncontrol.RuntimeExtensionToolDeclaration{{ToolName: "taskstate_fixture_tool", PermissionRefs: []string{"local_state_read"}}},
+		DeclaredEvents:           []string{"taskstate_fixture_event"},
+		DeclaredPermissions:      []string{"local_state_read"},
+		CompatibilityContractRef: "compat-v1",
+		HotReloadable:            true,
+		ChangeSummary:            "taskstate fixture extension metadata",
+		CreatedAt:                createdAt,
+		CreatedBy:                "operator",
+	}); err != nil {
+		t.Fatalf("StoreRuntimeExtensionPackRecord(%s) error = %v", extensionPackID, err)
+	}
 }
 
 func TestTaskStateOperatorStatusSurfacesHotUpdateOutcomeIdentity(t *testing.T) {

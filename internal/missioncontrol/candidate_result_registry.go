@@ -39,19 +39,20 @@ var candidateResultRequiredScoreKeys = []string{
 }
 
 type CandidatePromotionEligibilityStatus struct {
-	State                 string   `json:"state"`
-	ResultID              string   `json:"result_id,omitempty"`
-	RunID                 string   `json:"run_id,omitempty"`
-	CandidateID           string   `json:"candidate_id,omitempty"`
-	EvalSuiteID           string   `json:"eval_suite_id,omitempty"`
-	PromotionPolicyID     string   `json:"promotion_policy_id,omitempty"`
-	BaselinePackID        string   `json:"baseline_pack_id,omitempty"`
-	CandidatePackID       string   `json:"candidate_pack_id,omitempty"`
-	Decision              string   `json:"decision,omitempty"`
-	BlockingReasons       []string `json:"blocking_reasons,omitempty"`
-	CanaryRequired        bool     `json:"canary_required,omitempty"`
-	OwnerApprovalRequired bool     `json:"owner_approval_required,omitempty"`
-	Error                 string   `json:"error,omitempty"`
+	State                         string                                `json:"state"`
+	ResultID                      string                                `json:"result_id,omitempty"`
+	RunID                         string                                `json:"run_id,omitempty"`
+	CandidateID                   string                                `json:"candidate_id,omitempty"`
+	EvalSuiteID                   string                                `json:"eval_suite_id,omitempty"`
+	PromotionPolicyID             string                                `json:"promotion_policy_id,omitempty"`
+	BaselinePackID                string                                `json:"baseline_pack_id,omitempty"`
+	CandidatePackID               string                                `json:"candidate_pack_id,omitempty"`
+	Decision                      string                                `json:"decision,omitempty"`
+	BlockingReasons               []string                              `json:"blocking_reasons,omitempty"`
+	CanaryRequired                bool                                  `json:"canary_required,omitempty"`
+	OwnerApprovalRequired         bool                                  `json:"owner_approval_required,omitempty"`
+	ExtensionPermissionAssessment *RuntimeExtensionPermissionAssessment `json:"extension_permission_assessment,omitempty"`
+	Error                         string                                `json:"error,omitempty"`
 }
 
 type CandidateResultRecord struct {
@@ -345,6 +346,15 @@ func EvaluateCandidateResultPromotionEligibility(root, resultID string) (Candida
 	if record.ResourceScore < resourceThreshold {
 		blocking = append(blocking, "resource score is below policy threshold")
 	}
+	extensionAssessment, err := candidateResultExtensionPermissionAssessment(root, record)
+	if err != nil {
+		blocking = append(blocking, err.Error())
+	} else if extensionAssessment != nil {
+		status.ExtensionPermissionAssessment = extensionAssessment
+		for _, blocker := range extensionAssessment.Blockers {
+			blocking = append(blocking, fmt.Sprintf("%s: %s", blocker.Code, blocker.Reason))
+		}
+	}
 	if len(blocking) > 0 {
 		status.State = CandidatePromotionEligibilityStateRejected
 		status.BlockingReasons = blocking
@@ -364,6 +374,25 @@ func EvaluateCandidateResultPromotionEligibility(root, resultID string) (Candida
 		status.State = CandidatePromotionEligibilityStateEligible
 	}
 	return status, nil
+}
+
+func candidateResultExtensionPermissionAssessment(root string, record CandidateResultRecord) (*RuntimeExtensionPermissionAssessment, error) {
+	baselinePack, err := LoadRuntimePackRecord(root, record.BaselinePackID)
+	if err != nil {
+		return nil, fmt.Errorf("mission store candidate result baseline_pack_id %q extension assessment: %w", record.BaselinePackID, err)
+	}
+	candidatePack, err := LoadRuntimePackRecord(root, record.CandidatePackID)
+	if err != nil {
+		return nil, fmt.Errorf("mission store candidate result candidate_pack_id %q extension assessment: %w", record.CandidatePackID, err)
+	}
+	if baselinePack.ExtensionPackRef == candidatePack.ExtensionPackRef {
+		return nil, nil
+	}
+	assessment, err := AssessRuntimeExtensionPermissionWidening(root, baselinePack.ExtensionPackRef, candidatePack.ExtensionPackRef)
+	if err != nil {
+		return nil, err
+	}
+	return &assessment, nil
 }
 
 func ListCandidateResultRecords(root string) ([]CandidateResultRecord, error) {
