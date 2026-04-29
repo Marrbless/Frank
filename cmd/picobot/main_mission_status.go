@@ -386,6 +386,10 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		RuntimeControl:  runtimeControl,
 		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
 	}
+	skillStatus := ag.GovernedSkillStatus()
+	if len(skillStatus.Selected) > 0 || len(skillStatus.Active) > 0 || len(skillStatus.Skipped) > 0 {
+		snapshot.Skills = &skillStatus
+	}
 
 	if ec, ok := ag.ActiveMissionStep(); ok {
 		snapshot.Active = true
@@ -415,6 +419,9 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 			)
 		}
 		summary := missioncontrol.BuildOperatorStatusSummaryWithAllowedTools(*runtimeState, summaryAllowedTools)
+		if snapshot.Skills != nil {
+			summary = missioncontrol.WithGovernedSkillSelectionStatus(summary, *snapshot.Skills)
+		}
 		snapshot.RuntimeSummary = &summary
 	}
 

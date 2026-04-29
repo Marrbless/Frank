@@ -18,10 +18,11 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 	t.Parallel()
 
 	job := Job{
-		ID:           "job-1",
-		SpecVersion:  JobSpecVersionV2,
-		MaxAuthority: AuthorityTierHigh,
-		AllowedTools: []string{"read"},
+		ID:             "job-1",
+		SpecVersion:    JobSpecVersionV2,
+		MaxAuthority:   AuthorityTierHigh,
+		AllowedTools:   []string{"read"},
+		SelectedSkills: []string{"job-skill"},
 		Plan: Plan{
 			ID: "plan-1",
 			Steps: []Step{
@@ -31,7 +32,7 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 				{ID: "delta", Type: StepTypeStaticArtifact, StaticArtifactPath: "delta.md", StaticArtifactFormat: "markdown"},
 				{ID: "epsilon", Type: StepTypeOneShotCode, OneShotArtifactPath: "epsilon.go"},
 				{ID: "zeta", Type: StepTypeStaticArtifact, StaticArtifactPath: "zeta.yaml", StaticArtifactFormat: "yaml"},
-				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"zeta"}},
+				{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"zeta"}, SelectedSkills: []string{"step-skill"}},
 			},
 		},
 	}
@@ -129,6 +130,12 @@ func TestBuildCommittedMissionStatusSnapshotDeterministic(t *testing.T) {
 	}
 	if first.RuntimeSummary == nil {
 		t.Fatal("RuntimeSummary = nil, want deterministic summary")
+	}
+	if first.Skills == nil || !reflect.DeepEqual(first.Skills.Selected, []string{"job-skill", "step-skill"}) {
+		t.Fatalf("Skills = %#v, want selected job and step skills", first.Skills)
+	}
+	if first.RuntimeSummary.Skills == nil || !reflect.DeepEqual(first.RuntimeSummary.Skills.Selected, []string{"job-skill", "step-skill"}) {
+		t.Fatalf("RuntimeSummary.Skills = %#v, want selected job and step skills", first.RuntimeSummary.Skills)
 	}
 	if len(first.RuntimeSummary.RecentAudit) != OperatorStatusRecentAuditLimit {
 		t.Fatalf("RecentAudit len = %d, want %d", len(first.RuntimeSummary.RecentAudit), OperatorStatusRecentAuditLimit)
@@ -1185,6 +1192,7 @@ func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "RequiredAuthority", tag: `json:"required_authority"`},
 		{name: "RequiresApproval", tag: `json:"requires_approval"`},
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
+		{name: "Skills", tag: `json:"skills,omitempty"`},
 		{name: "Runtime", tag: `json:"runtime,omitempty"`},
 		{name: "RuntimeSummary", tag: `json:"runtime_summary,omitempty"`},
 		{name: "RuntimeControl", tag: `json:"runtime_control,omitempty"`},

@@ -526,6 +526,7 @@ func hydrateCommittedRuntimeControl(root string, jobRuntime JobRuntimeRecord) (*
 		TopologyModeEnabled: record.TopologyModeEnabled,
 		MaxAuthority:        record.MaxAuthority,
 		AllowedTools:        append([]string(nil), record.AllowedTools...),
+		SelectedSkills:      append([]string(nil), record.SelectedSkills...),
 		Step:                copyStep(record.Step),
 	}, nil
 }

@@ -10,8 +10,11 @@ import (
 
 // SkillMetadata holds metadata parsed from SKILL.md frontmatter.
 type SkillMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID                      string   `json:"id"`
+	Name                    string   `json:"name"`
+	Description             string   `json:"description"`
+	AllowedActivationScopes []string `json:"allowed_activation_scopes,omitempty"`
+	PromptOnly              bool     `json:"prompt_only"`
 }
 
 // SkillManager provides tools for managing skills in the workspace.
@@ -81,8 +84,8 @@ func (sm *SkillManager) CreateSkill(name, description, content string) error {
 		return err
 	}
 
-	// Create SKILL.md with frontmatter
-	frontmatter := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n", name, description)
+	// Create SKILL.md with governed prompt-only frontmatter.
+	frontmatter := fmt.Sprintf("---\nid: %s\nname: %s\ndescription: %s\nallowed_activation_scopes: mission_step_prompt\nprompt_only: true\ncan_affect_tools_or_actions: false\n---\n\n", name, name, description)
 	fullContent := frontmatter + content
 
 	return sm.root.WriteFile(skillDir+"/SKILL.md", []byte(fullContent), 0o644)
@@ -119,17 +122,53 @@ func (sm *SkillManager) parseSkillMetadata(skillPath string) (SkillMetadata, err
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		switch key {
+		case "id", "ref":
+			meta.ID = value
 		case "name":
 			meta.Name = value
 		case "description":
 			meta.Description = value
+		case "allowed_activation_scopes":
+			meta.AllowedActivationScopes = parseSkillToolListValue(value)
+		case "prompt_only":
+			meta.PromptOnly = parseSkillToolBool(value)
 		}
 	}
 
+	if meta.ID == "" {
+		meta.ID = meta.Name
+	}
 	if meta.Name == "" {
+		meta.Name = meta.ID
+	}
+	if meta.ID == "" {
 		return SkillMetadata{}, fmt.Errorf("missing name in frontmatter")
 	}
 	return meta, nil
+}
+
+func parseSkillToolListValue(value string) []string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "[")
+	value = strings.TrimSuffix(value, "]")
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.Trim(strings.TrimSpace(part), `"'`)
+		if trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
+func parseSkillToolBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1":
+		return true
+	default:
+		return false
+	}
 }
 
 // ============================================================================

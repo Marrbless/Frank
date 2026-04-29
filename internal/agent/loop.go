@@ -1303,6 +1303,28 @@ func (a *AgentLoop) MissionRuntimeControl() (missioncontrol.RuntimeControlContex
 	return a.taskState.MissionRuntimeControl()
 }
 
+func (a *AgentLoop) GovernedSkillStatus() missioncontrol.GovernedSkillSelectionStatus {
+	if a == nil || a.context == nil || a.context.skillsLoader == nil {
+		return missioncontrol.GovernedSkillSelectionStatus{}
+	}
+	var selected []string
+	if ec, ok := a.ActiveMissionStep(); ok {
+		selected = missioncontrol.EffectiveSelectedSkills(ec.Job, ec.Step)
+	}
+	report, err := a.context.skillsLoader.LoadSelected(selected, missioncontrol.SkillActivationScopeMissionStepPrompt)
+	if err != nil {
+		return missioncontrol.GovernedSkillSelectionStatus{
+			Root:     a.context.skillsLoader.SkillsRoot(),
+			Scope:    missioncontrol.SkillActivationScopeMissionStepPrompt,
+			Selected: selected,
+			Skipped: []missioncontrol.GovernedSkillSkippedStatus{{
+				Reason: "skill_loader_error",
+			}},
+		}
+	}
+	return report.Status()
+}
+
 func (a *AgentLoop) ResumeMissionRuntime(job missioncontrol.Job, runtimeState missioncontrol.JobRuntimeState, control *missioncontrol.RuntimeControlContext, resumeApproved bool) error {
 	if a == nil || a.taskState == nil {
 		return nil

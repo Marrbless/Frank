@@ -93,6 +93,7 @@ type RuntimeControlRecord struct {
 	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools,omitempty"`
+	SelectedSkills      []string        `json:"selected_skills,omitempty"`
 	Step                Step            `json:"step"`
 }
 

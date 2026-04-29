@@ -1251,6 +1251,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(missionCmd)
 
 	rootCmd.AddCommand(newMemoryCmd())
+	rootCmd.AddCommand(newSkillsCmd())
 
 	wrapCommandRunEWithSurfacedValidationErrors(rootCmd)
 	return rootCmd

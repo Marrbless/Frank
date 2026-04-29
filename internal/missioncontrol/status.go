@@ -31,6 +31,7 @@ type OperatorStatusSummary struct {
 	State                                        JobState                                                    `json:"state"`
 	ActiveStepID                                 string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                                 []string                                                    `json:"allowed_tools,omitempty"`
+	Skills                                       *GovernedSkillSelectionStatus                               `json:"skills,omitempty"`
 	RuntimePackIdentity                          *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	V4Summary                                    *OperatorV4SummaryStatus                                    `json:"v4_summary,omitempty"`
 	ImprovementCandidateIdentity                 *OperatorImprovementCandidateIdentityStatus                 `json:"improvement_candidate_identity,omitempty"`

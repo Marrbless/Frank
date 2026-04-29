@@ -66,6 +66,32 @@ func TestBuildRuntimeControlContextCapturesMinimalStepBinding(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeControlContextCarriesSelectedSkills(t *testing.T) {
+	t.Parallel()
+
+	job := testExecutionJob()
+	job.SelectedSkills = []string{"job-skill"}
+	for i := range job.Plan.Steps {
+		if job.Plan.Steps[i].ID == "build" {
+			job.Plan.Steps[i].SelectedSkills = []string{"step-skill"}
+		}
+	}
+
+	control, err := BuildRuntimeControlContext(job, "build")
+	if err != nil {
+		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
+	}
+	if !reflect.DeepEqual(control.SelectedSkills, []string{"job-skill"}) {
+		t.Fatalf("control.SelectedSkills = %#v, want job selected skills", control.SelectedSkills)
+	}
+	if !reflect.DeepEqual(control.Step.SelectedSkills, []string{"step-skill"}) {
+		t.Fatalf("control.Step.SelectedSkills = %#v, want step selected skills", control.Step.SelectedSkills)
+	}
+	if got := EffectiveSelectedSkills(&job, &control.Step); !reflect.DeepEqual(got, []string{"job-skill", "step-skill"}) {
+		t.Fatalf("EffectiveSelectedSkills = %#v, want job then step skills", got)
+	}
+}
+
 func TestRuntimeContextsCarryPromotionPolicyID(t *testing.T) {
 	t.Parallel()
 

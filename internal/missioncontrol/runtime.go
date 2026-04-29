@@ -82,6 +82,7 @@ type InspectablePlanContext struct {
 	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools,omitempty"`
+	SelectedSkills      []string        `json:"selected_skills,omitempty"`
 	Steps               []Step          `json:"steps,omitempty"`
 }
 
@@ -141,6 +142,7 @@ type RuntimeControlContext struct {
 	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools,omitempty"`
+	SelectedSkills      []string        `json:"selected_skills,omitempty"`
 	Step                Step            `json:"step"`
 }
 
@@ -224,6 +226,7 @@ func CloneInspectablePlanContext(plan *InspectablePlanContext) *InspectablePlanC
 	cloned.MutableSurfaces = cloneJobSurfaceRefs(plan.MutableSurfaces)
 	cloned.ImmutableSurfaces = cloneJobSurfaceRefs(plan.ImmutableSurfaces)
 	cloned.AllowedTools = append([]string(nil), plan.AllowedTools...)
+	cloned.SelectedSkills = append([]string(nil), plan.SelectedSkills...)
 	if len(plan.Steps) > 0 {
 		cloned.Steps = make([]Step, len(plan.Steps))
 		for i, step := range plan.Steps {
@@ -254,6 +257,7 @@ func CloneRuntimeControlContext(control *RuntimeControlContext) *RuntimeControlC
 	cloned.MutableSurfaces = cloneJobSurfaceRefs(control.MutableSurfaces)
 	cloned.ImmutableSurfaces = cloneJobSurfaceRefs(control.ImmutableSurfaces)
 	cloned.AllowedTools = append([]string(nil), control.AllowedTools...)
+	cloned.SelectedSkills = append([]string(nil), control.SelectedSkills...)
 	cloned.Step = copyStep(control.Step)
 	return &cloned
 }
@@ -294,6 +298,7 @@ func BuildRuntimeControlContext(job Job, stepID string) (RuntimeControlContext, 
 		TopologyModeEnabled: ec.Job.TopologyModeEnabled,
 		MaxAuthority:        ec.Job.MaxAuthority,
 		AllowedTools:        append([]string(nil), ec.Job.AllowedTools...),
+		SelectedSkills:      append([]string(nil), ec.Job.SelectedSkills...),
 		Step:                normalizedStep(*ec.Step),
 	}, nil
 }
@@ -317,6 +322,7 @@ func BuildInspectablePlanContext(job Job) (InspectablePlanContext, error) {
 		TopologyModeEnabled: job.TopologyModeEnabled,
 		MaxAuthority:        job.MaxAuthority,
 		AllowedTools:        append([]string(nil), job.AllowedTools...),
+		SelectedSkills:      append([]string(nil), job.SelectedSkills...),
 	}
 	if len(job.Plan.Steps) > 0 {
 		context.Steps = make([]Step, len(job.Plan.Steps))

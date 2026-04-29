@@ -61,6 +61,7 @@ func ResolveExecutionContext(job Job, stepID string) (ExecutionContext, error) {
 func copyJob(job Job) Job {
 	jobCopy := job
 	jobCopy.AllowedTools = append([]string(nil), job.AllowedTools...)
+	jobCopy.SelectedSkills = append([]string(nil), job.SelectedSkills...)
 	jobCopy.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
 	jobCopy.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
 	jobCopy.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)
@@ -78,6 +79,7 @@ func copyStep(step Step) Step {
 	stepCopy := step
 	stepCopy.DependsOn = append([]string(nil), step.DependsOn...)
 	stepCopy.AllowedTools = append([]string(nil), step.AllowedTools...)
+	stepCopy.SelectedSkills = append([]string(nil), step.SelectedSkills...)
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	stepCopy.RequiredCapabilities = append([]string(nil), step.RequiredCapabilities...)

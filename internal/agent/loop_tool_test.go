@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -230,6 +232,51 @@ func TestAgentLoopMissionRequiredWithoutContextProviderSeesNoTools(t *testing.T)
 	}
 }
 
+func TestAgentLoopGovernedSkillStatusExposesSelectedActiveAndSkipped(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	writeLoopTestSkill(t, workspace, "good", true)
+	writeLoopTestSkill(t, workspace, "unsafe", false)
+
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, workspace, nil)
+	job := missioncontrol.Job{
+		ID:           "job-1",
+		SpecVersion:  missioncontrol.JobSpecVersionV2,
+		MaxAuthority: missioncontrol.AuthorityTierHigh,
+		AllowedTools: []string{"filesystem"},
+		Plan: missioncontrol.Plan{Steps: []missioncontrol.Step{
+			{
+				ID:                  "build",
+				Type:                missioncontrol.StepTypeOneShotCode,
+				AllowedTools:        []string{"filesystem"},
+				OneShotArtifactPath: "out.txt",
+				SelectedSkills:      []string{"good", "unsafe"},
+			},
+			{ID: "final", Type: missioncontrol.StepTypeFinalResponse, DependsOn: []string{"build"}},
+		}},
+	}
+	if err := ag.ActivateMissionStep(job, "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	status := ag.GovernedSkillStatus()
+	if !reflect.DeepEqual(status.Selected, []string{"good", "unsafe"}) {
+		t.Fatalf("Selected = %#v, want good and unsafe", status.Selected)
+	}
+	if len(status.Active) != 1 || status.Active[0].ID != "good" {
+		t.Fatalf("Active = %#v, want good", status.Active)
+	}
+	if len(status.Skipped) != 1 || status.Skipped[0].ID != "unsafe" {
+		t.Fatalf("Skipped = %#v, want unsafe", status.Skipped)
+	}
+	if got := toolDefinitionNames(ag.tools.DefinitionsForExecutionContext(mustActiveMissionStep(t, ag))); !reflect.DeepEqual(got, []string{"filesystem"}) {
+		t.Fatalf("exposed tools = %#v, want unchanged allowed tools", got)
+	}
+}
+
 func TestAgentLoopActivateMissionStepAndActiveMissionStep(t *testing.T) {
 	t.Parallel()
 
@@ -295,4 +342,35 @@ func toolDefinitionNames(defs []providers.ToolDefinition) []string {
 		names = append(names, def.Name)
 	}
 	return names
+}
+
+func mustActiveMissionStep(t *testing.T, ag *AgentLoop) *missioncontrol.ExecutionContext {
+	t.Helper()
+	ec, ok := ag.ActiveMissionStep()
+	if !ok {
+		t.Fatal("ActiveMissionStep() ok = false, want true")
+	}
+	return &ec
+}
+
+func writeLoopTestSkill(t *testing.T, workspace string, id string, promptOnly bool) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := fmt.Sprintf(`---
+id: %s
+version: v1
+description: Test skill
+allowed_activation_scopes: mission_step_prompt
+prompt_only: %t
+can_affect_tools_or_actions: %t
+---
+
+# %s
+`, id, promptOnly, !promptOnly, id)
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

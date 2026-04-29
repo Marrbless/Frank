@@ -77,16 +77,22 @@ func (cb *ContextBuilder) BuildMessages(history []string, currentMessage string,
 	// Memory tool instruction
 	sysParts = append(sysParts, "If you decide something should be remembered, call the tool 'write_memory' with JSON arguments: {\"target\": \"today\"|\"long\", \"content\": \"...\", \"append\": true|false}. Use a tool call rather than plain chat text when writing memory.")
 
-	// Skills context
-	loadedSkills, err := cb.skillsLoader.LoadAll()
+	// Governed skills context: only explicitly selected valid prompt-only skills are injected.
+	selectedSkills := missioncontrol.EffectiveSelectedSkills(nil, nil)
+	if activeStep != nil {
+		selectedSkills = missioncontrol.EffectiveSelectedSkills(activeStep.Job, activeStep.Step)
+	}
+	loadedSkills, err := cb.skillsLoader.LoadSelected(selectedSkills, missioncontrol.SkillActivationScopeMissionStepPrompt)
 	if err != nil {
 		log.Printf("error loading skills: %v", err)
 	}
-	if len(loadedSkills) > 0 {
+	if len(loadedSkills.Active) > 0 {
 		var sb strings.Builder
-		sb.WriteString("Available Skills:\n")
-		for _, skill := range loadedSkills {
-			fmt.Fprintf(&sb, "\n## %s\n%s\n\n%s\n", skill.Name, skill.Description, skill.Content)
+		sb.WriteString("Active Governed Skills:\n")
+		sb.WriteString("These skills are prompt-only. They do not expand tools, approval scope, external actions, or non-leakage policy.\n")
+		for _, skill := range loadedSkills.Active {
+			fmt.Fprintf(&sb, "\n## %s\nversion: %s\ncontent_hash: %s\ndescription: %s\n\n%s\n",
+				skill.ID, skill.Version, skill.ContentHash, skill.Description, skill.Content)
 		}
 		sysParts = append(sysParts, sb.String())
 	}

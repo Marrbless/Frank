@@ -20,6 +20,7 @@ type InspectSummary struct {
 	TopologyModeEnabled bool            `json:"topology_mode_enabled,omitempty"`
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools"`
+	SelectedSkills      []string        `json:"selected_skills,omitempty"`
 	Steps               []InspectStep   `json:"steps"`
 }
 
@@ -29,6 +30,7 @@ type InspectStep struct {
 	DependsOn                                    []string                                                              `json:"depends_on"`
 	RequiredAuthority                            AuthorityTier                                                         `json:"required_authority"`
 	AllowedTools                                 []string                                                              `json:"allowed_tools"`
+	SelectedSkills                               []string                                                              `json:"selected_skills,omitempty"`
 	SuccessCriteria                              []string                                                              `json:"success_criteria"`
 	EffectiveAllowedTools                        []string                                                              `json:"effective_allowed_tools"`
 	RequiresApproval                             bool                                                                  `json:"requires_approval"`
@@ -109,6 +111,7 @@ func newInspectSummary(job Job, stepID string, buildStep func(Step, ExecutionCon
 		TopologyModeEnabled: job.TopologyModeEnabled,
 		MaxAuthority:        job.MaxAuthority,
 		AllowedTools:        append([]string(nil), job.AllowedTools...),
+		SelectedSkills:      append([]string(nil), job.SelectedSkills...),
 	}
 
 	if stepID != "" {
@@ -166,6 +169,7 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		TopologyModeEnabled: control.TopologyModeEnabled,
 		MaxAuthority:        control.MaxAuthority,
 		AllowedTools:        append([]string(nil), control.AllowedTools...),
+		SelectedSkills:      append([]string(nil), control.SelectedSkills...),
 	}
 	step := copyStep(control.Step)
 
@@ -184,6 +188,7 @@ func NewInspectSummaryFromControl(control RuntimeControlContext, stepID string) 
 		TopologyModeEnabled: job.TopologyModeEnabled,
 		MaxAuthority:        job.MaxAuthority,
 		AllowedTools:        append([]string(nil), job.AllowedTools...),
+		SelectedSkills:      append([]string(nil), job.SelectedSkills...),
 		Steps:               []InspectStep{newInspectStepSummary(step, ExecutionContext{Job: &job, Step: &step})},
 	}, nil
 }
@@ -211,6 +216,7 @@ func NewInspectSummaryFromInspectablePlan(jobID string, plan *InspectablePlanCon
 		TopologyModeEnabled: plan.TopologyModeEnabled,
 		MaxAuthority:        plan.MaxAuthority,
 		AllowedTools:        append([]string(nil), plan.AllowedTools...),
+		SelectedSkills:      append([]string(nil), plan.SelectedSkills...),
 		Plan: Plan{
 			Steps: make([]Step, len(plan.Steps)),
 		},
@@ -237,6 +243,7 @@ func newInspectStepSummary(step Step, ec ExecutionContext) InspectStep {
 		DependsOn:             append([]string(nil), step.DependsOn...),
 		RequiredAuthority:     step.RequiredAuthority,
 		AllowedTools:          append([]string(nil), step.AllowedTools...),
+		SelectedSkills:        append([]string(nil), step.SelectedSkills...),
 		SuccessCriteria:       append([]string(nil), step.SuccessCriteria...),
 		EffectiveAllowedTools: EffectiveAllowedTools(ec.Job, ec.Step),
 		RequiresApproval:      step.RequiresApproval,

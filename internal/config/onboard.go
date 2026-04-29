@@ -130,7 +130,8 @@ Never create files directly in the workspace root. Always use a project folder.
 ## Skills
 
 - You can create new skills with the create_skill tool
-- Skills are reusable knowledge/procedures stored in skills/
+- Skills are reusable governed knowledge/procedures stored in skills/
+- Skills are inactive unless explicitly selected by mission/runtime config
 - List available skills with list_skills before creating duplicates
 
 ## Safety
@@ -254,7 +255,7 @@ Delete a daily memory file. Cannot delete long-term memory (MEMORY.md).
 ## Skill Management
 
 ### create_skill
-Create a new skill in the skills/ directory.
+Create a governed prompt-only skill in the skills/ directory.
 - name: skill name (used as folder name)
 - description: brief description
 - content: the skill's markdown content
@@ -263,7 +264,7 @@ Create a new skill in the skills/ directory.
 List all available skills. No arguments needed.
 
 ### read_skill
-Read a specific skill's content.
+Read a specific skill's content. Reading a skill does not activate it.
 - name: the skill name to read
 
 ### delete_skill

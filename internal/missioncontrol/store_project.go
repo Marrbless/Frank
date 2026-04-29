@@ -7,16 +7,17 @@ import (
 )
 
 type MissionStatusSnapshot struct {
-	MissionRequired   bool             `json:"mission_required"`
-	Active            bool             `json:"active"`
-	MissionFile       string           `json:"mission_file"`
-	JobID             string           `json:"job_id"`
-	StepID            string           `json:"step_id"`
-	StepType          string           `json:"step_type"`
-	RequiredAuthority AuthorityTier    `json:"required_authority"`
-	RequiresApproval  bool             `json:"requires_approval"`
-	AllowedTools      []string         `json:"allowed_tools"`
-	Runtime           *JobRuntimeState `json:"runtime,omitempty"`
+	MissionRequired   bool                          `json:"mission_required"`
+	Active            bool                          `json:"active"`
+	MissionFile       string                        `json:"mission_file"`
+	JobID             string                        `json:"job_id"`
+	StepID            string                        `json:"step_id"`
+	StepType          string                        `json:"step_type"`
+	RequiredAuthority AuthorityTier                 `json:"required_authority"`
+	RequiresApproval  bool                          `json:"requires_approval"`
+	AllowedTools      []string                      `json:"allowed_tools"`
+	Skills            *GovernedSkillSelectionStatus `json:"skills,omitempty"`
+	Runtime           *JobRuntimeState              `json:"runtime,omitempty"`
 	// RuntimeSummary is a convenience projection of direct OperatorStatus JSON.
 	// Provider-specific Zoho fields may be carried through incidentally here, but
 	// only direct OperatorStatus and direct OperatorInspect remain frozen
@@ -79,6 +80,17 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	}
 
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
+	if runtimeControl != nil {
+		selected := EffectiveSelectedSkills(&Job{SelectedSkills: runtimeControl.SelectedSkills}, &runtimeControl.Step)
+		if len(selected) > 0 {
+			skillStatus := GovernedSkillSelectionStatus{
+				Scope:    SkillActivationScopeMissionStepPrompt,
+				Selected: selected,
+			}
+			snapshot.Skills = &skillStatus
+			summary = WithGovernedSkillSelectionStatus(summary, skillStatus)
+		}
+	}
 	campaignGate, err := buildCommittedMissionStatusCampaignZohoEmailSendGate(root, runtimeState, runtimeControl)
 	if err != nil {
 		return MissionStatusSnapshot{}, err

@@ -1,14 +1,15 @@
 # Skills System
 
-The skills system allows you to extend picobot with custom knowledge, workflows, and domain expertise.
+The skills system allows you to extend Picobot with governed local knowledge, workflows, and domain expertise.
 
 ## Overview
 
 Skills are modular packages that provide:
 - **Specialized workflows**: Multi-step procedures for specific tasks
 - **Domain knowledge**: Company-specific info, schemas, business logic
-- **Tool integrations**: Instructions for working with specific APIs or formats
-- **Bundled resources**: Scripts, configs, and reference materials
+- **Tool guidance**: Prompt-only instructions for working with specific APIs or formats
+
+Skills do not grant tools, outbound actions, approval scope, or policy exceptions. They are inert unless explicitly selected by mission/runtime configuration.
 
 ## Structure
 
@@ -23,12 +24,16 @@ skills/
 
 ## SKILL.md Format
 
-Every skill must have a `SKILL.md` file with YAML frontmatter:
+Every skill must have a `SKILL.md` file with governed frontmatter:
 
 ```markdown
 ---
-name: skill-name
+id: skill-name
+version: v1
 description: Brief description of what this skill does
+allowed_activation_scopes: mission_step_prompt
+prompt_only: true
+can_affect_tools_or_actions: false
 ---
 
 # Skill Name
@@ -37,30 +42,28 @@ description: Brief description of what this skill does
 
 What this skill helps you accomplish.
 
-## Usage
-
 Instructions, examples, and procedures.
-
-## Examples
-
-\`\`\`bash
-# Command examples
-curl example.com/api
-\`\`\`
-
-## Tips
-
-- Best practices
-- Common pitfalls
-- References
 ```
+
+Required metadata:
+- `id` or `ref`: must match the skill directory name.
+- `description`: non-empty operator/read-model description.
+- `allowed_activation_scopes`: currently `mission_step_prompt`.
+- `prompt_only`: must be `true`.
+
+Optional metadata:
+- `version`: operator-readable version. The loader also reports a `sha256:` content hash.
+
+Unsupported metadata/effects:
+- `can_affect_tools_or_actions: true` is blocked in this slice.
+- `prompt_only: false` is blocked in this slice.
 
 ## Management Tools
 
 Picobot provides built-in tools for managing skills:
 
 ### `create_skill`
-Create a new skill in the `skills` directory.
+Create a governed prompt-only skill in the `skills` directory.
 
 **Arguments:**
 ```json
@@ -108,10 +111,28 @@ Delete a skill from the `skills` directory.
 
 ## How Skills Work
 
-1. **Loading**: When the agent starts processing a message, all skills are loaded from `skills/`
-2. **Context**: Skill content is included in the agent's context automatically
-3. **Access**: The agent can reference skills when responding to relevant queries
-4. **Management**: The agent can create/modify/delete skills using the skill tools
+1. **Storage**: Skills live under `skills/<skill_id>/SKILL.md`.
+2. **Selection**: A job or step selects skill ids with `selected_skills`.
+3. **Validation**: The loader validates metadata, activation scope, prompt-only status, id/path consistency, and content hash.
+4. **Injection**: Only selected, valid skills for `mission_step_prompt` are included in prompt construction.
+5. **Status**: Runtime/status read models expose selected, active, and skipped skills with structured reasons.
+6. **Management**: The agent can create/list/read/delete skill files using the skill tools, but those operations do not activate skills.
+
+## Importing Installed Skills
+
+If an external installer writes Codex-style skills into `.agents/skills/` or `.codex/skills/`, admit them into Frank's governed root with:
+
+```bash
+picobot skills import
+```
+
+Or import a specific candidate root:
+
+```bash
+picobot skills import .agents/skills
+```
+
+The import command rewrites candidate frontmatter into the governed prompt-only schema and reports imported/skipped skills as JSON. It does not activate imported skills.
 
 ## Creating Effective Skills
 
@@ -141,8 +162,12 @@ Delete a skill from the `skills` directory.
 
 ```markdown
 ---
-name: api-integration
+id: api-integration
+version: v1
 description: How to integrate with our internal API
+allowed_activation_scopes: mission_step_prompt
+prompt_only: true
+can_affect_tools_or_actions: false
 ---
 
 # API Integration
@@ -176,7 +201,7 @@ After onboarding, check `skills/example/SKILL.md` for a demonstration of the for
 
 1. **One skill per domain**: Keep skills focused on specific areas
 2. **Include examples**: Show concrete usage, not just theory
-3. **Reference tools**: Mention which picobot tools are relevant
+3. **Respect tool policy**: Mention tool usage only as guidance; skills cannot grant tools
 4. **Update regularly**: Keep skills current as processes change
 5. **Test instructions**: Verify commands/procedures actually work
 
@@ -200,8 +225,12 @@ ls ~/.picobot/workspace/skills/
 mkdir -p ~/.picobot/workspace/skills/my-skill
 cat > ~/.picobot/workspace/skills/my-skill/SKILL.md <<EOF
 ---
-name: my-skill
+id: my-skill
+version: v1
 description: My custom skill
+allowed_activation_scopes: mission_step_prompt
+prompt_only: true
+can_affect_tools_or_actions: false
 ---
 
 # My Skill
@@ -217,8 +246,9 @@ rm -rf ~/.picobot/workspace/skills/my-skill
 
 **Skills not loading?**
 - Check `skills/` exists in workspace
-- Verify `SKILL.md` has valid frontmatter with `name` field
+- Verify `SKILL.md` has valid governed frontmatter and matching directory/id
 - Check file permissions (should be readable)
+- Check runtime/status for structured skipped reasons
 
 **Skill content too long?**
 - Break into multiple focused skills
@@ -226,6 +256,6 @@ rm -rf ~/.picobot/workspace/skills/my-skill
 - Use links for detailed references
 
 **Agent not using skill knowledge?**
-- Ensure skill name/description are clear and relevant
-- Add keywords that match user queries
-- Consider splitting broad skills into specific ones
+- Ensure the skill id is explicitly listed in job or step `selected_skills`
+- Ensure `allowed_activation_scopes` includes `mission_step_prompt`
+- Check runtime/status for `active` and `skipped` skill state

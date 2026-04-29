@@ -396,6 +396,7 @@ func projectRuntimeControlRecord(runtime JobRuntimeState, control *RuntimeContro
 		TopologyModeEnabled: control.TopologyModeEnabled,
 		MaxAuthority:        control.MaxAuthority,
 		AllowedTools:        append([]string(nil), control.AllowedTools...),
+		SelectedSkills:      append([]string(nil), control.SelectedSkills...),
 		Step:                copyStep(control.Step),
 	}
 	return &record, nil

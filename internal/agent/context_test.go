@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -108,5 +110,80 @@ func TestBuildMessagesWithActiveMissionStepRestrictsToExposedTools(t *testing.T)
 	}
 	if strings.Contains(sys, "No tools are available in the current mission step.") {
 		t.Fatalf("did not expect no-tools text in system prompt, got %q", sys)
+	}
+}
+
+func TestBuildMessagesIncludesOnlySelectedGovernedSkills(t *testing.T) {
+	workspace := t.TempDir()
+	writeContextTestSkill(t, workspace, "selected", "Selected instructions")
+	writeContextTestSkill(t, workspace, "unselected", "Unselected instructions")
+
+	cb := NewContextBuilder(workspace, memory.NewSimpleRanker(), 5)
+	ec := missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "build", SelectedSkills: []string{"selected"}},
+	}
+
+	msgs := cb.BuildMessages(nil, "hello", "telegram", "123", "", nil, &ec, nil)
+	sys := msgs[0].Content
+
+	if !strings.Contains(sys, "Active Governed Skills:") || !strings.Contains(sys, "Selected instructions") {
+		t.Fatalf("expected selected skill in system prompt, got %q", sys)
+	}
+	if strings.Contains(sys, "Unselected instructions") {
+		t.Fatalf("did not expect unselected skill in system prompt, got %q", sys)
+	}
+}
+
+func TestBuildMessagesSkipsSelectedInvalidSkill(t *testing.T) {
+	workspace := t.TempDir()
+	dir := filepath.Join(workspace, "skills", "unsafe")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(`---
+id: unsafe
+description: Unsafe instructions
+allowed_activation_scopes: mission_step_prompt
+prompt_only: false
+can_affect_tools_or_actions: true
+---
+
+Unsafe instructions
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cb := NewContextBuilder(workspace, memory.NewSimpleRanker(), 5)
+	ec := missioncontrol.ExecutionContext{
+		Job:  &missioncontrol.Job{ID: "job-1"},
+		Step: &missioncontrol.Step{ID: "build", SelectedSkills: []string{"unsafe"}},
+	}
+
+	msgs := cb.BuildMessages(nil, "hello", "telegram", "123", "", nil, &ec, nil)
+	if strings.Contains(msgs[0].Content, "Unsafe instructions") {
+		t.Fatalf("invalid skill was included in system prompt: %q", msgs[0].Content)
+	}
+}
+
+func writeContextTestSkill(t *testing.T, workspace string, id string, body string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `---
+id: ` + id + `
+version: v1
+description: Test skill
+allowed_activation_scopes: mission_step_prompt
+prompt_only: true
+can_affect_tools_or_actions: false
+---
+
+` + body + `
+`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

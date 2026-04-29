@@ -159,6 +159,7 @@ type Job struct {
 	State               JobState        `json:"state"`
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools"`
+	SelectedSkills      []string        `json:"selected_skills,omitempty"`
 	Plan                Plan            `json:"plan"`
 	MissionStoreRoot    string          `json:"-"`
 }
@@ -176,6 +177,7 @@ type Step struct {
 	DependsOn                       []string                         `json:"depends_on"`
 	RequiredAuthority               AuthorityTier                    `json:"required_authority"`
 	AllowedTools                    []string                         `json:"allowed_tools"`
+	SelectedSkills                  []string                         `json:"selected_skills,omitempty"`
 	RequiresApproval                bool                             `json:"requires_approval"`
 	SuccessCriteria                 []string                         `json:"success_criteria"`
 	StaticArtifactPath              string                           `json:"static_artifact_path,omitempty"`
