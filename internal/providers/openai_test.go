@@ -3,10 +3,12 @@ package providers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -90,6 +92,45 @@ func TestOpenAIDoJSONRedactsNon2xxBody(t *testing.T) {
 	}
 	if strings.Contains(logs, "sk-secret") || strings.Contains(logs, "private note") {
 		t.Fatalf("expected logs to redact provider body, got %q", logs)
+	}
+}
+
+func TestOpenAIDoJSONRateLimitHonorsRetryAfterCooldown(t *testing.T) {
+	var calls int32
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("X-Request-Id", "req_rate_limited")
+		w.Header().Set("Retry-After", "3")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limit"}`))
+	}))
+	defer h.Close()
+
+	p := NewOpenAIProvider("test-key", h.URL, 60, 0)
+	p.Client = &http.Client{Timeout: 5 * time.Second}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := p.doJSON(ctx, h.URL, []byte(`{"input":"hello"}`))
+	var firstRateLimit *RateLimitError
+	if err == nil || !errors.As(err, &firstRateLimit) {
+		t.Fatalf("first doJSON() error = %v, want RateLimitError", err)
+	}
+	if firstRateLimit.RequestID != "req_rate_limited" {
+		t.Fatalf("first RateLimitError.RequestID = %q, want req_rate_limited", firstRateLimit.RequestID)
+	}
+	if firstRateLimit.RetryAfter <= 0 {
+		t.Fatalf("first RateLimitError.RetryAfter = %v, want positive duration", firstRateLimit.RetryAfter)
+	}
+
+	_, err = p.doJSON(ctx, h.URL, []byte(`{"input":"hello again"}`))
+	var secondRateLimit *RateLimitError
+	if err == nil || !errors.As(err, &secondRateLimit) {
+		t.Fatalf("second doJSON() error = %v, want RateLimitError", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("provider calls = %d, want 1 because second call should use local cooldown", got)
 	}
 }
 

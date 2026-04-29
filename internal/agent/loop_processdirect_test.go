@@ -97,6 +97,26 @@ func TestProcessDirectRedactsProviderErrors(t *testing.T) {
 	}
 }
 
+func TestProviderRateLimitErrorGetsSpecificOperatorResponse(t *testing.T) {
+	err := &providers.RateLimitError{
+		Status:     "429 Too Many Requests",
+		RequestID:  "req_rate_limited",
+		RetryAfter: 45 * time.Second,
+		Until:      time.Now().Add(45 * time.Second),
+	}
+
+	if got := summarizeProviderError(err); got != "OpenAI API rate limited; retry after 45s" {
+		t.Fatalf("summarizeProviderError() = %q, want rate limit summary", got)
+	}
+	got, ok := providerRateLimitResponse(err)
+	if !ok {
+		t.Fatal("providerRateLimitResponse() ok = false, want true")
+	}
+	if !strings.Contains(got, "OpenAI is rate limited") || !strings.Contains(got, "45s") {
+		t.Fatalf("providerRateLimitResponse() = %q, want retry guidance", got)
+	}
+}
+
 type deniedMessageToolProvider struct {
 	calls int
 }

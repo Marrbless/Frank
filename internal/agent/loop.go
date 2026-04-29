@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -271,6 +272,13 @@ func summarizeProviderError(err error) string {
 	if err == nil {
 		return "provider request failed"
 	}
+	var rateLimitErr *providers.RateLimitError
+	if errors.As(err, &rateLimitErr) {
+		if rateLimitErr.RetryAfter > 0 {
+			return fmt.Sprintf("OpenAI API rate limited; retry after %s", rateLimitErr.RetryAfter.Round(time.Second))
+		}
+		return "OpenAI API rate limited"
+	}
 
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
@@ -296,6 +304,17 @@ func summarizeProviderError(err error) string {
 	default:
 		return "provider request failed"
 	}
+}
+
+func providerRateLimitResponse(err error) (string, bool) {
+	var rateLimitErr *providers.RateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		return "", false
+	}
+	if rateLimitErr.RetryAfter > 0 {
+		return fmt.Sprintf("OpenAI is rate limited right now. Try again after about %s.", rateLimitErr.RetryAfter.Round(time.Second)), true
+	}
+	return "OpenAI is rate limited right now. Try again shortly.", true
 }
 
 func summarizeMCPConnectError(err error) string {
@@ -1488,7 +1507,11 @@ func (a *AgentLoop) Run(ctx context.Context) {
 				resp, err := a.provider.Chat(ctx, messages, toolDefs, a.model)
 				if err != nil {
 					log.Printf("provider error: %s", summarizeProviderError(err))
-					finalContent = "Sorry, I encountered an error while processing your request."
+					if rateLimitContent, ok := providerRateLimitResponse(err); ok {
+						finalContent = rateLimitContent
+					} else {
+						finalContent = "Sorry, I encountered an error while processing your request."
+					}
 					break
 				}
 

@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +22,36 @@ type OpenAIProvider struct {
 	UseResponses    bool
 	ReasoningEffort string
 	Client          *http.Client
+
+	cooldownMu         sync.Mutex
+	rateLimitUntil     time.Time
+	rateLimitStatus    string
+	rateLimitRequestID string
+}
+
+// RateLimitError reports an OpenAI 429 and the local cooldown window that
+// Picobot will honor before attempting another provider request.
+type RateLimitError struct {
+	Status     string
+	RequestID  string
+	RetryAfter time.Duration
+	Until      time.Time
+}
+
+func (e *RateLimitError) Error() string {
+	status := strings.TrimSpace(e.Status)
+	if status == "" {
+		status = "429 Too Many Requests"
+	}
+
+	parts := []string{"OpenAI API error: " + status}
+	if e.RequestID != "" {
+		parts = append(parts, fmt.Sprintf("(request id: %s)", e.RequestID))
+	}
+	if e.RetryAfter > 0 {
+		parts = append(parts, fmt.Sprintf("(retry after: %s)", e.RetryAfter.Round(time.Second)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // Backward-compatible constructor.
@@ -424,6 +456,10 @@ func buildResponsesInput(messages []Message) []map[string]interface{} {
    =========== */
 
 func (p *OpenAIProvider) doJSON(ctx context.Context, url string, body []byte) ([]byte, error) {
+	if err := p.activeRateLimitError(); err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
@@ -445,6 +481,21 @@ func (p *OpenAIProvider) doJSON(ctx context.Context, url string, body []byte) ([
 		if requestID == "" {
 			requestID = strings.TrimSpace(resp.Header.Get("Request-Id"))
 		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+			until := p.setRateLimitCooldown(resp.Status, requestID, retryAfter)
+			if requestID == "" {
+				log.Printf("OpenAI API non-2xx: status=%s body_bytes=%d retry_after=%s", resp.Status, len(respBody), retryAfter.Round(time.Second))
+			} else {
+				log.Printf("OpenAI API non-2xx: status=%s request_id=%s body_bytes=%d retry_after=%s", resp.Status, requestID, len(respBody), retryAfter.Round(time.Second))
+			}
+			return nil, &RateLimitError{
+				Status:     resp.Status,
+				RequestID:  requestID,
+				RetryAfter: time.Until(until),
+				Until:      until,
+			}
+		}
 		if requestID == "" {
 			log.Printf("OpenAI API non-2xx: status=%s body_bytes=%d", resp.Status, len(respBody))
 		} else {
@@ -456,4 +507,68 @@ func (p *OpenAIProvider) doJSON(ctx context.Context, url string, body []byte) ([
 		return nil, fmt.Errorf("OpenAI API error: %s (request id: %s)", resp.Status, requestID)
 	}
 	return respBody, nil
+}
+
+func (p *OpenAIProvider) activeRateLimitError() error {
+	if p == nil {
+		return nil
+	}
+
+	p.cooldownMu.Lock()
+	defer p.cooldownMu.Unlock()
+
+	now := time.Now()
+	if p.rateLimitUntil.IsZero() || !now.Before(p.rateLimitUntil) {
+		return nil
+	}
+
+	status := p.rateLimitStatus
+	if status == "" {
+		status = "429 Too Many Requests"
+	}
+	return &RateLimitError{
+		Status:     status,
+		RequestID:  p.rateLimitRequestID,
+		RetryAfter: time.Until(p.rateLimitUntil),
+		Until:      p.rateLimitUntil,
+	}
+}
+
+func (p *OpenAIProvider) setRateLimitCooldown(status, requestID string, retryAfter time.Duration) time.Time {
+	if retryAfter <= 0 {
+		retryAfter = time.Minute
+	}
+	until := time.Now().Add(retryAfter)
+
+	p.cooldownMu.Lock()
+	defer p.cooldownMu.Unlock()
+
+	if until.After(p.rateLimitUntil) {
+		p.rateLimitUntil = until
+		p.rateLimitStatus = status
+		p.rateLimitRequestID = requestID
+	}
+	return p.rateLimitUntil
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Minute
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return time.Minute
+		}
+		return time.Duration(seconds) * time.Second
+	}
+
+	if at, err := http.ParseTime(value); err == nil {
+		if now.Before(at) {
+			return at.Sub(now)
+		}
+	}
+
+	return time.Minute
 }
