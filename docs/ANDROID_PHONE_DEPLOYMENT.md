@@ -173,13 +173,39 @@ For mission-control mode, replace the gateway command with the explicit `--missi
 
 ## Maintenance
 
-Update from the private repo:
+Update from the private repo and restart the bot process without rebooting Android:
 
 ```sh
 cd ~/Frank
-git pull --ff-only
-go build -tags lite -ldflags="-s -w" -o picobot ./cmd/picobot
-./picobot version
+scripts/termux/update-and-restart-frank
+```
+
+The script runs `git pull --ff-only`, builds a fresh lite `picobot` binary, replaces the old binary, kills only the `frank` tmux session, and starts a new one. The running old binary can be replaced safely; the new session uses the rebuilt binary.
+
+For mission-control mode, create a local phone-only environment file so the restart script always uses the same gateway flags:
+
+```sh
+cd ~/Frank
+nano .termux-frank.env
+```
+
+Example:
+
+```sh
+PICOBOT_SESSION=frank
+PICOBOT_GATEWAY_CMD='./picobot gateway --mission-required --mission-file ~/.picobot/frank/mission.json --mission-step discussion --mission-status-file ~/.picobot/frank/mission-status.json --mission-step-control-file ~/.picobot/frank/mission-step-control.json --mission-store-root ~/.picobot/frank/mission-store'
+```
+
+If you already ran `git pull --ff-only` and only need to rebuild/restart:
+
+```sh
+PICOBOT_SKIP_PULL=1 scripts/termux/update-and-restart-frank
+```
+
+If the script is not executable after cloning, run:
+
+```sh
+chmod +x scripts/termux/update-and-restart-frank
 ```
 
 Back up `~/.picobot` regularly. It contains local config, memory, skills, mission state, and channel setup.

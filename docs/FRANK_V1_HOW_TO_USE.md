@@ -138,6 +138,15 @@ Look for:
 
 ### Restart the phone gateway
 
+If the phone is running the recommended Termux/tmux deployment, update and restart the bot process without rebooting Android:
+
+```sh
+cd ~/Frank
+scripts/termux/update-and-restart-frank
+```
+
+Set `PICOBOT_GATEWAY_CMD` in `~/Frank/.termux-frank.env` if the phone gateway uses mission-control flags.
+
 Normal mission-required startup:
 
 ```sh

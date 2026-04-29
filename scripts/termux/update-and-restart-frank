@@ -1,0 +1,45 @@
+#!/data/data/com.termux/files/usr/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+
+cd "$REPO_ROOT"
+
+if [ -f "$REPO_ROOT/.termux-frank.env" ]; then
+	# Local phone-only configuration. Do not commit this file.
+	. "$REPO_ROOT/.termux-frank.env"
+fi
+
+PICOBOT_SESSION=${PICOBOT_SESSION:-frank}
+PICOBOT_GATEWAY_CMD=${PICOBOT_GATEWAY_CMD:-./picobot gateway}
+PICOBOT_BUILD_OUTPUT=${PICOBOT_BUILD_OUTPUT:-picobot}
+PICOBOT_BUILD_TAGS=${PICOBOT_BUILD_TAGS:-lite}
+PICOBOT_SKIP_PULL=${PICOBOT_SKIP_PULL:-0}
+
+tmp_binary="$PICOBOT_BUILD_OUTPUT.next.$$"
+cleanup() {
+	rm -f "$tmp_binary"
+}
+trap cleanup EXIT INT TERM
+
+if [ "$PICOBOT_SKIP_PULL" != "1" ]; then
+	git pull --ff-only
+fi
+
+if [ -n "$PICOBOT_BUILD_TAGS" ]; then
+	go build -tags "$PICOBOT_BUILD_TAGS" -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
+else
+	go build -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
+fi
+
+chmod 755 "$tmp_binary"
+mv "$tmp_binary" "$PICOBOT_BUILD_OUTPUT"
+trap - EXIT INT TERM
+
+if tmux has-session -t "$PICOBOT_SESSION" 2>/dev/null; then
+	tmux kill-session -t "$PICOBOT_SESSION"
+fi
+
+tmux new-session -d -s "$PICOBOT_SESSION" "$PICOBOT_GATEWAY_CMD"
+tmux ls

@@ -10,6 +10,7 @@
 
 # Docker env (contains secrets)
 docker/.env
+.termux-frank.env
 
 # Session data
 /sessions/
