@@ -293,13 +293,11 @@ func (c *slackClient) logUnauthorized(userID, channelID string, isDM bool) {
 	if len(c.allowedUsers) > 0 {
 		_, userAllowed = c.allowedUsers[userID]
 	}
-	if isDM {
-		channelAllowed = true
-	} else {
+	if !isDM {
 		channelAllowed = c.openChanMode
-	}
-	if !isDM && len(c.allowedChans) > 0 {
-		_, channelAllowed = c.allowedChans[channelID]
+		if len(c.allowedChans) > 0 {
+			_, channelAllowed = c.allowedChans[channelID]
+		}
 	}
 	log.Printf("slack: dropped message: user allowed=%t channel allowed=%t user=%s channel=%s", userAllowed, channelAllowed, redactLogID(userID), redactLogID(channelID))
 }
