@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+: "${GOCACHE:=/tmp/picobot-gocache}"
+: "${GOTMPDIR:=/tmp/picobot-gotmp}"
+mkdir -p "$GOCACHE" "$GOTMPDIR"
+export GOCACHE GOTMPDIR
+
+cd "$ROOT"
+go test -run '^TestCurrentDocsRelativeLinksResolve$' -count=1 ./internal/docscheck

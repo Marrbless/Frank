@@ -142,8 +142,9 @@ Connect to any OpenAI-compatible API service (OpenAI, OpenRouter, Ollama, etc.).
 
 **Examples:**
 
+OpenAI:
+
 ```json
-// OpenAI
 {
   "providers": {
     "openai": {
@@ -152,8 +153,11 @@ Connect to any OpenAI-compatible API service (OpenAI, OpenRouter, Ollama, etc.).
     }
   }
 }
+```
 
-// Local Ollama (no API key needed)
+Local Ollama (no API key needed):
+
+```json
 {
   "providers": {
     "openai": {
@@ -257,6 +261,20 @@ Only one transport is used per server: if both `command` and `url` are set, `com
 
 Each MCP tool is registered in the agent's tool registry as `mcp_{server}_{tool}`. For example, a server named `via-npx` exposing a tool `some-action` becomes `mcp_via-npx_some-action`. The agent sees and calls it like any built-in tool.
 
+### Authorization, side effects, and logging
+
+MCP is disabled by default because the generated config starts with an empty `mcpServers` map. Adding a server expands the model-visible tool surface only after that server connects and returns a tool list.
+
+MCP tools use the same mission guard as local tools:
+
+- Mission `allowed_tools` must name each MCP tool exactly, for example `mcp_via-npx_some-action`.
+- Step-level `allowed_tools` further narrow the job-level list when present.
+- Step approval, runtime validity, campaign readiness, governed identity mode, and autonomy eligibility checks still run before tool execution.
+
+Picobot does not inspect a remote MCP server deeply enough to prove whether a tool is read-only, writes durable state, calls a network, or performs account actions. Treat any MCP tool with unknown side effects as high authority until the server's own documentation and local testing prove a narrower scope. Record approved MCP tools in [maintenance/TOOL_PERMISSION_MANIFEST.md](maintenance/TOOL_PERMISSION_MANIFEST.md) or a mission-specific permission note before using them in unattended work.
+
+MCP logging is intentionally summarized on the local side. Startup failures are logged and the agent continues with other tools. Runtime tool logs use argument counts/types rather than raw argument keys or values, and MCP tool failures are surfaced as summarized MCP failures instead of raw remote payloads when they pass through the local registry.
+
 ### Startup behaviour
 
 - Servers are connected when the agent starts (`gateway` or `agent` command).
@@ -269,13 +287,35 @@ Each MCP tool is registered in the agent's tool registry as `mcp_{server}_{tool}
 
 Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
 
+Validate channel safety without starting network services:
+
+```sh
+picobot config validate
+```
+
+The command fails if any enabled channel has an empty allowlist without an explicit open-mode acknowledgement.
+On POSIX systems, it also warns when `~/.picobot/config.json` contains plaintext credentials and is readable by group or other users. New configs are written with owner-only permissions.
+
+Edit allowlists without manually editing JSON:
+
+```sh
+picobot channels allowlist list telegram
+picobot channels allowlist add telegram 8881234567
+picobot channels allowlist remove telegram 8881234567
+picobot channels allowlist add slack-users U0123456789
+picobot channels allowlist add slack-channels C0123456789
+```
+
+Valid allowlist scopes are `telegram`, `discord`, `whatsapp`, `slack-users`, and `slack-channels`. These commands do not disable open mode; if open mode is enabled, Picobot warns that allowlist edits will not restrict access until open mode is disabled.
+
 ### channels.telegram
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Set to `true` to start the Telegram bot. |
 | `token` | string | `""` | Your Telegram Bot token from [@BotFather](https://t.me/BotFather). |
-| `allowFrom` | string[] | `[]` | List of allowed Telegram user IDs. Empty = allow all. |
+| `allowFrom` | string[] | `[]` | List of allowed Telegram user IDs. Gateway startup fails closed when this is empty unless `openMode` is explicitly true. |
+| `openMode` | bool | `false` | Explicit acknowledgement that every Telegram user may message the bot. Prefer `allowFrom` for unattended deployments. |
 
 ```json
 {
@@ -283,7 +323,8 @@ Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
     "telegram": {
       "enabled": true,
       "token": "<REPLACE_WITH_TELEGRAM_BOT_TOKEN>",
-      "allowFrom": ["8881234567"]
+      "allowFrom": ["8881234567"],
+      "openMode": false
     }
   }
 }
@@ -295,7 +336,8 @@ Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Set to `true` to start the Discord bot. |
 | `token` | string | `""` | Your Discord Bot token from the [Developer Portal](https://discord.com/developers/applications). |
-| `allowFrom` | string[] | `[]` | List of allowed Discord user IDs. Empty = allow all. |
+| `allowFrom` | string[] | `[]` | List of allowed Discord user IDs. Gateway startup fails closed when this is empty unless `openMode` is explicitly true. |
+| `openMode` | bool | `false` | Explicit acknowledgement that every Discord user may message the bot. Prefer `allowFrom` for unattended deployments. |
 
 ```json
 {
@@ -303,7 +345,8 @@ Chat channel integrations. Supports Telegram, Discord, Slack, and WhatsApp.
     "discord": {
       "enabled": true,
       "token": "<REPLACE_WITH_DISCORD_BOT_TOKEN>",
-      "allowFrom": ["123456789012345678"]
+      "allowFrom": ["123456789012345678"],
+      "openMode": false
     }
   }
 }
@@ -325,8 +368,10 @@ The Discord bot uses the Gateway WebSocket API for receiving messages and the RE
 | `enabled` | bool | `false` | Set to `true` to start the Slack bot. |
 | `appToken` | string | `""` | Slack App-Level Token (Socket Mode), starts with `xapp-`. |
 | `botToken` | string | `""` | Slack Bot Token, starts with `xoxb-`. |
-| `allowUsers` | string[] | `[]` | List of allowed Slack user IDs. Empty = allow all. |
-| `allowChannels` | string[] | `[]` | List of allowed Slack channel IDs (C..., G..., D...). Empty = allow all. DMs ignore this list. |
+| `allowUsers` | string[] | `[]` | List of allowed Slack user IDs. Gateway startup fails closed when this is empty unless `openUserMode` is explicitly true. |
+| `allowChannels` | string[] | `[]` | List of allowed Slack channel IDs (C..., G..., D...). Gateway startup fails closed when this is empty unless `openChannelMode` is explicitly true. DMs ignore this list after startup. |
+| `openUserMode` | bool | `false` | Explicit acknowledgement that every Slack user may message the bot. |
+| `openChannelMode` | bool | `false` | Explicit acknowledgement that every Slack channel may reach the bot when mentioned. |
 
 ```json
 {
@@ -336,7 +381,9 @@ The Discord bot uses the Gateway WebSocket API for receiving messages and the RE
       "appToken": "<REPLACE_WITH_SLACK_APP_TOKEN>",
       "botToken": "<REPLACE_WITH_SLACK_BOT_TOKEN>",
       "allowUsers": ["U0123456789"],
-      "allowChannels": ["C0123456789"]
+      "allowChannels": ["C0123456789"],
+      "openUserMode": false,
+      "openChannelMode": false
     }
   }
 }
@@ -352,7 +399,8 @@ Uses a personal WhatsApp account (via [whatsmeow](https://go.mau.fi/whatsmeow)) 
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Set to `true` to start the WhatsApp channel. |
 | `dbPath` | string | `~/.picobot/whatsapp.db` | Path to the SQLite session database. Created automatically by `picobot channels login`. |
-| `allowFrom` | string[] | `[]` | List of **LID numbers** allowed to send messages. Empty `[]` = allow everyone. See below. |
+| `allowFrom` | string[] | `[]` | List of **LID numbers** allowed to send messages. Gateway startup fails closed when this is empty unless `openMode` is explicitly true. See below. |
+| `openMode` | bool | `false` | Explicit acknowledgement that every WhatsApp sender may message the bot. Prefer `allowFrom` for unattended deployments. |
 
 ```json
 {
@@ -360,7 +408,8 @@ Uses a personal WhatsApp account (via [whatsmeow](https://go.mau.fi/whatsmeow)) 
     "whatsapp": {
       "enabled": true,
       "dbPath": "~/.picobot/whatsapp.db",
-      "allowFrom": ["12345678901234"]
+      "allowFrom": ["12345678901234"],
+      "openMode": false
     }
   }
 }
@@ -370,7 +419,7 @@ Uses a personal WhatsApp account (via [whatsmeow](https://go.mau.fi/whatsmeow)) 
 ```
 picobot channels login
 ```
-Select **3) WhatsApp**. This shows a QR code. In WhatsApp on your phone: **Settings → Linked Devices → Link a Device**. The session is saved to `dbPath` — no QR code is needed on subsequent starts. The config is updated automatically.
+Select **4) WhatsApp**. The setup asks for allowed sender IDs or an explicit `OPEN` acknowledgement, then shows a QR code. In WhatsApp on your phone: **Settings → Linked Devices → Link a Device**. The session is saved to `dbPath` — no QR code is needed on subsequent starts. The config is updated automatically.
 
 #### Finding your LID for allowFrom
 
@@ -399,7 +448,7 @@ The number in the log is the sender's LID. Add that number to `allowFrom`.
 | Allow only yourself (Notes to Self) | `[]` *(self-chat is always allowed regardless)* |
 | Allow one other person | `["12345678901234"]` |
 | Allow multiple people | `["12345678901234", "99999999999"]` |
-| Allow everyone | `[]` |
+| Allow everyone | `[]` plus `"openMode": true` |
 
 > **Why not phone numbers?** Newer WhatsApp accounts use LID-based addressing internally. If you put a phone number in `allowFrom`, messages from that person will be silently dropped because WhatsApp delivers them with a LID, not the phone number.
 
@@ -411,15 +460,28 @@ The number in the log is the sender's LID. Add that number to `allowFrom`.
 
 ## Docker Environment Variables
 
-When running with Docker, Picobot reads `~/.picobot/config.json` and then applies a small set of environment overrides directly in the config loader. There is no separate Docker-only remapping layer.
+When running with Docker, Picobot reads `~/.picobot/config.json` and then the container entrypoint applies a small set of environment overrides. There is no separate Docker-only remapping layer.
+
+Docker channel overrides preserve the same fail-closed startup checks as normal config. If a token environment variable enables a channel, provide the matching allowlist environment variables or mount a config file that explicitly sets the relevant open-mode field. There is no Docker environment shortcut for `openMode`, `openUserMode`, or `openChannelMode`.
 
 | Environment Variable | Config Path | Description |
 |---------------------|-------------|-------------|
+| `OPENAI_API_KEY` | `providers.openai.apiKey` | OpenAI-compatible API key |
+| `OPENAI_API_BASE` | `providers.openai.apiBase` | OpenAI-compatible API base URL |
 | `PICOBOT_MODEL` | `agents.defaults.model` | LLM model to use |
 | `PICOBOT_MAX_TOKENS` | `agents.defaults.maxTokens` | Maximum tokens for LLM responses |
 | `PICOBOT_MAX_TOOL_ITERATIONS` | `agents.defaults.maxToolIterations` | Maximum tool iterations per request |
+| `PICOBOT_ENABLE_TOOL_ACTIVITY_INDICATOR` | `agents.defaults.enableToolActivityIndicator` | Show or hide tool activity progress messages |
+| `TELEGRAM_BOT_TOKEN` | `channels.telegram.enabled`, `channels.telegram.token` | Enables Telegram and sets the bot token |
+| `TELEGRAM_ALLOW_FROM` | `channels.telegram.allowFrom` | Comma-separated Telegram user IDs. Required with `TELEGRAM_BOT_TOKEN` unless config sets `channels.telegram.openMode=true` |
+| `DISCORD_BOT_TOKEN` | `channels.discord.enabled`, `channels.discord.token` | Enables Discord and sets the bot token |
+| `DISCORD_ALLOW_FROM` | `channels.discord.allowFrom` | Comma-separated Discord user IDs. Required with `DISCORD_BOT_TOKEN` unless config sets `channels.discord.openMode=true` |
+| `SLACK_APP_TOKEN` | `channels.slack.enabled`, `channels.slack.appToken` | Enables Slack and sets the app-level token |
+| `SLACK_BOT_TOKEN` | `channels.slack.enabled`, `channels.slack.botToken` | Enables Slack and sets the bot token |
+| `SLACK_ALLOW_USERS` | `channels.slack.allowUsers` | Comma-separated Slack user IDs. Required when Slack is enabled unless config sets `channels.slack.openUserMode=true` |
+| `SLACK_ALLOW_CHANNELS` | `channels.slack.allowChannels` | Comma-separated Slack channel IDs. Required when Slack is enabled unless config sets `channels.slack.openChannelMode=true` |
 
-Provider credentials and channel tokens must be set in `~/.picobot/config.json` or through the relevant interactive onboarding/login flows. `picobot channels login` hides token entry on supported terminals.
+Provider credentials and channel tokens may also be set in `~/.picobot/config.json` or through the relevant interactive onboarding/login flows. `picobot channels login` hides token entry on supported terminals.
 
 ---
 

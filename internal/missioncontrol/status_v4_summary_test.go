@@ -1,6 +1,52 @@
 package missioncontrol
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestOperatorStatusSummaryGoldenV4KeySurface(t *testing.T) {
+	t.Parallel()
+
+	summary := OperatorStatusSummary{
+		JobID:               "job-1",
+		ExecutionPlane:      ExecutionPlaneHotUpdateGate,
+		ExecutionHost:       ExecutionHostPhone,
+		MissionFamily:       MissionFamilyApplyHotUpdate,
+		TopologyModeEnabled: true,
+		State:               JobStateRunning,
+		ActiveStepID:        "apply_hot_update",
+		AllowedTools:        []string{"read_file", "write_file"},
+		V4Summary: &OperatorV4SummaryStatus{
+			State:                         "promotion_recorded",
+			ActivePackID:                  "pack-active",
+			LastKnownGoodPackID:           "pack-lkg",
+			SelectedHotUpdateID:           "hot-update-1",
+			SelectedOutcomeID:             "outcome-1",
+			SelectedPromotionID:           "promotion-1",
+			HasCandidatePromotionDecision: true,
+			HasCanaryAuthority:            true,
+			HasOwnerApprovalDecision:      true,
+			InvalidIdentityCount:          1,
+			Warnings:                      []string{"hot_update_gate_identity invalid"},
+		},
+	}
+
+	got, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	got = append(got, '\n')
+	want, err := os.ReadFile(filepath.Join("testdata", "operator_status_v4_key_surface.golden.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(golden) error = %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("operator status golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
 
 func TestOperatorV4SummaryEmptyStoreIsNotConfigured(t *testing.T) {
 	t.Parallel()

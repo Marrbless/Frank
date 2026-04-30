@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -152,24 +151,16 @@ func StoreCandidateMutationRecord(root string, record CandidateMutationRecord) (
 	}
 
 	path := StoreCandidateMutationPath(root, record.MutationID)
-	existing, err := loadCandidateMutationRecordFile(root, path)
-	if err == nil {
-		if reflect.DeepEqual(existing, record) {
-			return existing, false, nil
-		}
-		return CandidateMutationRecord{}, false, fmt.Errorf("mission store candidate mutation %q already exists", record.MutationID)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return CandidateMutationRecord{}, false, err
-	}
-	if err := WriteStoreJSONAtomic(path, record); err != nil {
-		return CandidateMutationRecord{}, false, err
-	}
-	stored, err := LoadCandidateMutationRecord(root, record.MutationID)
-	if err != nil {
-		return CandidateMutationRecord{}, false, err
-	}
-	return stored, true, nil
+	return storeImmutableJSONRecord(
+		path,
+		record,
+		func(path string) (CandidateMutationRecord, error) {
+			return loadCandidateMutationRecordFile(root, path)
+		},
+		func() error {
+			return fmt.Errorf("mission store candidate mutation %q already exists", record.MutationID)
+		},
+	)
 }
 
 func LoadCandidateMutationRecord(root, mutationID string) (CandidateMutationRecord, error) {

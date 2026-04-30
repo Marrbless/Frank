@@ -22,7 +22,13 @@ jobs:
           go-version-file: go.mod
 
       - name: Run tests
-        run: go test ./...
+        run: go test -count=1 ./...
+
+      - name: Run lite tests
+        run: go test -count=1 -tags lite ./...
+
+      - name: Run script tests
+        run: sh scripts/termux/test-update-and-restart-frank
 
       - name: Build Go binary (validation)
         run: go build ./...

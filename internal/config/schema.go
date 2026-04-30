@@ -43,26 +43,31 @@ type DiscordConfig struct {
 	Enabled   bool     `json:"enabled"`
 	Token     string   `json:"token"`
 	AllowFrom []string `json:"allowFrom"`
+	OpenMode  bool     `json:"openMode,omitempty"`
 }
 
 type TelegramConfig struct {
 	Enabled   bool     `json:"enabled"`
 	Token     string   `json:"token"`
 	AllowFrom []string `json:"allowFrom"`
+	OpenMode  bool     `json:"openMode,omitempty"`
 }
 
 type SlackConfig struct {
-	Enabled       bool     `json:"enabled"`
-	AppToken      string   `json:"appToken"`
-	BotToken      string   `json:"botToken"`
-	AllowUsers    []string `json:"allowUsers"`
-	AllowChannels []string `json:"allowChannels"`
+	Enabled         bool     `json:"enabled"`
+	AppToken        string   `json:"appToken"`
+	BotToken        string   `json:"botToken"`
+	AllowUsers      []string `json:"allowUsers"`
+	AllowChannels   []string `json:"allowChannels"`
+	OpenUserMode    bool     `json:"openUserMode,omitempty"`
+	OpenChannelMode bool     `json:"openChannelMode,omitempty"`
 }
 
 type WhatsAppConfig struct {
 	Enabled   bool     `json:"enabled"`
 	DBPath    string   `json:"dbPath"`
 	AllowFrom []string `json:"allowFrom"`
+	OpenMode  bool     `json:"openMode,omitempty"`
 }
 
 type ProvidersConfig struct {

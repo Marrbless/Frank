@@ -97,6 +97,16 @@ func TestStartDiscord_EmptyToken(t *testing.T) {
 	}
 }
 
+func TestStartDiscord_FailsClosedWithoutAllowlist(t *testing.T) {
+	err := StartDiscord(context.Background(), chat.NewHub(10), "fake-token", nil)
+	if err == nil {
+		t.Fatal("expected empty allowlist to fail closed")
+	}
+	if !strings.Contains(err.Error(), "allowlist is empty") {
+		t.Fatalf("expected allowlist error, got %v", err)
+	}
+}
+
 // TestDiscordClient_IsAllowed tests the allowlist logic.
 func TestDiscordClient_IsAllowed(t *testing.T) {
 	// This tests the allowlist logic conceptually
@@ -113,10 +123,13 @@ func TestDiscordClient_IsAllowed(t *testing.T) {
 		t.Error("user 987654321 should not be allowed")
 	}
 
-	// Test empty allowlist (all users allowed)
+	// Test empty allowlist without explicit open mode (all users blocked)
 	emptyAllowed := make(map[string]struct{})
-	if len(emptyAllowed) > 0 {
-		t.Error("empty allowlist should allow all users")
+	if allowedBySingleAllowlist(emptyAllowed, false, "987654321") {
+		t.Error("empty allowlist should fail closed without explicit open mode")
+	}
+	if !allowedBySingleAllowlist(emptyAllowed, true, "987654321") {
+		t.Error("empty allowlist should allow all users only with explicit open mode")
 	}
 }
 

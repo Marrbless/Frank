@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+	echo "usage: scripts/release-checksums <artifact>..." >&2
+	exit 2
+fi
+
+for artifact in "$@"; do
+	if [ ! -f "$artifact" ]; then
+		echo "release-checksums: missing artifact: $artifact" >&2
+		exit 1
+	fi
+done
+
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256sum "$@"
+elif command -v shasum >/dev/null 2>&1; then
+	shasum -a 256 "$@"
+else
+	echo "release-checksums: need sha256sum or shasum" >&2
+	exit 1
+fi

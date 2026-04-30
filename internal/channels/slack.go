@@ -21,9 +21,13 @@ type slackPoster interface {
 }
 
 // StartSlack starts a Slack bot using Socket Mode.
-// allowUsers restricts which Slack user IDs may send messages; empty means allow all.
-// allowChannels restricts which Slack channel IDs may send messages; empty means allow all.
+// allowUsers restricts which Slack user IDs may send messages; empty fails closed.
+// allowChannels restricts which Slack channel IDs may send messages; empty fails closed for non-DMs.
 func StartSlack(ctx context.Context, hub *chat.Hub, appToken, botToken string, allowUsers, allowChannels []string) error {
+	return StartSlackWithOpenMode(ctx, hub, appToken, botToken, allowUsers, allowChannels, false, false)
+}
+
+func StartSlackWithOpenMode(ctx context.Context, hub *chat.Hub, appToken, botToken string, allowUsers, allowChannels []string, openUserMode, openChannelMode bool) error {
 	if appToken == "" {
 		return fmt.Errorf("slack app token not provided")
 	}
@@ -35,6 +39,12 @@ func StartSlack(ctx context.Context, hub *chat.Hub, appToken, botToken string, a
 	}
 	if !strings.HasPrefix(botToken, "xoxb-") {
 		return fmt.Errorf("slack bot token must start with xoxb-")
+	}
+	if err := requireAllowlistOrExplicitOpen("slack users", allowUsers, openUserMode); err != nil {
+		return err
+	}
+	if err := requireAllowlistOrExplicitOpen("slack channels", allowChannels, openChannelMode); err != nil {
+		return err
 	}
 
 	api := slack.New(
@@ -51,14 +61,14 @@ func StartSlack(ctx context.Context, hub *chat.Hub, appToken, botToken string, a
 	}
 
 	socketClient := socketmode.New(api)
-	client := newSlackClient(ctx, socketClient, api, hub, auth.UserID, allowUsers, allowChannels)
+	client := newSlackClient(ctx, socketClient, api, hub, auth.UserID, allowUsers, allowChannels, openUserMode, openChannelMode)
 
 	go client.runOutbound()
 	go client.runEvents()
 
 	go func() {
 		if err := socketClient.RunContext(ctx); err != nil {
-			log.Printf("slack: socket mode error: %v", err)
+			log.Printf("slack: socket mode error: %s", redactLogError(err))
 		}
 	}()
 
@@ -78,18 +88,15 @@ type slackClient struct {
 	botID        string
 	allowedUsers map[string]struct{}
 	allowedChans map[string]struct{}
+	openUserMode bool
+	openChanMode bool
+	rateLimiter  ChannelRateLimiter
 	ctx          context.Context
 }
 
-func newSlackClient(ctx context.Context, socket *socketmode.Client, poster slackPoster, hub *chat.Hub, botID string, allowUsers, allowChannels []string) *slackClient {
-	allowedUsers := make(map[string]struct{}, len(allowUsers))
-	for _, id := range allowUsers {
-		allowedUsers[id] = struct{}{}
-	}
-	allowedChans := make(map[string]struct{}, len(allowChannels))
-	for _, id := range allowChannels {
-		allowedChans[id] = struct{}{}
-	}
+func newSlackClient(ctx context.Context, socket *socketmode.Client, poster slackPoster, hub *chat.Hub, botID string, allowUsers, allowChannels []string, openUserMode, openChannelMode bool) *slackClient {
+	allowedUsers := buildAllowedSet(allowUsers)
+	allowedChans := buildAllowedSet(allowChannels)
 
 	return &slackClient{
 		socket:       socket,
@@ -99,6 +106,9 @@ func newSlackClient(ctx context.Context, socket *socketmode.Client, poster slack
 		botID:        botID,
 		allowedUsers: allowedUsers,
 		allowedChans: allowedChans,
+		openUserMode: openUserMode,
+		openChanMode: openChannelMode,
+		rateLimiter:  defaultChannelRateLimiter,
 		ctx:          ctx,
 	}
 }
@@ -156,12 +166,15 @@ func (c *slackClient) handleMention(ev *slackevents.AppMentionEvent) {
 	if content == "" {
 		return
 	}
+	if !c.allowInboundByRateLimit(ev.User, ev.Channel) {
+		return
+	}
 
 	threadTS := ev.ThreadTimeStamp
 	chatID := formatSlackChatID(ev.Channel, threadTS)
 	teamID := firstNonEmpty(ev.SourceTeam, ev.UserTeam)
 
-	log.Printf("slack: mention from %s in %s (%s)", ev.User, ev.Channel, summarizeInboundContent(content, 0))
+	log.Printf("slack: mention from %s in %s (%s)", redactLogID(ev.User), redactLogID(ev.Channel), summarizeInboundContent(content, 0))
 
 	c.hub.In <- chat.Inbound{
 		Channel:   "slack",
@@ -202,12 +215,15 @@ func (c *slackClient) handleMessage(ev *slackevents.MessageEvent) {
 	if content == "" {
 		return
 	}
+	if !c.allowInboundByRateLimit(ev.User, ev.Channel) {
+		return
+	}
 
 	threadTS := ev.ThreadTimeStamp
 	chatID := formatSlackChatID(ev.Channel, threadTS)
 	teamID := firstNonEmpty(ev.SourceTeam, ev.UserTeam)
 
-	log.Printf("slack: message from %s in %s (%s)", ev.User, ev.Channel, summarizeInboundContent(content, len(ev.Files)))
+	log.Printf("slack: message from %s in %s (%s)", redactLogID(ev.User), redactLogID(ev.Channel), summarizeInboundContent(content, len(ev.Files)))
 
 	c.hub.In <- chat.Inbound{
 		Channel:   "slack",
@@ -233,7 +249,7 @@ func (c *slackClient) runOutbound() {
 		case out := <-c.outCh:
 			channelID, threadTS := splitSlackChatID(out.ChatID)
 			if channelID == "" {
-				log.Printf("slack: invalid chat ID %q", out.ChatID)
+				log.Printf("slack: invalid chat ID %s", redactLogID(out.ChatID))
 				continue
 			}
 			for _, chunk := range splitMessage(out.Content, 4000) {
@@ -242,7 +258,7 @@ func (c *slackClient) runOutbound() {
 					opts = append(opts, slack.MsgOptionTS(threadTS))
 				}
 				if _, _, err := c.poster.PostMessageContext(c.ctx, channelID, opts...); err != nil {
-					log.Printf("slack: send error: %v", err)
+					log.Printf("slack: send error: %s", redactLogError(err))
 				}
 			}
 		}
@@ -250,34 +266,42 @@ func (c *slackClient) runOutbound() {
 }
 
 func (c *slackClient) isAllowed(userID, channelID string, isDM bool) bool {
-	if len(c.allowedUsers) > 0 {
-		if _, ok := c.allowedUsers[userID]; !ok {
-			return false
-		}
+	if !allowedBySingleAllowlist(c.allowedUsers, c.openUserMode, userID) {
+		return false
 	}
 	if isDM {
 		return true
 	}
-	if len(c.allowedChans) > 0 {
-		if _, ok := c.allowedChans[channelID]; !ok {
-			return false
-		}
+	return allowedBySingleAllowlist(c.allowedChans, c.openChanMode, channelID)
+}
+
+func (c *slackClient) allowInboundByRateLimit(userID, channelID string) bool {
+	limiter := c.rateLimiter
+	if limiter == nil {
+		limiter = defaultChannelRateLimiter
 	}
-	return true
+	if limiter.AllowInbound("slack", userID, channelID, time.Now()) {
+		return true
+	}
+	log.Printf("slack: rate limited inbound message user=%s channel=%s", redactLogID(userID), redactLogID(channelID))
+	return false
 }
 
 func (c *slackClient) logUnauthorized(userID, channelID string, isDM bool) {
-	userAllowed := true
+	userAllowed := c.openUserMode
 	channelAllowed := true
 	if len(c.allowedUsers) > 0 {
 		_, userAllowed = c.allowedUsers[userID]
 	}
 	if isDM {
 		channelAllowed = true
-	} else if len(c.allowedChans) > 0 {
+	} else {
+		channelAllowed = c.openChanMode
+	}
+	if !isDM && len(c.allowedChans) > 0 {
 		_, channelAllowed = c.allowedChans[channelID]
 	}
-	log.Printf("slack: dropped message: user allowed=%t channel allowed=%t user=%s channel=%s", userAllowed, channelAllowed, userID, channelID)
+	log.Printf("slack: dropped message: user allowed=%t channel allowed=%t user=%s channel=%s", userAllowed, channelAllowed, redactLogID(userID), redactLogID(channelID))
 }
 
 func stripSlackMention(text, botID string) string {

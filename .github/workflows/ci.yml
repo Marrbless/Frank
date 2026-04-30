@@ -22,10 +22,65 @@ jobs:
           cache: true
 
       - name: Lint
+        id: lint
         uses: golangci/golangci-lint-action@v9
 
       - name: Vet
+        id: vet
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        id: test
+        run: go test -count=1 ./...
+
+      - name: Test lite build tag
+        id: test_lite
+        run: go test -count=1 -tags lite ./...
+
+      - name: Test scripts
+        id: test_scripts
+        run: make test-scripts
+
+      - name: Write CI summary
+        if: always()
+        run: |
+          {
+            echo "## Picobot CI Summary"
+            echo
+            echo "| Gate | Outcome |"
+            echo "| --- | --- |"
+            echo "| Lint | ${{ steps.lint.outcome }} |"
+            echo "| Vet | ${{ steps.vet.outcome }} |"
+            echo "| Tests | ${{ steps.test.outcome }} |"
+            echo "| Lite tests | ${{ steps.test_lite.outcome }} |"
+            echo "| Script tests | ${{ steps.test_scripts.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  race:
+    name: Targeted race tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test race-sensitive packages
+        id: test_race
+        run: make test-race
+
+      - name: Write race summary
+        if: always()
+        run: |
+          {
+            echo "## Picobot Race Test Summary"
+            echo
+            echo "| Gate | Outcome |"
+            echo "| --- | --- |"
+            echo "| Targeted race tests | ${{ steps.test_race.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

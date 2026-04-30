@@ -427,6 +427,7 @@ func ResolveFrankRegistryObjectRef(root string, ref FrankRegistryObjectRef) (Res
 			Container: &record,
 		}, nil
 	default:
+		//nolint:staticcheck // Preserve established operator/test error text.
 		return ResolvedFrankRegistryObjectRef{}, fmt.Errorf("Frank object ref kind %q is invalid", strings.TrimSpace(string(normalized.Kind)))
 	}
 }

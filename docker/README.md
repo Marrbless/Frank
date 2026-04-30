@@ -47,6 +47,21 @@ docker run -d \
 
 ## Environment Variables
 
+### Channel Access Policy
+
+Docker environment overrides preserve Picobot's fail-closed channel policy. Setting
+a channel token enables that channel, but gateway startup still fails until you
+also provide allowlist IDs or mount a config file that explicitly sets the
+matching open-mode field:
+
+- Telegram: `TELEGRAM_ALLOW_FROM` or `channels.telegram.openMode=true`
+- Discord: `DISCORD_ALLOW_FROM` or `channels.discord.openMode=true`
+- Slack: `SLACK_ALLOW_USERS` and `SLACK_ALLOW_CHANNELS`, or
+  `channels.slack.openUserMode=true` and `channels.slack.openChannelMode=true`
+
+There is no Docker environment shortcut for open mode. Prefer allowlists for
+unattended containers.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `OPENAI_API_KEY` | Yes | — | OpenAI-compatible API key (OpenRouter, OpenAI, etc.) |
@@ -56,13 +71,13 @@ docker run -d \
 | `PICOBOT_MAX_TOOL_ITERATIONS` | No | `100` | Maximum tool iterations per request |
 | `PICOBOT_ENABLE_TOOL_ACTIVITY_INDICATOR` | No | `true` | Send `🤖 Running` / `📢 done` progress messages during tool calls. Set to `false` for IoT or headless deployments |
 | `TELEGRAM_BOT_TOKEN` | No | — | Telegram bot token from @BotFather |
-| `TELEGRAM_ALLOW_FROM` | No | — | Comma-separated Telegram user IDs |
+| `TELEGRAM_ALLOW_FROM` | If Telegram token is set | — | Comma-separated Telegram user IDs. Required unless mounted config sets `channels.telegram.openMode=true` |
 | `DISCORD_BOT_TOKEN` | No | — | Discord bot token from Developer Portal |
-| `DISCORD_ALLOW_FROM` | No | — | Comma-separated Discord user IDs |
+| `DISCORD_ALLOW_FROM` | If Discord token is set | — | Comma-separated Discord user IDs. Required unless mounted config sets `channels.discord.openMode=true` |
 | `SLACK_APP_TOKEN` | No | — | Slack App-Level Token (`xapp-...`), also enables the channel |
 | `SLACK_BOT_TOKEN` | No | — | Slack Bot Token (`xoxb-...`), also enables the channel |
-| `SLACK_ALLOW_USERS` | No | — | Comma-separated Slack user IDs allowed to chat |
-| `SLACK_ALLOW_CHANNELS` | No | — | Comma-separated Slack channel IDs allowed. DMs ignore this list |
+| `SLACK_ALLOW_USERS` | If Slack tokens are set | — | Comma-separated Slack user IDs allowed to chat. Required unless mounted config sets `channels.slack.openUserMode=true` |
+| `SLACK_ALLOW_CHANNELS` | If Slack tokens are set | — | Comma-separated Slack channel IDs allowed. Required unless mounted config sets `channels.slack.openChannelMode=true`; DMs ignore this list after startup |
 
 ## Data Persistence
 

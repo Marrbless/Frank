@@ -518,60 +518,28 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		return WakeCycleRecord{}, false, fmt.Errorf("standing directive %q selected mission_family %q requires execution_plane %q", directive.StandingDirectiveID, selectedMissionFamily, requiredPlane)
 	}
 
+	requestedDebits := autonomyBudgetDebitsForMissionFamily(directive.BudgetRef, selectedMissionFamily)
+	blockedReasons := make([]string, 0, 3)
 	if isHotUpdateMissionFamily(selectedMissionFamily) {
 		if ownerPause, active, err := LoadActiveAutonomyOwnerPauseForBudget(root, directive.BudgetRef); err != nil {
 			return WakeCycleRecord{}, false, err
 		} else if active {
-			record := WakeCycleRecord{
-				WakeCycleID:            WakeCycleIDFromDirectiveStartedAt(directive.StandingDirectiveID, startedAt),
-				StartedAt:              startedAt,
-				CompletedAt:            startedAt,
-				Trigger:                WakeCycleTriggerStandingDirective,
-				SelectedDirectiveID:    directive.StandingDirectiveID,
-				SelectedJobID:          strings.TrimSpace(selectedJobID),
-				SelectedMissionFamily:  selectedMissionFamily,
-				SelectedExecutionPlane: selectedExecutionPlane,
-				SelectedExecutionHost:  selectedExecutionHost,
-				Decision:               WakeCycleDecisionBlocked,
-				BlockedReasons:         []string{string(RejectionCodeV4AutonomyPaused) + ": " + ownerPause.OwnerPauseID},
-				NextWakeAt:             startedAt.Add(time.Duration(directive.Schedule.IntervalSeconds) * time.Second),
-				AutonomyEnvelopeRef:    directive.AutonomyEnvelopeRef,
-				BudgetRef:              directive.BudgetRef,
-				CreatedAt:              startedAt,
-				CreatedBy:              createdBy,
-			}
-			return StoreWakeCycleRecord(root, record)
+			blockedReasons = append(blockedReasons, string(RejectionCodeV4AutonomyPaused)+": "+ownerPause.OwnerPauseID)
 		}
 	}
 
 	if pause, active, err := LoadActiveRepeatedFailurePauseForBudget(root, directive.BudgetRef); err != nil {
 		return WakeCycleRecord{}, false, err
 	} else if active {
-		record := WakeCycleRecord{
-			WakeCycleID:            WakeCycleIDFromDirectiveStartedAt(directive.StandingDirectiveID, startedAt),
-			StartedAt:              startedAt,
-			CompletedAt:            startedAt,
-			Trigger:                WakeCycleTriggerStandingDirective,
-			SelectedDirectiveID:    directive.StandingDirectiveID,
-			SelectedJobID:          strings.TrimSpace(selectedJobID),
-			SelectedMissionFamily:  selectedMissionFamily,
-			SelectedExecutionPlane: selectedExecutionPlane,
-			SelectedExecutionHost:  selectedExecutionHost,
-			Decision:               WakeCycleDecisionBlocked,
-			BlockedReasons:         []string{string(RejectionCodeV4RepeatedFailurePause) + ": " + pause.PauseID},
-			NextWakeAt:             startedAt.Add(time.Duration(directive.Schedule.IntervalSeconds) * time.Second),
-			AutonomyEnvelopeRef:    directive.AutonomyEnvelopeRef,
-			BudgetRef:              directive.BudgetRef,
-			CreatedAt:              startedAt,
-			CreatedBy:              createdBy,
-		}
-		return StoreWakeCycleRecord(root, record)
+		blockedReasons = append(blockedReasons, string(RejectionCodeV4RepeatedFailurePause)+": "+pause.PauseID)
 	}
 
-	requestedDebits := autonomyBudgetDebitsForMissionFamily(directive.BudgetRef, selectedMissionFamily)
 	budgetAssessment, err := AssessAutonomyBudgetForDebits(root, directive.BudgetRef, requestedDebits, startedAt)
 	if err != nil {
 		return WakeCycleRecord{}, false, err
+	}
+	if !budgetAssessment.Allowed {
+		blockedReasons = append(blockedReasons, budgetAssessment.Reason)
 	}
 
 	record := WakeCycleRecord{
@@ -593,10 +561,10 @@ func CreateWakeCycleProposalFromStandingDirective(root, standingDirectiveID, sel
 		CreatedAt:              startedAt,
 		CreatedBy:              createdBy,
 	}
-	if !budgetAssessment.Allowed {
+	if len(blockedReasons) > 0 {
 		record.Decision = WakeCycleDecisionBlocked
 		record.BudgetDebits = nil
-		record.BlockedReasons = []string{budgetAssessment.Reason}
+		record.BlockedReasons = blockedReasons
 	}
 	return StoreWakeCycleRecord(root, record)
 }

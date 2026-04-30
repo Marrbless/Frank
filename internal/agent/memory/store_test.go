@@ -2,12 +2,12 @@ package memory
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestMemoryAddAndRecent(t *testing.T) {
@@ -28,9 +28,7 @@ func TestMemoryAddAndRecent(t *testing.T) {
 func TestShortLimit(t *testing.T) {
 	s := NewMemoryStore(2)
 	s.AddShort("c")
-	time.Sleep(5 * time.Millisecond)
 	s.AddShort("b")
-	time.Sleep(5 * time.Millisecond)
 	s.AddShort("a")
 
 	res := s.Recent(10)
@@ -39,6 +37,27 @@ func TestShortLimit(t *testing.T) {
 	}
 	if res[0].Text != "a" || res[1].Text != "b" {
 		t.Fatalf("unexpected recent after limit: %v", res)
+	}
+}
+
+func TestShortTermMemoryRetainsOnlyConfiguredLimit(t *testing.T) {
+	s := NewMemoryStore(3)
+	for i := 0; i < 100; i++ {
+		s.AddShort(fmt.Sprintf("item-%03d", i))
+	}
+
+	if len(s.short) != 3 {
+		t.Fatalf("short memory length = %d, want configured limit 3", len(s.short))
+	}
+	res := s.Recent(10)
+	if len(res) != 3 {
+		t.Fatalf("Recent(10) len = %d, want 3 bounded short-term items", len(res))
+	}
+	want := []string{"item-099", "item-098", "item-097"}
+	for i, item := range res {
+		if item.Text != want[i] {
+			t.Fatalf("Recent(10)[%d].Text = %q, want %q", i, item.Text, want[i])
+		}
 	}
 }
 

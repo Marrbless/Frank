@@ -790,6 +790,7 @@ func validateFrankRegistryObjectKind(kind FrankRegistryObjectKind) error {
 	case FrankRegistryObjectKindIdentity, FrankRegistryObjectKindAccount, FrankRegistryObjectKindContainer:
 		return nil
 	default:
+		//nolint:staticcheck // Preserve established operator/test error text.
 		return fmt.Errorf("Frank object ref kind %q is invalid", strings.TrimSpace(string(kind)))
 	}
 }
@@ -800,6 +801,7 @@ func validateFrankRegistryObjectRef(ref FrankRegistryObjectRef) error {
 		return err
 	}
 	if ref.ObjectID == "" {
+		//nolint:staticcheck // Preserve established operator/test error text.
 		return fmt.Errorf("Frank object ref object_id is required")
 	}
 	return nil

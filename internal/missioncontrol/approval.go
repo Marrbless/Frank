@@ -705,26 +705,12 @@ func approvalRequestMatchesBinding(request ApprovalRequest, jobID, stepID, reque
 	return approvalBindingScopeMatches(request.JobID, request.StepID, request.RequestedAction, request.Scope, jobID, stepID, requestedAction, scope)
 }
 
-func approvalGrantMatchesBinding(grant ApprovalGrant, jobID, stepID, requestedAction, scope string) bool {
-	return approvalBindingScopeMatches(grant.JobID, grant.StepID, grant.RequestedAction, grant.Scope, jobID, stepID, requestedAction, scope)
-}
-
 func approvalRequestMatchesReusableBinding(request ApprovalRequest, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) bool {
 	return approvalReusableBindingMatches(request.JobID, request.StepID, request.RequestedAction, request.Scope, request.SessionChannel, request.SessionChatID, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID)
 }
 
 func approvalGrantMatchesReusableBinding(grant ApprovalGrant, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) bool {
 	return approvalReusableBindingMatches(grant.JobID, grant.StepID, grant.RequestedAction, grant.Scope, grant.SessionChannel, grant.SessionChatID, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID)
-}
-
-func findLatestApprovalGrant(grants []ApprovalGrant, jobID, stepID, requestedAction, scope string) (int, bool) {
-	for i := len(grants) - 1; i >= 0; i-- {
-		if !approvalGrantMatchesBinding(grants[i], jobID, stepID, requestedAction, scope) {
-			continue
-		}
-		return i, true
-	}
-	return 0, false
 }
 
 func findLatestReusableApprovalRequest(requests []ApprovalRequest, jobID, stepID, requestedAction, scope, sessionChannel, sessionChatID string) (int, bool) {

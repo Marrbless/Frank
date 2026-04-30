@@ -2,6 +2,7 @@ package missioncontrol
 
 import (
 	"errors"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -178,6 +179,35 @@ func TestLoadCapabilityRecordFailsClosedOnMalformedRecord(t *testing.T) {
 	}
 	if got := err.Error(); got != `mission store capability authority_tier "owner" is invalid` {
 		t.Fatalf("LoadCapabilityRecord() error = %q, want malformed-record rejection", got)
+	}
+}
+
+func TestStoreCapabilityRecordValidationFailureLeavesExistingRecordUnchanged(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	record := validCapabilityRecord(nil)
+	if err := StoreCapabilityRecord(root, record); err != nil {
+		t.Fatalf("StoreCapabilityRecord(valid) error = %v", err)
+	}
+	path := StoreCapabilityPath(root, record.CapabilityID)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(before) error = %v", err)
+	}
+
+	err = StoreCapabilityRecord(root, validCapabilityRecord(func(record *CapabilityRecord) {
+		record.Notes = " "
+	}))
+	if err == nil {
+		t.Fatal("StoreCapabilityRecord(invalid) error = nil, want validation failure")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(after) error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("invalid StoreCapabilityRecord mutated existing record\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
 

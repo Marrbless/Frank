@@ -1,6 +1,7 @@
 package missioncontrol
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -349,6 +350,130 @@ func TestDeriveCampaignZohoEmailSendGateDecisionFailsClosedOnUnsupportedOpenFail
 	}
 	if got := err.Error(); got != `campaign zoho email failure_threshold.metric "opens" is not evaluable from committed outbound action records` {
 		t.Fatalf("DeriveCampaignZohoEmailSendGateDecision() error = %q, want unsupported failure-threshold rejection", got)
+	}
+}
+
+func TestDeriveCampaignZohoEmailSendGateDecisionInvariantTable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)
+	first := testCampaignZohoEmailOutboundActionRecord("job-1", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-1", "campaign-zoho", "subject-1", now))
+	second := testCampaignZohoEmailOutboundActionRecord("job-2", 1, mustBuildVerifiedCampaignZohoEmailOutboundAction(t, "step-2", "campaign-zoho", "subject-2", now.Add(time.Minute)))
+	attributedReply := testFrankZohoInboundReplyRecord("job-r1", 1, FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "reply-gate-1",
+		InReplyTo:          first.MIMEMessageID,
+		FromAddress:        "person@example.com",
+		FromAddressCount:   1,
+		ReceivedAt:         now.Add(2 * time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/reply-gate-1/originalmessage",
+	})
+	attributedBounce := testFrankZohoBounceEvidenceRecord(t, "job-b1", 1, NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "bounce-gate-1",
+		ReceivedAt:         now.Add(3 * time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/bounce-gate-1/originalmessage",
+		CampaignID:         "campaign-zoho",
+		OutboundActionID:   first.ActionID,
+	}))
+	unattributedBounce := testFrankZohoBounceEvidenceRecord(t, "job-b2", 1, NormalizeFrankZohoBounceEvidence(FrankZohoBounceEvidence{
+		StepID:             "sync-bounces",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "bounce-gate-2",
+		ReceivedAt:         now.Add(4 * time.Minute),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/bounce-gate-2/originalmessage",
+	}))
+
+	tests := []struct {
+		name               string
+		stopConditions     []string
+		failureThreshold   CampaignFailureThreshold
+		outbound           []CampaignZohoEmailOutboundActionRecord
+		replies            []FrankZohoInboundReplyRecord
+		bounces            []FrankZohoBounceEvidenceRecord
+		wantAllowed        bool
+		wantHalted         bool
+		wantReplyCount     int
+		wantBounceCount    int
+		wantTriggeredStop  string
+		wantReasonContains string
+	}{
+		{
+			name:             "attributed reply and unattributed bounce stay below limits",
+			stopConditions:   []string{"stop after 2 replies"},
+			failureThreshold: CampaignFailureThreshold{Metric: "bounced_messages", Limit: 1},
+			outbound:         []CampaignZohoEmailOutboundActionRecord{first},
+			replies:          []FrankZohoInboundReplyRecord{attributedReply},
+			bounces:          []FrankZohoBounceEvidenceRecord{unattributedBounce},
+			wantAllowed:      true,
+			wantReplyCount:   1,
+			wantBounceCount:  0,
+		},
+		{
+			name:               "attributed reply trips reply stop condition",
+			stopConditions:     []string{"stop after first reply"},
+			failureThreshold:   CampaignFailureThreshold{Metric: "bounced_messages", Limit: 2},
+			outbound:           []CampaignZohoEmailOutboundActionRecord{first},
+			replies:            []FrankZohoInboundReplyRecord{attributedReply},
+			bounces:            []FrankZohoBounceEvidenceRecord{unattributedBounce},
+			wantHalted:         true,
+			wantReplyCount:     1,
+			wantBounceCount:    0,
+			wantTriggeredStop:  "stop after first reply",
+			wantReasonContains: "triggered after 1 attributed replies",
+		},
+		{
+			name:               "attributed bounce trips bounce threshold",
+			stopConditions:     []string{"stop after 3 replies"},
+			failureThreshold:   CampaignFailureThreshold{Metric: "bounced_messages", Limit: 1},
+			outbound:           []CampaignZohoEmailOutboundActionRecord{first, second},
+			replies:            nil,
+			bounces:            []FrankZohoBounceEvidenceRecord{attributedBounce, unattributedBounce},
+			wantHalted:         true,
+			wantReplyCount:     0,
+			wantBounceCount:    1,
+			wantReasonContains: `failure_threshold "bounced_messages" reached 1/1 counted attributed bounces`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			campaign := validCampaignRecord(now, func(record *CampaignRecord) {
+				record.CampaignID = "campaign-zoho"
+				record.StopConditions = tc.stopConditions
+				record.FailureThreshold = tc.failureThreshold
+			})
+			decision, err := DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence(campaign, tc.outbound, tc.replies, tc.bounces)
+			if err != nil {
+				t.Fatalf("DeriveCampaignZohoEmailSendGateDecisionWithBounceEvidence() error = %v", err)
+			}
+			if decision.Allowed != tc.wantAllowed {
+				t.Fatalf("Allowed = %v, want %v: %#v", decision.Allowed, tc.wantAllowed, decision)
+			}
+			if decision.Halted != tc.wantHalted {
+				t.Fatalf("Halted = %v, want %v: %#v", decision.Halted, tc.wantHalted, decision)
+			}
+			if decision.AttributedReplyCount != tc.wantReplyCount {
+				t.Fatalf("AttributedReplyCount = %d, want %d", decision.AttributedReplyCount, tc.wantReplyCount)
+			}
+			if decision.AttributedBounceCount != tc.wantBounceCount {
+				t.Fatalf("AttributedBounceCount = %d, want %d", decision.AttributedBounceCount, tc.wantBounceCount)
+			}
+			if decision.TriggeredStopCondition != tc.wantTriggeredStop {
+				t.Fatalf("TriggeredStopCondition = %q, want %q", decision.TriggeredStopCondition, tc.wantTriggeredStop)
+			}
+			if tc.wantReasonContains != "" && !strings.Contains(decision.Reason, tc.wantReasonContains) {
+				t.Fatalf("Reason = %q, want substring %q", decision.Reason, tc.wantReasonContains)
+			}
+		})
 	}
 }
 

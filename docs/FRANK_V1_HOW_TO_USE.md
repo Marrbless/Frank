@@ -145,7 +145,15 @@ cd ~/Frank
 scripts/termux/update-and-restart-frank
 ```
 
-Set `PICOBOT_GATEWAY_CMD` in `~/Frank/.termux-frank.env` if the phone gateway uses mission-control flags.
+The updater builds a side-by-side candidate, smoke-checks it, preserves the previous binary, restarts the configured tmux session, verifies session health, and rolls back automatically if restart or configured mission checks fail.
+
+Set `PICOBOT_GATEWAY_CMD` in `~/Frank/.termux-frank.env` if the phone gateway uses mission-control flags. Set `PICOBOT_MISSION_STATUS_FILE` when you want the updater to run `mission status` and `mission assert` after restart.
+
+Manual rollback is one command:
+
+```sh
+scripts/termux/update-and-restart-frank --rollback
+```
 
 Normal mission-required startup:
 

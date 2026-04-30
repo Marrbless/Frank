@@ -163,6 +163,76 @@ func TestAssessAutonomyBudgetForDebitsAllowsAndBlocksDeterministically(t *testin
 	}
 }
 
+func TestLoadAutonomyBudgetRecordFailsClosedOnCorruptRecord(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 16, 13, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		budgetID string
+		write    func(t *testing.T, root, budgetID string)
+		want     string
+	}{
+		{
+			name:     "malformed json",
+			budgetID: "autonomy-budget-malformed-json",
+			write: func(t *testing.T, root, budgetID string) {
+				t.Helper()
+				if err := WriteStoreFileAtomic(StoreAutonomyBudgetPath(root, budgetID), []byte("{\"record_version\":")); err != nil {
+					t.Fatalf("WriteStoreFileAtomic() error = %v", err)
+				}
+			},
+			want: "unexpected EOF",
+		},
+		{
+			name:     "unsupported record version",
+			budgetID: "autonomy-budget-unsupported-version",
+			write: func(t *testing.T, root, budgetID string) {
+				t.Helper()
+				record := validAutonomyBudgetRecord(now, budgetID, nil)
+				record.RecordVersion = StoreRecordVersion + 1
+				if err := WriteStoreJSONAtomic(StoreAutonomyBudgetPath(root, budgetID), record); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+				}
+			},
+			want: "mission store autonomy budget record_version 2 is unsupported; want 1",
+		},
+		{
+			name:     "missing required field",
+			budgetID: "autonomy-budget-missing-required",
+			write: func(t *testing.T, root, budgetID string) {
+				t.Helper()
+				record := validAutonomyBudgetRecord(now, budgetID, func(record *AutonomyBudgetRecord) {
+					record.BudgetID = ""
+				})
+				record.RecordVersion = StoreRecordVersion
+				if err := WriteStoreJSONAtomic(StoreAutonomyBudgetPath(root, budgetID), record); err != nil {
+					t.Fatalf("WriteStoreJSONAtomic() error = %v", err)
+				}
+			},
+			want: "budget_id is required",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			tc.write(t, root, tc.budgetID)
+
+			_, err := LoadAutonomyBudgetRecord(root, tc.budgetID)
+			if err == nil {
+				t.Fatal("LoadAutonomyBudgetRecord() error = nil, want fail-closed corrupt-record rejection")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("LoadAutonomyBudgetRecord() error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 func validAutonomyBudgetRecord(now time.Time, budgetID string, edit func(*AutonomyBudgetRecord)) AutonomyBudgetRecord {
 	record := AutonomyBudgetRecord{
 		BudgetID:                     budgetID,

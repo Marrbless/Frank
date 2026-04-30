@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+IMAGE_TAG="${PICOBOT_DOCKER_SMOKE_IMAGE:-picobot:smoke}"
+
+if ! command -v "$DOCKER_BIN" >/dev/null 2>&1; then
+	echo "docker smoke: $DOCKER_BIN not found" >&2
+	exit 127
+fi
+
+"$DOCKER_BIN" build -f docker/Dockerfile -t "$IMAGE_TAG" .
+"$DOCKER_BIN" run --rm --entrypoint /usr/local/bin/picobot "$IMAGE_TAG" --help >/dev/null
+echo "docker smoke: built $IMAGE_TAG and ran picobot --help"

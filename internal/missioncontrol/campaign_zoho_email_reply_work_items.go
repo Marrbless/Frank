@@ -81,7 +81,7 @@ func ValidateCampaignZohoEmailReplyWorkItem(item CampaignZohoEmailReplyWorkItem)
 			return fmt.Errorf("mission runtime campaign zoho email reply work item deferred state must not include claimed_followup_action_id")
 		}
 	case CampaignZohoEmailReplyWorkItemStateClaimed:
-		if normalized.DeferredUntil.IsZero() == false {
+		if !normalized.DeferredUntil.IsZero() {
 			return fmt.Errorf("mission runtime campaign zoho email reply work item claimed state must not include deferred_until")
 		}
 		if normalized.ClaimedFollowUpActionID == "" {

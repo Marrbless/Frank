@@ -67,15 +67,33 @@ For Frank mission-control development and operator runbooks, the relevant runtim
 ### Run tests
 
 ```sh
-# Run all tests
-go test ./...
+# Run the normal test surface
+make test
+
+# Run the lite build-tag test surface
+make test-lite
+
+# Prove full/lite build-tag contracts and build both binaries under /tmp
+make test-build-tags
+
+# Run the targeted race-sensitive package surface
+make test-race
+
+# Run all local checks used by the repo
+make verify
+
+# Generate a local coverage profile without enforcing a threshold
+make coverage
+
+# Build the Docker image and run a non-publishing --help smoke check
+make docker-smoke
 
 # Run tests for a specific package
-go test ./internal/cron/
-go test ./internal/agent/
+go test -count=1 ./internal/cron/
+go test -count=1 ./internal/agent/
 
 # Run tests with verbose output
-go test -v ./...
+go test -count=1 -v ./...
 ```
 
 ### Run go vet
@@ -83,21 +101,27 @@ go test -v ./...
 `go vet` catches common mistakes like unreachable code, misused format strings, and similar issues:
 
 ```sh
-go vet ./...
+make vet
 ```
 
 ### Run golangci-lint
 
-The project uses [golangci-lint](https://golangci-lint.run/) to enforce code quality. Install it first if you haven't already:
+The project uses [golangci-lint](https://golangci-lint.run/) to enforce code quality. The expected local version is the Makefile value:
 
 ```sh
-curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1
+make lint-version
+```
+
+Install that pinned version if you haven't already:
+
+```sh
+make install-lint
 golangci-lint --version
 ```
 
 ```sh
 # Lint all packages
-golangci-lint run
+make lint
 
 # Lint a specific package
 golangci-lint run ./internal/agent/...
@@ -106,15 +130,69 @@ golangci-lint run ./internal/agent/...
 golangci-lint run --fix
 ```
 
-## Versioning
+`make lint` sets `GOLANGCI_LINT_CACHE` to `/tmp/picobot-golangci-cache` by default so lint can run in read-only home environments. Override `GOLANGCI_LINT`, `GOLANGCI_LINT_VERSION`, or `GOLANGCI_LINT_CACHE` only when needed:
 
-The version string is defined in `cmd/picobot/main.go`:
-
-```go
-const version = "x.x.x"
+```sh
+GOLANGCI_LINT=/custom/path/golangci-lint make lint
+GOLANGCI_LINT_CACHE=/tmp/other-cache make lint
 ```
 
-Update this value before building a new release.
+### Validation scope
+
+Use focused package tests while editing, then broaden according to risk:
+
+| Command | When to use |
+|---------|-------------|
+| `go test -count=1 ./path/to/package` | Fast focused check while editing one package |
+| `make test` | Full normal test surface |
+| `make test-lite` | Lite build-tag compatibility |
+| `make test-build-tags` | Build-tag contract check: full WhatsApp implementation, lite WhatsApp stub, and both binary build modes under `/tmp/picobot-build-tags/` using `/tmp/picobot-go-cache/` by default |
+| `make test-scripts` | Shell-script regression checks plus env example, current-doc link, and tagged shell snippet syntax checks |
+| `make test-race` | Targeted race detector check for the small concurrency-heavy package set |
+| `make coverage` | Optional local coverage profile; writes `coverage.out` and `coverage.func.txt` under `/tmp/picobot-coverage/` by default and does not enforce thresholds |
+| `make docker-smoke` | Optional Docker packaging smoke; builds a local image and runs `picobot --help` without publishing |
+| `make vet` | Static Go vet checks |
+| `make lint` | Configured golangci-lint checks |
+| `make verify` | Full local gate before handing off non-trivial work |
+
+Some tests use `httptest` loopback listeners. If sandboxed tests fail because local bind is denied, rerun the same command with the required permission rather than changing code around the sandbox.
+
+Docs can opt shell examples into syntax validation with a fenced code info string containing `picobot-check:shell-syntax`, for example `sh picobot-check:shell-syntax`. The checker runs `sh -n` only; it never executes the snippet.
+
+### Test fixture naming
+
+Use fixture names that make the domain and scenario clear at the call site. Prefer `write<Domain><Scenario>Fixture(s)` helpers, `<domain><Scenario>Fixture(s)` struct types, and local variables such as `telegramOwnerFixture` or `mailboxBootstrapFixtures` instead of a bare `fixture` or `fixtures` when the test touches mission store records, provider records, or more than one object type.
+
+Durable golden files under `testdata/` should use `<surface>_<scenario>.golden.<ext>` so failures point back to the command or read model being checked.
+
+## Versioning
+
+For release gates, artifact builds, checksum capture, and rollback readiness,
+use [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md).
+
+The version string and build metadata defaults are defined in `cmd/picobot/main.go`:
+
+```go
+var (
+	version     = "x.x.x"
+	buildCommit = "unknown"
+	buildDate   = "unknown"
+)
+```
+
+Update `version` before building a new release. Release builds can stamp all
+three values with linker flags:
+
+```sh
+PICOBOT_VERSION=1.0.1
+PICOBOT_COMMIT="$(git rev-parse --short HEAD)"
+PICOBOT_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+go build -ldflags="-s -w -X main.version=${PICOBOT_VERSION} -X main.buildCommit=${PICOBOT_COMMIT} -X main.buildDate=${PICOBOT_DATE}" -o picobot ./cmd/picobot
+./picobot version
+```
+
+If the metadata linker flags are absent, `picobot version` reports
+`commit: unknown` and `date: unknown`.
 
 ## Building for Different Platforms
 
@@ -178,6 +256,18 @@ Some optional features — starting with WhatsApp via [whatsmeow](https://github
 The lite build is aimed at resource-constrained environments: IoT devices, cheap VPS with limited storage, or any deployment where a ~9 MB static binary is strongly preferred over a ~22 MB one. It includes every core feature (agent loop, Telegram, Discord, Slack, memory, skills, cron, heartbeat) but omits packages gated behind the `!lite` build tag.
 
 As new optional heavy integrations are added to Picobot in the future, they will follow the same pattern — included in the full build by default, excluded from the lite build.
+
+The build-tag contract is executable:
+
+```sh
+make test-build-tags
+```
+
+This target verifies that the full build uses the real WhatsApp implementation,
+the lite build uses the WhatsApp stub, and both command binaries compile into
+`/tmp/picobot-build-tags/`. It sets `GOCACHE` to `/tmp/picobot-go-cache/` and
+uses `-buildvcs=false` by default so fresh smoke binaries work in sandboxes where
+the home-directory Go cache is read-only.
 
 ```sh
 # Full build — all features including WhatsApp (default)

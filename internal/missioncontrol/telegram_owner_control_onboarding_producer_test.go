@@ -14,12 +14,12 @@ import (
 func TestResolveExecutionContextFrankTelegramOwnerControlOnboardingBundleResolvesExactLinkedBundle(t *testing.T) {
 	t.Parallel()
 
-	fixtures := writeTelegramOwnerControlOnboardingFixtures(t)
+	onboardingFixtures := writeTelegramOwnerControlOnboardingFixtures(t)
 	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
-		{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
-		{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: onboardingFixtures.identity.IdentityID},
+		{Kind: FrankRegistryObjectKindAccount, ObjectID: onboardingFixtures.account.AccountID},
 	})
-	ec.MissionStoreRoot = fixtures.root
+	ec.MissionStoreRoot = onboardingFixtures.root
 
 	got, ok, err := ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec)
 	if err != nil {
@@ -28,28 +28,28 @@ func TestResolveExecutionContextFrankTelegramOwnerControlOnboardingBundleResolve
 	if !ok {
 		t.Fatal("ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle() ok = false, want true")
 	}
-	if got.Identity.IdentityID != fixtures.identity.IdentityID {
-		t.Fatalf("Identity.IdentityID = %q, want %q", got.Identity.IdentityID, fixtures.identity.IdentityID)
+	if got.Identity.IdentityID != onboardingFixtures.identity.IdentityID {
+		t.Fatalf("Identity.IdentityID = %q, want %q", got.Identity.IdentityID, onboardingFixtures.identity.IdentityID)
 	}
-	if got.Account.AccountID != fixtures.account.AccountID {
-		t.Fatalf("Account.AccountID = %q, want %q", got.Account.AccountID, fixtures.account.AccountID)
+	if got.Account.AccountID != onboardingFixtures.account.AccountID {
+		t.Fatalf("Account.AccountID = %q, want %q", got.Account.AccountID, onboardingFixtures.account.AccountID)
 	}
-	if got.Provider.PlatformID != fixtures.providerTarget.RegistryID {
-		t.Fatalf("Provider.PlatformID = %q, want %q", got.Provider.PlatformID, fixtures.providerTarget.RegistryID)
+	if got.Provider.PlatformID != onboardingFixtures.providerTarget.RegistryID {
+		t.Fatalf("Provider.PlatformID = %q, want %q", got.Provider.PlatformID, onboardingFixtures.providerTarget.RegistryID)
 	}
-	if got.AccountClass.PlatformID != fixtures.accountClassTarget.RegistryID {
-		t.Fatalf("AccountClass.PlatformID = %q, want %q", got.AccountClass.PlatformID, fixtures.accountClassTarget.RegistryID)
+	if got.AccountClass.PlatformID != onboardingFixtures.accountClassTarget.RegistryID {
+		t.Fatalf("AccountClass.PlatformID = %q, want %q", got.AccountClass.PlatformID, onboardingFixtures.accountClassTarget.RegistryID)
 	}
 }
 
 func TestResolveExecutionContextFrankTelegramOwnerControlOnboardingBundleFailsClosedOnMissingAccount(t *testing.T) {
 	t.Parallel()
 
-	fixtures := writeTelegramOwnerControlOnboardingFixtures(t)
+	onboardingFixtures := writeTelegramOwnerControlOnboardingFixtures(t)
 	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
-		{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: onboardingFixtures.identity.IdentityID},
 	})
-	ec.MissionStoreRoot = fixtures.root
+	ec.MissionStoreRoot = onboardingFixtures.root
 
 	_, _, err := ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec)
 	if err == nil {
@@ -61,7 +61,7 @@ func TestResolveExecutionContextFrankTelegramOwnerControlOnboardingBundleFailsCl
 }
 
 func TestProduceFrankTelegramOwnerControlOnboardingPersistsConfirmedIdentifiersAndReplaysDeterministically(t *testing.T) {
-	fixtures := writeTelegramOwnerControlOnboardingFixtures(t)
+	onboardingFixtures := writeTelegramOwnerControlOnboardingFixtures(t)
 	configureTelegramOwnerControlTestConfig(t, "999111222", filepath.Join(t.TempDir(), "workspace"))
 
 	originalRead := readTelegramOwnerControlBotIdentity
@@ -74,10 +74,10 @@ func TestProduceFrankTelegramOwnerControlOnboardingPersistsConfirmedIdentifiersA
 	}
 
 	ec := testExecutionContextWithFrankObjectRefs(t, []FrankRegistryObjectRef{
-		{Kind: FrankRegistryObjectKindIdentity, ObjectID: fixtures.identity.IdentityID},
-		{Kind: FrankRegistryObjectKindAccount, ObjectID: fixtures.account.AccountID},
+		{Kind: FrankRegistryObjectKindIdentity, ObjectID: onboardingFixtures.identity.IdentityID},
+		{Kind: FrankRegistryObjectKindAccount, ObjectID: onboardingFixtures.account.AccountID},
 	})
-	ec.MissionStoreRoot = fixtures.root
+	ec.MissionStoreRoot = onboardingFixtures.root
 	bundle, ok, err := ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(ec)
 	if err != nil {
 		t.Fatalf("ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle() error = %v", err)
@@ -87,15 +87,15 @@ func TestProduceFrankTelegramOwnerControlOnboardingPersistsConfirmedIdentifiersA
 	}
 
 	firstNow := time.Date(2026, 4, 18, 19, 0, 0, 0, time.UTC)
-	if err := ProduceFrankTelegramOwnerControlOnboarding(fixtures.root, bundle, firstNow); err != nil {
+	if err := ProduceFrankTelegramOwnerControlOnboarding(onboardingFixtures.root, bundle, firstNow); err != nil {
 		t.Fatalf("ProduceFrankTelegramOwnerControlOnboarding(first) error = %v", err)
 	}
 
-	identity, err := LoadFrankIdentityRecord(fixtures.root, fixtures.identity.IdentityID)
+	identity, err := LoadFrankIdentityRecord(onboardingFixtures.root, onboardingFixtures.identity.IdentityID)
 	if err != nil {
 		t.Fatalf("LoadFrankIdentityRecord() error = %v", err)
 	}
-	account, err := LoadFrankAccountRecord(fixtures.root, fixtures.account.AccountID)
+	account, err := LoadFrankAccountRecord(onboardingFixtures.root, onboardingFixtures.account.AccountID)
 	if err != nil {
 		t.Fatalf("LoadFrankAccountRecord() error = %v", err)
 	}
@@ -116,15 +116,15 @@ func TestProduceFrankTelegramOwnerControlOnboardingPersistsConfirmedIdentifiersA
 		t.Fatal("ResolveExecutionContextFrankTelegramOwnerControlOnboardingBundle(replay) ok = false, want true")
 	}
 
-	if err := ProduceFrankTelegramOwnerControlOnboarding(fixtures.root, bundle, firstNow.Add(time.Minute)); err != nil {
+	if err := ProduceFrankTelegramOwnerControlOnboarding(onboardingFixtures.root, bundle, firstNow.Add(time.Minute)); err != nil {
 		t.Fatalf("ProduceFrankTelegramOwnerControlOnboarding(replay) error = %v, want deterministic no-op success", err)
 	}
 
-	identity, err = LoadFrankIdentityRecord(fixtures.root, fixtures.identity.IdentityID)
+	identity, err = LoadFrankIdentityRecord(onboardingFixtures.root, onboardingFixtures.identity.IdentityID)
 	if err != nil {
 		t.Fatalf("LoadFrankIdentityRecord(replay) error = %v", err)
 	}
-	account, err = LoadFrankAccountRecord(fixtures.root, fixtures.account.AccountID)
+	account, err = LoadFrankAccountRecord(onboardingFixtures.root, onboardingFixtures.account.AccountID)
 	if err != nil {
 		t.Fatalf("LoadFrankAccountRecord(replay) error = %v", err)
 	}

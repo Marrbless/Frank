@@ -50,7 +50,7 @@ func TestStartTelegramWithBase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := StartTelegramWithBase(ctx, b, token, base, nil); err != nil {
+	if err := StartTelegramWithBaseOpenMode(ctx, b, token, base, nil, true); err != nil {
 		t.Fatalf("StartTelegramWithBase failed: %v", err)
 	}
 	// Start the hub router so outbound messages sent to b.Out are dispatched
@@ -87,6 +87,16 @@ func TestStartTelegramWithBase(t *testing.T) {
 	cancel()
 	// give a small grace period
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestStartTelegramWithBaseFailsClosedWithoutAllowlist(t *testing.T) {
+	err := StartTelegramWithBase(context.Background(), chat.NewHub(10), "token", "https://example.com/bottoken", nil)
+	if err == nil {
+		t.Fatal("expected empty allowlist to fail closed")
+	}
+	if !strings.Contains(err.Error(), "allowlist is empty") {
+		t.Fatalf("expected allowlist error, got %v", err)
+	}
 }
 
 func TestReadTelegramBotIdentityWithBase(t *testing.T) {

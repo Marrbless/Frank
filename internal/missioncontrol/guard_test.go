@@ -502,6 +502,54 @@ func TestDefaultToolGuardDeniedByStepToolScope(t *testing.T) {
 	assertDenied(t, decision, RejectionCodeToolNotAllowed, "tool is not allowed by step tool scope")
 }
 
+func TestDefaultToolGuardLeastAuthorityProfileDeniesHighRiskToolsOutsideScope(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Job.MaxAuthority = AuthorityTierLow
+	ec.Job.AllowedTools = []string{"message", "read_memory", "list_memory", "web_search"}
+	ec.Step.RequiredAuthority = AuthorityTierLow
+	ec.Step.AllowedTools = []string{"message", "read_memory", "list_memory", "web_search"}
+
+	for _, toolName := range []string{
+		"exec",
+		"filesystem",
+		"frank_zoho_send_email",
+		"frank_zoho_manage_reply_work_item",
+		"write_memory",
+		"edit_memory",
+		"delete_memory",
+		"create_skill",
+		"delete_skill",
+		"mcp_mail_send",
+	} {
+		t.Run(toolName, func(t *testing.T) {
+			t.Parallel()
+
+			decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, toolName, nil)
+
+			assertDenied(t, decision, RejectionCodeToolNotAllowed, "tool is not allowed by job tool scope")
+		})
+	}
+}
+
+func TestDefaultToolGuardLeastAuthorityProfileApprovalGateDeniesScopedHighRiskTool(t *testing.T) {
+	t.Parallel()
+
+	ec := testExecutionContext()
+	ec.Job.MaxAuthority = AuthorityTierLow
+	ec.Job.AllowedTools = []string{"exec"}
+	ec.Step.RequiredAuthority = AuthorityTierLow
+	ec.Step.AllowedTools = []string{"exec"}
+	ec.Step.RequiresApproval = true
+
+	decision := NewDefaultToolGuard().EvaluateTool(context.Background(), ec, "exec", map[string]interface{}{
+		"cmd": []string{"go", "test"},
+	})
+
+	assertDenied(t, decision, RejectionCodeApprovalRequired, "step requires approval")
+}
+
 func TestDefaultToolGuardMissingJobOrStepContext(t *testing.T) {
 	t.Parallel()
 

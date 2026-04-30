@@ -529,6 +529,50 @@ func TestRegistryDefinitionsStepLevelIntersectionFiltering(t *testing.T) {
 	}
 }
 
+func TestRegistryDefinitionsLeastAuthorityProfileHidesHighRiskTools(t *testing.T) {
+	t.Parallel()
+
+	reg := NewRegistry()
+	for _, name := range []string{
+		"message",
+		"read_memory",
+		"list_memory",
+		"web_search",
+		"exec",
+		"filesystem",
+		"frank_zoho_send_email",
+		"create_skill",
+		"mcp_mail_send",
+	} {
+		reg.Register(&stubTool{name: name})
+	}
+
+	ec := &missioncontrol.ExecutionContext{
+		Job: &missioncontrol.Job{
+			MaxAuthority: missioncontrol.AuthorityTierLow,
+			AllowedTools: []string{
+				"message",
+				"read_memory",
+				"list_memory",
+				"web_search",
+			},
+		},
+		Step: &missioncontrol.Step{
+			RequiredAuthority: missioncontrol.AuthorityTierLow,
+			AllowedTools: []string{
+				"message",
+				"read_memory",
+			},
+		},
+	}
+
+	got := definitionNames(reg.DefinitionsForExecutionContext(ec))
+	want := []string{"message", "read_memory"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefinitionsForExecutionContext(least-authority profile) = %#v, want %#v", got, want)
+	}
+}
+
 func TestSurfacedToolRejectionCodeCanonicalizesFrozenV2Codes(t *testing.T) {
 	t.Parallel()
 

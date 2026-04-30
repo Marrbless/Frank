@@ -35,16 +35,28 @@ func captureChannelLogs(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func TestRedactLogTextRedactsKnownTokenShapes(t *testing.T) {
+	input := `Bearer secret-token xapp-secret xoxb-secret sk-secret bot1234567890:ABCDEF_secret https://api.telegram.org/botshorttoken/getUpdates`
+	got := redactLogText(input)
+	for _, leaked := range []string{"secret-token", "xapp-secret", "xoxb-secret", "sk-secret", "bot1234567890:ABCDEF_secret", "botshorttoken"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("redactLogText(%q) = %q, leaked %q", input, got, leaked)
+		}
+	}
+}
+
 func TestSlackInboundLogsOmitRawContentAndAttachmentURLs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	hub := chat.NewHub(10)
 	client := &slackClient{
-		hub:   hub,
-		outCh: hub.Subscribe("slack"),
-		botID: "UBOT",
-		ctx:   ctx,
+		hub:          hub,
+		outCh:        hub.Subscribe("slack"),
+		botID:        "UBOT",
+		openUserMode: true,
+		openChanMode: true,
+		ctx:          ctx,
 	}
 
 	logs := captureChannelLogs(t, func() {
@@ -59,13 +71,13 @@ func TestSlackInboundLogsOmitRawContentAndAttachmentURLs(t *testing.T) {
 		})
 	})
 
-	if !strings.Contains(logs, "slack: message from U123 in D123 (chars=") {
+	if !strings.Contains(logs, "slack: message from "+redactLogID("U123")+" in "+redactLogID("D123")+" (chars=") {
 		t.Fatalf("expected summarized Slack log, got %q", logs)
 	}
 	if !strings.Contains(logs, "attachments=1") {
 		t.Fatalf("expected attachment count in Slack log, got %q", logs)
 	}
-	if strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") || strings.Contains(logs, "files.example.com/private") {
+	if strings.Contains(logs, "U123") || strings.Contains(logs, "D123") || strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") || strings.Contains(logs, "files.example.com/private") {
 		t.Fatalf("expected Slack log to omit raw content and attachment URLs, got %q", logs)
 	}
 }
@@ -76,10 +88,12 @@ func TestSlackMentionLogsOmitRawContent(t *testing.T) {
 
 	hub := chat.NewHub(10)
 	client := &slackClient{
-		hub:   hub,
-		outCh: hub.Subscribe("slack"),
-		botID: "UBOT",
-		ctx:   ctx,
+		hub:          hub,
+		outCh:        hub.Subscribe("slack"),
+		botID:        "UBOT",
+		openUserMode: true,
+		openChanMode: true,
+		ctx:          ctx,
 	}
 
 	logs := captureChannelLogs(t, func() {
@@ -90,10 +104,10 @@ func TestSlackMentionLogsOmitRawContent(t *testing.T) {
 		})
 	})
 
-	if !strings.Contains(logs, "slack: mention from U123 in C123 (chars=") {
+	if !strings.Contains(logs, "slack: mention from "+redactLogID("U123")+" in "+redactLogID("C123")+" (chars=") {
 		t.Fatalf("expected summarized Slack mention log, got %q", logs)
 	}
-	if strings.Contains(logs, "private campaign note") {
+	if strings.Contains(logs, "U123") || strings.Contains(logs, "C123") || strings.Contains(logs, "private campaign note") {
 		t.Fatalf("expected Slack mention log to omit raw content, got %q", logs)
 	}
 }
@@ -103,7 +117,7 @@ func TestDiscordInboundLogsOmitRawContentAndAttachmentURLs(t *testing.T) {
 	defer cancel()
 
 	hub := chat.NewHub(10)
-	client := newDiscordClient(ctx, noopDiscordSender{}, hub, "BOT", nil)
+	client := newDiscordClient(ctx, noopDiscordSender{}, hub, "BOT", nil, true)
 
 	logs := captureChannelLogs(t, func() {
 		client.handleMessage(nil, &discordgo.MessageCreate{
@@ -124,13 +138,13 @@ func TestDiscordInboundLogsOmitRawContentAndAttachmentURLs(t *testing.T) {
 		client.stopAllTyping()
 	})
 
-	if !strings.Contains(logs, "discord: message from alice#1234 (U123) in C123 (chars=") {
+	if !strings.Contains(logs, "discord: message from "+redactLogID("U123")+" in "+redactLogID("C123")+" (chars=") {
 		t.Fatalf("expected summarized Discord log, got %q", logs)
 	}
 	if !strings.Contains(logs, "attachments=1") {
 		t.Fatalf("expected attachment count in Discord log, got %q", logs)
 	}
-	if strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") || strings.Contains(logs, "cdn.example.com/private") {
+	if strings.Contains(logs, "alice#1234") || strings.Contains(logs, "U123") || strings.Contains(logs, "C123") || strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") || strings.Contains(logs, "cdn.example.com/private") {
 		t.Fatalf("expected Discord log to omit raw content and attachment URLs, got %q", logs)
 	}
 }

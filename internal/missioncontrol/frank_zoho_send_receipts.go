@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const frankZohoSendEmailToolName = "frank_zoho_send_email"
-
 type FrankZohoSendReceipt struct {
 	StepID             string `json:"-"`
 	Provider           string `json:"provider"`

@@ -1,0 +1,14 @@
+{
+  "mission_required": true,
+  "active": false,
+  "mission_file": "mission.json",
+  "job_id": "job-failed",
+  "step_id": "build",
+  "step_type": "one_shot_code",
+  "required_authority": "low",
+  "requires_approval": false,
+  "allowed_tools": [
+    "read"
+  ],
+  "updated_at": "2026-04-30T18:10:00Z"
+}

@@ -48,7 +48,7 @@ func SaveConfig(cfg Config, path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o640)
+	return os.WriteFile(path, b, 0o600)
 }
 
 // InitializeWorkspace creates the workspace dir and bootstrap files.

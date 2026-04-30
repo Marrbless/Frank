@@ -716,164 +716,125 @@ func WithDeferredSchedulerTriggers(summary OperatorStatusSummary, deferred []Ope
 	return summary
 }
 
-func WithRuntimePackIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+func withStoreRootStatus(summary OperatorStatusSummary, root string, apply func(*OperatorStatusSummary, string)) OperatorStatusSummary {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		return summary
 	}
-	status := LoadOperatorRuntimePackIdentityStatus(root)
-	summary.RuntimePackIdentity = &status
+	apply(&summary, root)
 	return summary
+}
+
+func WithRuntimePackIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorRuntimePackIdentityStatus(root)
+		summary.RuntimePackIdentity = &status
+	})
 }
 
 func WithImprovementCandidateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorImprovementCandidateIdentityStatus(root)
-	summary.ImprovementCandidateIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorImprovementCandidateIdentityStatus(root)
+		summary.ImprovementCandidateIdentity = &status
+	})
 }
 
 func WithEvalSuiteIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorEvalSuiteIdentityStatus(root)
-	summary.EvalSuiteIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorEvalSuiteIdentityStatus(root)
+		summary.EvalSuiteIdentity = &status
+	})
 }
 
 func WithPromotionPolicyIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorPromotionPolicyIdentityStatus(root)
-	summary.PromotionPolicyIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorPromotionPolicyIdentityStatus(root)
+		summary.PromotionPolicyIdentity = &status
+	})
 }
 
 func WithImprovementRunIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorImprovementRunIdentityStatus(root)
-	summary.ImprovementRunIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorImprovementRunIdentityStatus(root)
+		summary.ImprovementRunIdentity = &status
+	})
 }
 
 func WithCandidateResultIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorCandidateResultIdentityStatus(root)
-	summary.CandidateResultIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorCandidateResultIdentityStatus(root)
+		summary.CandidateResultIdentity = &status
+	})
 }
 
 func WithCandidatePromotionDecisionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorCandidatePromotionDecisionIdentityStatus(root)
-	summary.CandidatePromotionDecisionIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorCandidatePromotionDecisionIdentityStatus(root)
+		summary.CandidatePromotionDecisionIdentity = &status
+	})
 }
 
 func WithHotUpdateCanaryRequirementIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateCanaryRequirementIdentityStatus(root)
-	summary.HotUpdateCanaryRequirementIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateCanaryRequirementIdentityStatus(root)
+		summary.HotUpdateCanaryRequirementIdentity = &status
+	})
 }
 
 func WithHotUpdateCanaryEvidenceIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateCanaryEvidenceIdentityStatus(root)
-	summary.HotUpdateCanaryEvidenceIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateCanaryEvidenceIdentityStatus(root)
+		summary.HotUpdateCanaryEvidenceIdentity = &status
+	})
 }
 
 func WithHotUpdateCanarySatisfactionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateCanarySatisfactionIdentityStatus(root)
-	summary.HotUpdateCanarySatisfactionIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateCanarySatisfactionIdentityStatus(root)
+		summary.HotUpdateCanarySatisfactionIdentity = &status
+	})
 }
 
 func WithHotUpdateCanarySatisfactionAuthorityIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateCanarySatisfactionAuthorityIdentityStatus(root)
-	summary.HotUpdateCanarySatisfactionAuthorityIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateCanarySatisfactionAuthorityIdentityStatus(root)
+		summary.HotUpdateCanarySatisfactionAuthorityIdentity = &status
+	})
 }
 
 func WithHotUpdateOwnerApprovalRequestIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateOwnerApprovalRequestIdentityStatus(root)
-	summary.HotUpdateOwnerApprovalRequestIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateOwnerApprovalRequestIdentityStatus(root)
+		summary.HotUpdateOwnerApprovalRequestIdentity = &status
+	})
 }
 
 func WithHotUpdateOwnerApprovalDecisionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateOwnerApprovalDecisionIdentityStatus(root)
-	summary.HotUpdateOwnerApprovalDecisionIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateOwnerApprovalDecisionIdentityStatus(root)
+		summary.HotUpdateOwnerApprovalDecisionIdentity = &status
+	})
 }
 
 func WithHotUpdateGateIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateGateIdentityStatus(root)
-	summary.HotUpdateGateIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateGateIdentityStatus(root)
+		summary.HotUpdateGateIdentity = &status
+	})
 }
 
 func WithHotUpdateOutcomeIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorHotUpdateOutcomeIdentityStatus(root)
-	summary.HotUpdateOutcomeIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorHotUpdateOutcomeIdentityStatus(root)
+		summary.HotUpdateOutcomeIdentity = &status
+	})
 }
 
 func WithPromotionIdentity(summary OperatorStatusSummary, root string) OperatorStatusSummary {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return summary
-	}
-	status := LoadOperatorPromotionIdentityStatus(root)
-	summary.PromotionIdentity = &status
-	return summary
+	return withStoreRootStatus(summary, root, func(summary *OperatorStatusSummary, root string) {
+		status := LoadOperatorPromotionIdentityStatus(root)
+		summary.PromotionIdentity = &status
+	})
 }
 
 func WithV4Summary(summary OperatorStatusSummary) OperatorStatusSummary {

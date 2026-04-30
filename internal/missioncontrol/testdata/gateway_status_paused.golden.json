@@ -1,0 +1,15 @@
+{
+  "mission_required": true,
+  "active": false,
+  "mission_file": "mission.json",
+  "job_id": "job-paused",
+  "step_id": "owner-approval",
+  "step_type": "wait_user",
+  "required_authority": "medium",
+  "requires_approval": true,
+  "allowed_tools": [
+    "read",
+    "reply"
+  ],
+  "updated_at": "2026-04-30T18:05:00Z"
+}

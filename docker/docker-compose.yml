@@ -18,21 +18,25 @@ services:
       - PICOBOT_MAX_TOOL_ITERATIONS=${PICOBOT_MAX_TOOL_ITERATIONS:-100}
       # Optional: Show tool activity indicators during tool calls (default: true).
       - PICOBOT_ENABLE_TOOL_ACTIVITY_INDICATOR=${PICOBOT_ENABLE_TOOL_ACTIVITY_INDICATOR:-true}
-      # Optional: Telegram bot token from @BotFather
+      # Optional: Telegram bot token from @BotFather.
+      # If set, also set TELEGRAM_ALLOW_FROM or mount config with channels.telegram.openMode=true.
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      # Optional: Comma-separated Telegram user IDs allowed to chat
+      # Required with TELEGRAM_BOT_TOKEN unless Telegram open mode is explicit in config.
       - TELEGRAM_ALLOW_FROM=${TELEGRAM_ALLOW_FROM:-}
-      # Optional: Discord bot token from Developer Portal
+      # Optional: Discord bot token from Developer Portal.
+      # If set, also set DISCORD_ALLOW_FROM or mount config with channels.discord.openMode=true.
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
-      # Optional: Comma-separated Discord user IDs allowed to chat
+      # Required with DISCORD_BOT_TOKEN unless Discord open mode is explicit in config.
       - DISCORD_ALLOW_FROM=${DISCORD_ALLOW_FROM:-}
-      # Optional: Slack App-Level Token (xapp-...), also enables the channel
+      # Optional: Slack App-Level Token (xapp-...), also enables the channel.
+      # If either Slack token is set, also set both Slack allowlists or mount config with explicit Slack open modes.
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
-      # Optional: Slack Bot Token (xoxb-...), also enables the channel
+      # Optional: Slack Bot Token (xoxb-...), also enables the channel.
+      # If either Slack token is set, also set both Slack allowlists or mount config with explicit Slack open modes.
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
-      # Optional: Comma-separated Slack user IDs allowed to chat
+      # Required with Slack tokens unless channels.slack.openUserMode=true is explicit in config.
       - SLACK_ALLOW_USERS=${SLACK_ALLOW_USERS:-}
-      # Optional: Comma-separated Slack channel IDs allowed to chat
+      # Required with Slack tokens unless channels.slack.openChannelMode=true is explicit in config.
       - SLACK_ALLOW_CHANNELS=${SLACK_ALLOW_CHANNELS:-}
     volumes:
       # Persist config, workspace, memory, skills, and WhatsApp session DB

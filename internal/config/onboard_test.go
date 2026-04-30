@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,25 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 	if strings.Contains(parsed.Providers.OpenAI.APIKey, "sk-") {
 		t.Fatalf("expected non-token-shaped placeholder, got %q", parsed.Providers.OpenAI.APIKey)
+	}
+}
+
+func TestSaveConfigUsesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are not reliable on windows")
+	}
+	d := t.TempDir()
+	cfg := DefaultConfig()
+	path := filepath.Join(d, "config.json")
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat saved config failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %#o, want %#o", got, os.FileMode(0o600))
 	}
 }
 

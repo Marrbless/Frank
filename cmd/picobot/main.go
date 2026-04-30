@@ -30,7 +30,11 @@ import (
 	"github.com/local/picobot/internal/providers"
 )
 
-const version = "1.0.1"
+var (
+	version     = "1.0.1"
+	buildCommit = "unknown"
+	buildDate   = "unknown"
+)
 
 var gatewayLogNow = time.Now
 var newGatewayLogTicker = func(interval time.Duration) *time.Ticker {
@@ -430,7 +434,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("🤖 picobot v%s\n", version)
+			fmt.Fprintf(cmd.OutOrStdout(), "🤖 picobot v%s\ncommit: %s\ndate: %s\n", version, buildCommit, buildDate)
 		},
 	})
 
@@ -446,9 +450,11 @@ func NewRootCmd() *cobra.Command {
 			fmt.Printf("Wrote config to %s\nInitialized workspace at %s\n", cfgPath, workspacePath)
 		},
 	}
+	onboardCmd.AddCommand(newOnboardChecklistCmd())
 
 	rootCmd.AddCommand(onboardCmd)
 
+	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newChannelsCmd())
 
 	agentCmd := &cobra.Command{
@@ -617,21 +623,29 @@ func NewRootCmd() *cobra.Command {
 
 			// start telegram if enabled
 			if cfg.Channels.Telegram.Enabled {
-				if err := channels.StartTelegram(ctx, hub, cfg.Channels.Telegram.Token, cfg.Channels.Telegram.AllowFrom); err != nil {
+				if err := requireAllowlistOrOpen("telegram", cfg.Channels.Telegram.AllowFrom, cfg.Channels.Telegram.OpenMode); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to start telegram: %v\n", err)
+				} else if err := channels.StartTelegramWithOpenMode(ctx, hub, cfg.Channels.Telegram.Token, cfg.Channels.Telegram.AllowFrom, cfg.Channels.Telegram.OpenMode); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to start telegram: %v\n", err)
 				}
 			}
 
 			// start discord if enabled
 			if cfg.Channels.Discord.Enabled {
-				if err := channels.StartDiscord(ctx, hub, cfg.Channels.Discord.Token, cfg.Channels.Discord.AllowFrom); err != nil {
+				if err := requireAllowlistOrOpen("discord", cfg.Channels.Discord.AllowFrom, cfg.Channels.Discord.OpenMode); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to start discord: %v\n", err)
+				} else if err := channels.StartDiscordWithOpenMode(ctx, hub, cfg.Channels.Discord.Token, cfg.Channels.Discord.AllowFrom, cfg.Channels.Discord.OpenMode); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to start discord: %v\n", err)
 				}
 			}
 
 			// start slack if enabled
 			if cfg.Channels.Slack.Enabled {
-				if err := channels.StartSlack(ctx, hub, cfg.Channels.Slack.AppToken, cfg.Channels.Slack.BotToken, cfg.Channels.Slack.AllowUsers, cfg.Channels.Slack.AllowChannels); err != nil {
+				if err := requireAllowlistOrOpen("slack users", cfg.Channels.Slack.AllowUsers, cfg.Channels.Slack.OpenUserMode); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to start slack: %v\n", err)
+				} else if err := requireAllowlistOrOpen("slack channels", cfg.Channels.Slack.AllowChannels, cfg.Channels.Slack.OpenChannelMode); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to start slack: %v\n", err)
+				} else if err := channels.StartSlackWithOpenMode(ctx, hub, cfg.Channels.Slack.AppToken, cfg.Channels.Slack.BotToken, cfg.Channels.Slack.AllowUsers, cfg.Channels.Slack.AllowChannels, cfg.Channels.Slack.OpenUserMode, cfg.Channels.Slack.OpenChannelMode); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to start slack: %v\n", err)
 				}
 			}
@@ -647,7 +661,9 @@ func NewRootCmd() *cobra.Command {
 					home, _ := os.UserHomeDir()
 					dbPath = filepath.Join(home, dbPath[2:])
 				}
-				if err := channels.StartWhatsApp(ctx, hub, dbPath, cfg.Channels.WhatsApp.AllowFrom); err != nil {
+				if err := requireAllowlistOrOpen("whatsapp", cfg.Channels.WhatsApp.AllowFrom, cfg.Channels.WhatsApp.OpenMode); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to start whatsapp: %v\n", err)
+				} else if err := channels.StartWhatsAppWithOpenMode(ctx, hub, dbPath, cfg.Channels.WhatsApp.AllowFrom, cfg.Channels.WhatsApp.OpenMode); err != nil {
 					fmt.Fprintf(os.Stderr, "failed to start whatsapp: %v\n", err)
 				}
 			}
@@ -1248,10 +1264,14 @@ func NewRootCmd() *cobra.Command {
 	missionCmd.AddCommand(missionSetStepCmd)
 	missionCmd.AddCommand(missionPackageLogsCmd)
 	missionCmd.AddCommand(missionPruneStoreCmd)
+	missionCmd.AddCommand(newMissionStoreTransferPlanCmd())
 	rootCmd.AddCommand(missionCmd)
 
 	rootCmd.AddCommand(newMemoryCmd())
 	rootCmd.AddCommand(newSkillsCmd())
+	rootCmd.AddCommand(newDiagnosticsCmd())
+	rootCmd.AddCommand(newUpdateReadinessCmd())
+	rootCmd.AddCommand(newCompletionCmd())
 
 	wrapCommandRunEWithSurfacedValidationErrors(rootCmd)
 	return rootCmd
@@ -1712,7 +1732,6 @@ type missionPruneStoreSummary struct {
 }
 
 var loadValidatedLegacyMissionStatusSnapshot = missioncontrol.LoadValidatedLegacyMissionStatusSnapshot
-var loadMissionStatusObservationFile = missioncontrol.LoadMissionStatusObservationFile
 
 func validateMissionJob(job missioncontrol.Job, storeRoot string) error {
 	job.MissionStoreRoot = storeRoot

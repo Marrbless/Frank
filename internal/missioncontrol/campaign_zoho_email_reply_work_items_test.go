@@ -212,3 +212,112 @@ func TestDeriveCampaignZohoEmailReplyWorkSelectionChoosesOldestEligibleReply(t *
 		t.Fatal("NeedsReopen = true, want oldest already-open reply to win before expired deferred reply")
 	}
 }
+
+func TestDeriveCampaignZohoEmailReplyWorkSelectionInvariantTable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)
+	reply := testFrankZohoInboundReplyRecord("job-r1", 1, FrankZohoInboundReply{
+		StepID:             "sync-replies",
+		Provider:           "zoho_mail",
+		ProviderAccountID:  "3323462000000008002",
+		ProviderMessageID:  "reply-work-selection",
+		ReceivedAt:         now.Add(-time.Hour),
+		OriginalMessageURL: "https://mail.zoho.test/api/accounts/3323462000000008002/messages/reply-work-selection/originalmessage",
+	})
+	openItem, err := BuildCampaignZohoEmailReplyWorkItemOpen("campaign-mail", reply.ReplyID, now.Add(-30*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemOpen(open) error = %v", err)
+	}
+	futureDeferredItem, err := BuildCampaignZohoEmailReplyWorkItemDeferred(openItem, now.Add(time.Hour), now.Add(-20*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemDeferred(future) error = %v", err)
+	}
+	expiredDeferredItem, err := BuildCampaignZohoEmailReplyWorkItemDeferred(openItem, now.Add(-time.Minute), now.Add(-20*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemDeferred(expired) error = %v", err)
+	}
+	ignoredItem, err := BuildCampaignZohoEmailReplyWorkItemIgnored(openItem, now.Add(-10*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCampaignZohoEmailReplyWorkItemIgnored() error = %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		item       CampaignZohoEmailReplyWorkItem
+		wantOK     bool
+		wantReopen bool
+		wantState  CampaignZohoEmailReplyWorkItemState
+	}{
+		{
+			name:      "open reply work is eligible",
+			item:      openItem,
+			wantOK:    true,
+			wantState: CampaignZohoEmailReplyWorkItemStateOpen,
+		},
+		{
+			name: "future deferred reply work is skipped",
+			item: futureDeferredItem,
+		},
+		{
+			name:       "expired deferred reply work is eligible and needs reopen",
+			item:       expiredDeferredItem,
+			wantOK:     true,
+			wantReopen: true,
+			wantState:  CampaignZohoEmailReplyWorkItemStateDeferred,
+		},
+		{
+			name: "ignored reply work is terminal and skipped",
+			item: ignoredItem,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			selection, ok, err := DeriveCampaignZohoEmailReplyWorkSelection("campaign-mail",
+				[]CampaignZohoEmailReplyWorkItemRecord{testCampaignZohoEmailReplyWorkItemRecord("job-reply-work", "send-outbound-email", tc.item)},
+				[]FrankZohoInboundReplyRecord{reply},
+				now,
+			)
+			if err != nil {
+				t.Fatalf("DeriveCampaignZohoEmailReplyWorkSelection() error = %v", err)
+			}
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v; selection = %#v", ok, tc.wantOK, selection)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if selection.WorkItem.State != tc.wantState {
+				t.Fatalf("WorkItem.State = %q, want %q", selection.WorkItem.State, tc.wantState)
+			}
+			if selection.NeedsReopen != tc.wantReopen {
+				t.Fatalf("NeedsReopen = %v, want %v", selection.NeedsReopen, tc.wantReopen)
+			}
+			if selection.InboundReply.ReplyID != reply.ReplyID {
+				t.Fatalf("InboundReply.ReplyID = %q, want %q", selection.InboundReply.ReplyID, reply.ReplyID)
+			}
+		})
+	}
+}
+
+func testCampaignZohoEmailReplyWorkItemRecord(jobID, stepID string, item CampaignZohoEmailReplyWorkItem) CampaignZohoEmailReplyWorkItemRecord {
+	item = NormalizeCampaignZohoEmailReplyWorkItem(item)
+	return CampaignZohoEmailReplyWorkItemRecord{
+		RecordVersion:           StoreRecordVersion,
+		LastSeq:                 1,
+		ReplyWorkItemID:         item.ReplyWorkItemID,
+		JobID:                   jobID,
+		StepID:                  stepID,
+		InboundReplyID:          item.InboundReplyID,
+		CampaignID:              item.CampaignID,
+		State:                   string(item.State),
+		DeferredUntil:           item.DeferredUntil,
+		ClaimedFollowUpActionID: item.ClaimedFollowUpActionID,
+		CreatedAt:               item.CreatedAt,
+		UpdatedAt:               item.UpdatedAt,
+	}
+}

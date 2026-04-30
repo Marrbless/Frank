@@ -1052,7 +1052,6 @@ func frankZohoExtractReportField(message string, field string) string {
 				break
 			}
 			value = strings.TrimSpace(strings.Join([]string{value, strings.TrimSpace(next)}, " "))
-			i = j
 		}
 		if field == "Final-Recipient" {
 			return frankZohoExtractRecipientAddress(value)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -113,6 +114,16 @@ func TestStartWhatsApp_EmptyDBPath(t *testing.T) {
 	}
 }
 
+func TestStartWhatsApp_FailsClosedWithoutAllowlist(t *testing.T) {
+	err := StartWhatsApp(context.Background(), chat.NewHub(10), filepath.Join(t.TempDir(), "whatsapp.db"), nil)
+	if err == nil {
+		t.Fatal("expected empty allowlist to fail closed")
+	}
+	if !strings.Contains(err.Error(), "allowlist is empty") {
+		t.Fatalf("expected allowlist error, got %v", err)
+	}
+}
+
 func TestSetupWhatsApp_EmptyDBPath(t *testing.T) {
 	err := SetupWhatsApp("")
 	if err == nil || err.Error() != "whatsapp database path not provided" {
@@ -128,7 +139,7 @@ func TestWhatsAppClient_HandleMessage_Inbound(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{}) // no allowlist
+	c := newWhatsAppClient(ctx, mock, hub, nil, true, types.JID{}, types.JID{}) // explicit open mode
 
 	text := "hello bot"
 	c.handleMessage(makeWhatsAppMsg("15551234567", false, false, text))
@@ -162,7 +173,7 @@ func TestWhatsAppClient_HandleMessage_LogOmitsRawContent(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, mock, hub, nil, true, types.JID{}, types.JID{})
 
 	logs := captureWhatsAppLogs(t, func() {
 		c.handleMessage(makeWhatsAppMsg("15551234567", false, false, "private token sk-secret"))
@@ -170,13 +181,13 @@ func TestWhatsAppClient_HandleMessage_LogOmitsRawContent(t *testing.T) {
 		c.stopAllTyping()
 	})
 
-	if !strings.Contains(logs, "whatsapp: message from 15551234567@s.whatsapp.net in chat 15551234567@s.whatsapp.net (chars=") {
+	if !strings.Contains(logs, "whatsapp: message from "+redactLogID("15551234567@s.whatsapp.net")+" in chat "+redactLogID("15551234567@s.whatsapp.net")+" (chars=") {
 		t.Fatalf("expected summarized WhatsApp log, got %q", logs)
 	}
 	if !strings.Contains(logs, "attachments=0") {
 		t.Fatalf("expected attachment count in WhatsApp log, got %q", logs)
 	}
-	if strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") {
+	if strings.Contains(logs, "15551234567") || strings.Contains(logs, "private token") || strings.Contains(logs, "sk-secret") {
 		t.Fatalf("expected WhatsApp log to omit raw content, got %q", logs)
 	}
 }
@@ -185,7 +196,7 @@ func TestWhatsAppClient_HandleMessage_SkipsFromMe(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, types.JID{}, types.JID{})
 
 	c.handleMessage(makeWhatsAppMsg("15551234567", true /* IsFromMe */, false, "ignore me"))
 
@@ -220,7 +231,7 @@ func TestWhatsAppClient_HandleMessage_SelfChat(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, phoneJID, lidJID)
+			c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, phoneJID, lidJID)
 
 			// Override the chat JID to simulate the server type under test.
 			msg := makeWhatsAppMsg(tt.chatUser, true /* IsFromMe */, false, "remind me later")
@@ -248,7 +259,7 @@ func TestWhatsAppClient_HandleMessage_SelfChat_OtherConversation(t *testing.T) {
 
 	ownJID := types.JID{User: "85298765432", Server: "s.whatsapp.net"}
 	ownLID := types.JID{User: "169032883908635", Server: "lid"}
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, ownJID, ownLID)
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, ownJID, ownLID)
 
 	// Sent to someone else's number.
 	c.handleMessage(makeWhatsAppMsg("99999999999", true /* IsFromMe */, false, "echo"))
@@ -265,7 +276,7 @@ func TestWhatsAppClient_HandleMessage_SkipsGroup(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, types.JID{}, types.JID{})
 
 	c.handleMessage(makeWhatsAppMsg("15551234567", false, true /* IsGroup */, "group msg"))
 
@@ -281,7 +292,7 @@ func TestWhatsAppClient_HandleMessage_SkipsEmpty(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, types.JID{}, types.JID{})
 
 	empty := ""
 	evt := makeWhatsAppMsg("15551234567", false, false, "")
@@ -300,7 +311,7 @@ func TestWhatsAppClient_HandleMessage_AllowList_Blocked(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, []string{"19999999999"}, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, []string{"19999999999"}, false, types.JID{}, types.JID{})
 
 	c.handleMessage(makeWhatsAppMsg("15551234567", false, false, "from blocked user"))
 
@@ -316,7 +327,7 @@ func TestWhatsAppClient_HandleMessage_AllowList_Permitted(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, []string{"15551234567"}, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, []string{"15551234567"}, false, types.JID{}, types.JID{})
 
 	text := "permitted message"
 	c.handleMessage(makeWhatsAppMsg("15551234567", false, false, text))
@@ -335,7 +346,7 @@ func TestWhatsAppClient_HandleMessage_AllowList_OpenAccess(t *testing.T) {
 	hub := chat.NewHub(10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{}) // nil allowlist = allow all
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, true, types.JID{}, types.JID{}) // explicit open mode = allow all
 
 	c.handleMessage(makeWhatsAppMsg("19876543210", false, false, "anyone can message"))
 
@@ -355,7 +366,7 @@ func TestWhatsAppClient_Outbound(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, mock, hub, nil, false, types.JID{}, types.JID{})
 	hub.StartRouter(ctx)
 	go c.runOutbound()
 
@@ -389,7 +400,7 @@ func TestWhatsAppClient_Outbound_OtherChannelIgnored(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, mock, hub, nil, false, types.JID{}, types.JID{})
 	hub.StartRouter(ctx)
 	go c.runOutbound()
 
@@ -408,7 +419,7 @@ func TestWhatsAppClient_Outbound_LongMessageSplit(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, mock, hub, nil, false, types.JID{}, types.JID{})
 	hub.StartRouter(ctx)
 	go c.runOutbound()
 
@@ -471,7 +482,7 @@ func TestWhatsAppClient_HandleEvent_SendsPresence(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWhatsAppSender{}
-	c := newWhatsAppClient(ctx, mock, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, mock, hub, nil, false, types.JID{}, types.JID{})
 
 	c.handleEvent(&events.PushNameSetting{})
 
@@ -494,7 +505,7 @@ func TestWhatsAppClient_StopTyping_NoPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, types.JID{}, types.JID{})
 
 	// Stopping a chat that never had typing started should not panic.
 	c.stopTyping("15551234567@s.whatsapp.net")
@@ -505,7 +516,7 @@ func TestWhatsAppClient_StopAllTyping(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, types.JID{}, types.JID{})
+	c := newWhatsAppClient(ctx, &mockWhatsAppSender{}, hub, nil, false, types.JID{}, types.JID{})
 
 	// Manually inject stops to simulate active typing indicators.
 	c.typingMu.Lock()

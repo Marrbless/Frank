@@ -16,13 +16,21 @@ import (
 type mockSlackPoster struct {
 	mu   sync.Mutex
 	sent []string // channel IDs received by PostMessageContext
+	done chan string
 }
 
 func (m *mockSlackPoster) PostMessageContext(_ context.Context, channelID string, _ ...slack.MsgOption) (string, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sent = append(m.sent, channelID)
+	if m.done != nil {
+		m.done <- channelID
+	}
 	return "", "", nil
+}
+
+func newMockSlackPoster() *mockSlackPoster {
+	return &mockSlackPoster{done: make(chan string, 10)}
 }
 
 func TestStartSlack_EmptyTokens(t *testing.T) {
@@ -55,13 +63,23 @@ func TestStartSlack_InvalidTokenPrefixes(t *testing.T) {
 	}
 }
 
+func TestStartSlack_FailsClosedWithoutAllowlists(t *testing.T) {
+	err := StartSlack(context.Background(), chat.NewHub(10), "xapp-test", "xoxb-test", nil, nil)
+	if err == nil {
+		t.Fatal("expected empty allowlists to fail closed")
+	}
+	if !strings.Contains(err.Error(), "allowlist is empty") {
+		t.Fatalf("expected allowlist error, got %v", err)
+	}
+}
+
 // TestSlackClient_Outbound verifies the outbound path delivers messages via the
 // slackPoster interface, mirroring the testability of the Discord channel.
 func TestSlackClient_Outbound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	poster := &mockSlackPoster{}
+	poster := newMockSlackPoster()
 	hub := chat.NewHub(10)
 	c := &slackClient{
 		poster: poster,
@@ -75,8 +93,7 @@ func TestSlackClient_Outbound(t *testing.T) {
 
 	hub.Out <- chat.Outbound{Channel: "slack", ChatID: "C123", Content: "hello"}
 
-	// Allow the goroutine time to process.
-	time.Sleep(50 * time.Millisecond)
+	waitForSlackPost(t, poster)
 
 	poster.mu.Lock()
 	defer poster.mu.Unlock()
@@ -94,7 +111,7 @@ func TestSlackClient_OutboundThread(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	poster := &mockSlackPoster{}
+	poster := newMockSlackPoster()
 	hub := chat.NewHub(10)
 	c := &slackClient{
 		poster: poster,
@@ -108,7 +125,7 @@ func TestSlackClient_OutboundThread(t *testing.T) {
 
 	hub.Out <- chat.Outbound{Channel: "slack", ChatID: "C123::1234567890.000001", Content: "threaded reply"}
 
-	time.Sleep(50 * time.Millisecond)
+	waitForSlackPost(t, poster)
 
 	poster.mu.Lock()
 	defer poster.mu.Unlock()
@@ -117,6 +134,15 @@ func TestSlackClient_OutboundThread(t *testing.T) {
 	}
 	if poster.sent[0] != "C123" {
 		t.Errorf("expected channel C123, got %s", poster.sent[0])
+	}
+}
+
+func waitForSlackPost(t *testing.T, poster *mockSlackPoster) {
+	t.Helper()
+	select {
+	case <-poster.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Slack post")
 	}
 }
 
@@ -161,14 +187,64 @@ func TestSlackAllowlists(t *testing.T) {
 		t.Fatal("expected channel C2 to be blocked")
 	}
 
-	open := &slackClient{allowedUsers: map[string]struct{}{}, allowedChans: map[string]struct{}{}}
+	closed := &slackClient{allowedUsers: map[string]struct{}{}, allowedChans: map[string]struct{}{}}
+	if closed.isAllowed("U999", "C999", false) {
+		t.Fatal("expected empty allowlists to fail closed without explicit open mode")
+	}
+
+	open := &slackClient{
+		allowedUsers: map[string]struct{}{},
+		allowedChans: map[string]struct{}{},
+		openUserMode: true,
+		openChanMode: true,
+	}
 	if !open.isAllowed("U999", "C999", false) {
-		t.Fatal("expected empty allowlists to permit all")
+		t.Fatal("expected explicit open mode to permit all")
 	}
 
 	if !c.isAllowed("U1", "D1", true) {
 		t.Fatal("expected DM to bypass channel allowlist")
 	}
+}
+
+func TestSlackClientRateLimiterHookCanDenyInbound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := chat.NewHub(10)
+	limiter := &recordingRateLimiter{allow: false}
+	client := newSlackClient(ctx, nil, nil, hub, "UBOT", []string{"U1"}, nil, false, false)
+	client.rateLimiter = limiter
+
+	client.handleMessage(&slackevents.MessageEvent{User: "U1", Channel: "D1", ChannelType: "im", Text: "slow down"})
+
+	select {
+	case msg := <-hub.In:
+		t.Fatalf("unexpected inbound message despite rate limit: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(limiter.calls) != 1 {
+		t.Fatalf("limiter calls = %d, want 1", len(limiter.calls))
+	}
+	call := limiter.calls[0]
+	if call.channel != "slack" || call.senderID != "U1" || call.chatID != "D1" {
+		t.Fatalf("limiter call = %#v, want slack/U1/D1", call)
+	}
+}
+
+type recordingRateLimiter struct {
+	allow bool
+	calls []rateLimitCall
+}
+
+type rateLimitCall struct {
+	channel  string
+	senderID string
+	chatID   string
+}
+
+func (r *recordingRateLimiter) AllowInbound(channel, senderID, chatID string, now time.Time) bool {
+	r.calls = append(r.calls, rateLimitCall{channel: channel, senderID: senderID, chatID: chatID})
+	return r.allow
 }
 
 func TestSlackAttachmentAppend(t *testing.T) {

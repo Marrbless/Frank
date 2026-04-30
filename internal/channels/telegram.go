@@ -22,13 +22,21 @@ type TelegramBotIdentity struct {
 // StartTelegram is a convenience wrapper that uses the real polling implementation
 // with the standard Telegram base URL.
 // allowFrom is a list of Telegram user IDs permitted to interact with the bot.
-// If empty, ALL users are allowed (open mode).
+// Empty allowlists fail closed; use StartTelegramWithOpenMode to explicitly
+// allow every sender.
 func StartTelegram(ctx context.Context, hub *chat.Hub, token string, allowFrom []string) error {
+	return StartTelegramWithOpenMode(ctx, hub, token, allowFrom, false)
+}
+
+func StartTelegramWithOpenMode(ctx context.Context, hub *chat.Hub, token string, allowFrom []string, openMode bool) error {
 	if token == "" {
 		return fmt.Errorf("telegram token not provided")
 	}
+	if err := requireAllowlistOrExplicitOpen("telegram", allowFrom, openMode); err != nil {
+		return err
+	}
 	base := "https://api.telegram.org/bot" + token
-	return StartTelegramWithBase(ctx, hub, token, base, allowFrom)
+	return StartTelegramWithBaseOpenMode(ctx, hub, token, base, allowFrom, openMode)
 }
 
 func ReadTelegramBotIdentity(ctx context.Context, token string) (TelegramBotIdentity, error) {
@@ -86,17 +94,21 @@ func ReadTelegramBotIdentityWithBase(ctx context.Context, token, base string) (T
 }
 
 // StartTelegramWithBase starts long-polling against the given base URL (e.g., https://api.telegram.org/bot<TOKEN> or a test server URL).
-// allowFrom restricts which Telegram user IDs may send messages. Empty means allow all.
+// allowFrom restricts which Telegram user IDs may send messages. Empty fails closed.
 func StartTelegramWithBase(ctx context.Context, hub *chat.Hub, token, base string, allowFrom []string) error {
+	return StartTelegramWithBaseOpenMode(ctx, hub, token, base, allowFrom, false)
+}
+
+func StartTelegramWithBaseOpenMode(ctx context.Context, hub *chat.Hub, token, base string, allowFrom []string, openMode bool) error {
 	if base == "" {
 		return fmt.Errorf("base URL is required")
 	}
+	if err := requireAllowlistOrExplicitOpen("telegram", allowFrom, openMode); err != nil {
+		return err
+	}
 
 	// Build a fast lookup set for allowed user IDs.
-	allowed := make(map[string]struct{}, len(allowFrom))
-	for _, id := range allowFrom {
-		allowed[id] = struct{}{}
-	}
+	allowed := buildAllowedSet(allowFrom)
 
 	client := &http.Client{Timeout: 45 * time.Second}
 
@@ -117,7 +129,7 @@ func StartTelegramWithBase(ctx context.Context, hub *chat.Hub, token, base strin
 			u := base + "/getUpdates"
 			resp, err := client.PostForm(u, values)
 			if err != nil {
-				log.Printf("telegram getUpdates error: %v", err)
+				log.Printf("telegram getUpdates error: %s", redactLogError(err))
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -140,7 +152,7 @@ func StartTelegramWithBase(ctx context.Context, hub *chat.Hub, token, base strin
 				} `json:"result"`
 			}
 			if err := json.Unmarshal(body, &gu); err != nil {
-				log.Printf("telegram: invalid getUpdates response: %v", err)
+				log.Printf("telegram: invalid getUpdates response: %s", redactLogError(err))
 				continue
 			}
 			for _, upd := range gu.Result {
@@ -155,12 +167,9 @@ func StartTelegramWithBase(ctx context.Context, hub *chat.Hub, token, base strin
 				if m.From != nil {
 					fromID = strconv.FormatInt(m.From.ID, 10)
 				}
-				// Enforce allowFrom: if the list is non-empty, reject unknown senders.
-				if len(allowed) > 0 {
-					if _, ok := allowed[fromID]; !ok {
-						log.Printf("telegram: dropping message from unauthorized user %s", fromID)
-						continue
-					}
+				if !allowedBySingleAllowlist(allowed, openMode, fromID) {
+					log.Printf("telegram: dropping message from unauthorized user %s", redactLogID(fromID))
+					continue
 				}
 				chatID := strconv.FormatInt(m.Chat.ID, 10)
 				hub.In <- chat.Inbound{
@@ -193,7 +202,7 @@ func StartTelegramWithBase(ctx context.Context, hub *chat.Hub, token, base strin
 				v.Set("text", out.Content)
 				resp, err := client.PostForm(u, v)
 				if err != nil {
-					log.Printf("telegram sendMessage error: %v", err)
+					log.Printf("telegram sendMessage error: %s", redactLogError(err))
 					continue
 				}
 				io.ReadAll(resp.Body)

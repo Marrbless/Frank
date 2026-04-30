@@ -9,30 +9,10 @@ import (
 )
 
 func TestWriteMissionStatusSnapshotAtomicAndProjectedShareAtomicWriter(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now().UTC().Truncate(time.Second)
-	job := testProjectedRuntimeJob()
-	control, err := BuildRuntimeControlContext(job, "build")
-	if err != nil {
-		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
-	}
-	inspectablePlan, err := BuildInspectablePlanContext(job)
-	if err != nil {
-		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
-	}
-	runtime := JobRuntimeState{
-		JobID:           job.ID,
-		State:           JobStateRunning,
-		ActiveStepID:    "build",
-		InspectablePlan: &inspectablePlan,
-		CreatedAt:       now.Add(-2 * time.Minute),
-		UpdatedAt:       now,
-		StartedAt:       now.Add(-2 * time.Minute),
-		ActiveStepAt:    now.Add(-time.Minute),
-	}
-	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
-		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
-	}
+	storeFixture := writeMissionStoreRuntimeFixture(t)
+	root := storeFixture.root
+	now := storeFixture.now
+	job := storeFixture.job
 
 	originalWrite := missionStatusSnapshotWriteFileAtomic
 	t.Cleanup(func() { missionStatusSnapshotWriteFileAtomic = originalWrite })

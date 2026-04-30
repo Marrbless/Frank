@@ -16,6 +16,7 @@ import (
 
 var promptSecretIsTerminal = term.IsTerminal
 var promptSecretReadPassword = term.ReadPassword
+var setupWhatsApp = channels.SetupWhatsApp
 
 func newChannelsCmd() *cobra.Command {
 	// channels command — connect and configure messaging channels interactively.
@@ -61,14 +62,14 @@ func newChannelsCmd() *cobra.Command {
 			case "3", "slack":
 				setupSlackInteractive(reader, cfg, cfgPath)
 			case "4", "whatsapp":
-				setupWhatsAppInteractive(cfg, cfgPath)
+				setupWhatsAppInteractive(reader, cfg, cfgPath)
 			default:
 				fmt.Fprintf(os.Stderr, "invalid choice %q — please enter 1, 2, 3 or 4\n", choice)
 			}
 		},
 	}
 
-	channelsCmd.AddCommand(loginCmd)
+	channelsCmd.AddCommand(loginCmd, newChannelsAllowlistCmd())
 	return channelsCmd
 }
 
@@ -115,6 +116,19 @@ func parseAllowFrom(s string) []string {
 	return out
 }
 
+func promptAllowlistOrOpen(reader *bufio.Reader, prompt, openPrompt string) ([]string, bool, bool) {
+	allowFromStr := promptLine(reader, prompt)
+	allowFrom := parseAllowFrom(allowFromStr)
+	if len(allowFrom) > 0 {
+		return allowFrom, false, true
+	}
+	ack := strings.TrimSpace(strings.ToUpper(promptLine(reader, openPrompt)))
+	if ack == "OPEN" {
+		return []string{}, true, true
+	}
+	return []string{}, false, false
+}
+
 func setupTelegramInteractive(reader *bufio.Reader, cfg config.Config, cfgPath string) {
 	fmt.Println()
 	fmt.Println("=== Telegram Setup ===")
@@ -136,15 +150,23 @@ func setupTelegramInteractive(reader *bufio.Reader, cfg config.Config, cfgPath s
 	fmt.Println()
 	fmt.Println("To restrict who can message your bot, enter your Telegram user ID.")
 	fmt.Println("Find it by messaging @userinfobot on Telegram.")
-	fmt.Println("Leave blank to allow everyone.")
+	fmt.Println("Blank is no longer accepted by default. To allow everyone, confirm explicit open mode.")
 	fmt.Println()
 
-	allowFromStr := promptLine(reader, "Allowed user IDs (comma-separated, blank = everyone): ")
-	allowFrom := parseAllowFrom(allowFromStr)
+	allowFrom, openMode, ok := promptAllowlistOrOpen(
+		reader,
+		"Allowed user IDs (comma-separated): ",
+		"Type OPEN to allow every Telegram user, or press Enter to abort: ",
+	)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "error: Telegram setup requires allowed user IDs or explicit OPEN acknowledgement")
+		return
+	}
 
 	cfg.Channels.Telegram.Enabled = true
 	cfg.Channels.Telegram.Token = token
 	cfg.Channels.Telegram.AllowFrom = allowFrom
+	cfg.Channels.Telegram.OpenMode = openMode
 
 	if err := config.SaveConfig(cfg, cfgPath); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
@@ -178,15 +200,23 @@ func setupDiscordInteractive(reader *bufio.Reader, cfg config.Config, cfgPath st
 	fmt.Println()
 	fmt.Println("To restrict who can message your bot, enter Discord user IDs.")
 	fmt.Println("Enable Developer Mode (Settings → Advanced) then right-click your name → Copy User ID.")
-	fmt.Println("Leave blank to allow everyone.")
+	fmt.Println("Blank is no longer accepted by default. To allow everyone, confirm explicit open mode.")
 	fmt.Println()
 
-	allowFromStr := promptLine(reader, "Allowed user IDs (comma-separated, blank = everyone): ")
-	allowFrom := parseAllowFrom(allowFromStr)
+	allowFrom, openMode, ok := promptAllowlistOrOpen(
+		reader,
+		"Allowed user IDs (comma-separated): ",
+		"Type OPEN to allow every Discord user, or press Enter to abort: ",
+	)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "error: Discord setup requires allowed user IDs or explicit OPEN acknowledgement")
+		return
+	}
 
 	cfg.Channels.Discord.Enabled = true
 	cfg.Channels.Discord.Token = token
 	cfg.Channels.Discord.AllowFrom = allowFrom
+	cfg.Channels.Discord.OpenMode = openMode
 
 	if err := config.SaveConfig(cfg, cfgPath); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
@@ -236,25 +266,41 @@ func setupSlackInteractive(reader *bufio.Reader, cfg config.Config, cfgPath stri
 
 	fmt.Println()
 	fmt.Println("To restrict who can message your bot, enter Slack user IDs (U...).")
-	fmt.Println("Leave blank to allow everyone.")
+	fmt.Println("Blank is no longer accepted by default. To allow every Slack user, confirm explicit open user mode.")
 	fmt.Println()
 
-	allowUsersStr := promptLine(reader, "Allowed user IDs (comma-separated, blank = everyone): ")
-	allowUsers := parseAllowFrom(allowUsersStr)
+	allowUsers, openUserMode, ok := promptAllowlistOrOpen(
+		reader,
+		"Allowed user IDs (comma-separated): ",
+		"Type OPEN to allow every Slack user, or press Enter to abort: ",
+	)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "error: Slack setup requires allowed user IDs or explicit OPEN acknowledgement")
+		return
+	}
 
 	fmt.Println()
 	fmt.Println("To restrict which channels the bot listens to, enter Slack channel IDs (C..., G..., D...).")
-	fmt.Println("Leave blank to allow all channels.")
+	fmt.Println("Blank is no longer accepted by default. To allow all channels, confirm explicit open channel mode.")
 	fmt.Println()
 
-	allowChannelsStr := promptLine(reader, "Allowed channel IDs (comma-separated, blank = all): ")
-	allowChannels := parseAllowFrom(allowChannelsStr)
+	allowChannels, openChannelMode, ok := promptAllowlistOrOpen(
+		reader,
+		"Allowed channel IDs (comma-separated): ",
+		"Type OPEN to allow every Slack channel, or press Enter to abort: ",
+	)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "error: Slack setup requires allowed channel IDs or explicit OPEN acknowledgement")
+		return
+	}
 
 	cfg.Channels.Slack.Enabled = true
 	cfg.Channels.Slack.AppToken = appToken
 	cfg.Channels.Slack.BotToken = botToken
 	cfg.Channels.Slack.AllowUsers = allowUsers
 	cfg.Channels.Slack.AllowChannels = allowChannels
+	cfg.Channels.Slack.OpenUserMode = openUserMode
+	cfg.Channels.Slack.OpenChannelMode = openChannelMode
 
 	if err := config.SaveConfig(cfg, cfgPath); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save config: %v\n", err)
@@ -265,10 +311,25 @@ func setupSlackInteractive(reader *bufio.Reader, cfg config.Config, cfgPath stri
 	fmt.Println("Slack configured! Run 'picobot gateway' to start.")
 }
 
-func setupWhatsAppInteractive(cfg config.Config, cfgPath string) {
+func setupWhatsAppInteractive(reader *bufio.Reader, cfg config.Config, cfgPath string) {
 	fmt.Println()
 	fmt.Println("=== WhatsApp Setup ===")
 	fmt.Println()
+
+	fmt.Println("To restrict who can message your bot, enter WhatsApp sender user IDs.")
+	fmt.Println("Use the sender user part shown in logs, such as a phone number or LID user.")
+	fmt.Println("Blank is no longer accepted by default. To allow everyone, confirm explicit open mode.")
+	fmt.Println()
+
+	allowFrom, openMode, ok := promptAllowlistOrOpen(
+		reader,
+		"Allowed WhatsApp sender IDs (comma-separated): ",
+		"Type OPEN to allow every WhatsApp sender, or press Enter to abort: ",
+	)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "error: WhatsApp setup requires allowed sender IDs or explicit OPEN acknowledgement")
+		return
+	}
 
 	dbPath := cfg.Channels.WhatsApp.DBPath
 	if dbPath == "" {
@@ -279,13 +340,15 @@ func setupWhatsAppInteractive(cfg config.Config, cfgPath string) {
 		dbPath = filepath.Join(home, dbPath[2:])
 	}
 
-	if err := channels.SetupWhatsApp(dbPath); err != nil {
+	if err := setupWhatsApp(dbPath); err != nil {
 		fmt.Fprintf(os.Stderr, "WhatsApp setup failed: %v\n", err)
 		return
 	}
 
 	cfg.Channels.WhatsApp.Enabled = true
 	cfg.Channels.WhatsApp.DBPath = dbPath
+	cfg.Channels.WhatsApp.AllowFrom = allowFrom
+	cfg.Channels.WhatsApp.OpenMode = openMode
 	if saveErr := config.SaveConfig(cfg, cfgPath); saveErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not save config: %v\n", saveErr)
 	} else {

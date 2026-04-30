@@ -174,12 +174,31 @@ If you omit `--mission-store-root` but provide `--mission-status-file`, Picobot 
 
 The durable mission store is where Picobot keeps committed runtime state, audit history, approval records, artifacts, and packaged gateway logs for Frank's long-running operator workflow.
 
+### Operator channel commands
+
+When the mission-controlled gateway is running, the operator channel accepts these static runtime-control commands:
+
+- `STATUS <job_id>`
+- `PAUSE <job_id>`
+- `RESUME <job_id>`
+- `ABORT <job_id>`
+- `APPROVE <job_id> <step_id>`
+- `DENY <job_id> <step_id>`
+- `SET_STEP <job_id> <step_id>`
+
+For the hot-update command index, use any of these read-only help aliases:
+
+- `HOT_UPDATE_HELP`
+- `HELP HOT_UPDATE`
+- `HELP V4`
+
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
 | `picobot version` | Print version |
 | `picobot onboard` | Create default config and workspace |
+| `picobot onboard checklist` | Print read-only onboarding next steps |
 | `picobot channels login` | Interactively connect Telegram, Discord, Slack, or WhatsApp |
 | `picobot agent -m "..."` | Run a single-shot agent query |
 | `picobot agent -M model -m "..."` | Query with a specific model |
@@ -191,6 +210,9 @@ The durable mission store is where Picobot keeps committed runtime state, audit 
 | `picobot mission set-step --control-file ... --mission-file ... --status-file ... --step-id ...` | Switch the active mission step through the watched control file |
 | `picobot mission package-logs --mission-store-root ...` | Package the active gateway log segment under the durable mission store |
 | `picobot mission prune-store --mission-store-root ...` | Prune expired retained data from the durable mission store |
+| `picobot diagnostics --mission-store-root ...` | Print read-only first-run setup diagnostics |
+| `picobot update-readiness --binary ./picobot` | Print read-only transactional update readiness |
+| `picobot completion bash` | Generate shell completion scripts |
 | `picobot memory read today` | Read today's memory notes |
 | `picobot memory read long` | Read long-term memory |
 | `picobot memory append today -c "..."` | Append to today's notes |
@@ -313,7 +335,7 @@ Edit `~/.picobot/config.json` and add your Telegram settings. The example below 
 |-------|-------------|
 | `enabled` | Set to `true` to activate the Telegram channel |
 | `token` | The bot token from BotFather |
-| `allowFrom` | List of user IDs allowed to chat. Empty `[]` = anyone can use it |
+| `allowFrom` | List of user IDs allowed to chat. Empty `[]` fails closed unless `openMode` is explicitly `true` |
 
 ### 6. Start the Gateway
 
@@ -419,7 +441,7 @@ Edit `~/.picobot/config.json` and add your Discord settings. The example below u
 |-------|-------------|
 | `enabled` | Set to `true` to activate the Discord channel |
 | `token` | The bot token from the Developer Portal |
-| `allowFrom` | List of Discord user IDs allowed to chat. Empty `[]` = anyone can use it |
+| `allowFrom` | List of Discord user IDs allowed to chat. Empty `[]` fails closed unless `openMode` is explicitly `true` |
 
 ---
 
@@ -520,8 +542,8 @@ Edit `~/.picobot/config.json` and add your Slack settings. The example below use
 | `enabled` | Set to `true` to activate the Slack channel |
 | `appToken` | App-Level Token for Socket Mode (`xapp-...`) |
 | `botToken` | Bot Token for Web API (`xoxb-...`) |
-| `allowUsers` | List of Slack user IDs allowed to chat. Empty `[]` = anyone can use it |
-| `allowChannels` | List of Slack channel IDs allowed to chat. Empty `[]` = all channels (DMs ignore this list) |
+| `allowUsers` | List of Slack user IDs allowed to chat. Empty `[]` fails closed unless `openUserMode` is explicitly `true` |
+| `allowChannels` | List of Slack channel IDs allowed to chat. Empty `[]` fails closed unless `openChannelMode` is explicitly `true` |
 
 ### 8. Start the Gateway
 
@@ -552,12 +574,13 @@ Picobot can receive and reply to WhatsApp messages. It uses [whatsmeow](https://
 ./picobot channels login
 ```
 
-Select **3) WhatsApp**. This will:
-1. Display a QR code in the terminal
-2. Wait for you to scan it with WhatsApp on your phone:
+Select **4) WhatsApp**. This will:
+1. Ask for allowed WhatsApp sender IDs or an explicit `OPEN` acknowledgement
+2. Display a QR code in the terminal
+3. Wait for you to scan it with WhatsApp on your phone:
    - Open WhatsApp → **Settings** → **Linked Devices** → **Link a Device**
-3. Sync with the phone (takes ~15 seconds)
-4. **Automatically update** `~/.picobot/config.json` with `enabled: true` and the correct `dbPath`
+4. Sync with the phone (takes ~15 seconds)
+5. **Automatically update** `~/.picobot/config.json` with `enabled: true`, the correct `dbPath`, and the selected allowlist/open-mode setting
 
 You should see:
 
@@ -618,9 +641,9 @@ Edit `~/.picobot/config.json` to set who can send messages:
 |-------|-------------|
 | `enabled` | `true` to activate the WhatsApp channel |
 | `dbPath` | Path to the SQLite session file (auto-set by `picobot channels login`) |
-| `allowFrom` | List of LID numbers allowed to send messages. Empty `[]` = anyone can send |
+| `allowFrom` | List of LID numbers allowed to send messages. Empty `[]` fails closed unless `openMode` is explicitly `true` |
 
-**To allow yourself only**, add your own LID. **To allow all**, leave `allowFrom` as `[]`.
+**To allow yourself only**, add your own LID. **To allow all**, set `allowFrom` to `[]` and `openMode` to `true`.
 
 ### 4. Texting Yourself (Notes to Self)
 
@@ -647,7 +670,7 @@ WhatsApp requires a **one-time interactive QR scan** before the bot can run head
 ```sh
 # Step 1: Pair (interactive — scan the QR with your phone)
 docker compose run --rm -it picobot channels login
-# Select "3" for WhatsApp and scan the QR code.
+# Select "4" for WhatsApp and scan the QR code.
 # The SQLite session DB is saved into ./picobot-data/
 
 # Step 2: Re-start container

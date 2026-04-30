@@ -200,16 +200,9 @@ func attributedCampaignZohoEmailReplyMatchesAction(reply FrankZohoInboundReplyRe
 }
 
 func attributedCampaignZohoEmailBounceMatchesAction(evidence FrankZohoBounceEvidence, action CampaignZohoEmailOutboundAction) bool {
-	matched := false
-	if evidence.OriginalProviderMessageID != "" && evidence.OriginalProviderMessageID == action.ProviderMessageID {
-		matched = true
-	}
-	if evidence.OriginalProviderMailID != "" && evidence.OriginalProviderMailID == action.ProviderMailID {
-		matched = true
-	}
-	if evidence.OriginalMIMEMessageID != "" && evidence.OriginalMIMEMessageID == action.MIMEMessageID {
-		matched = true
-	}
+	matched := (evidence.OriginalProviderMessageID != "" && evidence.OriginalProviderMessageID == action.ProviderMessageID) ||
+		(evidence.OriginalProviderMailID != "" && evidence.OriginalProviderMailID == action.ProviderMailID) ||
+		(evidence.OriginalMIMEMessageID != "" && evidence.OriginalMIMEMessageID == action.MIMEMessageID)
 	if !matched {
 		return false
 	}

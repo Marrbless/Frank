@@ -20,10 +20,17 @@ type discordSender interface {
 }
 
 // StartDiscord starts a Discord bot using the discordgo library.
-// allowFrom restricts which Discord user IDs may send messages; empty means allow all.
+// allowFrom restricts which Discord user IDs may send messages; empty fails closed.
 func StartDiscord(ctx context.Context, hub *chat.Hub, token string, allowFrom []string) error {
+	return StartDiscordWithOpenMode(ctx, hub, token, allowFrom, false)
+}
+
+func StartDiscordWithOpenMode(ctx context.Context, hub *chat.Hub, token string, allowFrom []string, openMode bool) error {
 	if token == "" {
 		return fmt.Errorf("discord token not provided")
+	}
+	if err := requireAllowlistOrExplicitOpen("discord", allowFrom, openMode); err != nil {
+		return err
 	}
 
 	session, err := discordgo.New("Bot " + token)
@@ -43,13 +50,13 @@ func StartDiscord(ctx context.Context, hub *chat.Hub, token string, allowFrom []
 	botUser, err := session.User("@me")
 	if err != nil {
 		if closeErr := session.Close(); closeErr != nil {
-			log.Printf("discord: error closing session: %v", closeErr)
+			log.Printf("discord: error closing session: %s", redactLogError(closeErr))
 		}
 		return fmt.Errorf("failed to get bot user: %w", err)
 	}
-	log.Printf("discord: connected as %s (%s)", botUser.Username, botUser.ID)
+	log.Printf("discord: connected as %s (%s)", botUser.Username, redactLogID(botUser.ID))
 
-	client := newDiscordClient(ctx, session, hub, botUser.ID, allowFrom)
+	client := newDiscordClient(ctx, session, hub, botUser.ID, allowFrom, openMode)
 	session.AddHandler(client.handleMessage)
 	go client.runOutbound()
 	go func() {
@@ -57,7 +64,7 @@ func StartDiscord(ctx context.Context, hub *chat.Hub, token string, allowFrom []
 		log.Println("discord: shutting down")
 		client.stopAllTyping()
 		if err := session.Close(); err != nil {
-			log.Printf("discord: error closing session: %v", err)
+			log.Printf("discord: error closing session: %s", redactLogError(err))
 		}
 	}()
 
@@ -71,6 +78,7 @@ type discordClient struct {
 	outCh      <-chan chat.Outbound
 	botID      string
 	allowed    map[string]struct{}
+	openMode   bool
 	ctx        context.Context
 	typingMu   sync.Mutex
 	typingStop map[string]chan struct{}
@@ -78,17 +86,15 @@ type discordClient struct {
 
 // newDiscordClient constructs a discordClient and registers it as the hub's
 // "discord" outbound subscriber. Inject a mock discordSender for tests.
-func newDiscordClient(ctx context.Context, sender discordSender, hub *chat.Hub, botID string, allowFrom []string) *discordClient {
-	allowed := make(map[string]struct{}, len(allowFrom))
-	for _, id := range allowFrom {
-		allowed[id] = struct{}{}
-	}
+func newDiscordClient(ctx context.Context, sender discordSender, hub *chat.Hub, botID string, allowFrom []string, openMode bool) *discordClient {
+	allowed := buildAllowedSet(allowFrom)
 	return &discordClient{
 		sender:     sender,
 		hub:        hub,
 		outCh:      hub.Subscribe("discord"),
 		botID:      botID,
 		allowed:    allowed,
+		openMode:   openMode,
 		ctx:        ctx,
 		typingStop: make(map[string]chan struct{}),
 	}
@@ -103,12 +109,9 @@ func (c *discordClient) handleMessage(_ *discordgo.Session, m *discordgo.Message
 		return
 	}
 
-	// Enforce allowlist when one is configured.
-	if len(c.allowed) > 0 {
-		if _, ok := c.allowed[m.Author.ID]; !ok {
-			log.Printf("discord: dropped message from unauthorised user %s (%s)", m.Author.Username, m.Author.ID)
-			return
-		}
+	if !allowedBySingleAllowlist(c.allowed, c.openMode, m.Author.ID) {
+		log.Printf("discord: dropped message from unauthorised user %s", redactLogID(m.Author.ID))
+		return
 	}
 
 	isDM := m.GuildID == ""
@@ -122,7 +125,8 @@ func (c *discordClient) handleMessage(_ *discordgo.Session, m *discordgo.Message
 				break
 			}
 		}
-		if !mentioned {
+		referencesBot := m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil && m.ReferencedMessage.Author.ID == c.botID
+		if !mentioned && !referencesBot {
 			return
 		}
 	}
@@ -147,7 +151,7 @@ func (c *discordClient) handleMessage(_ *discordgo.Session, m *discordgo.Message
 	}
 
 	senderName := senderDisplayName(m.Author)
-	log.Printf("discord: message from %s (%s) in %s (%s)", senderName, m.Author.ID, m.ChannelID, summarizeInboundContent(content, len(m.Attachments)))
+	log.Printf("discord: message from %s in %s (%s)", redactLogID(m.Author.ID), redactLogID(m.ChannelID), summarizeInboundContent(content, len(m.Attachments)))
 
 	c.startTyping(m.ChannelID)
 
@@ -176,7 +180,7 @@ func (c *discordClient) runOutbound() {
 			c.stopTyping(out.ChatID)
 			for _, chunk := range splitMessage(out.Content, 2000) {
 				if _, err := c.sender.ChannelMessageSend(out.ChatID, chunk); err != nil {
-					log.Printf("discord: send error: %v", err)
+					log.Printf("discord: send error: %s", redactLogError(err))
 				}
 			}
 		}
@@ -196,7 +200,7 @@ func (c *discordClient) startTyping(channelID string) {
 
 	go func() {
 		if err := c.sender.ChannelTyping(channelID); err != nil {
-			log.Printf("discord: typing error: %v", err)
+			log.Printf("discord: typing error: %s", redactLogError(err))
 		}
 
 		ticker := time.NewTicker(8 * time.Second)
@@ -214,7 +218,7 @@ func (c *discordClient) startTyping(channelID string) {
 				return
 			case <-ticker.C:
 				if err := c.sender.ChannelTyping(channelID); err != nil {
-					log.Printf("discord: typing error: %v", err)
+					log.Printf("discord: typing error: %s", redactLogError(err))
 				}
 			}
 		}

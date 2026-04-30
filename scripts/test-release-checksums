@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+TMPDIR=${TMPDIR:-/tmp}
+WORKDIR=$(mktemp -d "$TMPDIR/picobot-release-checksums.XXXXXX")
+trap 'rm -rf "$WORKDIR"' EXIT INT TERM
+
+artifact_one="$WORKDIR/artifact-one"
+artifact_two="$WORKDIR/artifact-two"
+printf 'picobot-one\n' > "$artifact_one"
+printf 'picobot-two\n' > "$artifact_two"
+
+output=$(sh "$ROOT/scripts/release-checksums" "$artifact_one" "$artifact_two")
+
+expected_one=$(printf 'picobot-one\n' | sha256sum | awk '{print $1}')
+expected_two=$(printf 'picobot-two\n' | sha256sum | awk '{print $1}')
+
+case "$output" in
+	*"$expected_one  $artifact_one"*"$expected_two  $artifact_two"*) ;;
+	*)
+		echo "unexpected checksum output:" >&2
+		echo "$output" >&2
+		exit 1
+		;;
+esac
+
+if sh "$ROOT/scripts/release-checksums" "$WORKDIR/missing" >/dev/null 2>"$WORKDIR/missing.err"; then
+	echo "missing artifact check unexpectedly passed" >&2
+	exit 1
+fi
+grep -q "missing artifact" "$WORKDIR/missing.err"
+
+if sh "$ROOT/scripts/release-checksums" >/dev/null 2>"$WORKDIR/usage.err"; then
+	echo "empty argument check unexpectedly passed" >&2
+	exit 1
+fi
+grep -q "usage:" "$WORKDIR/usage.err"
+
+echo "release checksum tests passed"

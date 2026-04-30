@@ -1,0 +1,28 @@
+{
+  "job_id": "job-1",
+  "execution_plane": "hot_update_gate",
+  "execution_host": "phone",
+  "mission_family": "apply_hot_update",
+  "topology_mode_enabled": true,
+  "state": "running",
+  "active_step_id": "apply_hot_update",
+  "allowed_tools": [
+    "read_file",
+    "write_file"
+  ],
+  "v4_summary": {
+    "state": "promotion_recorded",
+    "active_pack_id": "pack-active",
+    "last_known_good_pack_id": "pack-lkg",
+    "selected_hot_update_id": "hot-update-1",
+    "selected_outcome_id": "outcome-1",
+    "selected_promotion_id": "promotion-1",
+    "has_candidate_promotion_decision": true,
+    "has_canary_authority": true,
+    "has_owner_approval_decision": true,
+    "invalid_identity_count": 1,
+    "warnings": [
+      "hot_update_gate_identity invalid"
+    ]
+  }
+}

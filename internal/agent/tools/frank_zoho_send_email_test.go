@@ -400,6 +400,121 @@ func TestFrankZohoSendEmailToolFailsClosedWithoutCommittedZohoMailboxSenderPair(
 	}
 }
 
+func TestResolveFrankZohoCampaignSenderInvariantTable(t *testing.T) {
+	t.Parallel()
+
+	campaign := missioncontrol.CampaignRecord{
+		CampaignID: "campaign-mail",
+		ZohoEmailAddressing: &missioncontrol.CampaignZohoEmailAddressing{
+			To: []string{"person@example.com"},
+		},
+	}
+	identity := missioncontrol.FrankIdentityRecord{
+		IdentityID:   "identity-mail",
+		IdentityKind: "email",
+		ZohoMailbox: &missioncontrol.FrankZohoMailboxIdentity{
+			FromAddress:     "frank@example.com",
+			FromDisplayName: "Frank",
+		},
+	}
+	account := missioncontrol.FrankAccountRecord{
+		AccountID:   "account-mail",
+		AccountKind: "mailbox",
+		IdentityID:  identity.IdentityID,
+		ZohoMailbox: &missioncontrol.FrankZohoMailboxAccount{
+			ProviderAccountID: "3323462000000008002",
+			ConfirmedCreated:  true,
+		},
+	}
+
+	tests := []struct {
+		name       string
+		preflight  missioncontrol.ResolvedExecutionContextCampaignPreflight
+		wantSender frankZohoCampaignSender
+		wantErr    string
+	}{
+		{
+			name: "exactly one committed sender pair passes",
+			preflight: missioncontrol.ResolvedExecutionContextCampaignPreflight{
+				Campaign:   &campaign,
+				Identities: []missioncontrol.FrankIdentityRecord{identity},
+				Accounts:   []missioncontrol.FrankAccountRecord{account},
+			},
+			wantSender: frankZohoCampaignSender{
+				ProviderAccountID: "3323462000000008002",
+				FromAddress:       "frank@example.com",
+				FromDisplayName:   "Frank",
+			},
+		},
+		{
+			name: "missing sender identity fails closed",
+			preflight: missioncontrol.ResolvedExecutionContextCampaignPreflight{
+				Campaign: &campaign,
+				Accounts: []missioncontrol.FrankAccountRecord{account},
+			},
+			wantErr: "requires a campaign-linked Frank email identity",
+		},
+		{
+			name: "missing sender account fails closed",
+			preflight: missioncontrol.ResolvedExecutionContextCampaignPreflight{
+				Campaign:   &campaign,
+				Identities: []missioncontrol.FrankIdentityRecord{identity},
+			},
+			wantErr: "requires exactly one campaign-linked Frank Zoho mailbox sender pair",
+		},
+		{
+			name: "identity without sender mailbox fields fails closed",
+			preflight: missioncontrol.ResolvedExecutionContextCampaignPreflight{
+				Campaign: &campaign,
+				Identities: []missioncontrol.FrankIdentityRecord{{
+					IdentityID:   identity.IdentityID,
+					IdentityKind: identity.IdentityKind,
+				}},
+				Accounts: []missioncontrol.FrankAccountRecord{account},
+			},
+			wantErr: `requires campaign-linked Frank identity "identity-mail" to declare zoho_mailbox sender fields`,
+		},
+		{
+			name: "account without committed provider account fails closed",
+			preflight: missioncontrol.ResolvedExecutionContextCampaignPreflight{
+				Campaign:   &campaign,
+				Identities: []missioncontrol.FrankIdentityRecord{identity},
+				Accounts: []missioncontrol.FrankAccountRecord{{
+					AccountID:   account.AccountID,
+					AccountKind: account.AccountKind,
+					IdentityID:  account.IdentityID,
+					ZohoMailbox: &missioncontrol.FrankZohoMailboxAccount{},
+				}},
+			},
+			wantErr: `requires campaign-linked Frank mailbox account "account-mail" to declare committed zoho_mailbox.provider_account_id plus confirmed_created`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := resolveFrankZohoCampaignSender(tc.preflight, true)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatal("resolveFrankZohoCampaignSender() error = nil, want fail-closed sender invariant rejection")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveFrankZohoCampaignSender() error = %q, want substring %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveFrankZohoCampaignSender() error = %v", err)
+			}
+			if got != tc.wantSender {
+				t.Fatalf("resolveFrankZohoCampaignSender() = %#v, want %#v", got, tc.wantSender)
+			}
+		})
+	}
+}
+
 func TestFrankZohoSendEmailToolClassifiesProviderDeclaredRejectionAsTerminalFailure(t *testing.T) {
 	t.Parallel()
 
@@ -2827,107 +2942,6 @@ func testFrankZohoCampaignActionRecord(jobID string, lastSeq uint64, action miss
 		OriginalMessageURL:      normalized.OriginalMessageURL,
 		Failure:                 normalized.Failure,
 	}
-}
-
-func testFrankZohoInboundReplyRecord(t *testing.T, jobID string, lastSeq uint64, reply missioncontrol.FrankZohoInboundReply) missioncontrol.FrankZohoInboundReplyRecord {
-	t.Helper()
-	normalized := missioncontrol.NormalizeFrankZohoInboundReply(reply)
-	if normalized.ReplyID == "" {
-		runtime, changed, err := missioncontrol.AppendFrankZohoInboundReply(missioncontrol.JobRuntimeState{}, normalized)
-		if err != nil {
-			t.Fatalf("AppendFrankZohoInboundReply() error = %v", err)
-		}
-		if !changed || len(runtime.FrankZohoInboundReplies) != 1 {
-			t.Fatalf("AppendFrankZohoInboundReply() changed = %v len = %d, want one normalized reply", changed, len(runtime.FrankZohoInboundReplies))
-		}
-		normalized = runtime.FrankZohoInboundReplies[0]
-	}
-	stepID := normalized.StepID
-	if stepID == "" {
-		stepID = "sync-replies"
-	}
-	return missioncontrol.FrankZohoInboundReplyRecord{
-		RecordVersion:      missioncontrol.StoreRecordVersion,
-		LastSeq:            lastSeq,
-		ReplyID:            normalized.ReplyID,
-		JobID:              jobID,
-		StepID:             stepID,
-		Provider:           normalized.Provider,
-		ProviderAccountID:  normalized.ProviderAccountID,
-		ProviderMessageID:  normalized.ProviderMessageID,
-		ProviderMailID:     normalized.ProviderMailID,
-		MIMEMessageID:      normalized.MIMEMessageID,
-		InReplyTo:          normalized.InReplyTo,
-		References:         append([]string(nil), normalized.References...),
-		FromAddress:        normalized.FromAddress,
-		FromDisplayName:    normalized.FromDisplayName,
-		FromAddressCount:   normalized.FromAddressCount,
-		Subject:            normalized.Subject,
-		ReceivedAt:         normalized.ReceivedAt,
-		OriginalMessageURL: normalized.OriginalMessageURL,
-	}
-}
-
-func testFrankZohoBounceEvidenceRecord(t *testing.T, jobID string, lastSeq uint64, evidence missioncontrol.FrankZohoBounceEvidence) missioncontrol.FrankZohoBounceEvidenceRecord {
-	t.Helper()
-	normalized := missioncontrol.NormalizeFrankZohoBounceEvidence(evidence)
-	if normalized.BounceID == "" {
-		runtime, changed, err := missioncontrol.AppendFrankZohoBounceEvidence(missioncontrol.JobRuntimeState{}, normalized)
-		if err != nil {
-			t.Fatalf("AppendFrankZohoBounceEvidence() error = %v", err)
-		}
-		if !changed || len(runtime.FrankZohoBounceEvidence) != 1 {
-			t.Fatalf("AppendFrankZohoBounceEvidence() changed = %v len = %d, want one normalized bounce evidence", changed, len(runtime.FrankZohoBounceEvidence))
-		}
-		normalized = runtime.FrankZohoBounceEvidence[0]
-	}
-	stepID := normalized.StepID
-	if stepID == "" {
-		stepID = "sync-bounces"
-	}
-	return missioncontrol.FrankZohoBounceEvidenceRecord{
-		RecordVersion:             missioncontrol.StoreRecordVersion,
-		LastSeq:                   lastSeq,
-		BounceID:                  normalized.BounceID,
-		JobID:                     jobID,
-		StepID:                    stepID,
-		Provider:                  normalized.Provider,
-		ProviderAccountID:         normalized.ProviderAccountID,
-		ProviderMessageID:         normalized.ProviderMessageID,
-		ProviderMailID:            normalized.ProviderMailID,
-		MIMEMessageID:             normalized.MIMEMessageID,
-		InReplyTo:                 normalized.InReplyTo,
-		References:                append([]string(nil), normalized.References...),
-		OriginalProviderMessageID: normalized.OriginalProviderMessageID,
-		OriginalProviderMailID:    normalized.OriginalProviderMailID,
-		OriginalMIMEMessageID:     normalized.OriginalMIMEMessageID,
-		FinalRecipient:            normalized.FinalRecipient,
-		DiagnosticCode:            normalized.DiagnosticCode,
-		ReceivedAt:                normalized.ReceivedAt,
-		OriginalMessageURL:        normalized.OriginalMessageURL,
-		CampaignID:                normalized.CampaignID,
-		OutboundActionID:          normalized.OutboundActionID,
-	}
-}
-
-func replyRecordToRuntimeReply(record missioncontrol.FrankZohoInboundReplyRecord) missioncontrol.FrankZohoInboundReply {
-	return missioncontrol.NormalizeFrankZohoInboundReply(missioncontrol.FrankZohoInboundReply{
-		ReplyID:            record.ReplyID,
-		StepID:             record.StepID,
-		Provider:           record.Provider,
-		ProviderAccountID:  record.ProviderAccountID,
-		ProviderMessageID:  record.ProviderMessageID,
-		ProviderMailID:     record.ProviderMailID,
-		MIMEMessageID:      record.MIMEMessageID,
-		InReplyTo:          record.InReplyTo,
-		References:         append([]string(nil), record.References...),
-		FromAddress:        record.FromAddress,
-		FromDisplayName:    record.FromDisplayName,
-		FromAddressCount:   record.FromAddressCount,
-		Subject:            record.Subject,
-		ReceivedAt:         record.ReceivedAt,
-		OriginalMessageURL: record.OriginalMessageURL,
-	})
 }
 
 func persistFrankZohoCampaignRuntime(t *testing.T, root, jobID, campaignID string, actions []missioncontrol.CampaignZohoEmailOutboundAction, replies []missioncontrol.FrankZohoInboundReply, now time.Time) []missioncontrol.FrankZohoInboundReply {

@@ -1,0 +1,232 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+UPDATER="$REPO_ROOT/scripts/termux/update-and-restart-frank"
+
+tmp=$(mktemp -d)
+cleanup() {
+	rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+stub_dir="$tmp/bin"
+mkdir -p "$stub_dir"
+
+cat > "$stub_dir/git" <<'STUB'
+#!/bin/sh
+echo "git $*" >> "$PICOBOT_TEST_LOG"
+exit 0
+STUB
+
+cat > "$stub_dir/go" <<'STUB'
+#!/bin/sh
+echo "go $*" >> "$PICOBOT_TEST_LOG"
+if [ "${PICOBOT_TEST_GO_FAIL:-0}" = "1" ]; then
+	exit 23
+fi
+out=""
+prev=""
+for arg in "$@"; do
+	if [ "$prev" = "-o" ]; then
+		out=$arg
+	fi
+	prev=$arg
+done
+if [ -z "$out" ]; then
+	echo "go stub did not receive -o" >&2
+	exit 24
+fi
+mkdir -p "$(dirname -- "$out")"
+cat > "$out" <<'BIN'
+#!/bin/sh
+case "$1" in
+version)
+	exit 0
+	;;
+mission)
+	exit 0
+	;;
+*)
+	exit 0
+	;;
+esac
+BIN
+chmod 755 "$out"
+exit 0
+STUB
+
+cat > "$stub_dir/tmux" <<'STUB'
+#!/bin/sh
+echo "tmux $*" >> "$PICOBOT_TEST_LOG"
+state=${PICOBOT_TEST_TMUX_STATE:?}
+case "$1" in
+has-session)
+	if [ -f "$state" ]; then
+		exit 0
+	fi
+	exit 1
+	;;
+kill-session)
+	rm -f "$state"
+	exit 0
+	;;
+new-session)
+	if [ "${PICOBOT_TEST_TMUX_NEW_FAIL:-0}" = "1" ]; then
+		exit 42
+	fi
+	printf 'running\n' > "$state"
+	exit 0
+	;;
+ls)
+	if [ -f "$state" ]; then
+		printf 'frank: 1 windows\n'
+	fi
+	exit 0
+	;;
+*)
+	exit 0
+	;;
+esac
+STUB
+
+chmod 755 "$stub_dir/git" "$stub_dir/go" "$stub_dir/tmux"
+
+assert_file_contains() {
+	file=$1
+	pattern=$2
+	if ! grep -q "$pattern" "$file"; then
+		echo "expected $file to contain $pattern" >&2
+		echo "--- $file ---" >&2
+		cat "$file" >&2
+		exit 1
+	fi
+}
+
+assert_file_not_contains() {
+	file=$1
+	pattern=$2
+	if grep -q "$pattern" "$file"; then
+		echo "expected $file not to contain $pattern" >&2
+		echo "--- $file ---" >&2
+		cat "$file" >&2
+		exit 1
+	fi
+}
+
+sh -n "$UPDATER"
+
+readiness_log="$tmp/readiness.log"
+readiness_binary="$tmp/picobot-readiness"
+readiness_backup="$tmp/readiness-backup"
+readiness_store="$tmp/readiness-store"
+mkdir -p "$readiness_backup" "$readiness_store"
+cat > "$readiness_binary" <<'BIN'
+#!/bin/sh
+echo "picobot $*" >> "$PICOBOT_TEST_LOG"
+case "$1" in
+update-readiness)
+	printf '{"ready":true,"checks":[]}\n'
+	exit 0
+	;;
+*)
+	exit 41
+	;;
+esac
+BIN
+chmod 755 "$readiness_binary"
+
+PICOBOT_TEST_LOG="$readiness_log" \
+PICOBOT_BUILD_OUTPUT="$readiness_binary" \
+PICOBOT_BACKUP_DIR="$readiness_backup" \
+PICOBOT_MISSION_STORE_ROOT="$readiness_store" \
+PICOBOT_GATEWAY_CMD='SECRET_TOKEN=abc ./picobot gateway' \
+sh "$UPDATER" --check-readiness > "$tmp/readiness.out"
+
+assert_file_contains "$tmp/readiness.out" "stage: readiness"
+assert_file_contains "$tmp/readiness.out" '"ready":true'
+assert_file_contains "$readiness_log" "picobot update-readiness"
+assert_file_not_contains "$tmp/readiness.out" "SECRET_TOKEN"
+
+log="$tmp/success.log"
+state="$tmp/tmux.state"
+binary="$tmp/picobot"
+backup="$tmp/backup"
+transcript="$tmp/update-transcript.log"
+printf 'old-binary\n' > "$binary"
+chmod 755 "$binary"
+
+PATH="$stub_dir:$PATH" \
+PICOBOT_TEST_LOG="$log" \
+PICOBOT_TEST_TMUX_STATE="$state" \
+PICOBOT_GATEWAY_CMD='SECRET_TOKEN=abc ./picobot gateway' \
+PICOBOT_SKIP_PULL=1 \
+PICOBOT_BUILD_OUTPUT="$binary" \
+PICOBOT_BACKUP_DIR="$backup" \
+PICOBOT_TRANSCRIPT_LOG="$transcript" \
+PICOBOT_HEALTH_SLEEP=0 \
+sh "$UPDATER" > "$tmp/success.out"
+
+assert_file_contains "$tmp/success.out" "update complete"
+assert_file_contains "$log" "go build"
+assert_file_contains "$log" "tmux new-session"
+assert_file_contains "$backup/picobot.previous" "old-binary"
+assert_file_contains "$transcript" "stage: build"
+assert_file_contains "$transcript" "stage: complete"
+assert_file_not_contains "$transcript" "SECRET_TOKEN"
+
+PATH="$stub_dir:$PATH" \
+PICOBOT_TEST_LOG="$log" \
+PICOBOT_TEST_TMUX_STATE="$state" \
+PICOBOT_BUILD_OUTPUT="$binary" \
+PICOBOT_BACKUP_DIR="$backup" \
+PICOBOT_HEALTH_SLEEP=0 \
+sh "$UPDATER" --rollback > "$tmp/rollback.out"
+
+assert_file_contains "$tmp/rollback.out" "rolling back"
+assert_file_contains "$binary" "old-binary"
+
+fail_log="$tmp/build-fail.log"
+fail_binary="$tmp/picobot-fail"
+printf 'keep-me\n' > "$fail_binary"
+chmod 755 "$fail_binary"
+if PATH="$stub_dir:$PATH" \
+	PICOBOT_TEST_LOG="$fail_log" \
+	PICOBOT_TEST_TMUX_STATE="$tmp/fail.state" \
+	PICOBOT_TEST_GO_FAIL=1 \
+	PICOBOT_SKIP_PULL=1 \
+	PICOBOT_BUILD_OUTPUT="$fail_binary" \
+	PICOBOT_BACKUP_DIR="$tmp/fail-backup" \
+	PICOBOT_HEALTH_SLEEP=0 \
+	sh "$UPDATER" > "$tmp/build-fail.out" 2>&1; then
+	echo "expected build failure" >&2
+	exit 1
+fi
+assert_file_contains "$fail_binary" "keep-me"
+assert_file_not_contains "$fail_log" "tmux new-session"
+
+restart_fail_log="$tmp/restart-fail.log"
+restart_fail_binary="$tmp/picobot-restart-fail"
+restart_fail_backup="$tmp/restart-fail-backup"
+printf 'restore-me\n' > "$restart_fail_binary"
+chmod 755 "$restart_fail_binary"
+if PATH="$stub_dir:$PATH" \
+	PICOBOT_TEST_LOG="$restart_fail_log" \
+	PICOBOT_TEST_TMUX_STATE="$tmp/restart-fail.state" \
+	PICOBOT_TEST_TMUX_NEW_FAIL=1 \
+	PICOBOT_SKIP_PULL=1 \
+	PICOBOT_BUILD_OUTPUT="$restart_fail_binary" \
+	PICOBOT_BACKUP_DIR="$restart_fail_backup" \
+	PICOBOT_TRANSCRIPT_LOG="$tmp/restart-fail-transcript.log" \
+	PICOBOT_HEALTH_SLEEP=0 \
+	sh "$UPDATER" > "$tmp/restart-fail.out" 2>&1; then
+	echo "expected restart failure" >&2
+	exit 1
+fi
+assert_file_contains "$restart_fail_binary" "restore-me"
+assert_file_contains "$tmp/restart-fail.out" "rolling back: restart failed"
+assert_file_contains "$tmp/restart-fail-transcript.log" "stage: restart"
+assert_file_contains "$tmp/restart-fail-transcript.log" "rolling back: restart failed"
+
+echo "termux updater tests passed"

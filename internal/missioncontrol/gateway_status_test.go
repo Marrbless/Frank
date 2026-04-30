@@ -1,6 +1,8 @@
 package missioncontrol
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -42,31 +44,112 @@ func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
 	}
 }
 
+func TestGatewayStatusGoldenFixtures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		golden   string
+		snapshot MissionStatusSnapshot
+	}{
+		{
+			name:   "active",
+			golden: "gateway_status_active.golden.json",
+			snapshot: MissionStatusSnapshot{
+				MissionRequired:   true,
+				Active:            true,
+				MissionFile:       "mission.json",
+				JobID:             "job-active",
+				StepID:            "build",
+				StepType:          string(StepTypeOneShotCode),
+				RequiredAuthority: AuthorityTierLow,
+				AllowedTools:      []string{"read"},
+				Runtime: &JobRuntimeState{
+					JobID:        "job-active",
+					State:        JobStateRunning,
+					ActiveStepID: "build",
+				},
+				UpdatedAt: "2026-04-30T18:00:00Z",
+			},
+		},
+		{
+			name:   "paused",
+			golden: "gateway_status_paused.golden.json",
+			snapshot: MissionStatusSnapshot{
+				MissionRequired:   true,
+				Active:            false,
+				MissionFile:       "mission.json",
+				JobID:             "job-paused",
+				StepID:            "owner-approval",
+				StepType:          string(StepTypeWaitUser),
+				RequiredAuthority: AuthorityTierMedium,
+				RequiresApproval:  true,
+				AllowedTools:      []string{"read", "reply"},
+				Runtime: &JobRuntimeState{
+					JobID:        "job-paused",
+					State:        JobStatePaused,
+					ActiveStepID: "owner-approval",
+				},
+				UpdatedAt: "2026-04-30T18:05:00Z",
+			},
+		},
+		{
+			name:   "failed",
+			golden: "gateway_status_failed.golden.json",
+			snapshot: MissionStatusSnapshot{
+				MissionRequired:   true,
+				Active:            false,
+				MissionFile:       "mission.json",
+				JobID:             "job-failed",
+				StepID:            "build",
+				StepType:          string(StepTypeOneShotCode),
+				RequiredAuthority: AuthorityTierLow,
+				AllowedTools:      []string{"read"},
+				Runtime: &JobRuntimeState{
+					JobID:        "job-failed",
+					State:        JobStateFailed,
+					ActiveStepID: "build",
+				},
+				UpdatedAt: "2026-04-30T18:10:00Z",
+			},
+		},
+		{
+			name:   "no-active-mission",
+			golden: "gateway_status_no_active_mission.golden.json",
+			snapshot: MissionStatusSnapshot{
+				AllowedTools: []string{},
+				UpdatedAt:    "2026-04-30T18:15:00Z",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			data, err := json.MarshalIndent(ProjectGatewayStatusSnapshot(tc.snapshot), "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent() error = %v", err)
+			}
+			data = append(data, '\n')
+
+			want, err := os.ReadFile(filepath.Join("testdata", tc.golden))
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tc.golden, err)
+			}
+			if string(data) != string(want) {
+				t.Fatalf("gateway status fixture %s mismatch\ngot:\n%s\nwant:\n%s", tc.golden, string(data), string(want))
+			}
+		})
+	}
+}
+
 func TestWriteGatewayStatusSnapshotAtomicAndProjectedShareAtomicWriter(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now().UTC().Truncate(time.Second)
-	job := testProjectedRuntimeJob()
-	control, err := BuildRuntimeControlContext(job, "build")
-	if err != nil {
-		t.Fatalf("BuildRuntimeControlContext() error = %v", err)
-	}
-	inspectablePlan, err := BuildInspectablePlanContext(job)
-	if err != nil {
-		t.Fatalf("BuildInspectablePlanContext() error = %v", err)
-	}
-	runtime := JobRuntimeState{
-		JobID:           job.ID,
-		State:           JobStateRunning,
-		ActiveStepID:    "build",
-		InspectablePlan: &inspectablePlan,
-		CreatedAt:       now.Add(-2 * time.Minute),
-		UpdatedAt:       now,
-		StartedAt:       now.Add(-2 * time.Minute),
-		ActiveStepAt:    now.Add(-time.Minute),
-	}
-	if err := PersistProjectedRuntimeState(root, WriterLockLease{LeaseHolderID: "holder-1"}, &job, runtime, &control, now); err != nil {
-		t.Fatalf("PersistProjectedRuntimeState() error = %v", err)
-	}
+	storeFixture := writeMissionStoreRuntimeFixture(t)
+	root := storeFixture.root
+	now := storeFixture.now
+	job := storeFixture.job
 
 	originalWrite := missionStatusSnapshotWriteFileAtomic
 	t.Cleanup(func() { missionStatusSnapshotWriteFileAtomic = originalWrite })

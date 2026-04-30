@@ -1,31 +1,19 @@
 package cron
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
 
 func TestSchedulerFiresJob(t *testing.T) {
-	var mu sync.Mutex
 	var fired []Job
 
 	s := NewScheduler(func(job Job) {
-		mu.Lock()
 		fired = append(fired, job)
-		mu.Unlock()
 	})
 
-	done := make(chan struct{})
-	go s.Start(done)
-
 	s.Add("test-reminder", "buy cheesecake", 100*time.Millisecond, "telegram", "123")
-
-	time.Sleep(2 * time.Second)
-	close(done)
-
-	mu.Lock()
-	defer mu.Unlock()
+	s.tick(time.Now().Add(101 * time.Millisecond))
 	if len(fired) != 1 {
 		t.Fatalf("expected 1 fired job, got %d", len(fired))
 	}
@@ -64,26 +52,15 @@ func TestSchedulerCancel(t *testing.T) {
 }
 
 func TestSchedulerDoesNotFireCancelled(t *testing.T) {
-	var mu sync.Mutex
 	var fired []Job
 
 	s := NewScheduler(func(job Job) {
-		mu.Lock()
 		fired = append(fired, job)
-		mu.Unlock()
 	})
-
-	done := make(chan struct{})
-	go s.Start(done)
 
 	s.Add("will-cancel", "nope", 100*time.Millisecond, "telegram", "1")
 	s.CancelByName("will-cancel")
-
-	time.Sleep(300 * time.Millisecond)
-	close(done)
-
-	mu.Lock()
-	defer mu.Unlock()
+	s.tick(time.Now().Add(101 * time.Millisecond))
 	if len(fired) != 0 {
 		t.Errorf("expected 0 fired jobs after cancel, got %d", len(fired))
 	}

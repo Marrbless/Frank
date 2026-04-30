@@ -16,30 +16,211 @@ PICOBOT_GATEWAY_CMD=${PICOBOT_GATEWAY_CMD:-./picobot gateway}
 PICOBOT_BUILD_OUTPUT=${PICOBOT_BUILD_OUTPUT:-picobot}
 PICOBOT_BUILD_TAGS=${PICOBOT_BUILD_TAGS:-lite}
 PICOBOT_SKIP_PULL=${PICOBOT_SKIP_PULL:-0}
+PICOBOT_BACKUP_DIR=${PICOBOT_BACKUP_DIR:-.termux-frank-backup}
+PICOBOT_DRY_RUN=${PICOBOT_DRY_RUN:-0}
+PICOBOT_ROLLBACK=${PICOBOT_ROLLBACK:-0}
+PICOBOT_CHECK_READINESS=${PICOBOT_CHECK_READINESS:-0}
+PICOBOT_HEALTH_SLEEP=${PICOBOT_HEALTH_SLEEP:-2}
+PICOBOT_MISSION_STORE_ROOT=${PICOBOT_MISSION_STORE_ROOT:-}
+PICOBOT_MISSION_STATUS_FILE=${PICOBOT_MISSION_STATUS_FILE:-}
+PICOBOT_MISSION_ASSERT_ARGS=${PICOBOT_MISSION_ASSERT_ARGS:---active}
+PICOBOT_TRANSCRIPT_LOG=${PICOBOT_TRANSCRIPT_LOG:-$PICOBOT_BACKUP_DIR/update.log}
 
+for arg in "$@"; do
+	case "$arg" in
+	--dry-run)
+		PICOBOT_DRY_RUN=1
+		;;
+	--rollback)
+		PICOBOT_ROLLBACK=1
+		;;
+	--check-readiness)
+		PICOBOT_CHECK_READINESS=1
+		;;
+	*)
+		echo "unknown argument: $arg" >&2
+		exit 2
+		;;
+	esac
+done
+
+binary_name=$(basename -- "$PICOBOT_BUILD_OUTPUT")
 tmp_binary="$PICOBOT_BUILD_OUTPUT.next.$$"
+backup_binary="$PICOBOT_BACKUP_DIR/$binary_name.previous"
+backup_session="$PICOBOT_BACKUP_DIR/session"
+backup_gateway_cmd="$PICOBOT_BACKUP_DIR/gateway-command"
+
+append_transcript() {
+	if [ "$PICOBOT_DRY_RUN" = "1" ] || [ -z "$PICOBOT_TRANSCRIPT_LOG" ]; then
+		return 0
+	fi
+	transcript_dir=$(dirname -- "$PICOBOT_TRANSCRIPT_LOG")
+	mkdir -p "$transcript_dir"
+	printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$PICOBOT_TRANSCRIPT_LOG"
+}
+
+log() {
+	printf '%s\n' "$*"
+	append_transcript "$*"
+}
+
+run_cmd() {
+	case "${1:-} ${2:-}" in
+	"tmux new-session")
+		log "+ tmux new-session -d -s ${5:-} <gateway command>"
+		;;
+	*)
+		log "+ $*"
+		;;
+	esac
+	if [ "$PICOBOT_DRY_RUN" = "1" ]; then
+		return 0
+	fi
+	"$@"
+}
+
 cleanup() {
 	rm -f "$tmp_binary"
 }
 trap cleanup EXIT INT TERM
 
+write_text() {
+	path=$1
+	text=$2
+	if [ "$PICOBOT_DRY_RUN" = "1" ]; then
+		log "+ write $path"
+		return 0
+	fi
+	printf '%s\n' "$text" > "$path"
+}
+
+preserve_current_binary() {
+	run_cmd mkdir -p "$PICOBOT_BACKUP_DIR"
+	write_text "$backup_session" "$PICOBOT_SESSION"
+	write_text "$backup_gateway_cmd" "$PICOBOT_GATEWAY_CMD"
+	if [ -f "$PICOBOT_BUILD_OUTPUT" ]; then
+		run_cmd cp -p "$PICOBOT_BUILD_OUTPUT" "$backup_binary"
+	else
+		log "warning: no existing $PICOBOT_BUILD_OUTPUT binary to preserve"
+	fi
+}
+
+restart_gateway() {
+	session=$1
+	command=$2
+	if tmux has-session -t "$session" 2>/dev/null; then
+		run_cmd tmux kill-session -t "$session"
+	fi
+	run_cmd tmux new-session -d -s "$session" "$command"
+}
+
+verify_gateway_health() {
+	if [ "$PICOBOT_DRY_RUN" = "1" ]; then
+		log "+ verify tmux session $PICOBOT_SESSION"
+		return 0
+	fi
+	sleep "$PICOBOT_HEALTH_SLEEP"
+	if ! tmux has-session -t "$PICOBOT_SESSION" 2>/dev/null; then
+		echo "health check failed: tmux session $PICOBOT_SESSION is not running" >&2
+		return 1
+	fi
+	if [ -n "$PICOBOT_MISSION_STATUS_FILE" ] && [ -f "$PICOBOT_MISSION_STATUS_FILE" ]; then
+		"$PICOBOT_BUILD_OUTPUT" mission status --status-file "$PICOBOT_MISSION_STATUS_FILE" >/dev/null
+		# shellcheck disable=SC2086
+		"$PICOBOT_BUILD_OUTPUT" mission assert --status-file "$PICOBOT_MISSION_STATUS_FILE" $PICOBOT_MISSION_ASSERT_ARGS >/dev/null
+	fi
+	return 0
+}
+
+rollback_to_previous() {
+	reason=$1
+	if [ -f "$backup_session" ]; then
+		PICOBOT_SESSION=$(sed -n '1p' "$backup_session")
+	fi
+	if [ -f "$backup_gateway_cmd" ]; then
+		PICOBOT_GATEWAY_CMD=$(sed -n '1p' "$backup_gateway_cmd")
+	fi
+	if [ ! -f "$backup_binary" ]; then
+		echo "rollback unavailable: no preserved binary at $backup_binary" >&2
+		return 1
+	fi
+	log "rolling back: $reason"
+	run_cmd cp -p "$backup_binary" "$PICOBOT_BUILD_OUTPUT"
+	restart_gateway "$PICOBOT_SESSION" "$PICOBOT_GATEWAY_CMD"
+	verify_gateway_health
+}
+
+run_update_readiness() {
+	log "stage: readiness binary=$PICOBOT_BUILD_OUTPUT backup=$PICOBOT_BACKUP_DIR session=$PICOBOT_SESSION"
+	if [ ! -x "$PICOBOT_BUILD_OUTPUT" ]; then
+		echo "readiness failed: current binary $PICOBOT_BUILD_OUTPUT is not executable" >&2
+		return 1
+	fi
+
+	if [ -n "$PICOBOT_MISSION_STORE_ROOT" ] && [ -n "$PICOBOT_MISSION_STATUS_FILE" ]; then
+		"$PICOBOT_BUILD_OUTPUT" update-readiness --binary "$PICOBOT_BUILD_OUTPUT" --backup-dir "$PICOBOT_BACKUP_DIR" --session "$PICOBOT_SESSION" --gateway-cmd "$PICOBOT_GATEWAY_CMD" --mission-store-root "$PICOBOT_MISSION_STORE_ROOT" --mission-status-file "$PICOBOT_MISSION_STATUS_FILE"
+	elif [ -n "$PICOBOT_MISSION_STORE_ROOT" ]; then
+		"$PICOBOT_BUILD_OUTPUT" update-readiness --binary "$PICOBOT_BUILD_OUTPUT" --backup-dir "$PICOBOT_BACKUP_DIR" --session "$PICOBOT_SESSION" --gateway-cmd "$PICOBOT_GATEWAY_CMD" --mission-store-root "$PICOBOT_MISSION_STORE_ROOT"
+	elif [ -n "$PICOBOT_MISSION_STATUS_FILE" ]; then
+		"$PICOBOT_BUILD_OUTPUT" update-readiness --binary "$PICOBOT_BUILD_OUTPUT" --backup-dir "$PICOBOT_BACKUP_DIR" --session "$PICOBOT_SESSION" --gateway-cmd "$PICOBOT_GATEWAY_CMD" --mission-status-file "$PICOBOT_MISSION_STATUS_FILE"
+	else
+		"$PICOBOT_BUILD_OUTPUT" update-readiness --binary "$PICOBOT_BUILD_OUTPUT" --backup-dir "$PICOBOT_BACKUP_DIR" --session "$PICOBOT_SESSION" --gateway-cmd "$PICOBOT_GATEWAY_CMD"
+	fi
+}
+
+if [ "$PICOBOT_CHECK_READINESS" = "1" ]; then
+	run_update_readiness
+	trap - EXIT INT TERM
+	exit 0
+fi
+
+if [ "$PICOBOT_ROLLBACK" = "1" ]; then
+	log "stage: rollback binary=$PICOBOT_BUILD_OUTPUT backup=$backup_binary session=$PICOBOT_SESSION"
+	rollback_to_previous "manual rollback requested"
+	trap - EXIT INT TERM
+	exit 0
+fi
+
+log "stage: start binary=$PICOBOT_BUILD_OUTPUT candidate=$tmp_binary backup=$backup_binary session=$PICOBOT_SESSION dry_run=$PICOBOT_DRY_RUN rollback=$PICOBOT_ROLLBACK"
+
 if [ "$PICOBOT_SKIP_PULL" != "1" ]; then
-	git pull --ff-only
+	log "stage: pull"
+	run_cmd git pull --ff-only
 fi
 
+log "stage: build candidate=$tmp_binary tags=$PICOBOT_BUILD_TAGS"
 if [ -n "$PICOBOT_BUILD_TAGS" ]; then
-	go build -tags "$PICOBOT_BUILD_TAGS" -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
+	run_cmd go build -tags "$PICOBOT_BUILD_TAGS" -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
 else
-	go build -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
+	run_cmd go build -ldflags="-s -w" -o "$tmp_binary" ./cmd/picobot
 fi
 
-chmod 755 "$tmp_binary"
-mv "$tmp_binary" "$PICOBOT_BUILD_OUTPUT"
+run_cmd chmod 755 "$tmp_binary"
+
+if [ "$PICOBOT_DRY_RUN" != "1" ]; then
+	log "stage: smoke candidate=$tmp_binary"
+	"$tmp_binary" version >/dev/null
+fi
+
+log "stage: preserve previous=$PICOBOT_BUILD_OUTPUT backup=$backup_binary"
+preserve_current_binary
+log "stage: switch candidate=$tmp_binary binary=$PICOBOT_BUILD_OUTPUT"
+run_cmd mv "$tmp_binary" "$PICOBOT_BUILD_OUTPUT"
+
+log "stage: restart session=$PICOBOT_SESSION"
+if ! restart_gateway "$PICOBOT_SESSION" "$PICOBOT_GATEWAY_CMD"; then
+	rollback_to_previous "restart failed"
+	exit 1
+fi
+
+log "stage: health session=$PICOBOT_SESSION"
+if ! verify_gateway_health; then
+	rollback_to_previous "post-start health check failed"
+	exit 1
+fi
+
 trap - EXIT INT TERM
-
-if tmux has-session -t "$PICOBOT_SESSION" 2>/dev/null; then
-	tmux kill-session -t "$PICOBOT_SESSION"
-fi
-
-tmux new-session -d -s "$PICOBOT_SESSION" "$PICOBOT_GATEWAY_CMD"
-tmux ls
+cleanup
+run_cmd tmux ls
+log "stage: complete binary=$PICOBOT_BUILD_OUTPUT backup=$backup_binary"
+log "update complete"

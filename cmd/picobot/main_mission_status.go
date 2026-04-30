@@ -205,42 +205,12 @@ func waitForMissionStatusStepConfirmation(path string, stepID string, expectedJo
 	}
 }
 
-func assertMissionStatusSnapshot(path string, expected missionStatusAssertionExpectation) error {
-	snapshot, err := loadMissionStatusSnapshot(path)
-	if err != nil {
-		return err
-	}
-	return checkMissionStatusAssertion(path, snapshot, expected)
-}
-
 func assertMissionGatewayStatusSnapshot(path string, expected missionStatusAssertionExpectation) error {
 	snapshot, err := loadGatewayStatusObservation(path)
 	if err != nil {
 		return err
 	}
 	return checkMissionStatusAssertion(path, projectGatewayStatusAssertionSnapshot(snapshot), expected)
-}
-
-func waitForMissionStatusAssertion(path string, expected missionStatusAssertionExpectation, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-
-	for {
-		lastErr = assertMissionStatusSnapshot(path, expected)
-		if lastErr == nil {
-			return nil
-		}
-
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return fmt.Errorf("timed out waiting up to %s for mission status file %q to satisfy assertion: %w", timeout, path, lastErr)
-		}
-		sleep := 100 * time.Millisecond
-		if remaining < sleep {
-			sleep = remaining
-		}
-		time.Sleep(sleep)
-	}
 }
 
 func waitForMissionGatewayStatusAssertion(path string, expected missionStatusAssertionExpectation, timeout time.Duration) error {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -168,24 +167,16 @@ func StorePackageImportRecord(root string, record PackageImportRecord) (PackageI
 	}
 
 	path := StorePackageImportPath(root, record.ImportID)
-	existing, err := loadPackageImportRecordFile(root, path)
-	if err == nil {
-		if reflect.DeepEqual(existing, record) {
-			return existing, false, nil
-		}
-		return PackageImportRecord{}, false, fmt.Errorf("mission store package import %q already exists", record.ImportID)
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return PackageImportRecord{}, false, err
-	}
-	if err := WriteStoreJSONAtomic(path, record); err != nil {
-		return PackageImportRecord{}, false, err
-	}
-	stored, err := LoadPackageImportRecord(root, record.ImportID)
-	if err != nil {
-		return PackageImportRecord{}, false, err
-	}
-	return stored, true, nil
+	return storeImmutableJSONRecord(
+		path,
+		record,
+		func(path string) (PackageImportRecord, error) {
+			return loadPackageImportRecordFile(root, path)
+		},
+		func() error {
+			return fmt.Errorf("mission store package import %q already exists", record.ImportID)
+		},
+	)
 }
 
 func LoadPackageImportRecord(root, importID string) (PackageImportRecord, error) {

@@ -14,6 +14,10 @@ import (
 // 'lite' build tag. If WhatsApp is enabled in the config it logs a clear
 // warning and returns nil so the gateway continues with other channels.
 func StartWhatsApp(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom []string) error {
+	return StartWhatsAppWithOpenMode(ctx, hub, dbPath, allowFrom, false)
+}
+
+func StartWhatsAppWithOpenMode(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom []string, openMode bool) error {
 	log.Println("whatsapp: channel not available in 'lite' version.")
 	return nil
 }

@@ -149,6 +149,45 @@ func TestFindReusableApprovalGrantMatchesOneJobAcrossSteps(t *testing.T) {
 	}
 }
 
+func TestFindReusableApprovalGrantRejectsMissionStepGrantAcrossSteps(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	_, ok := FindReusableApprovalGrant(JobRuntimeState{
+		ApprovalRequests: []ApprovalRequest{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				State:           ApprovalStateGranted,
+				RequestedAt:     now.Add(-2 * time.Minute),
+				ResolvedAt:      now.Add(-90 * time.Second),
+			},
+		},
+		ApprovalGrants: []ApprovalGrant{
+			{
+				JobID:           "job-1",
+				StepID:          "authorize-1",
+				RequestedAction: ApprovalRequestedActionStepComplete,
+				Scope:           ApprovalScopeMissionStep,
+				GrantedVia:      ApprovalGrantedViaOperatorCommand,
+				State:           ApprovalStateGranted,
+				GrantedAt:       now.Add(-90 * time.Second),
+				ExpiresAt:       now.Add(time.Minute),
+			},
+		},
+	}, now, "job-1", Step{
+		ID:            "authorize-2",
+		Type:          StepTypeDiscussion,
+		Subtype:       StepSubtypeAuthorization,
+		ApprovalScope: ApprovalScopeMissionStep,
+	}, "", "")
+	if ok {
+		t.Fatal("FindReusableApprovalGrant() ok = true, want false for mission_step grant on another step")
+	}
+}
+
 func TestFindReusableApprovalGrantMatchesOneJobAcrossStepsWhenSliceOrderReversed(t *testing.T) {
 	t.Parallel()
 
@@ -628,6 +667,56 @@ func TestApplyApprovalDecisionWithSessionStampsRequestAndGrant(t *testing.T) {
 	}
 	if runtime.ApprovalGrants[0].SessionChannel != "telegram" || runtime.ApprovalGrants[0].SessionChatID != "chat-42" {
 		t.Fatalf("ApprovalGrants[0] session = (%q, %q), want (%q, %q)", runtime.ApprovalGrants[0].SessionChannel, runtime.ApprovalGrants[0].SessionChatID, "telegram", "chat-42")
+	}
+}
+
+func TestApplyApprovalDecisionWithSessionDenyStampsRequestWithoutGrant(t *testing.T) {
+	t.Parallel()
+
+	ec := testStepValidationExecutionContext(Step{
+		ID:      "discuss",
+		Type:    StepTypeDiscussion,
+		Subtype: StepSubtypeAuthorization,
+	}, JobStateWaitingUser)
+	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	ec.Runtime.ApprovalRequests = []ApprovalRequest{
+		{
+			JobID:           "job-1",
+			StepID:          "discuss",
+			RequestedAction: ApprovalRequestedActionStepComplete,
+			Scope:           ApprovalScopeMissionStep,
+			RequestedVia:    ApprovalRequestedViaRuntime,
+			State:           ApprovalStatePending,
+			RequestedAt:     now.Add(-30 * time.Second),
+			ExpiresAt:       now.Add(5 * time.Minute),
+		},
+	}
+
+	runtime, err := ApplyApprovalDecisionWithSession(ec, now, ApprovalDecisionDeny, ApprovalGrantedViaOperatorReply, "telegram", "chat-42")
+	if err != nil {
+		t.Fatalf("ApplyApprovalDecisionWithSession(deny) error = %v", err)
+	}
+	if len(runtime.ApprovalRequests) != 1 {
+		t.Fatalf("ApprovalRequests = %#v, want one request", runtime.ApprovalRequests)
+	}
+	request := runtime.ApprovalRequests[0]
+	if request.State != ApprovalStateDenied {
+		t.Fatalf("ApprovalRequests[0].State = %q, want %q", request.State, ApprovalStateDenied)
+	}
+	if request.GrantedVia != "" {
+		t.Fatalf("ApprovalRequests[0].GrantedVia = %q, want empty for denial", request.GrantedVia)
+	}
+	if request.ResolvedAt != now {
+		t.Fatalf("ApprovalRequests[0].ResolvedAt = %v, want %v", request.ResolvedAt, now)
+	}
+	if request.SessionChannel != "telegram" || request.SessionChatID != "chat-42" {
+		t.Fatalf("ApprovalRequests[0] session = (%q, %q), want (%q, %q)", request.SessionChannel, request.SessionChatID, "telegram", "chat-42")
+	}
+	if len(runtime.ApprovalGrants) != 0 {
+		t.Fatalf("ApprovalGrants = %#v, want none for denial", runtime.ApprovalGrants)
+	}
+	if runtime.State != JobStateWaitingUser {
+		t.Fatalf("State = %q, want waiting_user after denial", runtime.State)
 	}
 }
 

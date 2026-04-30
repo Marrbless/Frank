@@ -142,6 +142,41 @@ func TestHTTPClientCallToolError(t *testing.T) {
 	}
 }
 
+func TestHTTPClientToolsListErrorIncludesServerAndMethod(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req rpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"capabilities":{}}`)})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &rpcError{Code: -32001, Message: "permission denied"},
+			})
+		default:
+			http.Error(w, "unexpected method", http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	_, err := NewHTTPClient("permissioned", srv.URL, nil)
+	if err == nil {
+		t.Fatal("NewHTTPClient() error = nil, want tools/list error")
+	}
+	want := "mcp permissioned: tools/list: jsonrpc error -32001: permission denied"
+	if err.Error() != want {
+		t.Fatalf("NewHTTPClient() error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestHTTPClientSSEResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest

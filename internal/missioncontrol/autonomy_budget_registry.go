@@ -92,6 +92,9 @@ func ValidateAutonomyBudgetRecord(record AutonomyBudgetRecord) error {
 	if record.RecordVersion <= 0 {
 		return fmt.Errorf("mission store autonomy budget record_version must be positive")
 	}
+	if record.RecordVersion != StoreRecordVersion {
+		return fmt.Errorf("mission store autonomy budget record_version %d is unsupported; want %d", record.RecordVersion, StoreRecordVersion)
+	}
 	if err := ValidateAutonomyBudgetRef(AutonomyBudgetRef{BudgetID: record.BudgetID}); err != nil {
 		return err
 	}

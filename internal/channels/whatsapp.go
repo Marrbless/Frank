@@ -59,13 +59,13 @@ func (r *realWhatsAppSender) SendPresence(ctx context.Context, state types.Prese
 type whatsappLogger struct{}
 
 func (l whatsappLogger) Errorf(msg string, args ...interface{}) {
-	log.Printf("[whatsapp] ERROR: "+msg, args...)
+	log.Printf("[whatsapp] ERROR: %s", redactLogText(fmt.Sprintf(msg, args...)))
 }
 func (l whatsappLogger) Warnf(msg string, args ...interface{}) {
-	log.Printf("[whatsapp] WARN: "+msg, args...)
+	log.Printf("[whatsapp] WARN: %s", redactLogText(fmt.Sprintf(msg, args...)))
 }
 func (l whatsappLogger) Infof(msg string, args ...interface{}) {
-	log.Printf("[whatsapp] INFO: "+msg, args...)
+	log.Printf("[whatsapp] INFO: %s", redactLogText(fmt.Sprintf(msg, args...)))
 }
 func (l whatsappLogger) Debugf(msg string, args ...interface{}) {}
 func (l whatsappLogger) Sub(module string) waLog.Logger         { return l }
@@ -74,7 +74,7 @@ func (l whatsappLogger) Sub(module string) waLog.Logger         { return l }
 type quietLogger struct{}
 
 func (l quietLogger) Errorf(msg string, args ...interface{}) {
-	log.Printf("[whatsapp] ERROR: "+msg, args...)
+	log.Printf("[whatsapp] ERROR: %s", redactLogText(fmt.Sprintf(msg, args...)))
 }
 func (l quietLogger) Warnf(msg string, args ...interface{})  {}
 func (l quietLogger) Infof(msg string, args ...interface{})  {}
@@ -84,10 +84,17 @@ func (l quietLogger) Sub(module string) waLog.Logger         { return l }
 // StartWhatsApp starts a WhatsApp bot using the whatsmeow library.
 // dbPath is the path to the SQLite database for storing session data.
 // allowFrom restricts which phone numbers (digits only, e.g. "15551234567") may
-// send messages; empty means allow all.
+// send messages; empty fails closed.
 func StartWhatsApp(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom []string) error {
+	return StartWhatsAppWithOpenMode(ctx, hub, dbPath, allowFrom, false)
+}
+
+func StartWhatsAppWithOpenMode(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom []string, openMode bool) error {
 	if dbPath == "" {
 		return fmt.Errorf("whatsapp database path not provided")
+	}
+	if err := requireAllowlistOrExplicitOpen("whatsapp", allowFrom, openMode); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
@@ -112,16 +119,16 @@ func StartWhatsApp(ctx context.Context, hub *chat.Hub, dbPath string, allowFrom 
 	sender := &realWhatsAppSender{c: rawClient}
 	own := *rawClient.Store.ID
 	ownLID := rawClient.Store.GetLID()
-	waClient := newWhatsAppClient(ctx, sender, hub, allowFrom, own, ownLID)
+	waClient := newWhatsAppClient(ctx, sender, hub, allowFrom, openMode, own, ownLID)
 	rawClient.AddEventHandler(waClient.handleEvent)
 
 	if err := rawClient.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to whatsapp: %w", err)
 	}
 	if ownLID.IsEmpty() {
-		log.Printf("whatsapp: connected as %s", own.User)
+		log.Printf("whatsapp: connected as %s", redactLogID(own.User))
 	} else {
-		log.Printf("whatsapp: connected as %s (LID: %s)", own.User, ownLID.User)
+		log.Printf("whatsapp: connected as %s (LID: %s)", redactLogID(own.User), redactLogID(ownLID.User))
 	}
 
 	go waClient.runOutbound()
@@ -224,6 +231,7 @@ type whatsappClient struct {
 	hub        *chat.Hub
 	outCh      <-chan chat.Outbound
 	allowed    map[string]struct{}
+	openMode   bool
 	own        types.JID // phone JID  (e.g. 85298765432@s.whatsapp.net)
 	ownLID     types.JID // LID JID    (e.g. 169032883908635@lid) — may be empty
 	ctx        context.Context
@@ -235,16 +243,14 @@ type whatsappClient struct {
 // "whatsapp" outbound subscriber. Inject a mock whatsappSender for tests.
 // ownJID  = rawClient.Store.ID   (phone JID)  — pass types.JID{} in tests.
 // ownLID  = rawClient.Store.GetLID() (LID JID) — pass types.JID{} in tests.
-func newWhatsAppClient(ctx context.Context, sender whatsappSender, hub *chat.Hub, allowFrom []string, ownJID, ownLID types.JID) *whatsappClient {
-	allowed := make(map[string]struct{}, len(allowFrom))
-	for _, num := range allowFrom {
-		allowed[num] = struct{}{}
-	}
+func newWhatsAppClient(ctx context.Context, sender whatsappSender, hub *chat.Hub, allowFrom []string, openMode bool, ownJID, ownLID types.JID) *whatsappClient {
+	allowed := buildAllowedSet(allowFrom)
 	return &whatsappClient{
 		sender:     sender,
 		hub:        hub,
 		outCh:      hub.Subscribe("whatsapp"),
 		allowed:    allowed,
+		openMode:   openMode,
 		own:        ownJID,
 		ownLID:     ownLID,
 		ctx:        ctx,
@@ -258,7 +264,7 @@ func (c *whatsappClient) handleEvent(evt interface{}) {
 	case *events.PushNameSetting:
 		// PushName is now available — safe to advertise online presence.
 		if err := c.sender.SendPresence(c.ctx, types.PresenceAvailable); err != nil {
-			log.Printf("whatsapp: failed to send available presence: %v", err)
+			log.Printf("whatsapp: failed to send available presence: %s", redactLogError(err))
 		}
 	case *events.Message:
 		c.handleMessage(evt)
@@ -296,12 +302,10 @@ func (c *whatsappClient) handleMessage(msg *events.Message) {
 			return
 		}
 		senderID := msg.Info.Sender.User
-		if len(c.allowed) > 0 {
-			if _, ok := c.allowed[senderID]; !ok {
-				log.Printf("whatsapp: dropped message from unauthorized sender %s (add '%s' to allowFrom to permit)",
-					msg.Info.Sender.String(), senderID)
-				return
-			}
+		if !allowedBySingleAllowlist(c.allowed, c.openMode, senderID) {
+			log.Printf("whatsapp: dropped message from unauthorized sender %s (allowFrom id %s)",
+				redactLogID(msg.Info.Sender.String()), redactLogID(senderID))
+			return
 		}
 	}
 
@@ -319,7 +323,7 @@ func (c *whatsappClient) handleMessage(msg *events.Message) {
 	content = strings.TrimSpace(content)
 	chatID := msg.Info.Chat.String()
 
-	log.Printf("whatsapp: message from %s in chat %s (%s)", senderJID, chatID, summarizeInboundContent(content, 0))
+	log.Printf("whatsapp: message from %s in chat %s (%s)", redactLogID(senderJID), redactLogID(chatID), summarizeInboundContent(content, 0))
 
 	c.startTyping(msg.Info.Chat)
 
@@ -378,14 +382,14 @@ func (c *whatsappClient) runOutbound() {
 		case out := <-c.outCh:
 			recipient, err := types.ParseJID(out.ChatID)
 			if err != nil {
-				log.Printf("whatsapp: invalid chat ID %s: %v", out.ChatID, err)
+				log.Printf("whatsapp: invalid chat ID %s: %s", redactLogID(out.ChatID), redactLogError(err))
 				continue
 			}
 			c.stopTyping(out.ChatID)
 			// WhatsApp has a ~65 KB hard limit; use 4096 runes as a safe chunk size.
 			for i, chunk := range splitMessage(out.Content, 4096) {
 				if err := c.sender.SendText(c.ctx, recipient, chunk); err != nil {
-					log.Printf("whatsapp: send error (chunk %d): %v", i+1, err)
+					log.Printf("whatsapp: send error (chunk %d): %s", i+1, redactLogError(err))
 				}
 			}
 		}
