@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -192,6 +193,64 @@ func TestModelsHealthCommandSupportsLegacyProfile(t *testing.T) {
 	}
 	if strings.Contains(out, "legacy-health-secret") {
 		t.Fatalf("models health output leaked API key: %q", out)
+	}
+}
+
+func TestModelsSetupDryRunUsesMinimalSnapshotWithoutSideEffects(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "setup", "--dry-run", "--preset", "phone-ollama-tiny", "--config", cfgPath})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models setup dry-run error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"preset: phone-ollama-tiny",
+		"status: manual_required",
+		"platform: unknown",
+		"provider_ref: ollama_phone",
+		"model_ref: local_fast",
+		"bind_address: 127.0.0.1",
+		"side_effect: install_runtime",
+		"manual_required",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("models setup dry-run output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "sk-") || strings.Contains(out, "Authorization") {
+		t.Fatalf("models setup dry-run output leaked secret-shaped data: %q", out)
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("config path stat error = %v, want not exist after dry-run", err)
+	}
+}
+
+func TestModelsSetupWithoutDryRunFailsBeforeSideEffects(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "setup", "--preset", "phone-ollama-tiny", "--config", cfgPath})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("models setup error = nil, want execution blocked until later slices")
+	}
+	if !strings.Contains(err.Error(), "use --dry-run") {
+		t.Fatalf("models setup error = %v, want dry-run guidance", err)
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("config path stat error = %v, want not exist after blocked setup", err)
 	}
 }
 
