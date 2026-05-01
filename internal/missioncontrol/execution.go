@@ -62,6 +62,7 @@ func copyJob(job Job) Job {
 	jobCopy := job
 	jobCopy.AllowedTools = append([]string(nil), job.AllowedTools...)
 	jobCopy.SelectedSkills = append([]string(nil), job.SelectedSkills...)
+	jobCopy.ModelPolicy = cloneModelPolicy(job.ModelPolicy)
 	jobCopy.TargetSurfaces = cloneJobSurfaceRefs(job.TargetSurfaces)
 	jobCopy.MutableSurfaces = cloneJobSurfaceRefs(job.MutableSurfaces)
 	jobCopy.ImmutableSurfaces = cloneJobSurfaceRefs(job.ImmutableSurfaces)
@@ -80,6 +81,7 @@ func copyStep(step Step) Step {
 	stepCopy.DependsOn = append([]string(nil), step.DependsOn...)
 	stepCopy.AllowedTools = append([]string(nil), step.AllowedTools...)
 	stepCopy.SelectedSkills = append([]string(nil), step.SelectedSkills...)
+	stepCopy.ModelPolicy = cloneModelPolicy(step.ModelPolicy)
 	stepCopy.SuccessCriteria = append([]string(nil), step.SuccessCriteria...)
 	stepCopy.LongRunningStartupCommand = append([]string(nil), step.LongRunningStartupCommand...)
 	stepCopy.RequiredCapabilities = append([]string(nil), step.RequiredCapabilities...)
@@ -199,4 +201,27 @@ func normalizeCapabilityOnboardingProposalRefPtr(ref *CapabilityOnboardingPropos
 
 	normalized := NormalizeCapabilityOnboardingProposalRef(*ref)
 	return &normalized
+}
+
+func cloneModelPolicy(policy *ModelPolicy) *ModelPolicy {
+	if policy == nil {
+		return nil
+	}
+	cloned := *policy
+	cloned.AllowedModels = append([]string(nil), policy.AllowedModels...)
+	cloned.RequiredCapabilities.SupportsTools = cloneBoolPtr(policy.RequiredCapabilities.SupportsTools)
+	cloned.RequiredCapabilities.Local = cloneBoolPtr(policy.RequiredCapabilities.Local)
+	cloned.RequiredCapabilities.Offline = cloneBoolPtr(policy.RequiredCapabilities.Offline)
+	cloned.RequiredCapabilities.SupportsResponsesAPI = cloneBoolPtr(policy.RequiredCapabilities.SupportsResponsesAPI)
+	cloned.AllowFallback = cloneBoolPtr(policy.AllowFallback)
+	cloned.AllowCloud = cloneBoolPtr(policy.AllowCloud)
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

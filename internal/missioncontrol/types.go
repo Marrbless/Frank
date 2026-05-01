@@ -142,6 +142,22 @@ type JobSurfaceRef struct {
 	Ref   string `json:"ref"`
 }
 
+type ModelPolicy struct {
+	AllowedModels        []string                        `json:"allowed_models,omitempty"`
+	DefaultModel         string                          `json:"default_model,omitempty"`
+	RequiredCapabilities ModelPolicyRequiredCapabilities `json:"required_capabilities,omitempty"`
+	AllowFallback        *bool                           `json:"allow_fallback,omitempty"`
+	AllowCloud           *bool                           `json:"allow_cloud,omitempty"`
+}
+
+type ModelPolicyRequiredCapabilities struct {
+	SupportsTools        *bool         `json:"supportsTools,omitempty"`
+	Local                *bool         `json:"local,omitempty"`
+	Offline              *bool         `json:"offline,omitempty"`
+	SupportsResponsesAPI *bool         `json:"supportsResponsesAPI,omitempty"`
+	AuthorityTierAtLeast AuthorityTier `json:"authorityTierAtLeast,omitempty"`
+}
+
 type Job struct {
 	ID                  string          `json:"id"`
 	SpecVersion         string          `json:"spec_version,omitempty"`
@@ -160,6 +176,7 @@ type Job struct {
 	MaxAuthority        AuthorityTier   `json:"max_authority"`
 	AllowedTools        []string        `json:"allowed_tools"`
 	SelectedSkills      []string        `json:"selected_skills,omitempty"`
+	ModelPolicy         *ModelPolicy    `json:"model_policy,omitempty"`
 	Plan                Plan            `json:"plan"`
 	MissionStoreRoot    string          `json:"-"`
 }
@@ -178,6 +195,7 @@ type Step struct {
 	RequiredAuthority               AuthorityTier                    `json:"required_authority"`
 	AllowedTools                    []string                         `json:"allowed_tools"`
 	SelectedSkills                  []string                         `json:"selected_skills,omitempty"`
+	ModelPolicy                     *ModelPolicy                     `json:"model_policy,omitempty"`
 	RequiresApproval                bool                             `json:"requires_approval"`
 	SuccessCriteria                 []string                         `json:"success_criteria"`
 	StaticArtifactPath              string                           `json:"static_artifact_path,omitempty"`

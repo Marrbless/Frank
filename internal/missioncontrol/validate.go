@@ -21,6 +21,7 @@ const (
 	RejectionCodeInvalidExecutionPlane         RejectionCode = "invalid_execution_plane"
 	RejectionCodeInvalidExecutionHost          RejectionCode = "invalid_execution_host"
 	RejectionCodeInvalidMissionFamily          RejectionCode = "invalid_mission_family"
+	RejectionCodeInvalidModelPolicy            RejectionCode = "invalid_model_policy"
 	RejectionCodeMissingDependencyTarget       RejectionCode = "missing_dependency_target"
 	RejectionCodeDependencyCycle               RejectionCode = "dependency_cycle"
 	RejectionCodeMissingTerminalFinalStep      RejectionCode = "missing_terminal_final_response"
@@ -125,6 +126,7 @@ func ValidatePlan(job Job) []ValidationError {
 	dependentsByID := make(map[string]int, len(uniqueSteps))
 	missingDependencyErrors := make([]ValidationError, 0)
 	invalidTypeErrors := make([]ValidationError, 0)
+	modelPolicyErrors := make([]ValidationError, 0)
 	authorityErrors := make([]ValidationError, 0)
 	toolScopeErrors := make([]ValidationError, 0)
 
@@ -243,6 +245,8 @@ func ValidatePlan(job Job) []ValidationError {
 		}
 	}
 
+	modelPolicyErrors = append(modelPolicyErrors, validateJobModelPolicies(job)...)
+
 	cycleErrors := findCycleErrors(stepOrder, uniqueSteps)
 
 	hasTerminalFinalResponse := false
@@ -261,13 +265,14 @@ func ValidatePlan(job Job) []ValidationError {
 		})
 	}
 
-	errors := make([]ValidationError, 0, len(executionMetadataErrors)+len(duplicateErrors)+len(missingDependencyErrors)+len(cycleErrors)+len(terminalErrors)+len(invalidTypeErrors)+len(authorityErrors)+len(toolScopeErrors))
+	errors := make([]ValidationError, 0, len(executionMetadataErrors)+len(duplicateErrors)+len(missingDependencyErrors)+len(cycleErrors)+len(terminalErrors)+len(invalidTypeErrors)+len(modelPolicyErrors)+len(authorityErrors)+len(toolScopeErrors))
 	errors = append(errors, executionMetadataErrors...)
 	errors = append(errors, duplicateErrors...)
 	errors = append(errors, missingDependencyErrors...)
 	errors = append(errors, cycleErrors...)
 	errors = append(errors, terminalErrors...)
 	errors = append(errors, invalidTypeErrors...)
+	errors = append(errors, modelPolicyErrors...)
 	errors = append(errors, authorityErrors...)
 	errors = append(errors, toolScopeErrors...)
 	return errors
