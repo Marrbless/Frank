@@ -263,6 +263,98 @@ Check the local and cloud routes:
 ./picobot models health phone
 ```
 
+## V6 Local Model Setup Wizard
+
+Frank V6 adds a guided setup layer above the V5 model-control plane. The wizard
+is designed to show a plan first, then require explicit approval before any
+runtime install, model pull, config write, boot script write, or runtime start.
+
+Start with dry-run:
+
+```sh
+./picobot models setup --dry-run --preset phone-ollama-tiny
+```
+
+Dry-run must not write config, install Ollama, download models, start
+runtimes, write Termux:Boot scripts, call providers, or send prompts. It may
+show `manual_required` when no approved installer/model manifest is available.
+That status is expected until a human-approved manifest or manual runtime path
+exists.
+
+Inspect available presets:
+
+```sh
+./picobot models presets list
+./picobot models presets inspect phone-ollama-tiny
+./picobot models presets inspect phone-llamacpp-tiny
+```
+
+Detect the local phone environment without side effects:
+
+```sh
+./picobot models local detect
+```
+
+Safe defaults:
+
+- local phone models default to `supportsTools=false`,
+- local phone models default to `authorityTier=low`,
+- cloud fallback from local is disabled by default,
+- local runtimes bind to `127.0.0.1` by default,
+- LAN binding is never part of the default path,
+- cloud presets create stubs and key status only; they do not print API keys.
+
+### Ollama Wizard Path
+
+The Ollama preset is the intended easy-button path, but automatic install or
+model pull is blocked until the selected platform has a reviewed package path or
+checked-in manifest. Without that, the wizard reports `manual_required` and
+prints safe manual instructions.
+
+Dry-run:
+
+```sh
+./picobot models setup --dry-run --preset phone-ollama-tiny
+```
+
+After Ollama is installed manually or by a future approved manifest path, start
+the runtime and pull the selected model using the manual commands in the plan.
+Then run:
+
+```sh
+./picobot models health ollama
+./picobot models route --model ollama --local
+```
+
+### llama.cpp Wizard Path
+
+The first safe llama.cpp path is register-existing. Provide an existing
+`llama-server` binary and GGUF model path:
+
+```sh
+./picobot models setup \
+  --dry-run \
+  --preset phone-llamacpp-tiny \
+  --register-existing \
+  --llamacpp-server "$HOME/bin/llama-server" \
+  --gguf-model "$HOME/models/qwen3-1.7b-q8_0.gguf"
+```
+
+The generated runtime command binds to `127.0.0.1` by default. Automatic
+llama.cpp binary or model downloads remain blocked until checked-in manifests
+with source URL, immutable version, checksum, size, license notes, platform,
+architecture, install command, and safety notes are approved.
+
+### Termux:Boot Safety
+
+The wizard may generate Termux:Boot scripts only after approval. Generated
+scripts must be idempotent and must preserve mission-control reboot/resume
+guards. In particular, V6 must not add `--mission-resume-approved` to a gateway
+boot script automatically.
+
+If an existing boot script differs from the generated script, V6 must preserve
+it unless the operator explicitly approves an overwrite after backup.
+
 ## Start llama.cpp Phone Runtime
 
 Install or place a llama.cpp server build by your preferred Termux method. Frank only needs the OpenAI-compatible HTTP server.
