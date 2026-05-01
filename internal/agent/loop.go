@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -351,6 +352,9 @@ type AgentLoop struct {
 	memory                  *memory.MemoryStore
 	model                   string
 	toolDefinitionsAllowed  bool
+	modelRouteMu            sync.RWMutex
+	modelRoute              config.ModelRoute
+	hasModelRoute           bool
 	maxIterations           int
 	running                 bool
 	suppressTerminalNotices int32
@@ -468,6 +472,41 @@ func (a *AgentLoop) SetModelToolDefinitionsAllowed(allowed bool) {
 		return
 	}
 	a.toolDefinitionsAllowed = allowed
+	a.modelRouteMu.Lock()
+	defer a.modelRouteMu.Unlock()
+	if a.hasModelRoute {
+		a.modelRoute.ToolDefinitionsAllowed = allowed
+		a.modelRoute.ToolDefinitionsSuppressed = !allowed
+	}
+}
+
+// SetModelRoute stores the selected model route for safe runtime status and
+// applies its tool-schema gate to provider calls.
+func (a *AgentLoop) SetModelRoute(route config.ModelRoute) {
+	if a == nil {
+		return
+	}
+	route = cloneModelRoute(route)
+	a.modelRouteMu.Lock()
+	a.modelRoute = route
+	a.hasModelRoute = true
+	a.modelRouteMu.Unlock()
+	if route.ProviderModel != "" {
+		a.model = route.ProviderModel
+	}
+	a.SetModelToolDefinitionsAllowed(route.ToolDefinitionsAllowed)
+}
+
+func (a *AgentLoop) ModelRoute() (config.ModelRoute, bool) {
+	if a == nil {
+		return config.ModelRoute{}, false
+	}
+	a.modelRouteMu.RLock()
+	defer a.modelRouteMu.RUnlock()
+	if !a.hasModelRoute {
+		return config.ModelRoute{}, false
+	}
+	return cloneModelRoute(a.modelRoute), true
 }
 
 func (a *AgentLoop) activeToolDefinitions() []providers.ToolDefinition {
@@ -475,6 +514,14 @@ func (a *AgentLoop) activeToolDefinitions() []providers.ToolDefinition {
 		return nil
 	}
 	return activeToolDefinitions(a.tools, a.taskState)
+}
+
+func cloneModelRoute(route config.ModelRoute) config.ModelRoute {
+	if route.Request.Temperature != nil {
+		temperature := *route.Request.Temperature
+		route.Request.Temperature = &temperature
+	}
+	return route
 }
 
 func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) error {

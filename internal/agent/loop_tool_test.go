@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/local/picobot/internal/chat"
+	"github.com/local/picobot/internal/config"
 	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
@@ -284,6 +285,110 @@ func TestAgentLoopModelToolAllowancePreservesMissionAllowedTools(t *testing.T) {
 	}
 }
 
+func TestAgentLoopStoresLegacyRawModelRouteRecord(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{}
+	cfg.Providers.OpenAI = &config.ProviderConfig{APIKey: "legacy-secret", APIBase: "https://legacy.example/v1"}
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	route, err := reg.Route(config.ModelRouteOptions{
+		ExplicitModel:          "raw-provider-model",
+		AllowRawProviderModel:  true,
+		RawProviderModelSource: config.RouteReasonCLIOverride,
+	})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+
+	ag := NewAgentLoop(chat.NewHub(10), &capturingFinalProvider{}, "initial", 3, "", nil)
+	ag.SetModelRoute(route)
+	got, ok := ag.ModelRoute()
+	if !ok {
+		t.Fatal("ModelRoute() ok = false, want true")
+	}
+	if got.SelectedModelRef != config.LegacyModelRef || got.ProviderRef != config.LegacyProviderRef || got.ProviderModel != "raw-provider-model" {
+		t.Fatalf("ModelRoute() = %#v, want legacy raw provider model", got)
+	}
+	if !got.ToolDefinitionsAllowed || got.ToolDefinitionsSuppressed {
+		t.Fatalf("tool schema flags = allowed %t suppressed %t, want allowed", got.ToolDefinitionsAllowed, got.ToolDefinitionsSuppressed)
+	}
+}
+
+func TestAgentLoopStoresAliasRouteRecord(t *testing.T) {
+	t.Parallel()
+
+	cfg := routeRecordTestConfig()
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	route, err := reg.Route(config.ModelRouteOptions{ExplicitModel: "best"})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+
+	ag := NewAgentLoop(chat.NewHub(10), &capturingFinalProvider{}, "initial", 3, "", nil)
+	ag.SetModelRoute(route)
+	got, ok := ag.ModelRoute()
+	if !ok {
+		t.Fatal("ModelRoute() ok = false, want true")
+	}
+	if got.SelectedModelRef != "cloud_reasoning" || got.ProviderRef != "openrouter" || got.ProviderModel != "google/gemini-test" {
+		t.Fatalf("ModelRoute() = %#v, want alias-resolved cloud route", got)
+	}
+	if got.SelectionReason != config.RouteReasonCLIOverride {
+		t.Fatalf("selection reason = %q, want cli_override", got.SelectionReason)
+	}
+	if got.Request.MaxTokens != 8192 || got.Request.TimeoutS != 120 || got.Request.Temperature == nil || *got.Request.Temperature != 0.5 {
+		t.Fatalf("request override = %#v, want cloud request values", got.Request)
+	}
+}
+
+func TestAgentLoopStoresLocalSuppressedRouteRecord(t *testing.T) {
+	t.Parallel()
+
+	cfg := routeRecordTestConfig()
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	route, err := reg.Route(config.ModelRouteOptions{ExplicitModel: "phone"})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+
+	ag := NewAgentLoop(chat.NewHub(10), &capturingFinalProvider{}, "initial", 3, "", nil)
+	ag.SetModelRoute(route)
+	got, ok := ag.ModelRoute()
+	if !ok {
+		t.Fatal("ModelRoute() ok = false, want true")
+	}
+	if got.SelectedModelRef != "local_fast" || got.ProviderRef != "llamacpp_phone" || got.ProviderModel != "qwen3-test-local" {
+		t.Fatalf("ModelRoute() = %#v, want local route", got)
+	}
+	if !got.Capabilities.Local || got.Capabilities.AuthorityTier != config.ModelAuthorityLow {
+		t.Fatalf("capabilities = %#v, want local low-authority route", got.Capabilities)
+	}
+	if got.ToolDefinitionsAllowed || !got.ToolDefinitionsSuppressed {
+		t.Fatalf("tool schema flags = allowed %t suppressed %t, want suppressed", got.ToolDefinitionsAllowed, got.ToolDefinitionsSuppressed)
+	}
+
+	out, err := ag.ProcessDirect("trigger", time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("ProcessDirect() = %q, want done", out)
+	}
+	provider := ag.provider.(*capturingFinalProvider)
+	if len(provider.firstToolNames) != 0 {
+		t.Fatalf("provider tools = %#v, want empty list", provider.firstToolNames)
+	}
+}
+
 func TestAgentLoopGovernedSkillStatusExposesSelectedActiveAndSkipped(t *testing.T) {
 	t.Parallel()
 
@@ -403,6 +508,45 @@ func mustActiveMissionStep(t *testing.T, ag *AgentLoop) *missioncontrol.Executio
 		t.Fatal("ActiveMissionStep() ok = false, want true")
 	}
 	return &ec
+}
+
+func routeRecordTestConfig() config.Config {
+	tempCloud := 0.5
+	tempLocal := 0.3
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Model = "cloud_reasoning"
+	cfg.Providers.Named = map[string]config.ProviderConfig{
+		"openrouter":     {Type: config.ProviderTypeOpenAICompatible, APIKey: "router-secret", APIBase: "https://openrouter.example/v1"},
+		"llamacpp_phone": {Type: config.ProviderTypeOpenAICompatible, APIKey: "not-needed", APIBase: "http://127.0.0.1:8080/v1"},
+	}
+	cfg.Models = map[string]config.ModelProfileConfig{
+		"cloud_reasoning": {
+			Provider:      "openrouter",
+			ProviderModel: "google/gemini-test",
+			Capabilities: config.ModelCapabilities{
+				SupportsTools: true,
+				AuthorityTier: config.ModelAuthorityHigh,
+				CostTier:      config.ModelCostStandard,
+				LatencyTier:   config.ModelLatencyNormal,
+			},
+			Request: config.ModelRequestConfig{MaxTokens: 8192, Temperature: &tempCloud, TimeoutS: 120},
+		},
+		"local_fast": {
+			Provider:      "llamacpp_phone",
+			ProviderModel: "qwen3-test-local",
+			Capabilities: config.ModelCapabilities{
+				Local:         true,
+				Offline:       true,
+				AuthorityTier: config.ModelAuthorityLow,
+				CostTier:      config.ModelCostFree,
+				LatencyTier:   config.ModelLatencySlow,
+			},
+			Request: config.ModelRequestConfig{MaxTokens: 1024, Temperature: &tempLocal, TimeoutS: 300},
+		},
+	}
+	cfg.ModelAliases = map[string]string{"best": "cloud_reasoning", "phone": "local_fast"}
+	cfg.ModelRouting = config.ModelRoutingConfig{DefaultModel: "cloud_reasoning", LocalPreferredModel: "local_fast"}
+	return cfg
 }
 
 func writeLoopTestSkill(t *testing.T, workspace string, id string, promptOnly bool) {
