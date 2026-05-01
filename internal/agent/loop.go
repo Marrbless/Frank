@@ -360,6 +360,7 @@ type AgentLoop struct {
 	suppressTerminalNotices int32
 	taskState               *tools.TaskState
 	operatorSetStepHook     func(jobID string, stepID string) (string, error)
+	missionModelRouter      func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error)
 	mcpClients              []*mcp.Client
 	enableToolActivity      bool
 }
@@ -497,6 +498,23 @@ func (a *AgentLoop) SetModelRoute(route config.ModelRoute) {
 	a.SetModelToolDefinitionsAllowed(route.ToolDefinitionsAllowed)
 }
 
+func (a *AgentLoop) SetMissionModelRouter(router func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error)) {
+	if a == nil {
+		return
+	}
+	a.missionModelRouter = router
+}
+
+func (a *AgentLoop) setModelProvider(provider providers.LLMProvider, route config.ModelRoute) {
+	if a == nil || provider == nil {
+		return
+	}
+	a.provider = provider
+	if a.context != nil {
+		a.context.ranker = memory.NewLLMRanker(provider, route.ProviderModel)
+	}
+}
+
 func (a *AgentLoop) ModelRoute() (config.ModelRoute, bool) {
 	if a == nil {
 		return config.ModelRoute{}, false
@@ -527,6 +545,16 @@ func cloneModelRoute(route config.ModelRoute) config.ModelRoute {
 func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) error {
 	if a == nil || a.taskState == nil {
 		return nil
+	}
+	if a.missionModelRouter != nil {
+		route, provider, ok, err := a.missionModelRouter(job, stepID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			a.setModelProvider(provider, route)
+			a.SetModelRoute(route)
+		}
 	}
 	return a.taskState.ActivateStep(job, stepID)
 }

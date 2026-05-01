@@ -18,6 +18,8 @@ const (
 	RouteReasonRoutingDefault      = "routing_default"
 	RouteReasonLocalPreference     = "local_preference"
 	RouteReasonLegacyRawModel      = "legacy_raw_model"
+	RouteReasonModelPolicyDefault  = "model_policy_default"
+	RouteReasonModelPolicyAllowed  = "model_policy_allowed"
 	RouteReasonFallback            = "fallback"
 	DefaultModelRoutingPolicyID    = "default"
 	DefaultLegacyProviderModel     = "gpt-4o-mini"
@@ -86,12 +88,15 @@ type ModelRequiredCapabilities struct {
 
 type ModelRouteOptions struct {
 	ExplicitModel          string
+	DefaultModel           string
+	AllowedModels          []string
 	PreferLocal            bool
 	AllowFallback          bool
 	RequiredCapability     ModelRequiredCapabilities
 	UnavailableModels      map[string]bool
 	AllowRawProviderModel  bool
 	RawProviderModelSource string
+	PolicyID               string
 }
 
 type ModelRoute struct {
@@ -440,9 +445,23 @@ func (r ModelRegistry) ResolveModelRef(value string) (string, error) {
 }
 
 func (r ModelRegistry) Route(opts ModelRouteOptions) (ModelRoute, error) {
+	allowedOrder, allowedSet, err := r.resolveAllowedRouteModels(opts.AllowedModels)
+	if err != nil {
+		return ModelRoute{}, err
+	}
 	selected, reason, rawProviderModel, err := r.selectInitialModel(opts)
 	if err != nil {
 		return ModelRoute{}, err
+	}
+	if len(allowedSet) > 0 {
+		if _, ok := allowedSet[selected]; !ok {
+			if strings.TrimSpace(opts.ExplicitModel) != "" || rawProviderModel != "" {
+				return ModelRoute{}, fmt.Errorf("model_ref %q is not allowed by model policy", selected)
+			}
+			selected = allowedOrder[0]
+			reason = RouteReasonModelPolicyAllowed
+			rawProviderModel = ""
+		}
 	}
 
 	model, ok := r.Models[selected]
@@ -465,13 +484,18 @@ func (r ModelRegistry) Route(opts ModelRouteOptions) (ModelRoute, error) {
 	}
 
 	if !opts.UnavailableModels[selected] {
-		return r.buildRoute(model, reason, 0), nil
+		return r.buildRoute(model, reason, 0, opts.PolicyID), nil
 	}
 	if !opts.AllowFallback {
 		return ModelRoute{}, fmt.Errorf("model_ref %q is unavailable and fallback is disabled", selected)
 	}
 
 	for _, fallbackRef := range r.Routing.Fallbacks[selected] {
+		if len(allowedSet) > 0 {
+			if _, ok := allowedSet[fallbackRef]; !ok {
+				continue
+			}
+		}
 		fallback := r.Models[fallbackRef]
 		if opts.UnavailableModels[fallbackRef] {
 			continue
@@ -487,9 +511,30 @@ func (r ModelRegistry) Route(opts ModelRouteOptions) (ModelRoute, error) {
 		if err := r.validateRouteCapability(fallback, opts.RequiredCapability); err != nil {
 			continue
 		}
-		return r.buildRoute(fallback, RouteReasonFallback, 1), nil
+		return r.buildRoute(fallback, RouteReasonFallback, 1, opts.PolicyID), nil
 	}
 	return ModelRoute{}, fmt.Errorf("model_ref %q is unavailable and no valid fallback route exists", selected)
+}
+
+func (r ModelRegistry) resolveAllowedRouteModels(values []string) ([]string, map[string]struct{}, error) {
+	if len(values) == 0 {
+		return nil, nil, nil
+	}
+
+	order := make([]string, 0, len(values))
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		ref, err := r.ResolveModelRef(value)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, ok := set[ref]; ok {
+			continue
+		}
+		set[ref] = struct{}{}
+		order = append(order, ref)
+	}
+	return order, set, nil
 }
 
 func (r ModelRegistry) selectInitialModel(opts ModelRouteOptions) (string, string, string, error) {
@@ -515,6 +560,13 @@ func (r ModelRegistry) selectInitialModel(opts ModelRouteOptions) (string, strin
 
 	if opts.PreferLocal && r.Routing.LocalPreferredModel != "" {
 		return r.Routing.LocalPreferredModel, RouteReasonLocalPreference, "", nil
+	}
+	if strings.TrimSpace(opts.DefaultModel) != "" {
+		selected, err := r.ResolveModelRef(opts.DefaultModel)
+		if err != nil {
+			return "", "", "", err
+		}
+		return selected, RouteReasonModelPolicyDefault, "", nil
 	}
 	return r.Routing.DefaultModel, RouteReasonRoutingDefault, "", nil
 }
@@ -545,7 +597,10 @@ func (r ModelRegistry) validateRouteCapability(model ModelProfile, required Mode
 	return nil
 }
 
-func (r ModelRegistry) buildRoute(model ModelProfile, reason string, fallbackDepth int) ModelRoute {
+func (r ModelRegistry) buildRoute(model ModelProfile, reason string, fallbackDepth int, policyID string) ModelRoute {
+	if strings.TrimSpace(policyID) == "" {
+		policyID = DefaultModelRoutingPolicyID
+	}
 	allowed := model.Capabilities.SupportsTools
 	return ModelRoute{
 		SelectedModelRef:          model.Ref,
@@ -553,7 +608,7 @@ func (r ModelRegistry) buildRoute(model ModelProfile, reason string, fallbackDep
 		ProviderModel:             model.ProviderModel,
 		SelectionReason:           reason,
 		FallbackDepth:             fallbackDepth,
-		PolicyID:                  DefaultModelRoutingPolicyID,
+		PolicyID:                  policyID,
 		Capabilities:              model.Capabilities,
 		Request:                   r.resolveRequest(model),
 		ToolDefinitionsAllowed:    allowed,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/local/picobot/internal/agent"
 	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/config"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -406,6 +408,207 @@ func TestAgentCommandDoesNotRetryFallbackAfterProviderRequestStarts(t *testing.T
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "local-secret") {
 		t.Fatalf("agent command output leaked provider error body: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionUsesStepPolicyDefault(t *testing.T) {
+	cfg := v5FallbackRuntimeTestConfig("https://local.example/v1", "", "https://cloud.example/v1")
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		AllowedModels: []string{"local_fast", "cloud_reasoning"},
+		DefaultModel:  "local_fast",
+	}
+
+	selection, ok, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "", job, "build")
+	if err != nil {
+		t.Fatalf("resolveRuntimeMissionModelSelectionWithContext() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() ok = false, want policy route")
+	}
+	if selection.Route.SelectedModelRef != "local_fast" {
+		t.Fatalf("SelectedModelRef = %q, want local_fast", selection.Route.SelectedModelRef)
+	}
+	if selection.Route.PolicyID != "step:model_policy" {
+		t.Fatalf("PolicyID = %q, want step:model_policy", selection.Route.PolicyID)
+	}
+	if selection.Route.SelectionReason != config.RouteReasonModelPolicyDefault {
+		t.Fatalf("SelectionReason = %q, want model_policy_default", selection.Route.SelectionReason)
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionUsesJobPolicyDefault(t *testing.T) {
+	cfg := v5FallbackRuntimeTestConfig("https://local.example/v1", "", "https://cloud.example/v1")
+	job := testMissionBootstrapJob()
+	job.ModelPolicy = &missioncontrol.ModelPolicy{
+		AllowedModels: []string{"cloud_reasoning"},
+		DefaultModel:  "cloud_reasoning",
+	}
+
+	selection, ok, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "", job, "build")
+	if err != nil {
+		t.Fatalf("resolveRuntimeMissionModelSelectionWithContext() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() ok = false, want policy route")
+	}
+	if selection.Route.SelectedModelRef != "cloud_reasoning" {
+		t.Fatalf("SelectedModelRef = %q, want cloud_reasoning", selection.Route.SelectedModelRef)
+	}
+	if selection.Route.PolicyID != "job:model_policy" {
+		t.Fatalf("PolicyID = %q, want job:model_policy", selection.Route.PolicyID)
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionDeniesExplicitModelOutsideAllowedPolicy(t *testing.T) {
+	const secret = "policy-denial-secret"
+	cfg := v5FallbackRuntimeTestConfig("https://local.example/v1", "", "https://cloud.example/v1")
+	cfg.Providers.Named["openrouter"] = config.ProviderConfig{
+		Type:    config.ProviderTypeOpenAICompatible,
+		APIKey:  secret,
+		APIBase: "https://cloud.example/v1",
+	}
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		AllowedModels: []string{"local_fast"},
+	}
+
+	_, _, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "best", job, "build")
+	if err == nil {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() error = nil, want policy denial")
+	}
+	var validationErr missioncontrol.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("error = %T %[1]v, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeInvalidModelPolicy {
+		t.Fatalf("ValidationError.Code = %q, want invalid_model_policy", validationErr.Code)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("policy denial leaked API key: %q", err.Error())
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionEnforcesRequiredTools(t *testing.T) {
+	cfg := v5FallbackRuntimeTestConfig("https://local.example/v1", "", "https://cloud.example/v1")
+	supportsTools := true
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		DefaultModel: "local_fast",
+		RequiredCapabilities: missioncontrol.ModelPolicyRequiredCapabilities{
+			SupportsTools: &supportsTools,
+		},
+	}
+
+	_, _, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "", job, "build")
+	if err == nil {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() error = nil, want required-tools denial")
+	}
+	if !strings.Contains(err.Error(), "does not support tools") {
+		t.Fatalf("error = %q, want required-tools denial", err.Error())
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionEnforcesAllowCloudFalse(t *testing.T) {
+	cfg := v5RuntimeTestConfig("https://cloud.example/v1")
+	allowCloud := false
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		AllowCloud: &allowCloud,
+	}
+
+	_, _, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "", job, "build")
+	if err == nil {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() error = nil, want allow-cloud denial")
+	}
+	if !strings.Contains(err.Error(), "local capability is false, want true") {
+		t.Fatalf("error = %q, want local-required denial", err.Error())
+	}
+}
+
+func TestResolveRuntimeMissionModelSelectionEnforcesAllowFallbackFalse(t *testing.T) {
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer localServer.Close()
+
+	cfg := v5FallbackRuntimeTestConfig("https://local.example/v1", localServer.URL, "https://cloud.example/v1")
+	cfg.ModelRouting.AllowCloudFallbackFromLocal = true
+	allowFallback := false
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		DefaultModel:  "local_fast",
+		AllowFallback: &allowFallback,
+	}
+
+	_, _, err := resolveRuntimeMissionModelSelectionWithContext(context.Background(), cfg, "", job, "build")
+	if err == nil {
+		t.Fatal("resolveRuntimeMissionModelSelectionWithContext() error = nil, want fallback-disabled denial")
+	}
+	if !strings.Contains(err.Error(), "fallback is disabled") {
+		t.Fatalf("error = %q, want fallback-disabled denial", err.Error())
+	}
+}
+
+func TestAgentCommandAppliesMissionStepModelPolicyBeforeProviderCall(t *testing.T) {
+	var localChatCount int
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localChatCount++
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode local request body: %v", err)
+		}
+		if body.Model != "qwen3-test-local" {
+			t.Fatalf("local request model = %q, want qwen3-test-local", body.Model)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"local policy ok"}}]}`))
+	}))
+	defer localServer.Close()
+
+	var cloudChatCount int
+	cloudServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cloudChatCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"cloud should not run"}}]}`))
+	}))
+	defer cloudServer.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := v5FallbackRuntimeTestConfig(localServer.URL+"/v1", "", cloudServer.URL+"/v1")
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	job := testMissionBootstrapJob()
+	job.Plan.Steps[0].ModelPolicy = &missioncontrol.ModelPolicy{
+		AllowedModels: []string{"local_fast", "cloud_reasoning"},
+		DefaultModel:  "local_fast",
+	}
+	missionFile := writeMissionBootstrapJobFile(t, job)
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"agent", "-m", "hello", "--mission-file", missionFile, "--mission-step", "build"})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agent command error = %v stderr=%q", err, stderr.String())
+	}
+	if localChatCount != 1 {
+		t.Fatalf("local chat count = %d, want 1", localChatCount)
+	}
+	if cloudChatCount != 0 {
+		t.Fatalf("cloud chat count = %d, want 0", cloudChatCount)
+	}
+	if !strings.Contains(stdout.String(), "local policy ok") {
+		t.Fatalf("stdout = %q, want local policy response", stdout.String())
 	}
 }
 

@@ -290,3 +290,64 @@ func TestCloneJobCopiesModelPolicy(t *testing.T) {
 		t.Fatal("step model policy supportsTools mutated to false")
 	}
 }
+
+func TestEffectiveModelPolicyMergesJobAndStepPolicy(t *testing.T) {
+	t.Parallel()
+
+	allowFallbackJob := true
+	allowCloudJob := false
+	allowFallbackStep := false
+	supportsTools := true
+	local := true
+	job := testJob([]Step{
+		{
+			ID:   "draft",
+			Type: StepTypeDiscussion,
+			ModelPolicy: &ModelPolicy{
+				AllowedModels: []string{"local_fast"},
+				DefaultModel:  "local_fast",
+				RequiredCapabilities: ModelPolicyRequiredCapabilities{
+					Local: &local,
+				},
+				AllowFallback: &allowFallbackStep,
+			},
+		},
+		{ID: "final", Type: StepTypeFinalResponse, DependsOn: []string{"draft"}},
+	})
+	job.ModelPolicy = &ModelPolicy{
+		AllowedModels: []string{"local_fast", "cloud_reasoning"},
+		DefaultModel:  "cloud_reasoning",
+		RequiredCapabilities: ModelPolicyRequiredCapabilities{
+			SupportsTools:        &supportsTools,
+			AuthorityTierAtLeast: AuthorityTierMedium,
+		},
+		AllowFallback: &allowFallbackJob,
+		AllowCloud:    &allowCloudJob,
+	}
+
+	policy, policyID := EffectiveModelPolicy(&job, &job.Plan.Steps[0])
+	if policyID != "step:model_policy" {
+		t.Fatalf("policyID = %q, want step:model_policy", policyID)
+	}
+	if !reflect.DeepEqual(policy.AllowedModels, []string{"local_fast"}) {
+		t.Fatalf("AllowedModels = %#v, want step allowed_models", policy.AllowedModels)
+	}
+	if policy.DefaultModel != "local_fast" {
+		t.Fatalf("DefaultModel = %q, want local_fast", policy.DefaultModel)
+	}
+	if policy.RequiredCapabilities.SupportsTools == nil || !*policy.RequiredCapabilities.SupportsTools {
+		t.Fatal("SupportsTools not inherited from job policy")
+	}
+	if policy.RequiredCapabilities.Local == nil || !*policy.RequiredCapabilities.Local {
+		t.Fatal("Local not applied from step policy")
+	}
+	if policy.RequiredCapabilities.AuthorityTierAtLeast != AuthorityTierMedium {
+		t.Fatalf("AuthorityTierAtLeast = %q, want medium", policy.RequiredCapabilities.AuthorityTierAtLeast)
+	}
+	if policy.AllowFallback == nil || *policy.AllowFallback {
+		t.Fatal("AllowFallback did not use explicit step false")
+	}
+	if policy.AllowCloud == nil || *policy.AllowCloud {
+		t.Fatal("AllowCloud did not inherit explicit job false")
+	}
+}

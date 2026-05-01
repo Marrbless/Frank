@@ -168,6 +168,71 @@ func TestRouteDeniesLowerAuthorityFallbackByDefault(t *testing.T) {
 	}
 }
 
+func TestRouteUsesPolicyDefaultAndPolicyID(t *testing.T) {
+	reg := mustBuildModelRegistry(t, v5RegistryTestConfig())
+
+	route, err := reg.Route(ModelRouteOptions{
+		DefaultModel:  "phone",
+		AllowedModels: []string{"local_fast", "cloud_reasoning"},
+		PolicyID:      "step:model_policy",
+	})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if route.SelectedModelRef != "local_fast" {
+		t.Fatalf("SelectedModelRef = %q, want local_fast", route.SelectedModelRef)
+	}
+	if route.SelectionReason != RouteReasonModelPolicyDefault {
+		t.Fatalf("SelectionReason = %q, want model_policy_default", route.SelectionReason)
+	}
+	if route.PolicyID != "step:model_policy" {
+		t.Fatalf("PolicyID = %q, want step:model_policy", route.PolicyID)
+	}
+}
+
+func TestRouteDeniesExplicitModelOutsidePolicyAllowedModels(t *testing.T) {
+	reg := mustBuildModelRegistry(t, v5RegistryTestConfig())
+
+	_, err := reg.Route(ModelRouteOptions{
+		ExplicitModel: "cloud_reasoning",
+		AllowedModels: []string{"local_fast"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `model_ref "cloud_reasoning" is not allowed by model policy`) {
+		t.Fatalf("Route() error = %v, want model policy denial", err)
+	}
+}
+
+func TestRouteUsesFirstAllowedPolicyModelWhenConfigDefaultIsDenied(t *testing.T) {
+	reg := mustBuildModelRegistry(t, v5RegistryTestConfig())
+
+	route, err := reg.Route(ModelRouteOptions{
+		AllowedModels: []string{"phone"},
+	})
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if route.SelectedModelRef != "local_fast" {
+		t.Fatalf("SelectedModelRef = %q, want local_fast", route.SelectedModelRef)
+	}
+	if route.SelectionReason != RouteReasonModelPolicyAllowed {
+		t.Fatalf("SelectionReason = %q, want model_policy_allowed", route.SelectionReason)
+	}
+}
+
+func TestRouteFallbackCannotBypassPolicyAllowedModels(t *testing.T) {
+	reg := mustBuildModelRegistry(t, v5RegistryTestConfig())
+
+	_, err := reg.Route(ModelRouteOptions{
+		ExplicitModel:     "local_fast",
+		AllowedModels:     []string{"local_fast"},
+		UnavailableModels: map[string]bool{"local_fast": true},
+		AllowFallback:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `model_ref "local_fast" is unavailable and no valid fallback route exists`) {
+		t.Fatalf("Route() error = %v, want no valid fallback within policy", err)
+	}
+}
+
 func TestRouteResolvesRequestOverrides(t *testing.T) {
 	cfg := v5RegistryTestConfig()
 	temp := 0.2

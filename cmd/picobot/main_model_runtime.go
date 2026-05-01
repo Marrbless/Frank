@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/local/picobot/internal/config"
+	"github.com/local/picobot/internal/missioncontrol"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -45,6 +46,111 @@ func resolveRuntimeModelSelectionWithContext(ctx context.Context, cfg config.Con
 		Route:    route,
 		Provider: provider,
 	}, nil
+}
+
+func newRuntimeMissionModelRouter(ctx context.Context, cfg config.Config, explicitModel string) func(missioncontrol.Job, string) (config.ModelRoute, providers.LLMProvider, bool, error) {
+	return func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error) {
+		selection, ok, err := resolveRuntimeMissionModelSelectionWithContext(ctx, cfg, explicitModel, job, stepID)
+		if err != nil {
+			return config.ModelRoute{}, nil, false, err
+		}
+		if !ok {
+			return config.ModelRoute{}, nil, false, nil
+		}
+		return selection.Route, selection.Provider, true, nil
+	}
+}
+
+func resolveRuntimeMissionModelSelectionWithContext(ctx context.Context, cfg config.Config, explicitModel string, job missioncontrol.Job, stepID string) (runtimeModelSelection, bool, error) {
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return runtimeModelSelection{}, false, err
+	}
+	policy, policyID := missioncontrol.EffectiveModelPolicy(ec.Job, ec.Step)
+	if policy == nil {
+		return runtimeModelSelection{}, false, nil
+	}
+
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		return runtimeModelSelection{}, false, fmt.Errorf("failed to build model registry: %w", err)
+	}
+	required, err := modelPolicyRequiredCapabilities(policy)
+	if err != nil {
+		return runtimeModelSelection{}, false, modelPolicyRouteError(stepID, err)
+	}
+	route, err := reg.Route(config.ModelRouteOptions{
+		ExplicitModel:          explicitModel,
+		DefaultModel:           policy.DefaultModel,
+		AllowedModels:          policy.AllowedModels,
+		AllowFallback:          modelPolicyAllowFallback(policy, reg),
+		RequiredCapability:     required,
+		UnavailableModels:      runtimeUnavailableModels(ctx, reg, cfg.LocalRuntimes),
+		AllowRawProviderModel:  false,
+		RawProviderModelSource: config.RouteReasonCLIOverride,
+		PolicyID:               policyID,
+	})
+	if err != nil {
+		return runtimeModelSelection{}, false, modelPolicyRouteError(stepID, err)
+	}
+	provider, err := providers.NewProviderFromModelRoute(reg, route)
+	if err != nil {
+		return runtimeModelSelection{}, false, err
+	}
+	return runtimeModelSelection{
+		Registry: reg,
+		Route:    route,
+		Provider: provider,
+	}, true, nil
+}
+
+func modelPolicyRequiredCapabilities(policy *missioncontrol.ModelPolicy) (config.ModelRequiredCapabilities, error) {
+	var required config.ModelRequiredCapabilities
+	if policy == nil {
+		return required, nil
+	}
+
+	capabilities := policy.RequiredCapabilities
+	if capabilities.SupportsTools != nil && *capabilities.SupportsTools {
+		required.SupportsTools = true
+	}
+	required.Local = cloneBoolPtr(capabilities.Local)
+	required.Offline = cloneBoolPtr(capabilities.Offline)
+	required.SupportsResponsesAPI = cloneBoolPtr(capabilities.SupportsResponsesAPI)
+	if capabilities.AuthorityTierAtLeast != "" {
+		required.AuthorityTierAtLeast = config.ModelAuthorityTier(capabilities.AuthorityTierAtLeast)
+	}
+	if policy.AllowCloud != nil && !*policy.AllowCloud {
+		if required.Local != nil && !*required.Local {
+			return config.ModelRequiredCapabilities{}, fmt.Errorf("model_policy.allow_cloud=false conflicts with required_capabilities.local=false")
+		}
+		local := true
+		required.Local = &local
+	}
+	return required, nil
+}
+
+func modelPolicyAllowFallback(policy *missioncontrol.ModelPolicy, reg config.ModelRegistry) bool {
+	if policy != nil && policy.AllowFallback != nil {
+		return *policy.AllowFallback
+	}
+	return runtimeModelFallbackConfigured(reg)
+}
+
+func modelPolicyRouteError(stepID string, err error) error {
+	return missioncontrol.ValidationError{
+		Code:    missioncontrol.RejectionCodeInvalidModelPolicy,
+		StepID:  stepID,
+		Message: "model_policy denied route: " + err.Error(),
+	}
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func runtimeUnavailableModels(ctx context.Context, reg config.ModelRegistry, runtimes map[string]config.LocalRuntimeConfig) map[string]bool {

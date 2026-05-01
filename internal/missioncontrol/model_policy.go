@@ -40,6 +40,67 @@ func validateJobModelPolicies(job Job) []ValidationError {
 	return errors
 }
 
+func EffectiveModelPolicy(job *Job, step *Step) (*ModelPolicy, string) {
+	if job == nil && step == nil {
+		return nil, ""
+	}
+	var effective *ModelPolicy
+	policyID := ""
+	if job != nil && job.ModelPolicy != nil {
+		effective = cloneModelPolicy(job.ModelPolicy)
+		policyID = "job:model_policy"
+	}
+	if step != nil && step.ModelPolicy != nil {
+		effective = mergeModelPolicies(effective, step.ModelPolicy)
+		policyID = "step:model_policy"
+	}
+	return effective, policyID
+}
+
+func mergeModelPolicies(base *ModelPolicy, override *ModelPolicy) *ModelPolicy {
+	if base == nil {
+		return cloneModelPolicy(override)
+	}
+	if override == nil {
+		return base
+	}
+	out := cloneModelPolicy(base)
+	if len(override.AllowedModels) > 0 {
+		out.AllowedModels = append([]string(nil), override.AllowedModels...)
+	}
+	if strings.TrimSpace(override.DefaultModel) != "" {
+		out.DefaultModel = override.DefaultModel
+	}
+	out.RequiredCapabilities = mergeModelPolicyRequiredCapabilities(out.RequiredCapabilities, override.RequiredCapabilities)
+	if override.AllowFallback != nil {
+		out.AllowFallback = cloneBoolPtr(override.AllowFallback)
+	}
+	if override.AllowCloud != nil {
+		out.AllowCloud = cloneBoolPtr(override.AllowCloud)
+	}
+	return out
+}
+
+func mergeModelPolicyRequiredCapabilities(base, override ModelPolicyRequiredCapabilities) ModelPolicyRequiredCapabilities {
+	out := base
+	if override.SupportsTools != nil {
+		out.SupportsTools = cloneBoolPtr(override.SupportsTools)
+	}
+	if override.Local != nil {
+		out.Local = cloneBoolPtr(override.Local)
+	}
+	if override.Offline != nil {
+		out.Offline = cloneBoolPtr(override.Offline)
+	}
+	if override.SupportsResponsesAPI != nil {
+		out.SupportsResponsesAPI = cloneBoolPtr(override.SupportsResponsesAPI)
+	}
+	if strings.TrimSpace(string(override.AuthorityTierAtLeast)) != "" {
+		out.AuthorityTierAtLeast = override.AuthorityTierAtLeast
+	}
+	return out
+}
+
 func validateModelPolicy(scope, stepID string, policy *ModelPolicy) []ValidationError {
 	if policy == nil {
 		return nil
