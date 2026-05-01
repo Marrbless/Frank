@@ -147,6 +147,26 @@ func applyPatchToConfig(cfg config.Config, patch ConfigPatch, opts ConfigWriteOp
 		delete(patched.Providers.Named, providerKey)
 		patched.Providers.Named[providerRef] = patch.ProviderConfig
 	}
+	for ref, provider := range patch.ExtraProviders {
+		normalized, err := config.NormalizeProviderRef(ref)
+		if err != nil {
+			return config.Config{}, false, err
+		}
+		providerKey, existingProvider, providerExists, err := findProviderByNormalizedRef(patched, normalized)
+		if err != nil {
+			return config.Config{}, false, err
+		}
+		if providerExists && !providerEquivalent(existingProvider, provider) && !opts.ApproveReplacements && !opts.Force {
+			return config.Config{}, false, fmt.Errorf("provider_ref %q already exists with different config; replacement requires approval", normalized)
+		}
+		if normalized == config.LegacyProviderRef {
+			providerCopy := provider
+			patched.Providers.OpenAI = &providerCopy
+		} else {
+			delete(patched.Providers.Named, providerKey)
+			patched.Providers.Named[normalized] = provider
+		}
+	}
 
 	modelKey, existingModel, modelExists, err := findModelByNormalizedRef(patched.Models, modelRef)
 	if err != nil {
@@ -157,6 +177,21 @@ func applyPatchToConfig(cfg config.Config, patch ConfigPatch, opts ConfigWriteOp
 	}
 	delete(patched.Models, modelKey)
 	patched.Models[modelRef] = patch.ModelConfig
+	for ref, model := range patch.ExtraModels {
+		normalized, err := config.NormalizeModelRef(ref)
+		if err != nil {
+			return config.Config{}, false, err
+		}
+		modelKey, existingModel, modelExists, err := findModelByNormalizedRef(patched.Models, normalized)
+		if err != nil {
+			return config.Config{}, false, err
+		}
+		if modelExists && !reflect.DeepEqual(existingModel, model) && !opts.ApproveReplacements && !opts.Force {
+			return config.Config{}, false, fmt.Errorf("model_ref %q already exists with different config; replacement requires approval", normalized)
+		}
+		delete(patched.Models, modelKey)
+		patched.Models[normalized] = model
+	}
 
 	for alias, target := range patch.AliasRefs {
 		normalizedAlias, err := config.NormalizeModelRef(alias)

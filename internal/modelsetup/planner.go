@@ -140,6 +140,34 @@ func buildConfigPatch(preset Preset, plan Plan, choices OperatorChoices) *Config
 	if preset.RuntimeKind == RuntimeKindCloud {
 		routing.LocalPreferredModel = ""
 	}
+	extraProviders := map[string]config.ProviderConfig{}
+	extraModels := map[string]config.ModelProfileConfig{}
+	if preset.Name == PresetMixedLocalCloudSafe {
+		cloudTemp := 0.5
+		extraProviders["openrouter"] = config.ProviderConfig{
+			Type:    config.ProviderTypeOpenAICompatible,
+			APIKey:  "REPLACE_WITH_REAL_PROVIDER_API_KEY",
+			APIBase: "https://openrouter.ai/api/v1",
+		}
+		extraModels["cloud_reasoning"] = config.ModelProfileConfig{
+			Provider:      "openrouter",
+			ProviderModel: "REPLACE_WITH_PROVIDER_MODEL",
+			DisplayName:   "Cloud reasoning stub",
+			Capabilities: config.ModelCapabilities{
+				Local:           false,
+				Offline:         false,
+				SupportsTools:   true,
+				ContextTokens:   1000000,
+				MaxOutputTokens: 8192,
+				AuthorityTier:   config.ModelAuthorityHigh,
+				CostTier:        config.ModelCostStandard,
+				LatencyTier:     config.ModelLatencyNormal,
+			},
+			Request: config.ModelRequestConfig{MaxTokens: 8192, Temperature: &cloudTemp, TimeoutS: 120},
+		}
+		aliasRefs["best"] = "cloud_reasoning"
+		routing.Fallbacks["cloud_reasoning"] = []string{}
+	}
 	runtime := config.LocalRuntimeConfig{}
 	runtimeRef := ""
 	if preset.RuntimeKind != RuntimeKindCloud {
@@ -166,6 +194,8 @@ func buildConfigPatch(preset Preset, plan Plan, choices OperatorChoices) *Config
 		RuntimeRef:      runtimeRef,
 		DefaultModelRef: plan.ModelRef,
 		ProviderConfig:  provider,
+		ExtraProviders:  extraProviders,
+		ExtraModels:     extraModels,
 		ModelConfig: config.ModelProfileConfig{
 			Provider:      plan.ProviderRef,
 			ProviderModel: preset.ProviderModel,

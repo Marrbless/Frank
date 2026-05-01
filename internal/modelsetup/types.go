@@ -148,6 +148,8 @@ type ConfigPatch struct {
 	DefaultModelRef string
 	ModelConfig     config.ModelProfileConfig
 	ProviderConfig  config.ProviderConfig
+	ExtraProviders  map[string]config.ProviderConfig
+	ExtraModels     map[string]config.ModelProfileConfig
 	RoutingConfig   config.ModelRoutingConfig
 	RuntimeConfig   config.LocalRuntimeConfig
 }
