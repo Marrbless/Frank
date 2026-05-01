@@ -15,6 +15,9 @@ func requireAllowlistOrOpen(surface string, allowed []string, openMode bool) err
 
 func validateConfigForStartup(cfg config.Config) []error {
 	var errs []error
+	if _, err := config.BuildModelRegistry(cfg); err != nil {
+		errs = append(errs, err)
+	}
 	if cfg.Channels.Telegram.Enabled {
 		if err := requireAllowlistOrOpen("telegram", cfg.Channels.Telegram.AllowFrom, cfg.Channels.Telegram.OpenMode); err != nil {
 			errs = append(errs, err)

@@ -174,6 +174,156 @@ If no valid provider is configured, Picobot uses a **Stub** provider (echoes bac
 
 ---
 
+## Frank V5 Model Control Plane
+
+Frank V5 adds a model registry and deterministic resolver while preserving the legacy `providers.openai` configuration.
+
+Read-only inspection commands:
+
+```sh
+picobot models list
+picobot models inspect local_fast
+picobot models route --model best --requires-tools
+picobot models route --local
+```
+
+The first V5 slice validates model refs, provider refs, aliases, request overrides, and fallback guardrails. It does not download models, start Ollama or llama.cpp, perform live health checks, or wire full mission step model policy yet. See [FRANK_V5_MODEL_CONTROL_SPEC.md](FRANK_V5_MODEL_CONTROL_SPEC.md).
+
+### Example V5 model registry
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "cloud_reasoning",
+      "maxTokens": 8192,
+      "temperature": 0.7,
+      "maxToolIterations": 100,
+      "heartbeatIntervalS": 60,
+      "requestTimeoutS": 60,
+      "enableToolActivityIndicator": true
+    }
+  },
+  "providers": {
+    "openai": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_PROVIDER_API_KEY",
+      "apiBase": "https://api.openai.com/v1"
+    },
+    "openrouter": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_PROVIDER_API_KEY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    },
+    "llamacpp_phone": {
+      "type": "openai_compatible",
+      "apiKey": "not-needed",
+      "apiBase": "http://127.0.0.1:8080/v1"
+    },
+    "ollama_phone": {
+      "type": "openai_compatible",
+      "apiKey": "ollama",
+      "apiBase": "http://127.0.0.1:11434/v1"
+    }
+  },
+  "models": {
+    "local_fast": {
+      "provider": "llamacpp_phone",
+      "providerModel": "qwen3-1.7b-q8_0",
+      "displayName": "Qwen3 1.7B phone local",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "supportsStreaming": false,
+        "supportsResponsesAPI": false,
+        "supportsVision": false,
+        "supportsAudio": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false,
+        "reasoningEffort": ""
+      }
+    },
+    "cloud_reasoning": {
+      "provider": "openrouter",
+      "providerModel": "google/gemini-2.5-flash",
+      "displayName": "Cloud reasoning default",
+      "capabilities": {
+        "local": false,
+        "offline": false,
+        "supportsTools": true,
+        "supportsStreaming": false,
+        "supportsResponsesAPI": false,
+        "supportsVision": false,
+        "supportsAudio": false,
+        "contextTokens": 1000000,
+        "maxOutputTokens": 8192,
+        "authorityTier": "high",
+        "costTier": "standard",
+        "latencyTier": "normal"
+      },
+      "request": {
+        "maxTokens": 8192,
+        "temperature": 0.5,
+        "timeoutS": 120,
+        "useResponses": false,
+        "reasoningEffort": ""
+      }
+    }
+  },
+  "modelAliases": {
+    "default": "cloud_reasoning",
+    "phone": "local_fast",
+    "local": "local_fast",
+    "best": "cloud_reasoning"
+  },
+  "modelRouting": {
+    "defaultModel": "cloud_reasoning",
+    "localPreferredModel": "local_fast",
+    "fallbacks": {
+      "local_fast": ["cloud_reasoning"],
+      "cloud_reasoning": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  },
+  "localRuntimes": {
+    "llamacpp_phone": {
+      "kind": "external_http",
+      "provider": "llamacpp_phone",
+      "expectedBaseURL": "http://127.0.0.1:8080/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:8080/health",
+      "notes": "Started separately in Termux/tmux."
+    },
+    "ollama_phone": {
+      "kind": "external_http",
+      "provider": "ollama_phone",
+      "expectedBaseURL": "http://127.0.0.1:11434/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:11434/api/tags",
+      "notes": "Started separately by Ollama."
+    }
+  }
+}
+```
+
+Model and provider refs are normalized by trimming whitespace and lowercasing. They may contain only `a-z`, `0-9`, `_`, and `-`, and must not contain path separators. Alias chains are rejected. A local model profile defaults to low authority and no tool support if those fields are omitted.
+
+Existing configs that omit `models` keep legacy behavior: `agents.defaults.model` remains the raw provider model sent to `providers.openai`, and `-M some-provider-model` still works as a raw provider model override on the legacy provider.
+
+---
+
 ## mcpServers
 
 Connect external [MCP (Model Context Protocol)](https://modelcontextprotocol.io) servers to give the agent additional tools. Each entry is a named server that exposes one or more tools, which are registered automatically at startup under the name `mcp_{server}_{tool}`.

@@ -27,7 +27,6 @@ import (
 	"github.com/local/picobot/internal/cron"
 	"github.com/local/picobot/internal/heartbeat"
 	"github.com/local/picobot/internal/missioncontrol"
-	"github.com/local/picobot/internal/providers"
 )
 
 var (
@@ -455,6 +454,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(onboardCmd)
 
 	rootCmd.AddCommand(newConfigCmd())
+	rootCmd.AddCommand(newModelsCmd())
 	rootCmd.AddCommand(newChannelsCmd())
 
 	agentCmd := &cobra.Command{
@@ -470,16 +470,12 @@ func NewRootCmd() *cobra.Command {
 
 			hub := chat.NewHub(100)
 			cfg, _ := config.LoadConfig()
-			provider := providers.NewProviderFromConfig(cfg)
-
-			// choose model: flag > config default > provider default
-			model := modelFlag
-			if model == "" && cfg.Agents.Defaults.Model != "" {
-				model = cfg.Agents.Defaults.Model
+			selection, err := resolveRuntimeModelSelection(cfg, modelFlag)
+			if err != nil {
+				return err
 			}
-			if model == "" {
-				model = provider.GetDefaultModel()
-			}
+			provider := selection.Provider
+			model := selection.Route.ProviderModel
 
 			maxIter := cfg.Agents.Defaults.MaxToolIterations
 			if maxIter <= 0 {
@@ -520,18 +516,15 @@ func NewRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			hub := chat.NewHub(200)
 			cfg, _ := config.LoadConfig()
-			provider := providers.NewProviderFromConfig(cfg)
 			var ag *agent.AgentLoop
 
-			// choose model: flag > config > provider default
 			modelFlag, _ := cmd.Flags().GetString("model")
-			model := modelFlag
-			if model == "" && cfg.Agents.Defaults.Model != "" {
-				model = cfg.Agents.Defaults.Model
+			selection, err := resolveRuntimeModelSelection(cfg, modelFlag)
+			if err != nil {
+				return err
 			}
-			if model == "" {
-				model = provider.GetDefaultModel()
-			}
+			provider := selection.Provider
+			model := selection.Route.ProviderModel
 
 			storeRoot, logLease, restoreGatewayLogger, err := configureGatewayMissionStoreLogging(cmd)
 			if err != nil {
