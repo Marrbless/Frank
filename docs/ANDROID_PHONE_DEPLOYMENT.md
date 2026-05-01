@@ -92,9 +92,10 @@ nano ~/.picobot/config.json
 
 Set at least:
 
-- `providers.openai.apiKey`
-- `providers.openai.apiBase`
 - `agents.defaults.model`
+- named `providers` for any cloud and local endpoints you plan to use
+- `models` entries for the phone-local and cloud profiles
+- `modelAliases` for operator-friendly names such as `phone`, `local`, and `best`
 - one channel token and owner allowlist, usually Telegram first
 
 Test a one-shot call:
@@ -102,6 +103,208 @@ Test a one-shot call:
 ```sh
 ./picobot agent -m "hello from the phone"
 ```
+
+## V5 Model Control Plane
+
+Frank V5 can run phone-local and cloud models through named model profiles. The phone does not download or supervise models automatically in this slice; start llama.cpp or Ollama separately and point Frank at their OpenAI-compatible HTTP endpoints.
+
+Minimal phone-oriented shape:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "phone",
+      "maxTokens": 8192,
+      "temperature": 0.7,
+      "maxToolIterations": 100,
+      "requestTimeoutS": 60
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_OPENROUTER_KEY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    },
+    "openai": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_OPENAI_KEY",
+      "apiBase": "https://api.openai.com/v1"
+    },
+    "llamacpp_phone": {
+      "type": "openai_compatible",
+      "apiKey": "not-needed",
+      "apiBase": "http://127.0.0.1:8080/v1"
+    },
+    "ollama_phone": {
+      "type": "openai_compatible",
+      "apiKey": "ollama",
+      "apiBase": "http://127.0.0.1:11434/v1"
+    }
+  },
+  "models": {
+    "local_fast": {
+      "provider": "llamacpp_phone",
+      "providerModel": "qwen3-1.7b-q8_0",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false
+      }
+    },
+    "ollama_chat": {
+      "provider": "ollama_phone",
+      "providerModel": "qwen3:1.7b",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false
+      }
+    },
+    "cloud_reasoning": {
+      "provider": "openrouter",
+      "providerModel": "google/gemini-2.5-flash",
+      "capabilities": {
+        "local": false,
+        "offline": false,
+        "supportsTools": true,
+        "contextTokens": 1000000,
+        "maxOutputTokens": 8192,
+        "authorityTier": "high",
+        "costTier": "standard",
+        "latencyTier": "normal"
+      },
+      "request": {
+        "maxTokens": 8192,
+        "temperature": 0.5,
+        "timeoutS": 120,
+        "useResponses": false
+      }
+    }
+  },
+  "modelAliases": {
+    "phone": "local_fast",
+    "local": "local_fast",
+    "ollama": "ollama_chat",
+    "best": "cloud_reasoning",
+    "default": "cloud_reasoning"
+  },
+  "modelRouting": {
+    "defaultModel": "cloud_reasoning",
+    "localPreferredModel": "local_fast",
+    "fallbacks": {
+      "local_fast": ["cloud_reasoning"],
+      "ollama_chat": ["cloud_reasoning"],
+      "cloud_reasoning": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  },
+  "localRuntimes": {
+    "llamacpp_phone": {
+      "kind": "external_http",
+      "provider": "llamacpp_phone",
+      "expectedBaseURL": "http://127.0.0.1:8080/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:8080/health",
+      "notes": "Started separately in Termux/tmux."
+    },
+    "ollama_phone": {
+      "kind": "external_http",
+      "provider": "ollama_phone",
+      "expectedBaseURL": "http://127.0.0.1:11434/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:11434/api/tags",
+      "notes": "Started separately by Ollama."
+    }
+  }
+}
+```
+
+Important guardrails:
+
+- `supportsTools: false` means the model receives zero tool schemas.
+- Local phone models should stay `authorityTier: "low"` unless a later reviewed policy explicitly grants more.
+- Cloud fallback from a local model is denied by default. Set `allowCloudFallbackFromLocal: true` only when cloud fallback is acceptable for that mission.
+- Fallback is preflight-only by default. Frank does not retry or replay an agent turn after a provider request begins.
+- API keys are placeholders in examples. Do not paste real keys into docs, issues, chat transcripts, or support logs.
+
+Check the local and cloud routes:
+
+```sh
+./picobot models list
+./picobot models inspect phone
+./picobot models route --model phone --local
+./picobot models route --model best --requires-tools
+./picobot models health phone
+```
+
+## Start llama.cpp Phone Runtime
+
+Install or place a llama.cpp server build by your preferred Termux method. Frank only needs the OpenAI-compatible HTTP server.
+
+Example tmux session:
+
+```sh
+tmux new -s llama
+llama-server \
+  -m "$HOME/models/qwen3-1.7b-q8_0.gguf" \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+Detach with `Ctrl-b`, then `d`.
+
+Health check:
+
+```sh
+curl -sS http://127.0.0.1:8080/health
+./picobot models health phone
+```
+
+If `/health` is not supported by the server build you use, clear `localRuntimes.llamacpp_phone.healthURL` so `picobot models health phone` uses the configured OpenAI-compatible `/models` endpoint, or update the field to a supported local readiness URL.
+
+## Start Ollama Phone Runtime
+
+Run Ollama separately from Frank:
+
+```sh
+tmux new -s ollama
+ollama serve
+```
+
+In another Termux session:
+
+```sh
+ollama pull qwen3:1.7b
+./picobot models health ollama
+```
+
+The Ollama OpenAI-compatible API is expected at `http://127.0.0.1:11434/v1`; `localRuntimes.ollama_phone.healthURL` may use `http://127.0.0.1:11434/api/tags`.
 
 ## Start Gateway
 

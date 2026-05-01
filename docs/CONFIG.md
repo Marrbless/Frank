@@ -178,16 +178,18 @@ If no valid provider is configured, Picobot uses a **Stub** provider (echoes bac
 
 Frank V5 adds a model registry and deterministic resolver while preserving the legacy `providers.openai` configuration.
 
-Read-only inspection commands:
+Operator inspection commands:
 
 ```sh
 picobot models list
 picobot models inspect local_fast
 picobot models route --model best --requires-tools
 picobot models route --local
+picobot models health
+picobot models health local_fast
 ```
 
-The first V5 slice validates model refs, provider refs, aliases, request overrides, and fallback guardrails. It does not download models, start Ollama or llama.cpp, perform live health checks, or wire full mission step model policy yet. See [FRANK_V5_MODEL_CONTROL_SPEC.md](FRANK_V5_MODEL_CONTROL_SPEC.md).
+V5 does not download models, start Ollama, or start llama.cpp. Local runtimes remain external processes, usually managed in a separate Termux or tmux session. Runtime routing uses named providers and named model profiles; fallback is preflight-only and does not retry an agent turn after a provider request has started. See [FRANK_V5_MODEL_CONTROL_SPEC.md](FRANK_V5_MODEL_CONTROL_SPEC.md).
 
 ### Example V5 model registry
 
@@ -254,6 +256,32 @@ The first V5 slice validates model refs, provider refs, aliases, request overrid
         "reasoningEffort": ""
       }
     },
+    "ollama_chat": {
+      "provider": "ollama_phone",
+      "providerModel": "qwen3:1.7b",
+      "displayName": "Ollama phone chat",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "supportsStreaming": false,
+        "supportsResponsesAPI": false,
+        "supportsVision": false,
+        "supportsAudio": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false,
+        "reasoningEffort": ""
+      }
+    },
     "cloud_reasoning": {
       "provider": "openrouter",
       "providerModel": "google/gemini-2.5-flash",
@@ -279,20 +307,50 @@ The first V5 slice validates model refs, provider refs, aliases, request overrid
         "useResponses": false,
         "reasoningEffort": ""
       }
+    },
+    "cloud_openai": {
+      "provider": "openai",
+      "providerModel": "gpt-4.1-mini",
+      "displayName": "OpenAI cloud fallback",
+      "capabilities": {
+        "local": false,
+        "offline": false,
+        "supportsTools": true,
+        "supportsStreaming": false,
+        "supportsResponsesAPI": true,
+        "supportsVision": false,
+        "supportsAudio": false,
+        "contextTokens": 128000,
+        "maxOutputTokens": 8192,
+        "authorityTier": "high",
+        "costTier": "standard",
+        "latencyTier": "normal"
+      },
+      "request": {
+        "maxTokens": 8192,
+        "temperature": 0.3,
+        "timeoutS": 120,
+        "useResponses": true,
+        "reasoningEffort": ""
+      }
     }
   },
   "modelAliases": {
     "default": "cloud_reasoning",
     "phone": "local_fast",
     "local": "local_fast",
-    "best": "cloud_reasoning"
+    "ollama": "ollama_chat",
+    "best": "cloud_reasoning",
+    "openai": "cloud_openai"
   },
   "modelRouting": {
     "defaultModel": "cloud_reasoning",
     "localPreferredModel": "local_fast",
     "fallbacks": {
       "local_fast": ["cloud_reasoning"],
-      "cloud_reasoning": []
+      "ollama_chat": ["cloud_reasoning"],
+      "cloud_reasoning": [],
+      "cloud_openai": []
     },
     "allowCloudFallbackFromLocal": false,
     "allowLowerAuthorityFallback": false
@@ -321,6 +379,43 @@ The first V5 slice validates model refs, provider refs, aliases, request overrid
 Model and provider refs are normalized by trimming whitespace and lowercasing. They may contain only `a-z`, `0-9`, `_`, and `-`, and must not contain path separators. Alias chains are rejected. A local model profile defaults to low authority and no tool support if those fields are omitted.
 
 Existing configs that omit `models` keep legacy behavior: `agents.defaults.model` remains the raw provider model sent to `providers.openai`, and `-M some-provider-model` still works as a raw provider model override on the legacy provider.
+
+### V5 runtime notes
+
+- `providerModel` is the string sent to the selected backend.
+- `request.maxTokens`, `request.temperature`, `request.timeoutS`, `request.useResponses`, and `request.reasoningEffort` override the global defaults for that model profile.
+- `supportsTools: false` causes zero tool schemas to be sent to the provider.
+- Low and medium authority models receive only the tool schemas allowed by the current V5 authority gate; high authority remains bounded by mission `allowed_tools` and approvals.
+- `localRuntimes.*.healthURL` is used for local preflight readiness checks. The status JSON may show cached `model_health` values, but status reads do not perform network health probes.
+- Cloud fallback from a local model is denied unless `modelRouting.allowCloudFallbackFromLocal` or mission policy explicitly allows it.
+- Runtime fallback is preflight-only by default. Frank does not automatically replay a turn after a provider request starts.
+
+### Local runtime commands
+
+Start llama.cpp separately, then point `llamacpp_phone` at its OpenAI-compatible server:
+
+```sh
+llama-server \
+  -m "$HOME/models/qwen3-1.7b-q8_0.gguf" \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+Start Ollama separately, then point `ollama_phone` at `http://127.0.0.1:11434/v1`:
+
+```sh
+ollama serve
+ollama pull qwen3:1.7b
+```
+
+After the model server is running:
+
+```sh
+picobot models list
+picobot models inspect phone
+picobot models route --model phone --local
+picobot models health phone
+```
 
 ---
 

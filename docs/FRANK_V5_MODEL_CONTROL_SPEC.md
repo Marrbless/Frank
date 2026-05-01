@@ -237,15 +237,25 @@ picobot models health
 picobot models health local_fast
 ```
 
-V5-001 implements read-only config commands:
+Implemented operator commands use the currently supported flags:
 
 ```sh
 picobot models list
 picobot models inspect <model_ref_or_alias>
-picobot models route [--model X] [--local] [--requires-tools]
+picobot models route [--model X] [--local] [--requires-tools] [--allow-fallback]
+picobot models health
+picobot models health <model_ref_or_alias>
 ```
 
-Health checks are reserved for a later slice.
+Health behavior:
+
+- `models list` reads config only.
+- `models inspect` reads config only.
+- `models route` reads config and policy only.
+- `models health` may call provider endpoints.
+- Health checks use configured local runtime health URLs or OpenAI-compatible `/models` endpoints.
+- A future explicit probe flag may add tiny chat-completions probes for endpoints that lack `/models`.
+- Runtime status may show cached health/readiness results as `model_health`; status reads must not perform network health probes.
 
 Health status shape:
 
@@ -260,7 +270,7 @@ Health status shape:
 }
 ```
 
-Health output must not leak API keys or raw secret-bearing request data.
+Health output must not leak API keys, authorization headers, raw response bodies, prompts, message content, or tool arguments.
 
 ## Runtime Status
 
@@ -289,7 +299,7 @@ Do not include API keys, full request bodies, message content, tool arguments, o
 
 ## Local Runtime Profiles
 
-V5 models local runtimes as external services in config. The first slice does not manage processes.
+V5 models local runtimes as external services in config. Frank does not manage these processes in the current implementation.
 
 ```json
 {
@@ -313,6 +323,27 @@ V5 models local runtimes as external services in config. The first slice does no
   }
 }
 ```
+
+Phone-local runtime examples:
+
+```sh
+llama-server \
+  -m "$HOME/models/qwen3-1.7b-q8_0.gguf" \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+```sh
+ollama serve
+ollama pull qwen3:1.7b
+```
+
+The matching provider profiles should use local OpenAI-compatible URLs:
+
+- llama.cpp: `http://127.0.0.1:8080/v1`
+- Ollama: `http://127.0.0.1:11434/v1`
+
+Use `picobot models health phone` or `picobot models health ollama` to inspect readiness. These commands report refs, status, checked-at timestamp, error class, and fallback availability without printing API keys or provider response bodies.
 
 ## Determinism Requirements
 
