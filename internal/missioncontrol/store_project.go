@@ -16,6 +16,7 @@ type MissionStatusSnapshot struct {
 	RequiredAuthority AuthorityTier                 `json:"required_authority"`
 	RequiresApproval  bool                          `json:"requires_approval"`
 	AllowedTools      []string                      `json:"allowed_tools"`
+	Model             *OperatorModelRouteStatus     `json:"model,omitempty"`
 	Skills            *GovernedSkillSelectionStatus `json:"skills,omitempty"`
 	Runtime           *JobRuntimeState              `json:"runtime,omitempty"`
 	// RuntimeSummary is a convenience projection of direct OperatorStatus JSON.
@@ -31,6 +32,7 @@ type MissionStatusSnapshotOptions struct {
 	MissionRequired bool
 	MissionFile     string
 	UpdatedAt       time.Time
+	Model           *OperatorModelRouteStatus
 }
 
 func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusSnapshotOptions) (MissionStatusSnapshot, error) {
@@ -64,6 +66,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 		StepID:          runtimeState.ActiveStepID,
 		StepType:        "",
 		AllowedTools:    []string{},
+		Model:           CloneOperatorModelRouteStatus(opts.Model),
 		Runtime:         CloneJobRuntimeState(&runtimeState),
 		RuntimeControl:  CloneRuntimeControlContext(runtimeControl),
 		UpdatedAt:       now.Format(time.RFC3339Nano),
@@ -80,6 +83,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	}
 
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
+	summary = WithModelRouteStatus(summary, snapshot.Model)
 	if runtimeControl != nil {
 		selected := EffectiveSelectedSkills(&Job{SelectedSkills: runtimeControl.SelectedSkills}, &runtimeControl.Step)
 		if len(selected) > 0 {

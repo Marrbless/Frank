@@ -127,6 +127,7 @@ func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLo
 	if statusFile == "" {
 		return nil
 	}
+	modelStatus := missionStatusModelRouteStatus(ag)
 
 	storeRoot := resolveMissionStoreRoot(cmd)
 	if storeRoot == "" {
@@ -153,7 +154,7 @@ func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLo
 	}
 
 	missionRequired, _ := cmd.Flags().GetBool("mission-required")
-	return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, now)
+	return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, now, modelStatus)
 }
 
 func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
@@ -352,6 +353,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		StepID:          "",
 		StepType:        "",
 		AllowedTools:    []string{},
+		Model:           missionStatusModelRouteStatus(ag),
 		Runtime:         runtimeState,
 		RuntimeControl:  runtimeControl,
 		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
@@ -392,13 +394,38 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		if snapshot.Skills != nil {
 			summary = missioncontrol.WithGovernedSkillSelectionStatus(summary, *snapshot.Skills)
 		}
+		summary = missioncontrol.WithModelRouteStatus(summary, snapshot.Model)
 		snapshot.RuntimeSummary = &summary
 	}
 
 	return writeMissionStatusSnapshotAtomic(path, snapshot)
 }
 
-func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time) error {
+func missionStatusModelRouteStatus(ag *agent.AgentLoop) *missioncontrol.OperatorModelRouteStatus {
+	if ag == nil {
+		return nil
+	}
+	route, ok := ag.ModelRoute()
+	if !ok {
+		return nil
+	}
+	return &missioncontrol.OperatorModelRouteStatus{
+		SelectedModelRef: route.SelectedModelRef,
+		ProviderRef:      route.ProviderRef,
+		ProviderModel:    route.ProviderModel,
+		SelectionReason:  route.SelectionReason,
+		FallbackDepth:    route.FallbackDepth,
+		PolicyID:         route.PolicyID,
+		Capabilities: missioncontrol.OperatorModelCapabilitiesStatus{
+			Local:         route.Capabilities.Local,
+			Offline:       route.Capabilities.Offline,
+			SupportsTools: route.Capabilities.SupportsTools,
+			AuthorityTier: string(route.Capabilities.AuthorityTier),
+		},
+	}
+}
+
+func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time, modelStatus ...*missioncontrol.OperatorModelRouteStatus) error {
 	if path == "" {
 		return nil
 	}
@@ -418,11 +445,19 @@ func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeR
 		MissionRequired: missionRequired,
 		MissionFile:     missionFile,
 		UpdatedAt:       now,
+		Model:           firstMissionStatusModelRouteStatus(modelStatus),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to build committed mission status snapshot from durable store %q: %w", storeRoot, err)
 	}
 	return writeMissionStatusSnapshotAtomic(path, snapshot)
+}
+
+func firstMissionStatusModelRouteStatus(modelStatus []*missioncontrol.OperatorModelRouteStatus) *missioncontrol.OperatorModelRouteStatus {
+	if len(modelStatus) == 0 {
+		return nil
+	}
+	return modelStatus[0]
 }
 
 func intersectAllowedTools(ec missioncontrol.ExecutionContext) []string {

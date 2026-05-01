@@ -31,6 +31,7 @@ type OperatorStatusSummary struct {
 	State                                        JobState                                                    `json:"state"`
 	ActiveStepID                                 string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                                 []string                                                    `json:"allowed_tools,omitempty"`
+	Model                                        *OperatorModelRouteStatus                                   `json:"model,omitempty"`
 	Skills                                       *GovernedSkillSelectionStatus                               `json:"skills,omitempty"`
 	RuntimePackIdentity                          *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	V4Summary                                    *OperatorV4SummaryStatus                                    `json:"v4_summary,omitempty"`
@@ -108,6 +109,23 @@ type OperatorDeferredSchedulerTriggerStatus struct {
 	Message        string `json:"message,omitempty"`
 	FireAt         string `json:"fire_at"`
 	DeferredAt     string `json:"deferred_at"`
+}
+
+type OperatorModelRouteStatus struct {
+	SelectedModelRef string                          `json:"selected_model_ref"`
+	ProviderRef      string                          `json:"provider_ref"`
+	ProviderModel    string                          `json:"provider_model"`
+	SelectionReason  string                          `json:"selection_reason"`
+	FallbackDepth    int                             `json:"fallback_depth"`
+	PolicyID         string                          `json:"policy_id"`
+	Capabilities     OperatorModelCapabilitiesStatus `json:"capabilities"`
+}
+
+type OperatorModelCapabilitiesStatus struct {
+	Local         bool   `json:"local"`
+	Offline       bool   `json:"offline"`
+	SupportsTools bool   `json:"supports_tools"`
+	AuthorityTier string `json:"authority_tier"`
 }
 
 type OperatorRuntimePackIdentityStatus struct {
@@ -714,6 +732,19 @@ func WithDeferredSchedulerTriggers(summary OperatorStatusSummary, deferred []Ope
 	}
 	summary.DeferredSchedulerTriggers = append([]OperatorDeferredSchedulerTriggerStatus(nil), deferred...)
 	return summary
+}
+
+func WithModelRouteStatus(summary OperatorStatusSummary, model *OperatorModelRouteStatus) OperatorStatusSummary {
+	summary.Model = CloneOperatorModelRouteStatus(model)
+	return summary
+}
+
+func CloneOperatorModelRouteStatus(model *OperatorModelRouteStatus) *OperatorModelRouteStatus {
+	if model == nil {
+		return nil
+	}
+	clone := *model
+	return &clone
 }
 
 func withStoreRootStatus(summary OperatorStatusSummary, root string, apply func(*OperatorStatusSummary, string)) OperatorStatusSummary {

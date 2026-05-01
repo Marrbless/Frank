@@ -26,6 +26,7 @@ func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "RequiredAuthority", tag: `json:"required_authority"`},
 		{name: "RequiresApproval", tag: `json:"requires_approval"`},
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
+		{name: "Model", tag: `json:"model,omitempty"`},
 		{name: "UpdatedAt", tag: `json:"updated_at"`},
 	}
 
@@ -41,6 +42,45 @@ func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
 		if string(field.Tag) != want.tag {
 			t.Fatalf("GatewayStatusSnapshot field[%d].Tag = %q, want %q", i, string(field.Tag), want.tag)
 		}
+	}
+}
+
+func TestProjectGatewayStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
+	t.Parallel()
+
+	snapshot := MissionStatusSnapshot{
+		JobID:        "job-1",
+		AllowedTools: []string{"read"},
+		Model: &OperatorModelRouteStatus{
+			SelectedModelRef: "local_fast",
+			ProviderRef:      "llamacpp_phone",
+			ProviderModel:    "qwen3-test-local",
+			SelectionReason:  "mission_step_default",
+			FallbackDepth:    0,
+			PolicyID:         "default",
+			Capabilities: OperatorModelCapabilitiesStatus{
+				Local:         true,
+				Offline:       true,
+				SupportsTools: false,
+				AuthorityTier: "low",
+			},
+		},
+	}
+
+	projected := ProjectGatewayStatusSnapshot(snapshot)
+	if projected.Model == nil {
+		t.Fatal("GatewayStatusSnapshot.Model = nil, want route")
+	}
+	if projected.Model.SelectedModelRef != "local_fast" || projected.Model.ProviderRef != "llamacpp_phone" || projected.Model.ProviderModel != "qwen3-test-local" {
+		t.Fatalf("GatewayStatusSnapshot.Model = %#v, want safe route fields", projected.Model)
+	}
+	if !projected.Model.Capabilities.Local || !projected.Model.Capabilities.Offline || projected.Model.Capabilities.SupportsTools {
+		t.Fatalf("GatewayStatusSnapshot.Model.Capabilities = %#v, want local/offline/no-tools", projected.Model.Capabilities)
+	}
+
+	snapshot.Model.ProviderModel = "mutated"
+	if projected.Model.ProviderModel != "qwen3-test-local" {
+		t.Fatalf("GatewayStatusSnapshot.Model.ProviderModel mutated to %q", projected.Model.ProviderModel)
 	}
 }
 

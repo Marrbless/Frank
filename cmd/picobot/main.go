@@ -1412,7 +1412,7 @@ func installMissionRuntimeChangeHookWithExtension(cmd *cobra.Command, ag *agent.
 			if strings.TrimSpace(jobID) == "" && job != nil {
 				jobID = job.ID
 			}
-			return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now())
+			return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now(), missionStatusModelRouteStatus(ag))
 		})
 		ag.SetMissionRuntimeChangeHook(func() {
 			defer func() {

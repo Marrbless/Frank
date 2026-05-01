@@ -1175,6 +1175,47 @@ func TestBuildCommittedMissionStatusSnapshotDeterministicallyOrdersDeferredSched
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesModelRouteStatus(t *testing.T) {
+	t.Parallel()
+
+	storeFixture := writeMissionStoreRuntimeFixture(t)
+	model := &OperatorModelRouteStatus{
+		SelectedModelRef: "cloud_reasoning",
+		ProviderRef:      "openrouter",
+		ProviderModel:    "google/gemini-test",
+		SelectionReason:  "routing_default",
+		FallbackDepth:    0,
+		PolicyID:         "default",
+		Capabilities: OperatorModelCapabilitiesStatus{
+			Local:         false,
+			Offline:       false,
+			SupportsTools: true,
+			AuthorityTier: "high",
+		},
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(storeFixture.root, storeFixture.job.ID, MissionStatusSnapshotOptions{
+		MissionRequired: true,
+		MissionFile:     "mission.json",
+		UpdatedAt:       storeFixture.now,
+		Model:           model,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+	if snapshot.Model == nil || snapshot.Model.ProviderModel != "google/gemini-test" {
+		t.Fatalf("snapshot.Model = %#v, want model route", snapshot.Model)
+	}
+	if snapshot.RuntimeSummary == nil || snapshot.RuntimeSummary.Model == nil || snapshot.RuntimeSummary.Model.SelectedModelRef != "cloud_reasoning" {
+		t.Fatalf("snapshot.RuntimeSummary.Model = %#v, want model route", snapshot.RuntimeSummary)
+	}
+
+	model.ProviderModel = "mutated"
+	if snapshot.Model.ProviderModel != "google/gemini-test" {
+		t.Fatalf("snapshot.Model.ProviderModel mutated to %q", snapshot.Model.ProviderModel)
+	}
+}
+
 func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -1192,6 +1233,7 @@ func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "RequiredAuthority", tag: `json:"required_authority"`},
 		{name: "RequiresApproval", tag: `json:"requires_approval"`},
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
+		{name: "Model", tag: `json:"model,omitempty"`},
 		{name: "Skills", tag: `json:"skills,omitempty"`},
 		{name: "Runtime", tag: `json:"runtime,omitempty"`},
 		{name: "RuntimeSummary", tag: `json:"runtime_summary,omitempty"`},

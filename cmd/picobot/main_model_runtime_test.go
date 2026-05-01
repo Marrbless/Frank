@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/local/picobot/internal/agent"
+	"github.com/local/picobot/internal/chat"
 	"github.com/local/picobot/internal/config"
 	"github.com/local/picobot/internal/providers"
 )
@@ -168,6 +172,58 @@ func TestAgentCommandSuppressesToolsForNoToolModel(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "local ok") {
 		t.Fatalf("stdout = %q, want provider response", stdout.String())
+	}
+}
+
+func TestMissionStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
+	const secret = "status-secret-key"
+	cfg := v5RuntimeTestConfig("https://openrouter.example/v1")
+	cfg.Providers.Named["openrouter"] = config.ProviderConfig{
+		Type:    config.ProviderTypeOpenAICompatible,
+		APIKey:  secret,
+		APIBase: "https://openrouter.example/v1",
+	}
+	selection, err := resolveRuntimeModelSelection(cfg, "best")
+	if err != nil {
+		t.Fatalf("resolveRuntimeModelSelection() error = %v", err)
+	}
+	ag := agent.NewAgentLoop(chat.NewHub(10), selection.Provider, selection.Route.ProviderModel, 3, t.TempDir(), nil)
+	defer ag.Close()
+	ag.SetModelRoute(selection.Route)
+	if err := ag.ActivateMissionStep(testMissionBootstrapJob(), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	statusPath := filepath.Join(t.TempDir(), "mission-status.json")
+	if err := writeMissionStatusSnapshot(statusPath, "mission.json", ag, time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("writeMissionStatusSnapshot() error = %v", err)
+	}
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("mission status leaked API key: %s", data)
+	}
+
+	var snapshot missionStatusSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if snapshot.Model == nil {
+		t.Fatal("snapshot.Model = nil, want route")
+	}
+	if snapshot.Model.SelectedModelRef != "cloud_reasoning" || snapshot.Model.ProviderRef != "openrouter" || snapshot.Model.ProviderModel != "google/gemini-test" {
+		t.Fatalf("snapshot.Model = %#v, want safe route fields", snapshot.Model)
+	}
+	if snapshot.Model.Capabilities.AuthorityTier != "high" || !snapshot.Model.Capabilities.SupportsTools {
+		t.Fatalf("snapshot.Model.Capabilities = %#v, want high tool-capable model", snapshot.Model.Capabilities)
+	}
+	if snapshot.RuntimeSummary == nil || snapshot.RuntimeSummary.Model == nil {
+		t.Fatalf("snapshot.RuntimeSummary.Model = %#v, want route", snapshot.RuntimeSummary)
+	}
+	if snapshot.RuntimeSummary.Model.ProviderModel != "google/gemini-test" {
+		t.Fatalf("runtime_summary.model.provider_model = %q, want google/gemini-test", snapshot.RuntimeSummary.Model.ProviderModel)
 	}
 }
 
