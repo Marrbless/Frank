@@ -343,6 +343,42 @@ func TestModelsPresetsCommandsExposeCatalog(t *testing.T) {
 	}
 }
 
+func TestModelsSetupDryRunLlamaCPPRegisterExisting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	server := filepath.Join(home, "llama-server")
+	model := filepath.Join(home, "qwen.gguf")
+	if err := os.WriteFile(server, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(server) error = %v", err)
+	}
+	if err := os.WriteFile(model, []byte("model"), 0o600); err != nil {
+		t.Fatalf("WriteFile(model) error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{
+		"models", "setup",
+		"--dry-run",
+		"--preset", "phone-llamacpp-tiny",
+		"--config", filepath.Join(home, ".picobot", "config.json"),
+		"--register-existing",
+		"--llamacpp-server", server,
+		"--gguf-model", model,
+	})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models setup llama.cpp dry-run error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"status: planned", "register-llamacpp-existing", "--host 127.0.0.1", server, model} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("models setup output = %q, want %q", out, want)
+		}
+	}
+}
+
 func writeModelsCommandConfig(t *testing.T) {
 	t.Helper()
 

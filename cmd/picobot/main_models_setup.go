@@ -14,12 +14,15 @@ import (
 )
 
 type modelsSetupOptions struct {
-	DryRun         bool
-	NonInteractive bool
-	Preset         string
-	Approve        bool
-	ConfigPath     string
-	Force          bool
+	DryRun           bool
+	NonInteractive   bool
+	Preset           string
+	Approve          bool
+	ConfigPath       string
+	Force            bool
+	RegisterExisting bool
+	LlamaCPPServer   string
+	GGUFModel        string
 }
 
 func newModelsSetupCmd() *cobra.Command {
@@ -38,6 +41,9 @@ func newModelsSetupCmd() *cobra.Command {
 	setupCmd.Flags().BoolVar(&opts.Approve, "approve", false, "Execute a fully resolved approved plan in later V6 slices")
 	setupCmd.Flags().StringVar(&opts.ConfigPath, "config", "", "Config file path to plan against")
 	setupCmd.Flags().BoolVar(&opts.Force, "force", false, "Allow approved overwrites after backup in later V6 slices")
+	setupCmd.Flags().BoolVar(&opts.RegisterExisting, "register-existing", false, "Register existing local runtime/model assets")
+	setupCmd.Flags().StringVar(&opts.LlamaCPPServer, "llamacpp-server", "", "Path to existing llama-server binary")
+	setupCmd.Flags().StringVar(&opts.GGUFModel, "gguf-model", "", "Path to existing GGUF model")
 	return setupCmd
 }
 
@@ -139,13 +145,20 @@ func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 		opts.Preset = preset
 	}
 	env := modelsetup.DetectEnvironment(opts.ConfigPath, modelsetup.DefaultDetector())
+	registerBehavior := ""
+	if opts.RegisterExisting {
+		registerBehavior = "provided"
+	}
 	plan, err := modelsetup.BuildPlan(env, modelsetup.OperatorChoices{
-		PresetName:     opts.Preset,
-		ConfigPath:     opts.ConfigPath,
-		NonInteractive: opts.NonInteractive,
-		Approve:        opts.Approve,
-		DryRun:         opts.DryRun,
-		Force:          opts.Force,
+		PresetName:               opts.Preset,
+		ConfigPath:               opts.ConfigPath,
+		NonInteractive:           opts.NonInteractive,
+		Approve:                  opts.Approve,
+		DryRun:                   opts.DryRun,
+		Force:                    opts.Force,
+		RegisterExistingBehavior: registerBehavior,
+		LlamaCPPServerPath:       opts.LlamaCPPServer,
+		GGUFModelPath:            opts.GGUFModel,
 	})
 	if err != nil {
 		return err

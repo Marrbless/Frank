@@ -112,6 +112,8 @@ type OperatorChoices struct {
 	NonInteractive           bool
 	Approve                  bool
 	DryRun                   bool
+	LlamaCPPServerPath       string
+	GGUFModelPath            string
 }
 
 type Plan struct {

@@ -100,7 +100,7 @@ func BuildPlan(env EnvSnapshot, choices OperatorChoices) (Plan, error) {
 		}
 	}
 
-	plan.ConfigPatch = buildConfigPatch(preset, plan)
+	plan.ConfigPatch = buildConfigPatch(preset, plan, choices)
 	plan.Steps = buildPlanSteps(preset, plan, choices)
 	if len(plan.BlockedReasons) > 0 {
 		plan.Status = PlanStatusBlocked
@@ -111,7 +111,7 @@ func BuildPlan(env EnvSnapshot, choices OperatorChoices) (Plan, error) {
 	return plan, nil
 }
 
-func buildConfigPatch(preset Preset, plan Plan) *ConfigPatch {
+func buildConfigPatch(preset Preset, plan Plan, choices OperatorChoices) *ConfigPatch {
 	provider := config.ProviderConfig{
 		Type:    config.ProviderTypeOpenAICompatible,
 		APIBase: preset.BaseURL,
@@ -143,12 +143,18 @@ func buildConfigPatch(preset Preset, plan Plan) *ConfigPatch {
 	runtime := config.LocalRuntimeConfig{}
 	runtimeRef := ""
 	if preset.RuntimeKind != RuntimeKindCloud {
+		startCommand := ""
+		if preset.RuntimeKind == RuntimeKindLlamaCPP && choices.LlamaCPPServerPath != "" && choices.GGUFModelPath != "" {
+			if reg, err := BuildLlamaCPPRegistration(choices.LlamaCPPServerPath, choices.GGUFModelPath, plan.BindAddress, plan.Port); err == nil {
+				startCommand = reg.Command
+			}
+		}
 		runtimeRef = plan.ProviderRef
 		runtime = config.LocalRuntimeConfig{
 			Kind:            "external_http",
 			Provider:        plan.ProviderRef,
 			ExpectedBaseURL: preset.BaseURL,
-			StartCommand:    "",
+			StartCommand:    startCommand,
 			HealthURL:       preset.HealthURL,
 			Notes:           "Configured by Frank V6 setup wizard.",
 		}
@@ -315,13 +321,20 @@ func addRuntimeSetupSteps(steps *[]PlanStep, preset Preset, plan Plan, choices O
 		})
 	case RuntimeKindLlamaCPP:
 		status := PlanStatusManualRequired
-		if choices.RegisterExistingBehavior == "provided" {
+		reg, regErr := BuildLlamaCPPRegistration(choices.LlamaCPPServerPath, choices.GGUFModelPath, plan.BindAddress, plan.Port)
+		if choices.RegisterExistingBehavior == "provided" && regErr == nil {
 			status = PlanStatusPlanned
+		}
+		manualText := "Provide existing llama-server and GGUF model paths; automatic downloads are blocked until manifests exist."
+		if choices.RegisterExistingBehavior == "provided" && regErr != nil {
+			manualText = regErr.Error()
 		}
 		*steps = append(*steps, PlanStep{
 			ID:                     "register-llamacpp-existing",
 			Summary:                "Register existing llama-server binary and GGUF model",
 			SideEffect:             SideEffectNone,
+			Command:                llamaCPPCommandArgs(reg),
+			FilesToRead:            llamaCPPFilesToRead(reg),
 			RuntimePort:            plan.Port,
 			RuntimeBindAddress:     plan.BindAddress,
 			ApprovalRequired:       false,
@@ -330,7 +343,7 @@ func addRuntimeSetupSteps(steps *[]PlanStep, preset Preset, plan Plan, choices O
 			RollbackCleanup:        "none",
 			RedactionPolicy:        plan.RedactionPolicy,
 			Status:                 status,
-			ManualInstructions:     manualInstructionsIf(status == PlanStatusManualRequired, "Provide existing llama-server and GGUF model paths; automatic downloads are blocked until manifests exist."),
+			ManualInstructions:     manualInstructionsIf(status == PlanStatusManualRequired, manualText),
 			DiagnosticsPriority:    15,
 			PreserveWhenTruncating: status == PlanStatusManualRequired,
 		})
@@ -427,6 +440,20 @@ func manualInstructionsIf(include bool, text string) []string {
 		return nil
 	}
 	return []string{text}
+}
+
+func llamaCPPCommandArgs(reg LlamaCPPRegistration) []string {
+	if reg.ServerPath == "" || reg.ModelPath == "" || reg.BindAddress == "" || reg.Port <= 0 {
+		return nil
+	}
+	return []string{reg.ServerPath, "-m", reg.ModelPath, "--host", reg.BindAddress, "--port", fmt.Sprintf("%d", reg.Port)}
+}
+
+func llamaCPPFilesToRead(reg LlamaCPPRegistration) []string {
+	if reg.ServerPath == "" || reg.ModelPath == "" {
+		return nil
+	}
+	return []string{reg.ServerPath, reg.ModelPath}
 }
 
 func sortedStrings(values []string) []string {
