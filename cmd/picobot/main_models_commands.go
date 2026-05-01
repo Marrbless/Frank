@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/local/picobot/internal/config"
+	"github.com/local/picobot/internal/providers"
 )
 
 func newModelsCmd() *cobra.Command {
@@ -122,20 +124,59 @@ func newModelsCmd() *cobra.Command {
 	routeCmd.Flags().Bool("requires-tools", false, "Require a model that supports tools")
 	routeCmd.Flags().Bool("allow-fallback", false, "Allow configured fallback routes")
 
-	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd)
+	healthCmd := &cobra.Command{
+		Use:   "health [model_ref_or_alias]",
+		Short: "Check configured model provider health",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, reg, err := loadConfigAndModelRegistryForCommand()
+			if err != nil {
+				return err
+			}
+			modelRefs := modelCommandSortedKeys(reg.Models)
+			if len(args) == 1 {
+				ref, err := reg.ResolveModelRef(args[0])
+				if err != nil {
+					return err
+				}
+				modelRefs = []string{ref}
+			}
+			for i, ref := range modelRefs {
+				if i > 0 {
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				result, err := providers.CheckModelHealth(cmd.Context(), reg, ref, providers.ModelHealthCheckOptions{
+					Now:           time.Now().UTC(),
+					LocalRuntimes: cfg.LocalRuntimes,
+				})
+				if err != nil {
+					return err
+				}
+				printModelHealth(cmd, result)
+			}
+			return nil
+		},
+	}
+
+	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd, healthCmd)
 	return modelsCmd
 }
 
 func loadModelRegistryForCommand() (config.ModelRegistry, error) {
+	_, reg, err := loadConfigAndModelRegistryForCommand()
+	return reg, err
+}
+
+func loadConfigAndModelRegistryForCommand() (config.Config, config.ModelRegistry, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		return config.ModelRegistry{}, fmt.Errorf("failed to load config: %w", err)
+		return config.Config{}, config.ModelRegistry{}, fmt.Errorf("failed to load config: %w", err)
 	}
 	reg, err := config.BuildModelRegistry(cfg)
 	if err != nil {
-		return config.ModelRegistry{}, err
+		return config.Config{}, config.ModelRegistry{}, err
 	}
-	return reg, nil
+	return cfg, reg, nil
 }
 
 func printModelRoute(cmd *cobra.Command, route config.ModelRoute) {
@@ -160,6 +201,17 @@ func printModelRoute(cmd *cobra.Command, route config.ModelRoute) {
 	if route.Request.ReasoningEffort != "" {
 		fmt.Fprintf(cmd.OutOrStdout(), "request_reasoning_effort: %s\n", route.Request.ReasoningEffort)
 	}
+}
+
+func printModelHealth(cmd *cobra.Command, result providers.ModelHealthResult) {
+	fmt.Fprintf(cmd.OutOrStdout(), "model_ref: %s\n", result.ModelRef)
+	fmt.Fprintf(cmd.OutOrStdout(), "provider_ref: %s\n", result.ProviderRef)
+	fmt.Fprintf(cmd.OutOrStdout(), "status: %s\n", result.Status)
+	fmt.Fprintf(cmd.OutOrStdout(), "last_checked_at: %s\n", result.LastCheckedAt)
+	if result.LastErrorClass != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "last_error_class: %s\n", result.LastErrorClass)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "fallback_available: %t\n", result.FallbackAvailable)
 }
 
 func modelCommandSortedKeys[V any](m map[string]V) []string {

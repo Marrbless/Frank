@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,6 +128,73 @@ func TestConfigValidateCommandRejectsInvalidModelRegistry(t *testing.T) {
 	}
 }
 
+func TestModelsHealthCommandResolvesAliasWithoutSecrets(t *testing.T) {
+	const secret = "health-router-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"qwen3-test"}]}`))
+	}))
+	defer server.Close()
+	writeModelsHealthCommandConfig(t, server.URL+"/v1", secret)
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "health", "phone"})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models health error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"model_ref: local_fast", "provider_ref: llamacpp_phone", "status: healthy", "fallback_available: true"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("models health output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("models health output leaked API key: %q", out)
+	}
+}
+
+func TestModelsHealthCommandSupportsLegacyProfile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"legacy"}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Model = "legacy-model"
+	cfg.Models = nil
+	cfg.ModelAliases = nil
+	cfg.ModelRouting = config.ModelRoutingConfig{}
+	cfg.Providers.OpenAI = &config.ProviderConfig{APIKey: "legacy-health-secret", APIBase: server.URL + "/v1"}
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "health", "legacy_default"})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models health error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"model_ref: legacy_default", "provider_ref: openai", "status: healthy"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("models health output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "legacy-health-secret") {
+		t.Fatalf("models health output leaked API key: %q", out)
+	}
+}
+
 func writeModelsCommandConfig(t *testing.T) {
 	t.Helper()
 
@@ -174,6 +243,50 @@ func writeModelsCommandConfig(t *testing.T) {
 		DefaultModel:        "cloud_reasoning",
 		LocalPreferredModel: "local_fast",
 		Fallbacks:           map[string][]string{"local_fast": {"cloud_reasoning"}, "cloud_reasoning": {}},
+	}
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+}
+
+func writeModelsHealthCommandConfig(t *testing.T, apiBase string, secret string) {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Model = "local_fast"
+	cfg.Providers.Named = map[string]config.ProviderConfig{
+		"llamacpp_phone": {Type: config.ProviderTypeOpenAICompatible, APIKey: secret, APIBase: apiBase},
+		"openrouter":     {Type: config.ProviderTypeOpenAICompatible, APIKey: "router-secret", APIBase: "https://openrouter.example/v1"},
+	}
+	cfg.Models = map[string]config.ModelProfileConfig{
+		"local_fast": {
+			Provider:      "llamacpp_phone",
+			ProviderModel: "qwen3-test-local",
+			Capabilities: config.ModelCapabilities{
+				Local:         true,
+				Offline:       true,
+				AuthorityTier: config.ModelAuthorityLow,
+				CostTier:      config.ModelCostFree,
+				LatencyTier:   config.ModelLatencySlow,
+			},
+		},
+		"cloud_reasoning": {
+			Provider:      "openrouter",
+			ProviderModel: "google/gemini-test",
+			Capabilities: config.ModelCapabilities{
+				SupportsTools: true,
+				AuthorityTier: config.ModelAuthorityHigh,
+				CostTier:      config.ModelCostStandard,
+				LatencyTier:   config.ModelLatencyNormal,
+			},
+		},
+	}
+	cfg.ModelAliases = map[string]string{"phone": "local_fast"}
+	cfg.ModelRouting = config.ModelRoutingConfig{
+		DefaultModel: "local_fast",
+		Fallbacks:    map[string][]string{"local_fast": {"cloud_reasoning"}},
 	}
 	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
