@@ -1,0 +1,65 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "ollama",
+      "maxTokens": 4096,
+      "temperature": 0.3,
+      "maxToolIterations": 5,
+      "requestTimeoutS": 300
+    }
+  },
+  "providers": {
+    "ollama_phone": {
+      "type": "openai_compatible",
+      "apiKey": "ollama",
+      "apiBase": "http://127.0.0.1:11434/v1"
+    }
+  },
+  "models": {
+    "ollama_chat": {
+      "provider": "ollama_phone",
+      "providerModel": "qwen3:1.7b",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false
+      }
+    }
+  },
+  "modelAliases": {
+    "ollama": "ollama_chat",
+    "phone": "ollama_chat",
+    "default": "ollama_chat"
+  },
+  "modelRouting": {
+    "defaultModel": "ollama_chat",
+    "localPreferredModel": "ollama_chat",
+    "fallbacks": {
+      "ollama_chat": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  },
+  "localRuntimes": {
+    "ollama_phone": {
+      "kind": "external_http",
+      "provider": "ollama_phone",
+      "expectedBaseURL": "http://127.0.0.1:11434/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:11434/api/tags",
+      "notes": "Started separately by Ollama."
+    }
+  }
+}

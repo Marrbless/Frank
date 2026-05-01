@@ -1,0 +1,65 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "phone",
+      "maxTokens": 4096,
+      "temperature": 0.3,
+      "maxToolIterations": 5,
+      "requestTimeoutS": 300
+    }
+  },
+  "providers": {
+    "llamacpp_phone": {
+      "type": "openai_compatible",
+      "apiKey": "not-needed",
+      "apiBase": "http://127.0.0.1:8080/v1"
+    }
+  },
+  "models": {
+    "local_fast": {
+      "provider": "llamacpp_phone",
+      "providerModel": "qwen3-1.7b-q8_0",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false
+      }
+    }
+  },
+  "modelAliases": {
+    "phone": "local_fast",
+    "local": "local_fast",
+    "default": "local_fast"
+  },
+  "modelRouting": {
+    "defaultModel": "local_fast",
+    "localPreferredModel": "local_fast",
+    "fallbacks": {
+      "local_fast": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  },
+  "localRuntimes": {
+    "llamacpp_phone": {
+      "kind": "external_http",
+      "provider": "llamacpp_phone",
+      "expectedBaseURL": "http://127.0.0.1:8080/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:8080/health",
+      "notes": "Started separately in Termux/tmux."
+    }
+  }
+}

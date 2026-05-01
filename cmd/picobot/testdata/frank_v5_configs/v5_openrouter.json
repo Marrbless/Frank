@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "best",
+      "maxTokens": 8192,
+      "temperature": 0.7,
+      "maxToolIterations": 5,
+      "requestTimeoutS": 120
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_OPENROUTER_KEY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    }
+  },
+  "models": {
+    "cloud_reasoning": {
+      "provider": "openrouter",
+      "providerModel": "google/gemini-2.5-flash",
+      "capabilities": {
+        "local": false,
+        "offline": false,
+        "supportsTools": true,
+        "contextTokens": 1000000,
+        "maxOutputTokens": 8192,
+        "authorityTier": "high",
+        "costTier": "standard",
+        "latencyTier": "normal"
+      },
+      "request": {
+        "maxTokens": 777,
+        "temperature": 0.42,
+        "timeoutS": 120,
+        "useResponses": false
+      }
+    }
+  },
+  "modelAliases": {
+    "best": "cloud_reasoning",
+    "default": "cloud_reasoning"
+  },
+  "modelRouting": {
+    "defaultModel": "cloud_reasoning",
+    "fallbacks": {
+      "cloud_reasoning": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  }
+}

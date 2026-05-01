@@ -1,0 +1,91 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "phone",
+      "maxTokens": 4096,
+      "temperature": 0.3,
+      "maxToolIterations": 5,
+      "requestTimeoutS": 300
+    }
+  },
+  "providers": {
+    "llamacpp_phone": {
+      "type": "openai_compatible",
+      "apiKey": "not-needed",
+      "apiBase": "http://127.0.0.1:8080/v1"
+    },
+    "openrouter": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_OPENROUTER_KEY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    }
+  },
+  "models": {
+    "local_fast": {
+      "provider": "llamacpp_phone",
+      "providerModel": "qwen3-1.7b-q8_0",
+      "capabilities": {
+        "local": true,
+        "offline": true,
+        "supportsTools": false,
+        "contextTokens": 4096,
+        "maxOutputTokens": 1024,
+        "authorityTier": "low",
+        "costTier": "free",
+        "latencyTier": "slow"
+      },
+      "request": {
+        "maxTokens": 1024,
+        "temperature": 0.3,
+        "timeoutS": 300,
+        "useResponses": false
+      }
+    },
+    "cloud_reasoning": {
+      "provider": "openrouter",
+      "providerModel": "google/gemini-2.5-flash",
+      "capabilities": {
+        "local": false,
+        "offline": false,
+        "supportsTools": true,
+        "contextTokens": 1000000,
+        "maxOutputTokens": 8192,
+        "authorityTier": "high",
+        "costTier": "standard",
+        "latencyTier": "normal"
+      },
+      "request": {
+        "maxTokens": 8192,
+        "temperature": 0.5,
+        "timeoutS": 120,
+        "useResponses": false
+      }
+    }
+  },
+  "modelAliases": {
+    "phone": "local_fast",
+    "best": "cloud_reasoning",
+    "default": "local_fast"
+  },
+  "modelRouting": {
+    "defaultModel": "local_fast",
+    "localPreferredModel": "local_fast",
+    "fallbacks": {
+      "local_fast": ["cloud_reasoning"],
+      "cloud_reasoning": []
+    },
+    "allowCloudFallbackFromLocal": false,
+    "allowLowerAuthorityFallback": false
+  },
+  "localRuntimes": {
+    "llamacpp_phone": {
+      "kind": "external_http",
+      "provider": "llamacpp_phone",
+      "expectedBaseURL": "http://127.0.0.1:8080/v1",
+      "startCommand": "",
+      "healthURL": "http://127.0.0.1:8080/health",
+      "notes": "Started separately in Termux/tmux."
+    }
+  }
+}

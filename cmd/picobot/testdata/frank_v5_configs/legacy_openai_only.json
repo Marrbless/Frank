@@ -1,0 +1,19 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.picobot/workspace",
+      "model": "legacy-fixture-model",
+      "maxTokens": 2048,
+      "temperature": 0.2,
+      "maxToolIterations": 5,
+      "requestTimeoutS": 30
+    }
+  },
+  "providers": {
+    "openai": {
+      "type": "openai_compatible",
+      "apiKey": "REPLACE_WITH_REAL_LEGACY_KEY",
+      "apiBase": "https://api.openai.com/v1"
+    }
+  }
+}
