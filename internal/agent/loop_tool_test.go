@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -490,6 +491,114 @@ func TestAgentLoopActivateMissionStepAndActiveMissionStep(t *testing.T) {
 
 	if stored.Step.AllowedTools[0] != "read" {
 		t.Fatalf("stored ActiveMissionStep().Step.AllowedTools[0] = %q, want %q", stored.Step.AllowedTools[0], "read")
+	}
+}
+
+func TestAgentLoopLowAuthorityModelReceivesNoDangerousToolSchemas(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.tools.Register(&failingMCPTool{})
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityLow))
+
+	allowed := []string{"message", "read_memory", "list_memory", "web_search", "exec", "filesystem", "mcp_demo_lookup"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if got := toolDefinitionNames(ag.activeToolDefinitions()); len(got) != 0 {
+		t.Fatalf("activeToolDefinitions() = %#v, want no low-authority dangerous tools", got)
+	}
+}
+
+func TestAgentLoopMediumAuthorityModelReceivesReadOnlyLocalToolSchemas(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityMedium))
+
+	allowed := []string{"read_memory", "list_memory", "read_skill", "list_skills", "web_search", "message"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	got := toolDefinitionNames(ag.activeToolDefinitions())
+	want := []string{"list_memory", "list_skills", "read_memory", "read_skill"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activeToolDefinitions() = %#v, want medium read-only local tools %#v", got, want)
+	}
+}
+
+func TestAgentLoopMediumAuthorityModelSuppressesUnclassifiedToolSchemas(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.tools.Register(&failingMCPTool{})
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityMedium))
+
+	allowed := []string{"mcp_demo_lookup"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if got := toolDefinitionNames(ag.activeToolDefinitions()); len(got) != 0 {
+		t.Fatalf("activeToolDefinitions() = %#v, want unclassified MCP suppressed", got)
+	}
+}
+
+func TestAgentLoopHighAuthorityModelKeepsMissionApprovedToolSchemas(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.tools.Register(&failingMCPTool{})
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityHigh))
+
+	allowed := []string{"exec", "filesystem", "message", "web_search", "mcp_demo_lookup"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	got := toolDefinitionNames(ag.activeToolDefinitions())
+	want := []string{"exec", "filesystem", "mcp_demo_lookup", "message", "web_search"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activeToolDefinitions() = %#v, want high authority unchanged %#v", got, want)
+	}
+}
+
+func TestAgentLoopRejectsMissionStepAboveSelectedModelAuthority(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityLow))
+	job := testMissionJob([]string{"read_memory"}, []string{"read_memory"})
+	job.Plan.Steps[0].RequiredAuthority = missioncontrol.AuthorityTierHigh
+
+	err := ag.ActivateMissionStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateMissionStep() error = nil, want model authority rejection")
+	}
+	var validationErr missioncontrol.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ActivateMissionStep() error = %T %[1]v, want ValidationError", err)
+	}
+	if validationErr.Code != missioncontrol.RejectionCodeAuthorityExceeded {
+		t.Fatalf("ValidationError.Code = %q, want authority_exceeded", validationErr.Code)
+	}
+	if !strings.Contains(validationErr.Message, "selected model authority tier") {
+		t.Fatalf("ValidationError.Message = %q, want selected model authority message", validationErr.Message)
+	}
+}
+
+func testAuthorityModelRoute(tier config.ModelAuthorityTier) config.ModelRoute {
+	return config.ModelRoute{
+		SelectedModelRef:       "test_model",
+		ProviderRef:            "test_provider",
+		ProviderModel:          "test-provider-model",
+		ToolDefinitionsAllowed: true,
+		Capabilities: config.ModelCapabilities{
+			SupportsTools: true,
+			AuthorityTier: tier,
+		},
 	}
 }
 

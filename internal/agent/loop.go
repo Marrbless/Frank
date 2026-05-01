@@ -531,7 +531,39 @@ func (a *AgentLoop) activeToolDefinitions() []providers.ToolDefinition {
 	if a == nil || !a.toolDefinitionsAllowed {
 		return nil
 	}
-	return activeToolDefinitions(a.tools, a.taskState)
+	defs := activeToolDefinitions(a.tools, a.taskState)
+	route, ok := a.ModelRoute()
+	if !ok {
+		return defs
+	}
+	return filterToolDefinitionsForModelAuthority(defs, route.Capabilities.AuthorityTier)
+}
+
+func filterToolDefinitionsForModelAuthority(defs []providers.ToolDefinition, tier config.ModelAuthorityTier) []providers.ToolDefinition {
+	switch tier {
+	case config.ModelAuthorityLow:
+		filtered := make([]providers.ToolDefinition, 0, len(defs))
+		for _, def := range defs {
+			profile, ok := missioncontrol.ClassifyKnownToolRisk(def.Name)
+			if !ok || profile.DangerousForLowAuthority() {
+				continue
+			}
+			filtered = append(filtered, def)
+		}
+		return filtered
+	case config.ModelAuthorityMedium:
+		filtered := make([]providers.ToolDefinition, 0, len(defs))
+		for _, def := range defs {
+			profile, ok := missioncontrol.ClassifyKnownToolRisk(def.Name)
+			if !ok || !profile.ReadOnly || profile.Network || profile.Account || profile.Exec || profile.Write || profile.SideEffect {
+				continue
+			}
+			filtered = append(filtered, def)
+		}
+		return filtered
+	default:
+		return defs
+	}
 }
 
 func cloneModelRoute(route config.ModelRoute) config.ModelRoute {
@@ -556,7 +588,60 @@ func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) e
 			a.SetModelRoute(route)
 		}
 	}
+	if err := a.validateModelAuthorityForMissionStep(job, stepID); err != nil {
+		return err
+	}
 	return a.taskState.ActivateStep(job, stepID)
+}
+
+func (a *AgentLoop) validateModelAuthorityForMissionStep(job missioncontrol.Job, stepID string) error {
+	route, ok := a.ModelRoute()
+	if !ok {
+		return nil
+	}
+	ec, err := missioncontrol.ResolveExecutionContext(job, stepID)
+	if err != nil {
+		return err
+	}
+	if ec.Step == nil || ec.Step.RequiredAuthority == "" {
+		return nil
+	}
+	modelRank, modelOK := modelAuthorityRank(route.Capabilities.AuthorityTier)
+	stepRank, stepOK := missionStepAuthorityRank(ec.Step.RequiredAuthority)
+	if !modelOK || !stepOK || modelRank < stepRank {
+		return missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeAuthorityExceeded,
+			StepID:  stepID,
+			Message: fmt.Sprintf("selected model authority tier %q is below step required authority %q", route.Capabilities.AuthorityTier, ec.Step.RequiredAuthority),
+		}
+	}
+	return nil
+}
+
+func modelAuthorityRank(tier config.ModelAuthorityTier) (int, bool) {
+	switch tier {
+	case config.ModelAuthorityLow:
+		return 0, true
+	case config.ModelAuthorityMedium:
+		return 1, true
+	case config.ModelAuthorityHigh:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func missionStepAuthorityRank(tier missioncontrol.AuthorityTier) (int, bool) {
+	switch tier {
+	case missioncontrol.AuthorityTierLow:
+		return 0, true
+	case missioncontrol.AuthorityTierMedium:
+		return 1, true
+	case missioncontrol.AuthorityTierHigh:
+		return 2, true
+	default:
+		return 0, false
+	}
 }
 
 func (a *AgentLoop) ClearMissionStep() {
