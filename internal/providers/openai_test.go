@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -60,6 +61,85 @@ func TestOpenAIFunctionCallParsing(t *testing.T) {
 	}
 	if resp.ToolCalls[0].Arguments["content"] != "Hello from function" {
 		t.Fatalf("unexpected argument content: %v", resp.ToolCalls[0].Arguments)
+	}
+}
+
+func TestOpenAIChatCompletionsIncludesRequestOverrides(t *testing.T) {
+	var captured struct {
+		Model       string   `json:"model"`
+		MaxTokens   int      `json:"max_tokens"`
+		Temperature *float64 `json:"temperature"`
+	}
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer h.Close()
+
+	temp := 0.25
+	p := NewOpenAIProviderWithRequestOptions("test-key", h.URL, 60, 456, &temp, false, "")
+	p.Client = &http.Client{Timeout: 5 * time.Second}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := p.Chat(ctx, []Message{{Role: "user", Content: "hello"}}, nil, "model-x"); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if captured.Model != "model-x" {
+		t.Fatalf("model = %q, want model-x", captured.Model)
+	}
+	if captured.MaxTokens != 456 {
+		t.Fatalf("max_tokens = %d, want 456", captured.MaxTokens)
+	}
+	if captured.Temperature == nil || *captured.Temperature != 0.25 {
+		t.Fatalf("temperature = %v, want 0.25", captured.Temperature)
+	}
+}
+
+func TestOpenAIResponsesIncludesRequestOverrides(t *testing.T) {
+	var captured map[string]interface{}
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("path = %q, want /responses", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output_text":"ok","output":[]}`))
+	}))
+	defer h.Close()
+
+	temp := 0.35
+	p := NewOpenAIProviderWithRequestOptions("test-key", h.URL, 60, 789, &temp, true, "medium")
+	p.Client = &http.Client{Timeout: 5 * time.Second}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := p.Chat(ctx, []Message{{Role: "user", Content: "hello"}}, nil, "model-y"); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if captured["model"] != "model-y" {
+		t.Fatalf("model = %#v, want model-y", captured["model"])
+	}
+	if captured["max_output_tokens"] != float64(789) {
+		t.Fatalf("max_output_tokens = %#v, want 789", captured["max_output_tokens"])
+	}
+	if captured["temperature"] != 0.35 {
+		t.Fatalf("temperature = %#v, want 0.35", captured["temperature"])
+	}
+	reasoning, ok := captured["reasoning"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reasoning = %#v, want object", captured["reasoning"])
+	}
+	if reasoning["effort"] != "medium" {
+		t.Fatalf("reasoning.effort = %#v, want medium", reasoning["effort"])
 	}
 }
 

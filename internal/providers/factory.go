@@ -42,12 +42,13 @@ func NewProviderFromModelRoute(reg config.ModelRegistry, route config.ModelRoute
 		return nil, fmt.Errorf("provider_ref %q requires apiKey or apiBase", route.ProviderRef)
 	}
 
-	return NewOpenAIProviderWithOptions(
+	return NewOpenAIProviderWithRequestOptions(
 		providerCfg.APIKey,
 		providerCfg.APIBase,
-		reg.Defaults.RequestTimeoutS,
-		reg.Defaults.MaxTokens,
-		providerCfg.UseResponses,
-		providerCfg.ReasoningEffort,
+		route.Request.TimeoutS,
+		route.Request.MaxTokens,
+		route.Request.Temperature,
+		route.Request.UseResponses,
+		route.Request.ReasoningEffort,
 	), nil
 }

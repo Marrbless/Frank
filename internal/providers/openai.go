@@ -19,6 +19,7 @@ type OpenAIProvider struct {
 	APIKey          string
 	APIBase         string // e.g. https://api.openai.com/v1
 	MaxTokens       int    // 0 means "let the API decide"
+	Temperature     *float64
 	UseResponses    bool
 	ReasoningEffort string
 	Client          *http.Client
@@ -60,16 +61,26 @@ func NewOpenAIProvider(apiKey, apiBase string, timeoutSecs, maxTokens int) *Open
 }
 
 func NewOpenAIProviderWithOptions(apiKey, apiBase string, timeoutSecs, maxTokens int, useResponses bool, reasoningEffort string) *OpenAIProvider {
+	return NewOpenAIProviderWithRequestOptions(apiKey, apiBase, timeoutSecs, maxTokens, nil, useResponses, reasoningEffort)
+}
+
+func NewOpenAIProviderWithRequestOptions(apiKey, apiBase string, timeoutSecs, maxTokens int, temperature *float64, useResponses bool, reasoningEffort string) *OpenAIProvider {
 	if apiBase == "" {
 		apiBase = "https://api.openai.com/v1"
 	}
 	if timeoutSecs <= 1 {
 		timeoutSecs = 60
 	}
+	var temp *float64
+	if temperature != nil {
+		value := *temperature
+		temp = &value
+	}
 	return &OpenAIProvider{
 		APIKey:          apiKey,
 		APIBase:         strings.TrimRight(apiBase, "/"),
 		MaxTokens:       maxTokens,
+		Temperature:     temp,
 		UseResponses:    useResponses,
 		ReasoningEffort: strings.TrimSpace(reasoningEffort),
 		Client: &http.Client{
@@ -98,10 +109,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
    ========================= */
 
 type chatCompletionRequest struct {
-	Model     string        `json:"model"`
-	Messages  []messageJSON `json:"messages"`
-	Tools     []toolWrapper `json:"tools,omitempty"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []messageJSON `json:"messages"`
+	Tools       []toolWrapper `json:"tools,omitempty"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
 }
 
 type toolWrapper struct {
@@ -147,9 +159,10 @@ type chatCompletionResponse struct {
 
 func (p *OpenAIProvider) chatCompletions(ctx context.Context, messages []Message, tools []ToolDefinition, model string) (LLMResponse, error) {
 	reqBody := chatCompletionRequest{
-		Model:     model,
-		Messages:  make([]messageJSON, 0, len(messages)),
-		MaxTokens: p.MaxTokens,
+		Model:       model,
+		Messages:    make([]messageJSON, 0, len(messages)),
+		MaxTokens:   p.MaxTokens,
+		Temperature: p.Temperature,
 	}
 
 	for _, m := range messages {
@@ -291,6 +304,9 @@ func (p *OpenAIProvider) chatResponses(ctx context.Context, messages []Message, 
 	}
 	if p.MaxTokens > 0 {
 		reqBody["max_output_tokens"] = p.MaxTokens
+	}
+	if p.Temperature != nil {
+		reqBody["temperature"] = *p.Temperature
 	}
 	if p.ReasoningEffort != "" {
 		reqBody["reasoning"] = map[string]interface{}{

@@ -27,6 +27,8 @@ func TestNewProviderFromConfig_FallbacksToStub(t *testing.T) {
 }
 
 func TestNewProviderFromModelRouteUsesNamedProvider(t *testing.T) {
+	temp := 0.2
+	useResponses := false
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.MaxTokens = 1234
 	cfg.Agents.Defaults.RequestTimeoutS = 45
@@ -48,6 +50,13 @@ func TestNewProviderFromModelRouteUsesNamedProvider(t *testing.T) {
 				AuthorityTier: config.ModelAuthorityHigh,
 				CostTier:      config.ModelCostStandard,
 				LatencyTier:   config.ModelLatencyNormal,
+			},
+			Request: config.ModelRequestConfig{
+				MaxTokens:       4321,
+				Temperature:     &temp,
+				TimeoutS:        7,
+				UseResponses:    &useResponses,
+				ReasoningEffort: "medium",
 			},
 		},
 	}
@@ -75,11 +84,20 @@ func TestNewProviderFromModelRouteUsesNamedProvider(t *testing.T) {
 	if openAI.APIKey != "named-secret" {
 		t.Fatalf("APIKey was not copied from named provider")
 	}
-	if !openAI.UseResponses {
-		t.Fatalf("UseResponses = false, want true")
+	if openAI.MaxTokens != 4321 {
+		t.Fatalf("MaxTokens = %d, want route request override", openAI.MaxTokens)
 	}
-	if openAI.ReasoningEffort != "low" {
-		t.Fatalf("ReasoningEffort = %q, want low", openAI.ReasoningEffort)
+	if openAI.Temperature == nil || *openAI.Temperature != 0.2 {
+		t.Fatalf("Temperature = %v, want 0.2", openAI.Temperature)
+	}
+	if openAI.Client.Timeout.String() != "7s" {
+		t.Fatalf("client timeout = %s, want 7s", openAI.Client.Timeout)
+	}
+	if openAI.UseResponses {
+		t.Fatalf("UseResponses = true, want model request override false")
+	}
+	if openAI.ReasoningEffort != "medium" {
+		t.Fatalf("ReasoningEffort = %q, want medium", openAI.ReasoningEffort)
 	}
 }
 
