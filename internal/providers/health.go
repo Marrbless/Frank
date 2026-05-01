@@ -46,10 +46,11 @@ type ModelHealthResult struct {
 }
 
 type ModelHealthCheckOptions struct {
-	Now           time.Time
-	Timeout       time.Duration
-	Client        *http.Client
-	LocalRuntimes map[string]config.LocalRuntimeConfig
+	Now                        time.Time
+	Timeout                    time.Duration
+	Client                     *http.Client
+	LocalRuntimes              map[string]config.LocalRuntimeConfig
+	SkipProviderModelsEndpoint bool
 }
 
 func CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrAlias string, opts ModelHealthCheckOptions) (ModelHealthResult, error) {
@@ -79,7 +80,7 @@ func CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrA
 		return result, nil
 	}
 
-	healthURL, schemaRequired := modelHealthURL(model.ProviderRef, providerCfg, opts.LocalRuntimes)
+	healthURL, schemaRequired := modelHealthURL(model.ProviderRef, providerCfg, opts.LocalRuntimes, opts.SkipProviderModelsEndpoint)
 	if healthURL == "" {
 		result.Status = ModelHealthDisabled
 		return result, nil
@@ -139,7 +140,7 @@ func CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrA
 	return result, nil
 }
 
-func modelHealthURL(providerRef string, providerCfg config.ProviderConfig, runtimes map[string]config.LocalRuntimeConfig) (string, bool) {
+func modelHealthURL(providerRef string, providerCfg config.ProviderConfig, runtimes map[string]config.LocalRuntimeConfig, skipProviderModelsEndpoint bool) (string, bool) {
 	for key, runtime := range runtimes {
 		runtimeProvider, err := config.NormalizeProviderRef(runtime.Provider)
 		if err != nil || runtimeProvider == "" {
@@ -153,6 +154,9 @@ func modelHealthURL(providerRef string, providerCfg config.ProviderConfig, runti
 		}
 	}
 
+	if skipProviderModelsEndpoint {
+		return "", false
+	}
 	base := strings.TrimRight(strings.TrimSpace(providerCfg.APIBase), "/")
 	if base == "" {
 		return "", false

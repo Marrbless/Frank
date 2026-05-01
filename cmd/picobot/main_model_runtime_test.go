@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -227,6 +228,187 @@ func TestMissionStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeModelSelectionPreflightFallbackAllowed(t *testing.T) {
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("local path = %q, want /health", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer localServer.Close()
+
+	cfg := v5FallbackRuntimeTestConfig("http://127.0.0.1:1/v1", localServer.URL+"/health", "https://cloud.example/v1")
+	cfg.ModelRouting.AllowCloudFallbackFromLocal = true
+
+	selection, err := resolveRuntimeModelSelectionWithContext(context.Background(), cfg, "")
+	if err != nil {
+		t.Fatalf("resolveRuntimeModelSelectionWithContext() error = %v", err)
+	}
+	if selection.Route.SelectedModelRef != "cloud_reasoning" {
+		t.Fatalf("selected model = %q, want cloud_reasoning", selection.Route.SelectedModelRef)
+	}
+	if selection.Route.SelectionReason != config.RouteReasonFallback {
+		t.Fatalf("selection reason = %q, want fallback", selection.Route.SelectionReason)
+	}
+	if selection.Route.FallbackDepth != 1 {
+		t.Fatalf("fallback depth = %d, want 1", selection.Route.FallbackDepth)
+	}
+	if selection.Route.ProviderModel != "google/gemini-test" {
+		t.Fatalf("provider model = %q, want fallback provider model", selection.Route.ProviderModel)
+	}
+}
+
+func TestResolveRuntimeModelSelectionPreflightFallbackDisabled(t *testing.T) {
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer localServer.Close()
+
+	cfg := v5FallbackRuntimeTestConfig("http://127.0.0.1:1/v1", localServer.URL, "https://cloud.example/v1")
+	cfg.ModelRouting.Fallbacks = nil
+	cfg.ModelRouting.AllowCloudFallbackFromLocal = true
+
+	_, err := resolveRuntimeModelSelectionWithContext(context.Background(), cfg, "")
+	if err == nil {
+		t.Fatal("resolveRuntimeModelSelectionWithContext() error = nil, want fallback-disabled error")
+	}
+	if !strings.Contains(err.Error(), "fallback is disabled") {
+		t.Fatalf("error = %q, want fallback-disabled error", err.Error())
+	}
+}
+
+func TestResolveRuntimeModelSelectionPreflightCloudFallbackDeniedByDefault(t *testing.T) {
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer localServer.Close()
+
+	cfg := v5FallbackRuntimeTestConfig("http://127.0.0.1:1/v1", localServer.URL, "https://cloud.example/v1")
+
+	_, err := resolveRuntimeModelSelectionWithContext(context.Background(), cfg, "")
+	if err == nil {
+		t.Fatal("resolveRuntimeModelSelectionWithContext() error = nil, want cloud-fallback denial")
+	}
+	if !strings.Contains(err.Error(), "cloud fallback from local") {
+		t.Fatalf("error = %q, want cloud-fallback denial", err.Error())
+	}
+}
+
+func TestResolveRuntimeModelSelectionPreflightLowerAuthorityDeniedByDefault(t *testing.T) {
+	healthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer healthServer.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Model = "cloud_reasoning"
+	cfg.Providers.Named = map[string]config.ProviderConfig{
+		"openrouter": {
+			Type:    config.ProviderTypeOpenAICompatible,
+			APIKey:  "high-secret",
+			APIBase: "https://cloud.example/v1",
+		},
+		"cheap_cloud": {
+			Type:    config.ProviderTypeOpenAICompatible,
+			APIKey:  "low-secret",
+			APIBase: "https://cheap.example/v1",
+		},
+	}
+	cfg.Models = map[string]config.ModelProfileConfig{
+		"cloud_reasoning": {
+			Provider:      "openrouter",
+			ProviderModel: "high-model",
+			Capabilities: config.ModelCapabilities{
+				SupportsTools: true,
+				AuthorityTier: config.ModelAuthorityHigh,
+				CostTier:      config.ModelCostStandard,
+				LatencyTier:   config.ModelLatencyNormal,
+			},
+		},
+		"cheap_cloud": {
+			Provider:      "cheap_cloud",
+			ProviderModel: "low-model",
+			Capabilities: config.ModelCapabilities{
+				AuthorityTier: config.ModelAuthorityLow,
+				CostTier:      config.ModelCostCheap,
+				LatencyTier:   config.ModelLatencyNormal,
+			},
+		},
+	}
+	cfg.ModelRouting = config.ModelRoutingConfig{
+		DefaultModel: "cloud_reasoning",
+		Fallbacks:    map[string][]string{"cloud_reasoning": {"cheap_cloud"}},
+	}
+	cfg.LocalRuntimes = map[string]config.LocalRuntimeConfig{
+		"openrouter_readiness": {
+			Provider:  "openrouter",
+			HealthURL: healthServer.URL,
+		},
+	}
+
+	_, err := resolveRuntimeModelSelectionWithContext(context.Background(), cfg, "")
+	if err == nil {
+		t.Fatal("resolveRuntimeModelSelectionWithContext() error = nil, want lower-authority denial")
+	}
+	if !strings.Contains(err.Error(), "lower-authority fallback") {
+		t.Fatalf("error = %q, want lower-authority denial", err.Error())
+	}
+}
+
+func TestAgentCommandDoesNotRetryFallbackAfterProviderRequestStarts(t *testing.T) {
+	var localChatCount int
+	localServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_, _ = w.Write([]byte(`ok`))
+		case "/v1/chat/completions":
+			localChatCount++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"local failed","token":"local-secret"}`))
+		default:
+			t.Fatalf("local path = %q", r.URL.Path)
+		}
+	}))
+	defer localServer.Close()
+
+	var cloudChatCount int
+	cloudServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cloudChatCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"cloud fallback should not run"}}]}`))
+	}))
+	defer cloudServer.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := v5FallbackRuntimeTestConfig(localServer.URL+"/v1", localServer.URL+"/health", cloudServer.URL+"/v1")
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.ModelRouting.AllowCloudFallbackFromLocal = true
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"agent", "-m", "hello", "-M", "phone"})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agent command error = %v", err)
+	}
+	if localChatCount != 1 {
+		t.Fatalf("local chat count = %d, want 1", localChatCount)
+	}
+	if cloudChatCount != 0 {
+		t.Fatalf("cloud chat count = %d, want no post-request fallback retry", cloudChatCount)
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "local-secret") {
+		t.Fatalf("agent command output leaked provider error body: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func v5RuntimeTestConfig(apiBase string) config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Model = "cloud_reasoning"
@@ -251,5 +433,60 @@ func v5RuntimeTestConfig(apiBase string) config.Config {
 	}
 	cfg.ModelAliases = map[string]string{"best": "cloud_reasoning"}
 	cfg.ModelRouting = config.ModelRoutingConfig{DefaultModel: "cloud_reasoning"}
+	return cfg
+}
+
+func v5FallbackRuntimeTestConfig(localAPIBase, localHealthURL, cloudAPIBase string) config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Model = "local_fast"
+	cfg.Providers.Named = map[string]config.ProviderConfig{
+		"llamacpp_phone": {
+			Type:    config.ProviderTypeOpenAICompatible,
+			APIKey:  "not-needed",
+			APIBase: localAPIBase,
+		},
+		"openrouter": {
+			Type:    config.ProviderTypeOpenAICompatible,
+			APIKey:  "cloud-secret",
+			APIBase: cloudAPIBase,
+		},
+	}
+	cfg.Models = map[string]config.ModelProfileConfig{
+		"local_fast": {
+			Provider:      "llamacpp_phone",
+			ProviderModel: "qwen3-test-local",
+			Capabilities: config.ModelCapabilities{
+				Local:         true,
+				Offline:       true,
+				AuthorityTier: config.ModelAuthorityLow,
+				CostTier:      config.ModelCostFree,
+				LatencyTier:   config.ModelLatencySlow,
+			},
+		},
+		"cloud_reasoning": {
+			Provider:      "openrouter",
+			ProviderModel: "google/gemini-test",
+			Capabilities: config.ModelCapabilities{
+				SupportsTools: true,
+				AuthorityTier: config.ModelAuthorityHigh,
+				CostTier:      config.ModelCostStandard,
+				LatencyTier:   config.ModelLatencyNormal,
+			},
+		},
+	}
+	cfg.ModelAliases = map[string]string{
+		"best":  "cloud_reasoning",
+		"phone": "local_fast",
+	}
+	cfg.ModelRouting = config.ModelRoutingConfig{
+		DefaultModel: "local_fast",
+		Fallbacks:    map[string][]string{"local_fast": {"cloud_reasoning"}},
+	}
+	cfg.LocalRuntimes = map[string]config.LocalRuntimeConfig{
+		"llamacpp_phone": {
+			Provider:  "llamacpp_phone",
+			HealthURL: localHealthURL,
+		},
+	}
 	return cfg
 }

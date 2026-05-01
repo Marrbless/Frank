@@ -470,7 +470,7 @@ func NewRootCmd() *cobra.Command {
 
 			hub := chat.NewHub(100)
 			cfg, _ := config.LoadConfig()
-			selection, err := resolveRuntimeModelSelection(cfg, modelFlag)
+			selection, err := resolveRuntimeModelSelectionWithContext(cmd.Context(), cfg, modelFlag)
 			if err != nil {
 				return err
 			}
@@ -520,7 +520,7 @@ func NewRootCmd() *cobra.Command {
 			var ag *agent.AgentLoop
 
 			modelFlag, _ := cmd.Flags().GetString("model")
-			selection, err := resolveRuntimeModelSelection(cfg, modelFlag)
+			selection, err := resolveRuntimeModelSelectionWithContext(cmd.Context(), cfg, modelFlag)
 			if err != nil {
 				return err
 			}
