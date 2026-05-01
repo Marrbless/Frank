@@ -128,6 +128,7 @@ func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLo
 		return nil
 	}
 	modelStatus := missionStatusModelRouteStatus(ag)
+	modelMetricsStatus := missionStatusModelControlMetricsStatus(ag)
 
 	storeRoot := resolveMissionStoreRoot(cmd)
 	if storeRoot == "" {
@@ -154,7 +155,7 @@ func writeMissionStatusSnapshotFromCommand(cmd *cobra.Command, ag *agent.AgentLo
 	}
 
 	missionRequired, _ := cmd.Flags().GetBool("mission-required")
-	return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, now, modelStatus)
+	return writeProjectedMissionStatusSnapshotWithModelStatus(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, now, modelStatus, modelMetricsStatus)
 }
 
 func missionStatusSnapshotMissionFile(cmd *cobra.Command) string {
@@ -354,6 +355,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 		StepType:        "",
 		AllowedTools:    []string{},
 		Model:           missionStatusModelRouteStatus(ag),
+		ModelMetrics:    missionStatusModelControlMetricsStatus(ag),
 		Runtime:         runtimeState,
 		RuntimeControl:  runtimeControl,
 		UpdatedAt:       now.UTC().Format(time.RFC3339Nano),
@@ -395,6 +397,7 @@ func writeMissionStatusSnapshot(path string, missionFile string, ag *agent.Agent
 			summary = missioncontrol.WithGovernedSkillSelectionStatus(summary, *snapshot.Skills)
 		}
 		summary = missioncontrol.WithModelRouteStatus(summary, snapshot.Model)
+		summary = missioncontrol.WithModelControlMetricsStatus(summary, snapshot.ModelMetrics)
 		snapshot.RuntimeSummary = &summary
 	}
 
@@ -425,7 +428,33 @@ func missionStatusModelRouteStatus(ag *agent.AgentLoop) *missioncontrol.Operator
 	}
 }
 
+func missionStatusModelControlMetricsStatus(ag *agent.AgentLoop) *missioncontrol.OperatorModelControlMetricsStatus {
+	if ag == nil {
+		return nil
+	}
+	metrics := ag.ModelControlMetrics()
+	if modelControlMetricsStatusZero(metrics) {
+		return nil
+	}
+	return &metrics
+}
+
+func modelControlMetricsStatusZero(metrics missioncontrol.OperatorModelControlMetricsStatus) bool {
+	return metrics.RouteAttemptCount == 0 &&
+		metrics.RouteSuccessCount == 0 &&
+		metrics.RouteFailureCount == 0 &&
+		metrics.FallbackCount == 0 &&
+		metrics.ProviderHealthFailureCount == 0 &&
+		metrics.ModelPolicyDenialCount == 0 &&
+		metrics.AuthorityDenialCount == 0 &&
+		metrics.ToolSchemaSuppressedCount == 0
+}
+
 func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time, modelStatus ...*missioncontrol.OperatorModelRouteStatus) error {
+	return writeProjectedMissionStatusSnapshotWithModelStatus(path, missionFile, storeRoot, missionRequired, jobID, now, firstMissionStatusModelRouteStatus(modelStatus), nil)
+}
+
+func writeProjectedMissionStatusSnapshotWithModelStatus(path string, missionFile string, storeRoot string, missionRequired bool, jobID string, now time.Time, modelStatus *missioncontrol.OperatorModelRouteStatus, modelMetricsStatus *missioncontrol.OperatorModelControlMetricsStatus) error {
 	if path == "" {
 		return nil
 	}
@@ -445,7 +474,8 @@ func writeProjectedMissionStatusSnapshot(path string, missionFile string, storeR
 		MissionRequired: missionRequired,
 		MissionFile:     missionFile,
 		UpdatedAt:       now,
-		Model:           firstMissionStatusModelRouteStatus(modelStatus),
+		Model:           modelStatus,
+		ModelMetrics:    modelMetricsStatus,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to build committed mission status snapshot from durable store %q: %w", storeRoot, err)

@@ -1216,6 +1216,43 @@ func TestBuildCommittedMissionStatusSnapshotIncludesModelRouteStatus(t *testing.
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesModelControlMetrics(t *testing.T) {
+	t.Parallel()
+
+	storeFixture := writeMissionStoreRuntimeFixture(t)
+	metrics := &OperatorModelControlMetricsStatus{
+		RouteAttemptCount:          3,
+		RouteSuccessCount:          2,
+		RouteFailureCount:          1,
+		FallbackCount:              1,
+		ProviderHealthFailureCount: 1,
+		ModelPolicyDenialCount:     1,
+		AuthorityDenialCount:       1,
+		ToolSchemaSuppressedCount:  2,
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(storeFixture.root, storeFixture.job.ID, MissionStatusSnapshotOptions{
+		MissionRequired: true,
+		MissionFile:     "mission.json",
+		UpdatedAt:       storeFixture.now,
+		ModelMetrics:    metrics,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+	if snapshot.ModelMetrics == nil || snapshot.ModelMetrics.RouteAttemptCount != 3 || snapshot.ModelMetrics.ToolSchemaSuppressedCount != 2 {
+		t.Fatalf("snapshot.ModelMetrics = %#v, want metrics", snapshot.ModelMetrics)
+	}
+	if snapshot.RuntimeSummary == nil || snapshot.RuntimeSummary.ModelMetrics == nil || snapshot.RuntimeSummary.ModelMetrics.FallbackCount != 1 {
+		t.Fatalf("snapshot.RuntimeSummary.ModelMetrics = %#v, want metrics", snapshot.RuntimeSummary)
+	}
+
+	metrics.RouteAttemptCount = 99
+	if snapshot.ModelMetrics.RouteAttemptCount != 3 {
+		t.Fatalf("snapshot.ModelMetrics.RouteAttemptCount mutated to %d", snapshot.ModelMetrics.RouteAttemptCount)
+	}
+}
+
 func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -1234,6 +1271,7 @@ func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "RequiresApproval", tag: `json:"requires_approval"`},
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
 		{name: "Model", tag: `json:"model,omitempty"`},
+		{name: "ModelMetrics", tag: `json:"model_metrics,omitempty"`},
 		{name: "Skills", tag: `json:"skills,omitempty"`},
 		{name: "Runtime", tag: `json:"runtime,omitempty"`},
 		{name: "RuntimeSummary", tag: `json:"runtime_summary,omitempty"`},

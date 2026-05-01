@@ -484,6 +484,7 @@ func NewRootCmd() *cobra.Command {
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil, cfg.MCPServers)
 			defer ag.Close()
 			ag.SetModelRoute(selection.Route)
+			ag.AddModelControlMetrics(missioncontrol.OperatorModelControlMetricsStatus{ProviderHealthFailureCount: selection.ProviderHealthFailureCount})
 			ag.SetMissionModelRouter(newRuntimeMissionModelRouter(cmd.Context(), cfg, modelFlag))
 			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
 				ag.SetToolActivityIndicator(false)
@@ -559,6 +560,7 @@ func NewRootCmd() *cobra.Command {
 			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler, cfg.MCPServers)
 			defer ag.Close()
 			ag.SetModelRoute(selection.Route)
+			ag.AddModelControlMetrics(missioncontrol.OperatorModelControlMetricsStatus{ProviderHealthFailureCount: selection.ProviderHealthFailureCount})
 			ag.SetMissionModelRouter(newRuntimeMissionModelRouter(cmd.Context(), cfg, modelFlag))
 			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
 				ag.SetToolActivityIndicator(false)
@@ -1414,7 +1416,7 @@ func installMissionRuntimeChangeHookWithExtension(cmd *cobra.Command, ag *agent.
 			if strings.TrimSpace(jobID) == "" && job != nil {
 				jobID = job.ID
 			}
-			return writeProjectedMissionStatusSnapshot(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now(), missionStatusModelRouteStatus(ag))
+			return writeProjectedMissionStatusSnapshotWithModelStatus(statusFile, missionStatusSnapshotMissionFile(cmd), storeRoot, missionRequired, jobID, time.Now(), missionStatusModelRouteStatus(ag), missionStatusModelControlMetricsStatus(ag))
 		})
 		ag.SetMissionRuntimeChangeHook(func() {
 			defer func() {

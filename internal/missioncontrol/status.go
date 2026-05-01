@@ -32,6 +32,7 @@ type OperatorStatusSummary struct {
 	ActiveStepID                                 string                                                      `json:"active_step_id,omitempty"`
 	AllowedTools                                 []string                                                    `json:"allowed_tools,omitempty"`
 	Model                                        *OperatorModelRouteStatus                                   `json:"model,omitempty"`
+	ModelMetrics                                 *OperatorModelControlMetricsStatus                          `json:"model_metrics,omitempty"`
 	Skills                                       *GovernedSkillSelectionStatus                               `json:"skills,omitempty"`
 	RuntimePackIdentity                          *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	V4Summary                                    *OperatorV4SummaryStatus                                    `json:"v4_summary,omitempty"`
@@ -126,6 +127,17 @@ type OperatorModelCapabilitiesStatus struct {
 	Offline       bool   `json:"offline"`
 	SupportsTools bool   `json:"supports_tools"`
 	AuthorityTier string `json:"authority_tier"`
+}
+
+type OperatorModelControlMetricsStatus struct {
+	RouteAttemptCount          int64 `json:"route_attempt_count,omitempty"`
+	RouteSuccessCount          int64 `json:"route_success_count,omitempty"`
+	RouteFailureCount          int64 `json:"route_failure_count,omitempty"`
+	FallbackCount              int64 `json:"fallback_count,omitempty"`
+	ProviderHealthFailureCount int64 `json:"provider_health_failure_count,omitempty"`
+	ModelPolicyDenialCount     int64 `json:"model_policy_denial_count,omitempty"`
+	AuthorityDenialCount       int64 `json:"authority_denial_count,omitempty"`
+	ToolSchemaSuppressedCount  int64 `json:"tool_schema_suppressed_count,omitempty"`
 }
 
 type OperatorRuntimePackIdentityStatus struct {
@@ -739,11 +751,24 @@ func WithModelRouteStatus(summary OperatorStatusSummary, model *OperatorModelRou
 	return summary
 }
 
+func WithModelControlMetricsStatus(summary OperatorStatusSummary, metrics *OperatorModelControlMetricsStatus) OperatorStatusSummary {
+	summary.ModelMetrics = CloneOperatorModelControlMetricsStatus(metrics)
+	return summary
+}
+
 func CloneOperatorModelRouteStatus(model *OperatorModelRouteStatus) *OperatorModelRouteStatus {
 	if model == nil {
 		return nil
 	}
 	clone := *model
+	return &clone
+}
+
+func CloneOperatorModelControlMetricsStatus(metrics *OperatorModelControlMetricsStatus) *OperatorModelControlMetricsStatus {
+	if metrics == nil {
+		return nil
+	}
+	clone := *metrics
 	return &clone
 }
 

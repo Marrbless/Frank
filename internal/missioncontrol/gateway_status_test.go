@@ -27,6 +27,7 @@ func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "RequiresApproval", tag: `json:"requires_approval"`},
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
 		{name: "Model", tag: `json:"model,omitempty"`},
+		{name: "ModelMetrics", tag: `json:"model_metrics,omitempty"`},
 		{name: "UpdatedAt", tag: `json:"updated_at"`},
 	}
 
@@ -81,6 +82,35 @@ func TestProjectGatewayStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
 	snapshot.Model.ProviderModel = "mutated"
 	if projected.Model.ProviderModel != "qwen3-test-local" {
 		t.Fatalf("GatewayStatusSnapshot.Model.ProviderModel mutated to %q", projected.Model.ProviderModel)
+	}
+}
+
+func TestProjectGatewayStatusSnapshotIncludesModelControlMetrics(t *testing.T) {
+	t.Parallel()
+
+	snapshot := MissionStatusSnapshot{
+		JobID:        "job-1",
+		AllowedTools: []string{"read"},
+		ModelMetrics: &OperatorModelControlMetricsStatus{
+			RouteAttemptCount:         2,
+			RouteSuccessCount:         1,
+			RouteFailureCount:         1,
+			ModelPolicyDenialCount:    1,
+			ToolSchemaSuppressedCount: 1,
+		},
+	}
+
+	projected := ProjectGatewayStatusSnapshot(snapshot)
+	if projected.ModelMetrics == nil {
+		t.Fatal("GatewayStatusSnapshot.ModelMetrics = nil, want metrics")
+	}
+	if projected.ModelMetrics.RouteAttemptCount != 2 || projected.ModelMetrics.ModelPolicyDenialCount != 1 {
+		t.Fatalf("GatewayStatusSnapshot.ModelMetrics = %#v, want safe counters", projected.ModelMetrics)
+	}
+
+	snapshot.ModelMetrics.RouteAttemptCount = 99
+	if projected.ModelMetrics.RouteAttemptCount != 2 {
+		t.Fatalf("GatewayStatusSnapshot.ModelMetrics.RouteAttemptCount mutated to %d", projected.ModelMetrics.RouteAttemptCount)
 	}
 }
 

@@ -7,18 +7,19 @@ import (
 )
 
 type MissionStatusSnapshot struct {
-	MissionRequired   bool                          `json:"mission_required"`
-	Active            bool                          `json:"active"`
-	MissionFile       string                        `json:"mission_file"`
-	JobID             string                        `json:"job_id"`
-	StepID            string                        `json:"step_id"`
-	StepType          string                        `json:"step_type"`
-	RequiredAuthority AuthorityTier                 `json:"required_authority"`
-	RequiresApproval  bool                          `json:"requires_approval"`
-	AllowedTools      []string                      `json:"allowed_tools"`
-	Model             *OperatorModelRouteStatus     `json:"model,omitempty"`
-	Skills            *GovernedSkillSelectionStatus `json:"skills,omitempty"`
-	Runtime           *JobRuntimeState              `json:"runtime,omitempty"`
+	MissionRequired   bool                               `json:"mission_required"`
+	Active            bool                               `json:"active"`
+	MissionFile       string                             `json:"mission_file"`
+	JobID             string                             `json:"job_id"`
+	StepID            string                             `json:"step_id"`
+	StepType          string                             `json:"step_type"`
+	RequiredAuthority AuthorityTier                      `json:"required_authority"`
+	RequiresApproval  bool                               `json:"requires_approval"`
+	AllowedTools      []string                           `json:"allowed_tools"`
+	Model             *OperatorModelRouteStatus          `json:"model,omitempty"`
+	ModelMetrics      *OperatorModelControlMetricsStatus `json:"model_metrics,omitempty"`
+	Skills            *GovernedSkillSelectionStatus      `json:"skills,omitempty"`
+	Runtime           *JobRuntimeState                   `json:"runtime,omitempty"`
 	// RuntimeSummary is a convenience projection of direct OperatorStatus JSON.
 	// Provider-specific Zoho fields may be carried through incidentally here, but
 	// only direct OperatorStatus and direct OperatorInspect remain frozen
@@ -33,6 +34,7 @@ type MissionStatusSnapshotOptions struct {
 	MissionFile     string
 	UpdatedAt       time.Time
 	Model           *OperatorModelRouteStatus
+	ModelMetrics    *OperatorModelControlMetricsStatus
 }
 
 func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusSnapshotOptions) (MissionStatusSnapshot, error) {
@@ -67,6 +69,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 		StepType:        "",
 		AllowedTools:    []string{},
 		Model:           CloneOperatorModelRouteStatus(opts.Model),
+		ModelMetrics:    CloneOperatorModelControlMetricsStatus(opts.ModelMetrics),
 		Runtime:         CloneJobRuntimeState(&runtimeState),
 		RuntimeControl:  CloneRuntimeControlContext(runtimeControl),
 		UpdatedAt:       now.Format(time.RFC3339Nano),
@@ -84,6 +87,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
 	summary = WithModelRouteStatus(summary, snapshot.Model)
+	summary = WithModelControlMetricsStatus(summary, snapshot.ModelMetrics)
 	if runtimeControl != nil {
 		selected := EffectiveSelectedSkills(&Job{SelectedSkills: runtimeControl.SelectedSkills}, &runtimeControl.Step)
 		if len(selected) > 0 {

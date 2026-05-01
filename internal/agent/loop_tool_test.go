@@ -589,6 +589,127 @@ func TestAgentLoopRejectsMissionStepAboveSelectedModelAuthority(t *testing.T) {
 	}
 }
 
+func TestAgentLoopModelControlMetricsRecordRouteSuccessAndFallback(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+
+	route := testAuthorityModelRoute(config.ModelAuthorityHigh)
+	route.FallbackDepth = 1
+	ag.SetModelRoute(route)
+
+	metrics := ag.ModelControlMetrics()
+	if metrics.RouteAttemptCount != 1 || metrics.RouteSuccessCount != 1 || metrics.FallbackCount != 1 {
+		t.Fatalf("ModelControlMetrics() = %#v, want one attempt, success, and fallback", metrics)
+	}
+	if metrics.RouteFailureCount != 0 || metrics.ToolSchemaSuppressedCount != 0 {
+		t.Fatalf("ModelControlMetrics() = %#v, want no failure or suppression counts", metrics)
+	}
+}
+
+func TestAgentLoopModelControlMetricsRecordToolSchemaSuppression(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+
+	route := testAuthorityModelRoute(config.ModelAuthorityHigh)
+	route.ToolDefinitionsAllowed = false
+	route.ToolDefinitionsSuppressed = true
+	ag.SetModelRoute(route)
+	allowed := []string{"message"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	if got := ag.activeToolDefinitions(); len(got) != 0 {
+		t.Fatalf("activeToolDefinitions() = %#v, want no tools", toolDefinitionNames(got))
+	}
+
+	metrics := ag.ModelControlMetrics()
+	if metrics.ToolSchemaSuppressedCount != 1 {
+		t.Fatalf("ModelControlMetrics().ToolSchemaSuppressedCount = %d, want 1; metrics=%#v", metrics.ToolSchemaSuppressedCount, metrics)
+	}
+}
+
+func TestAgentLoopModelControlMetricsRecordAuthorityFilteringSuppression(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityMedium))
+
+	allowed := []string{"read_memory", "exec"}
+	if err := ag.ActivateMissionStep(testMissionJob(allowed, allowed), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	got := toolDefinitionNames(ag.activeToolDefinitions())
+	want := []string{"read_memory"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("activeToolDefinitions() = %#v, want %#v", got, want)
+	}
+
+	metrics := ag.ModelControlMetrics()
+	if metrics.ToolSchemaSuppressedCount != 1 {
+		t.Fatalf("ModelControlMetrics().ToolSchemaSuppressedCount = %d, want 1; metrics=%#v", metrics.ToolSchemaSuppressedCount, metrics)
+	}
+}
+
+func TestAgentLoopModelControlMetricsRecordAuthorityDenial(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelRoute(testAuthorityModelRoute(config.ModelAuthorityLow))
+	job := testMissionJob([]string{"read_memory"}, []string{"read_memory"})
+	job.Plan.Steps[0].RequiredAuthority = missioncontrol.AuthorityTierHigh
+
+	err := ag.ActivateMissionStep(job, "build")
+	if err == nil {
+		t.Fatal("ActivateMissionStep() error = nil, want authority denial")
+	}
+	metrics := ag.ModelControlMetrics()
+	if metrics.RouteFailureCount != 1 || metrics.AuthorityDenialCount != 1 {
+		t.Fatalf("ModelControlMetrics() = %#v, want one route failure and authority denial", metrics)
+	}
+}
+
+func TestAgentLoopModelControlMetricsRecordModelPolicyDenial(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
+		return config.ModelRoute{}, nil, missioncontrol.OperatorModelControlMetricsStatus{}, false, missioncontrol.ValidationError{
+			Code:    missioncontrol.RejectionCodeInvalidModelPolicy,
+			StepID:  stepID,
+			Message: "model_policy denied route",
+		}
+	})
+
+	err := ag.ActivateMissionStep(testMissionJob([]string{"read_memory"}, []string{"read_memory"}), "build")
+	if err == nil {
+		t.Fatal("ActivateMissionStep() error = nil, want policy denial")
+	}
+	metrics := ag.ModelControlMetrics()
+	if metrics.RouteAttemptCount != 1 || metrics.RouteFailureCount != 1 || metrics.ModelPolicyDenialCount != 1 {
+		t.Fatalf("ModelControlMetrics() = %#v, want one route attempt, failure, and model policy denial", metrics)
+	}
+}
+
+func TestAgentLoopModelControlMetricsIncludeRouterProviderHealthFailures(t *testing.T) {
+	b := chat.NewHub(10)
+	p := &FakeProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
+		metrics := missioncontrol.OperatorModelControlMetricsStatus{ProviderHealthFailureCount: 2}
+		return testAuthorityModelRoute(config.ModelAuthorityHigh), p, metrics, true, nil
+	})
+
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"read_memory"}, []string{"read_memory"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+	metrics := ag.ModelControlMetrics()
+	if metrics.ProviderHealthFailureCount != 2 || metrics.RouteAttemptCount != 1 || metrics.RouteSuccessCount != 1 {
+		t.Fatalf("ModelControlMetrics() = %#v, want health failures plus successful route", metrics)
+	}
+}
+
 func testAuthorityModelRoute(tier config.ModelAuthorityTier) config.ModelRoute {
 	return config.ModelRoute{
 		SelectedModelRef:       "test_model",

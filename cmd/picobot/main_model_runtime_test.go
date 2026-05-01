@@ -228,6 +228,12 @@ func TestMissionStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
 	if snapshot.RuntimeSummary.Model.ProviderModel != "google/gemini-test" {
 		t.Fatalf("runtime_summary.model.provider_model = %q, want google/gemini-test", snapshot.RuntimeSummary.Model.ProviderModel)
 	}
+	if snapshot.ModelMetrics == nil || snapshot.ModelMetrics.RouteAttemptCount != 1 || snapshot.ModelMetrics.RouteSuccessCount != 1 {
+		t.Fatalf("snapshot.ModelMetrics = %#v, want route counters", snapshot.ModelMetrics)
+	}
+	if snapshot.RuntimeSummary.ModelMetrics == nil || snapshot.RuntimeSummary.ModelMetrics.RouteSuccessCount != 1 {
+		t.Fatalf("snapshot.RuntimeSummary.ModelMetrics = %#v, want route counters", snapshot.RuntimeSummary.ModelMetrics)
+	}
 }
 
 func TestResolveRuntimeModelSelectionPreflightFallbackAllowed(t *testing.T) {

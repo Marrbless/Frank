@@ -355,12 +355,14 @@ type AgentLoop struct {
 	modelRouteMu            sync.RWMutex
 	modelRoute              config.ModelRoute
 	hasModelRoute           bool
+	modelMetricsMu          sync.RWMutex
+	modelMetrics            missioncontrol.OperatorModelControlMetricsStatus
 	maxIterations           int
 	running                 bool
 	suppressTerminalNotices int32
 	taskState               *tools.TaskState
 	operatorSetStepHook     func(jobID string, stepID string) (string, error)
-	missionModelRouter      func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error)
+	missionModelRouter      func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error)
 	mcpClients              []*mcp.Client
 	enableToolActivity      bool
 }
@@ -481,12 +483,56 @@ func (a *AgentLoop) SetModelToolDefinitionsAllowed(allowed bool) {
 	}
 }
 
+func (a *AgentLoop) ModelControlMetrics() missioncontrol.OperatorModelControlMetricsStatus {
+	if a == nil {
+		return missioncontrol.OperatorModelControlMetricsStatus{}
+	}
+	a.modelMetricsMu.RLock()
+	defer a.modelMetricsMu.RUnlock()
+	return a.modelMetrics
+}
+
+func (a *AgentLoop) AddModelControlMetrics(delta missioncontrol.OperatorModelControlMetricsStatus) {
+	if a == nil || modelControlMetricsZero(delta) {
+		return
+	}
+	a.modelMetricsMu.Lock()
+	defer a.modelMetricsMu.Unlock()
+	a.modelMetrics.RouteAttemptCount += delta.RouteAttemptCount
+	a.modelMetrics.RouteSuccessCount += delta.RouteSuccessCount
+	a.modelMetrics.RouteFailureCount += delta.RouteFailureCount
+	a.modelMetrics.FallbackCount += delta.FallbackCount
+	a.modelMetrics.ProviderHealthFailureCount += delta.ProviderHealthFailureCount
+	a.modelMetrics.ModelPolicyDenialCount += delta.ModelPolicyDenialCount
+	a.modelMetrics.AuthorityDenialCount += delta.AuthorityDenialCount
+	a.modelMetrics.ToolSchemaSuppressedCount += delta.ToolSchemaSuppressedCount
+}
+
+func modelControlMetricsZero(metrics missioncontrol.OperatorModelControlMetricsStatus) bool {
+	return metrics.RouteAttemptCount == 0 &&
+		metrics.RouteSuccessCount == 0 &&
+		metrics.RouteFailureCount == 0 &&
+		metrics.FallbackCount == 0 &&
+		metrics.ProviderHealthFailureCount == 0 &&
+		metrics.ModelPolicyDenialCount == 0 &&
+		metrics.AuthorityDenialCount == 0 &&
+		metrics.ToolSchemaSuppressedCount == 0
+}
+
 // SetModelRoute stores the selected model route for safe runtime status and
 // applies its tool-schema gate to provider calls.
 func (a *AgentLoop) SetModelRoute(route config.ModelRoute) {
 	if a == nil {
 		return
 	}
+	delta := missioncontrol.OperatorModelControlMetricsStatus{
+		RouteAttemptCount: 1,
+		RouteSuccessCount: 1,
+	}
+	if route.FallbackDepth > 0 {
+		delta.FallbackCount = 1
+	}
+	a.AddModelControlMetrics(delta)
 	route = cloneModelRoute(route)
 	a.modelRouteMu.Lock()
 	a.modelRoute = route
@@ -498,7 +544,7 @@ func (a *AgentLoop) SetModelRoute(route config.ModelRoute) {
 	a.SetModelToolDefinitionsAllowed(route.ToolDefinitionsAllowed)
 }
 
-func (a *AgentLoop) SetMissionModelRouter(router func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error)) {
+func (a *AgentLoop) SetMissionModelRouter(router func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error)) {
 	if a == nil {
 		return
 	}
@@ -528,15 +574,25 @@ func (a *AgentLoop) ModelRoute() (config.ModelRoute, bool) {
 }
 
 func (a *AgentLoop) activeToolDefinitions() []providers.ToolDefinition {
-	if a == nil || !a.toolDefinitionsAllowed {
+	if a == nil {
 		return nil
 	}
 	defs := activeToolDefinitions(a.tools, a.taskState)
+	if !a.toolDefinitionsAllowed {
+		if len(defs) > 0 {
+			a.AddModelControlMetrics(missioncontrol.OperatorModelControlMetricsStatus{ToolSchemaSuppressedCount: 1})
+		}
+		return nil
+	}
 	route, ok := a.ModelRoute()
 	if !ok {
 		return defs
 	}
-	return filterToolDefinitionsForModelAuthority(defs, route.Capabilities.AuthorityTier)
+	filtered := filterToolDefinitionsForModelAuthority(defs, route.Capabilities.AuthorityTier)
+	if len(filtered) < len(defs) {
+		a.AddModelControlMetrics(missioncontrol.OperatorModelControlMetricsStatus{ToolSchemaSuppressedCount: 1})
+	}
+	return filtered
 }
 
 func filterToolDefinitionsForModelAuthority(defs []providers.ToolDefinition, tier config.ModelAuthorityTier) []providers.ToolDefinition {
@@ -579,8 +635,10 @@ func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) e
 		return nil
 	}
 	if a.missionModelRouter != nil {
-		route, provider, ok, err := a.missionModelRouter(job, stepID)
+		route, provider, metrics, ok, err := a.missionModelRouter(job, stepID)
+		a.AddModelControlMetrics(metrics)
 		if err != nil {
+			a.AddModelControlMetrics(modelRouteFailureMetrics(err))
 			return err
 		}
 		if ok {
@@ -589,9 +647,26 @@ func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) e
 		}
 	}
 	if err := a.validateModelAuthorityForMissionStep(job, stepID); err != nil {
+		a.AddModelControlMetrics(modelRouteFailureMetrics(err))
 		return err
 	}
 	return a.taskState.ActivateStep(job, stepID)
+}
+
+func modelRouteFailureMetrics(err error) missioncontrol.OperatorModelControlMetricsStatus {
+	metrics := missioncontrol.OperatorModelControlMetricsStatus{
+		RouteAttemptCount: 1,
+		RouteFailureCount: 1,
+	}
+	if validationErr, ok := err.(missioncontrol.ValidationError); ok {
+		switch validationErr.Code {
+		case missioncontrol.RejectionCodeInvalidModelPolicy:
+			metrics.ModelPolicyDenialCount = 1
+		case missioncontrol.RejectionCodeAuthorityExceeded:
+			metrics.AuthorityDenialCount = 1
+		}
+	}
+	return metrics
 }
 
 func (a *AgentLoop) validateModelAuthorityForMissionStep(job missioncontrol.Job, stepID string) error {

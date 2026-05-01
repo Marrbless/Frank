@@ -9,17 +9,18 @@ import (
 // It is a sanitized projection of the mission status snapshot contract and does
 // not expose raw runtime state or runtime control records.
 type GatewayStatusSnapshot struct {
-	MissionRequired   bool                      `json:"mission_required"`
-	Active            bool                      `json:"active"`
-	MissionFile       string                    `json:"mission_file"`
-	JobID             string                    `json:"job_id"`
-	StepID            string                    `json:"step_id"`
-	StepType          string                    `json:"step_type"`
-	RequiredAuthority AuthorityTier             `json:"required_authority"`
-	RequiresApproval  bool                      `json:"requires_approval"`
-	AllowedTools      []string                  `json:"allowed_tools"`
-	Model             *OperatorModelRouteStatus `json:"model,omitempty"`
-	UpdatedAt         string                    `json:"updated_at"`
+	MissionRequired   bool                               `json:"mission_required"`
+	Active            bool                               `json:"active"`
+	MissionFile       string                             `json:"mission_file"`
+	JobID             string                             `json:"job_id"`
+	StepID            string                             `json:"step_id"`
+	StepType          string                             `json:"step_type"`
+	RequiredAuthority AuthorityTier                      `json:"required_authority"`
+	RequiresApproval  bool                               `json:"requires_approval"`
+	AllowedTools      []string                           `json:"allowed_tools"`
+	Model             *OperatorModelRouteStatus          `json:"model,omitempty"`
+	ModelMetrics      *OperatorModelControlMetricsStatus `json:"model_metrics,omitempty"`
+	UpdatedAt         string                             `json:"updated_at"`
 }
 
 type GatewayStatusSnapshotOptions = MissionStatusSnapshotOptions
@@ -36,6 +37,7 @@ func ProjectGatewayStatusSnapshot(snapshot MissionStatusSnapshot) GatewayStatusS
 		RequiresApproval:  snapshot.RequiresApproval,
 		AllowedTools:      append([]string(nil), snapshot.AllowedTools...),
 		Model:             CloneOperatorModelRouteStatus(snapshot.Model),
+		ModelMetrics:      CloneOperatorModelControlMetricsStatus(snapshot.ModelMetrics),
 		UpdatedAt:         snapshot.UpdatedAt,
 	}
 }

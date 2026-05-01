@@ -12,9 +12,10 @@ import (
 )
 
 type runtimeModelSelection struct {
-	Registry config.ModelRegistry
-	Route    config.ModelRoute
-	Provider providers.LLMProvider
+	Registry                   config.ModelRegistry
+	Route                      config.ModelRoute
+	Provider                   providers.LLMProvider
+	ProviderHealthFailureCount int64
 }
 
 func resolveRuntimeModelSelection(cfg config.Config, explicitModel string) (runtimeModelSelection, error) {
@@ -26,7 +27,7 @@ func resolveRuntimeModelSelectionWithContext(ctx context.Context, cfg config.Con
 	if err != nil {
 		return runtimeModelSelection{}, fmt.Errorf("failed to build model registry: %w", err)
 	}
-	unavailable := runtimeUnavailableModels(ctx, reg, cfg.LocalRuntimes)
+	unavailable, healthFailures := runtimeUnavailableModelsWithHealthFailures(ctx, reg, cfg.LocalRuntimes)
 	route, err := reg.Route(config.ModelRouteOptions{
 		ExplicitModel:          explicitModel,
 		AllowFallback:          runtimeModelFallbackConfigured(reg),
@@ -42,22 +43,26 @@ func resolveRuntimeModelSelectionWithContext(ctx context.Context, cfg config.Con
 		return runtimeModelSelection{}, err
 	}
 	return runtimeModelSelection{
-		Registry: reg,
-		Route:    route,
-		Provider: provider,
+		Registry:                   reg,
+		Route:                      route,
+		Provider:                   provider,
+		ProviderHealthFailureCount: healthFailures,
 	}, nil
 }
 
-func newRuntimeMissionModelRouter(ctx context.Context, cfg config.Config, explicitModel string) func(missioncontrol.Job, string) (config.ModelRoute, providers.LLMProvider, bool, error) {
-	return func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, bool, error) {
+func newRuntimeMissionModelRouter(ctx context.Context, cfg config.Config, explicitModel string) func(missioncontrol.Job, string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
+	return func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
 		selection, ok, err := resolveRuntimeMissionModelSelectionWithContext(ctx, cfg, explicitModel, job, stepID)
 		if err != nil {
-			return config.ModelRoute{}, nil, false, err
+			return config.ModelRoute{}, nil, missioncontrol.OperatorModelControlMetricsStatus{}, false, err
 		}
 		if !ok {
-			return config.ModelRoute{}, nil, false, nil
+			return config.ModelRoute{}, nil, missioncontrol.OperatorModelControlMetricsStatus{}, false, nil
 		}
-		return selection.Route, selection.Provider, true, nil
+		metrics := missioncontrol.OperatorModelControlMetricsStatus{
+			ProviderHealthFailureCount: selection.ProviderHealthFailureCount,
+		}
+		return selection.Route, selection.Provider, metrics, true, nil
 	}
 }
 
@@ -79,13 +84,14 @@ func resolveRuntimeMissionModelSelectionWithContext(ctx context.Context, cfg con
 	if err != nil {
 		return runtimeModelSelection{}, false, modelPolicyRouteError(stepID, err)
 	}
+	unavailable, healthFailures := runtimeUnavailableModelsWithHealthFailures(ctx, reg, cfg.LocalRuntimes)
 	route, err := reg.Route(config.ModelRouteOptions{
 		ExplicitModel:          explicitModel,
 		DefaultModel:           policy.DefaultModel,
 		AllowedModels:          policy.AllowedModels,
 		AllowFallback:          modelPolicyAllowFallback(policy, reg),
 		RequiredCapability:     required,
-		UnavailableModels:      runtimeUnavailableModels(ctx, reg, cfg.LocalRuntimes),
+		UnavailableModels:      unavailable,
 		AllowRawProviderModel:  false,
 		RawProviderModelSource: config.RouteReasonCLIOverride,
 		PolicyID:               policyID,
@@ -98,9 +104,10 @@ func resolveRuntimeMissionModelSelectionWithContext(ctx context.Context, cfg con
 		return runtimeModelSelection{}, false, err
 	}
 	return runtimeModelSelection{
-		Registry: reg,
-		Route:    route,
-		Provider: provider,
+		Registry:                   reg,
+		Route:                      route,
+		Provider:                   provider,
+		ProviderHealthFailureCount: healthFailures,
 	}, true, nil
 }
 
@@ -154,11 +161,17 @@ func cloneBoolPtr(value *bool) *bool {
 }
 
 func runtimeUnavailableModels(ctx context.Context, reg config.ModelRegistry, runtimes map[string]config.LocalRuntimeConfig) map[string]bool {
+	unavailable, _ := runtimeUnavailableModelsWithHealthFailures(ctx, reg, runtimes)
+	return unavailable
+}
+
+func runtimeUnavailableModelsWithHealthFailures(ctx context.Context, reg config.ModelRegistry, runtimes map[string]config.LocalRuntimeConfig) (map[string]bool, int64) {
 	if len(runtimes) == 0 || len(reg.Models) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	unavailable := make(map[string]bool)
+	var healthFailures int64
 	for modelRef, model := range reg.Models {
 		if !runtimeProviderHasHealthURL(model.ProviderRef, runtimes) {
 			continue
@@ -170,16 +183,18 @@ func runtimeUnavailableModels(ctx context.Context, reg config.ModelRegistry, run
 		})
 		if err != nil {
 			unavailable[modelRef] = true
+			healthFailures++
 			continue
 		}
 		if result.Status == providers.ModelHealthUnhealthy {
 			unavailable[modelRef] = true
+			healthFailures++
 		}
 	}
 	if len(unavailable) == 0 {
-		return nil
+		return nil, healthFailures
 	}
-	return unavailable
+	return unavailable, healthFailures
 }
 
 func runtimeProviderHasHealthURL(providerRef string, runtimes map[string]config.LocalRuntimeConfig) bool {
