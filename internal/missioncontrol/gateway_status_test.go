@@ -28,6 +28,7 @@ func TestGatewayStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
 		{name: "Model", tag: `json:"model,omitempty"`},
 		{name: "ModelMetrics", tag: `json:"model_metrics,omitempty"`},
+		{name: "ModelHealth", tag: `json:"model_health,omitempty"`},
 		{name: "UpdatedAt", tag: `json:"updated_at"`},
 	}
 
@@ -111,6 +112,32 @@ func TestProjectGatewayStatusSnapshotIncludesModelControlMetrics(t *testing.T) {
 	snapshot.ModelMetrics.RouteAttemptCount = 99
 	if projected.ModelMetrics.RouteAttemptCount != 2 {
 		t.Fatalf("GatewayStatusSnapshot.ModelMetrics.RouteAttemptCount mutated to %d", projected.ModelMetrics.RouteAttemptCount)
+	}
+}
+
+func TestProjectGatewayStatusSnapshotIncludesModelHealthStatus(t *testing.T) {
+	t.Parallel()
+
+	snapshot := MissionStatusSnapshot{
+		JobID:        "job-1",
+		AllowedTools: []string{"read"},
+		ModelHealth: []OperatorModelHealthStatus{
+			{ModelRef: "cloud_reasoning", ProviderRef: "openrouter", Status: "unknown", LastCheckedAt: "2026-05-01T12:00:00Z"},
+			{ModelRef: "local_fast", ProviderRef: "llamacpp_phone", Status: "disabled", LastCheckedAt: "2026-05-01T12:00:00Z"},
+		},
+	}
+
+	projected := ProjectGatewayStatusSnapshot(snapshot)
+	if len(projected.ModelHealth) != 2 {
+		t.Fatalf("GatewayStatusSnapshot.ModelHealth = %#v, want 2 statuses", projected.ModelHealth)
+	}
+	if projected.ModelHealth[0].Status != "unknown" || projected.ModelHealth[1].Status != "disabled" {
+		t.Fatalf("GatewayStatusSnapshot.ModelHealth = %#v, want unknown and disabled", projected.ModelHealth)
+	}
+
+	snapshot.ModelHealth[0].Status = "mutated"
+	if projected.ModelHealth[0].Status != "unknown" {
+		t.Fatalf("GatewayStatusSnapshot.ModelHealth[0].Status mutated to %q", projected.ModelHealth[0].Status)
 	}
 }
 

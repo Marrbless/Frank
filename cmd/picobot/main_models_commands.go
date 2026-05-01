@@ -141,11 +141,12 @@ func newModelsCmd() *cobra.Command {
 				}
 				modelRefs = []string{ref}
 			}
+			healthCache := providers.NewModelHealthCache(30*time.Second, 128)
 			for i, ref := range modelRefs {
 				if i > 0 {
 					fmt.Fprintln(cmd.OutOrStdout())
 				}
-				result, err := providers.CheckModelHealth(cmd.Context(), reg, ref, providers.ModelHealthCheckOptions{
+				result, err := healthCache.CheckModelHealth(cmd.Context(), reg, ref, providers.ModelHealthCheckOptions{
 					Now:           time.Now().UTC(),
 					LocalRuntimes: cfg.LocalRuntimes,
 				})

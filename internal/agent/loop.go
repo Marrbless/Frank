@@ -357,12 +357,14 @@ type AgentLoop struct {
 	hasModelRoute           bool
 	modelMetricsMu          sync.RWMutex
 	modelMetrics            missioncontrol.OperatorModelControlMetricsStatus
+	modelHealthMu           sync.RWMutex
+	modelHealth             []missioncontrol.OperatorModelHealthStatus
 	maxIterations           int
 	running                 bool
 	suppressTerminalNotices int32
 	taskState               *tools.TaskState
 	operatorSetStepHook     func(jobID string, stepID string) (string, error)
-	missionModelRouter      func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error)
+	missionModelRouter      func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, []missioncontrol.OperatorModelHealthStatus, bool, error)
 	mcpClients              []*mcp.Client
 	enableToolActivity      bool
 }
@@ -508,6 +510,24 @@ func (a *AgentLoop) AddModelControlMetrics(delta missioncontrol.OperatorModelCon
 	a.modelMetrics.ToolSchemaSuppressedCount += delta.ToolSchemaSuppressedCount
 }
 
+func (a *AgentLoop) SetModelHealthStatus(health []missioncontrol.OperatorModelHealthStatus) {
+	if a == nil {
+		return
+	}
+	a.modelHealthMu.Lock()
+	defer a.modelHealthMu.Unlock()
+	a.modelHealth = missioncontrol.CloneOperatorModelHealthStatus(health)
+}
+
+func (a *AgentLoop) ModelHealthStatus() []missioncontrol.OperatorModelHealthStatus {
+	if a == nil {
+		return nil
+	}
+	a.modelHealthMu.RLock()
+	defer a.modelHealthMu.RUnlock()
+	return missioncontrol.CloneOperatorModelHealthStatus(a.modelHealth)
+}
+
 func modelControlMetricsZero(metrics missioncontrol.OperatorModelControlMetricsStatus) bool {
 	return metrics.RouteAttemptCount == 0 &&
 		metrics.RouteSuccessCount == 0 &&
@@ -544,7 +564,7 @@ func (a *AgentLoop) SetModelRoute(route config.ModelRoute) {
 	a.SetModelToolDefinitionsAllowed(route.ToolDefinitionsAllowed)
 }
 
-func (a *AgentLoop) SetMissionModelRouter(router func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error)) {
+func (a *AgentLoop) SetMissionModelRouter(router func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, []missioncontrol.OperatorModelHealthStatus, bool, error)) {
 	if a == nil {
 		return
 	}
@@ -635,8 +655,11 @@ func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) e
 		return nil
 	}
 	if a.missionModelRouter != nil {
-		route, provider, metrics, ok, err := a.missionModelRouter(job, stepID)
+		route, provider, metrics, health, ok, err := a.missionModelRouter(job, stepID)
 		a.AddModelControlMetrics(metrics)
+		if len(health) > 0 {
+			a.SetModelHealthStatus(health)
+		}
 		if err != nil {
 			a.AddModelControlMetrics(modelRouteFailureMetrics(err))
 			return err

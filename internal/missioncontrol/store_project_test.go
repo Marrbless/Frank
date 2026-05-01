@@ -1253,6 +1253,37 @@ func TestBuildCommittedMissionStatusSnapshotIncludesModelControlMetrics(t *testi
 	}
 }
 
+func TestBuildCommittedMissionStatusSnapshotIncludesModelHealthStatus(t *testing.T) {
+	t.Parallel()
+
+	storeFixture := writeMissionStoreRuntimeFixture(t)
+	health := []OperatorModelHealthStatus{
+		{ModelRef: "cloud_reasoning", ProviderRef: "openrouter", Status: "healthy", LastCheckedAt: "2026-05-01T12:00:00Z", FallbackAvailable: true},
+		{ModelRef: "local_fast", ProviderRef: "llamacpp_phone", Status: "unhealthy", LastCheckedAt: "2026-05-01T12:00:00Z", LastErrorClass: "connection_refused"},
+	}
+
+	snapshot, err := BuildCommittedMissionStatusSnapshot(storeFixture.root, storeFixture.job.ID, MissionStatusSnapshotOptions{
+		MissionRequired: true,
+		MissionFile:     "mission.json",
+		UpdatedAt:       storeFixture.now,
+		ModelHealth:     health,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommittedMissionStatusSnapshot() error = %v", err)
+	}
+	if len(snapshot.ModelHealth) != 2 || snapshot.ModelHealth[1].LastErrorClass != "connection_refused" {
+		t.Fatalf("snapshot.ModelHealth = %#v, want health status", snapshot.ModelHealth)
+	}
+	if snapshot.RuntimeSummary == nil || len(snapshot.RuntimeSummary.ModelHealth) != 2 || snapshot.RuntimeSummary.ModelHealth[0].Status != "healthy" {
+		t.Fatalf("snapshot.RuntimeSummary.ModelHealth = %#v, want health status", snapshot.RuntimeSummary)
+	}
+
+	health[0].Status = "mutated"
+	if snapshot.ModelHealth[0].Status != "healthy" {
+		t.Fatalf("snapshot.ModelHealth[0].Status mutated to %q", snapshot.ModelHealth[0].Status)
+	}
+}
+
 func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -1272,6 +1303,7 @@ func TestMissionStatusSnapshotSchemaUnchanged(t *testing.T) {
 		{name: "AllowedTools", tag: `json:"allowed_tools"`},
 		{name: "Model", tag: `json:"model,omitempty"`},
 		{name: "ModelMetrics", tag: `json:"model_metrics,omitempty"`},
+		{name: "ModelHealth", tag: `json:"model_health,omitempty"`},
 		{name: "Skills", tag: `json:"skills,omitempty"`},
 		{name: "Runtime", tag: `json:"runtime,omitempty"`},
 		{name: "RuntimeSummary", tag: `json:"runtime_summary,omitempty"`},

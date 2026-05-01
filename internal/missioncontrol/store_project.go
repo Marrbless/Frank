@@ -18,6 +18,7 @@ type MissionStatusSnapshot struct {
 	AllowedTools      []string                           `json:"allowed_tools"`
 	Model             *OperatorModelRouteStatus          `json:"model,omitempty"`
 	ModelMetrics      *OperatorModelControlMetricsStatus `json:"model_metrics,omitempty"`
+	ModelHealth       []OperatorModelHealthStatus        `json:"model_health,omitempty"`
 	Skills            *GovernedSkillSelectionStatus      `json:"skills,omitempty"`
 	Runtime           *JobRuntimeState                   `json:"runtime,omitempty"`
 	// RuntimeSummary is a convenience projection of direct OperatorStatus JSON.
@@ -35,6 +36,7 @@ type MissionStatusSnapshotOptions struct {
 	UpdatedAt       time.Time
 	Model           *OperatorModelRouteStatus
 	ModelMetrics    *OperatorModelControlMetricsStatus
+	ModelHealth     []OperatorModelHealthStatus
 }
 
 func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusSnapshotOptions) (MissionStatusSnapshot, error) {
@@ -70,6 +72,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 		AllowedTools:    []string{},
 		Model:           CloneOperatorModelRouteStatus(opts.Model),
 		ModelMetrics:    CloneOperatorModelControlMetricsStatus(opts.ModelMetrics),
+		ModelHealth:     CloneOperatorModelHealthStatus(opts.ModelHealth),
 		Runtime:         CloneJobRuntimeState(&runtimeState),
 		RuntimeControl:  CloneRuntimeControlContext(runtimeControl),
 		UpdatedAt:       now.Format(time.RFC3339Nano),
@@ -88,6 +91,7 @@ func BuildCommittedMissionStatusSnapshot(root, jobID string, opts MissionStatusS
 	summary := BuildOperatorStatusSummaryWithAllowedTools(runtimeState, snapshot.AllowedTools)
 	summary = WithModelRouteStatus(summary, snapshot.Model)
 	summary = WithModelControlMetricsStatus(summary, snapshot.ModelMetrics)
+	summary = WithModelHealthStatus(summary, snapshot.ModelHealth)
 	if runtimeControl != nil {
 		selected := EffectiveSelectedSkills(&Job{SelectedSkills: runtimeControl.SelectedSkills}, &runtimeControl.Step)
 		if len(selected) > 0 {

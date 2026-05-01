@@ -193,6 +193,7 @@ func TestMissionStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
 	ag := agent.NewAgentLoop(chat.NewHub(10), selection.Provider, selection.Route.ProviderModel, 3, t.TempDir(), nil)
 	defer ag.Close()
 	ag.SetModelRoute(selection.Route)
+	ag.SetModelHealthStatus(modelHealthStatusesFromResults(selection.HealthResults))
 	if err := ag.ActivateMissionStep(testMissionBootstrapJob(), "build"); err != nil {
 		t.Fatalf("ActivateMissionStep() error = %v", err)
 	}
@@ -233,6 +234,12 @@ func TestMissionStatusSnapshotIncludesSafeModelRoute(t *testing.T) {
 	}
 	if snapshot.RuntimeSummary.ModelMetrics == nil || snapshot.RuntimeSummary.ModelMetrics.RouteSuccessCount != 1 {
 		t.Fatalf("snapshot.RuntimeSummary.ModelMetrics = %#v, want route counters", snapshot.RuntimeSummary.ModelMetrics)
+	}
+	if len(snapshot.ModelHealth) == 0 || snapshot.ModelHealth[0].Status != "unknown" {
+		t.Fatalf("snapshot.ModelHealth = %#v, want cached unknown readiness status", snapshot.ModelHealth)
+	}
+	if snapshot.RuntimeSummary == nil || len(snapshot.RuntimeSummary.ModelHealth) == 0 {
+		t.Fatalf("snapshot.RuntimeSummary.ModelHealth = %#v, want readiness status", snapshot.RuntimeSummary)
 	}
 }
 

@@ -20,6 +20,7 @@ type GatewayStatusSnapshot struct {
 	AllowedTools      []string                           `json:"allowed_tools"`
 	Model             *OperatorModelRouteStatus          `json:"model,omitempty"`
 	ModelMetrics      *OperatorModelControlMetricsStatus `json:"model_metrics,omitempty"`
+	ModelHealth       []OperatorModelHealthStatus        `json:"model_health,omitempty"`
 	UpdatedAt         string                             `json:"updated_at"`
 }
 
@@ -38,6 +39,7 @@ func ProjectGatewayStatusSnapshot(snapshot MissionStatusSnapshot) GatewayStatusS
 		AllowedTools:      append([]string(nil), snapshot.AllowedTools...),
 		Model:             CloneOperatorModelRouteStatus(snapshot.Model),
 		ModelMetrics:      CloneOperatorModelControlMetricsStatus(snapshot.ModelMetrics),
+		ModelHealth:       CloneOperatorModelHealthStatus(snapshot.ModelHealth),
 		UpdatedAt:         snapshot.UpdatedAt,
 	}
 }

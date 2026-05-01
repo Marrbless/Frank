@@ -33,6 +33,7 @@ type OperatorStatusSummary struct {
 	AllowedTools                                 []string                                                    `json:"allowed_tools,omitempty"`
 	Model                                        *OperatorModelRouteStatus                                   `json:"model,omitempty"`
 	ModelMetrics                                 *OperatorModelControlMetricsStatus                          `json:"model_metrics,omitempty"`
+	ModelHealth                                  []OperatorModelHealthStatus                                 `json:"model_health,omitempty"`
 	Skills                                       *GovernedSkillSelectionStatus                               `json:"skills,omitempty"`
 	RuntimePackIdentity                          *OperatorRuntimePackIdentityStatus                          `json:"runtime_pack_identity,omitempty"`
 	V4Summary                                    *OperatorV4SummaryStatus                                    `json:"v4_summary,omitempty"`
@@ -138,6 +139,15 @@ type OperatorModelControlMetricsStatus struct {
 	ModelPolicyDenialCount     int64 `json:"model_policy_denial_count,omitempty"`
 	AuthorityDenialCount       int64 `json:"authority_denial_count,omitempty"`
 	ToolSchemaSuppressedCount  int64 `json:"tool_schema_suppressed_count,omitempty"`
+}
+
+type OperatorModelHealthStatus struct {
+	ModelRef          string `json:"model_ref"`
+	ProviderRef       string `json:"provider_ref"`
+	Status            string `json:"status"`
+	LastCheckedAt     string `json:"last_checked_at"`
+	LastErrorClass    string `json:"last_error_class,omitempty"`
+	FallbackAvailable bool   `json:"fallback_available"`
 }
 
 type OperatorRuntimePackIdentityStatus struct {
@@ -756,6 +766,11 @@ func WithModelControlMetricsStatus(summary OperatorStatusSummary, metrics *Opera
 	return summary
 }
 
+func WithModelHealthStatus(summary OperatorStatusSummary, health []OperatorModelHealthStatus) OperatorStatusSummary {
+	summary.ModelHealth = CloneOperatorModelHealthStatus(health)
+	return summary
+}
+
 func CloneOperatorModelRouteStatus(model *OperatorModelRouteStatus) *OperatorModelRouteStatus {
 	if model == nil {
 		return nil
@@ -770,6 +785,15 @@ func CloneOperatorModelControlMetricsStatus(metrics *OperatorModelControlMetrics
 	}
 	clone := *metrics
 	return &clone
+}
+
+func CloneOperatorModelHealthStatus(health []OperatorModelHealthStatus) []OperatorModelHealthStatus {
+	if len(health) == 0 {
+		return nil
+	}
+	clone := make([]OperatorModelHealthStatus, len(health))
+	copy(clone, health)
+	return clone
 }
 
 func withStoreRootStatus(summary OperatorStatusSummary, root string, apply func(*OperatorStatusSummary, string)) OperatorStatusSummary {

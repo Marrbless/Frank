@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/local/picobot/internal/config"
@@ -53,18 +55,151 @@ type ModelHealthCheckOptions struct {
 	SkipProviderModelsEndpoint bool
 }
 
+type ModelHealthCache struct {
+	mu         sync.Mutex
+	ttl        time.Duration
+	maxEntries int
+	entries    map[string]modelHealthCacheEntry
+}
+
+type modelHealthCacheEntry struct {
+	result    ModelHealthResult
+	expiresAt time.Time
+}
+
+func NewModelHealthCache(ttl time.Duration, maxEntries int) *ModelHealthCache {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	if maxEntries <= 0 {
+		maxEntries = 128
+	}
+	return &ModelHealthCache{
+		ttl:        ttl,
+		maxEntries: maxEntries,
+		entries:    make(map[string]modelHealthCacheEntry),
+	}
+}
+
+func (c *ModelHealthCache) CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrAlias string, opts ModelHealthCheckOptions) (ModelHealthResult, error) {
+	if c == nil {
+		return CheckModelHealth(ctx, reg, modelRefOrAlias, opts)
+	}
+	modelRef, err := reg.ResolveModelRef(modelRefOrAlias)
+	if err != nil {
+		return ModelHealthResult{}, err
+	}
+	now := modelHealthNow(opts.Now)
+
+	c.mu.Lock()
+	if entry, ok := c.entries[modelRef]; ok && now.Before(entry.expiresAt) {
+		result := entry.result
+		c.mu.Unlock()
+		return result, nil
+	}
+	c.mu.Unlock()
+
+	opts.Now = now
+	result, err := CheckModelHealth(ctx, reg, modelRef, opts)
+	if err != nil {
+		return ModelHealthResult{}, err
+	}
+	c.Store(result, now)
+	return result, nil
+}
+
+func (c *ModelHealthCache) Store(result ModelHealthResult, now time.Time) {
+	if c == nil || strings.TrimSpace(result.ModelRef) == "" {
+		return
+	}
+	now = modelHealthNow(now)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[result.ModelRef] = modelHealthCacheEntry{
+		result:    result,
+		expiresAt: now.Add(c.ttl),
+	}
+	c.enforceLimitLocked()
+}
+
+func (c *ModelHealthCache) Snapshot(reg config.ModelRegistry, now time.Time) []ModelHealthResult {
+	if c == nil {
+		return ModelHealthUnknownSnapshot(reg, now)
+	}
+	now = modelHealthNow(now)
+	refs := make([]string, 0, len(reg.Models))
+	for ref := range reg.Models {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	results := make([]ModelHealthResult, 0, len(refs))
+	for _, ref := range refs {
+		if entry, ok := c.entries[ref]; ok && now.Before(entry.expiresAt) {
+			results = append(results, entry.result)
+			continue
+		}
+		results = append(results, unknownModelHealthResult(reg, ref, now))
+	}
+	return results
+}
+
+func (c *ModelHealthCache) enforceLimitLocked() {
+	if c.maxEntries <= 0 || len(c.entries) <= c.maxEntries {
+		return
+	}
+	keys := make([]string, 0, len(c.entries))
+	for key := range c.entries {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left := c.entries[keys[i]]
+		right := c.entries[keys[j]]
+		if !left.expiresAt.Equal(right.expiresAt) {
+			return left.expiresAt.Before(right.expiresAt)
+		}
+		return keys[i] < keys[j]
+	})
+	for len(c.entries) > c.maxEntries && len(keys) > 0 {
+		delete(c.entries, keys[0])
+		keys = keys[1:]
+	}
+}
+
+func ModelHealthUnknownSnapshot(reg config.ModelRegistry, now time.Time) []ModelHealthResult {
+	now = modelHealthNow(now)
+	refs := make([]string, 0, len(reg.Models))
+	for ref := range reg.Models {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	results := make([]ModelHealthResult, 0, len(refs))
+	for _, ref := range refs {
+		results = append(results, unknownModelHealthResult(reg, ref, now))
+	}
+	return results
+}
+
+func unknownModelHealthResult(reg config.ModelRegistry, modelRef string, now time.Time) ModelHealthResult {
+	model := reg.Models[modelRef]
+	return ModelHealthResult{
+		ModelRef:          model.Ref,
+		ProviderRef:       model.ProviderRef,
+		Status:            ModelHealthUnknown,
+		LastCheckedAt:     modelHealthNow(now).Format(time.RFC3339),
+		FallbackAvailable: len(reg.Routing.Fallbacks[model.Ref]) > 0,
+	}
+}
+
 func CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrAlias string, opts ModelHealthCheckOptions) (ModelHealthResult, error) {
 	modelRef, err := reg.ResolveModelRef(modelRefOrAlias)
 	if err != nil {
 		return ModelHealthResult{}, err
 	}
 	model := reg.Models[modelRef]
-	now := opts.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
+	now := modelHealthNow(opts.Now)
 	result := ModelHealthResult{
 		ModelRef:          model.Ref,
 		ProviderRef:       model.ProviderRef,
@@ -138,6 +273,13 @@ func CheckModelHealth(ctx context.Context, reg config.ModelRegistry, modelRefOrA
 
 	result.Status = ModelHealthHealthy
 	return result, nil
+}
+
+func modelHealthNow(now time.Time) time.Time {
+	if now.IsZero() {
+		return time.Now().UTC()
+	}
+	return now.UTC()
 }
 
 func modelHealthURL(providerRef string, providerCfg config.ProviderConfig, runtimes map[string]config.LocalRuntimeConfig, skipProviderModelsEndpoint bool) (string, bool) {

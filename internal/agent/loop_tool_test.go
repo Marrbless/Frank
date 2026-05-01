@@ -674,8 +674,8 @@ func TestAgentLoopModelControlMetricsRecordModelPolicyDenial(t *testing.T) {
 	b := chat.NewHub(10)
 	p := &FakeProvider{}
 	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
-	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
-		return config.ModelRoute{}, nil, missioncontrol.OperatorModelControlMetricsStatus{}, false, missioncontrol.ValidationError{
+	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, []missioncontrol.OperatorModelHealthStatus, bool, error) {
+		return config.ModelRoute{}, nil, missioncontrol.OperatorModelControlMetricsStatus{}, nil, false, missioncontrol.ValidationError{
 			Code:    missioncontrol.RejectionCodeInvalidModelPolicy,
 			StepID:  stepID,
 			Message: "model_policy denied route",
@@ -696,9 +696,10 @@ func TestAgentLoopModelControlMetricsIncludeRouterProviderHealthFailures(t *test
 	b := chat.NewHub(10)
 	p := &FakeProvider{}
 	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
-	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, bool, error) {
+	ag.SetMissionModelRouter(func(job missioncontrol.Job, stepID string) (config.ModelRoute, providers.LLMProvider, missioncontrol.OperatorModelControlMetricsStatus, []missioncontrol.OperatorModelHealthStatus, bool, error) {
 		metrics := missioncontrol.OperatorModelControlMetricsStatus{ProviderHealthFailureCount: 2}
-		return testAuthorityModelRoute(config.ModelAuthorityHigh), p, metrics, true, nil
+		health := []missioncontrol.OperatorModelHealthStatus{{ModelRef: "test_model", ProviderRef: "test_provider", Status: "healthy", LastCheckedAt: "2026-05-01T00:00:00Z"}}
+		return testAuthorityModelRoute(config.ModelAuthorityHigh), p, metrics, health, true, nil
 	})
 
 	if err := ag.ActivateMissionStep(testMissionJob([]string{"read_memory"}, []string{"read_memory"}), "build"); err != nil {
@@ -707,6 +708,10 @@ func TestAgentLoopModelControlMetricsIncludeRouterProviderHealthFailures(t *test
 	metrics := ag.ModelControlMetrics()
 	if metrics.ProviderHealthFailureCount != 2 || metrics.RouteAttemptCount != 1 || metrics.RouteSuccessCount != 1 {
 		t.Fatalf("ModelControlMetrics() = %#v, want health failures plus successful route", metrics)
+	}
+	health := ag.ModelHealthStatus()
+	if len(health) != 1 || health[0].Status != "healthy" {
+		t.Fatalf("ModelHealthStatus() = %#v, want router health status", health)
 	}
 }
 

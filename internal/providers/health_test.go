@@ -115,6 +115,119 @@ func TestCheckModelHealthDisabledWhenNoEndpoint(t *testing.T) {
 	}
 }
 
+func TestModelHealthCacheHitAvoidsSecondProbe(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := healthTestConfig(server.URL + "/v1")
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	cache := NewModelHealthCache(time.Minute, 8)
+	opts := ModelHealthCheckOptions{Now: time.Unix(10, 0).UTC()}
+	first, err := cache.CheckModelHealth(context.Background(), reg, "best", opts)
+	if err != nil {
+		t.Fatalf("CheckModelHealth(first) error = %v", err)
+	}
+	opts.Now = time.Unix(20, 0).UTC()
+	second, err := cache.CheckModelHealth(context.Background(), reg, "cloud_reasoning", opts)
+	if err != nil {
+		t.Fatalf("CheckModelHealth(second) error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("health probe calls = %d, want 1 cache hit", calls)
+	}
+	if first.LastCheckedAt != second.LastCheckedAt {
+		t.Fatalf("cached LastCheckedAt = %q, want first %q", second.LastCheckedAt, first.LastCheckedAt)
+	}
+}
+
+func TestModelHealthCacheRefreshAfterTTL(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"failed","api_key":"sk-health-secret"}`))
+	}))
+	defer server.Close()
+
+	cfg := healthTestConfig(server.URL + "/v1")
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	cache := NewModelHealthCache(time.Second, 8)
+	if _, err := cache.CheckModelHealth(context.Background(), reg, "best", ModelHealthCheckOptions{Now: time.Unix(10, 0).UTC()}); err != nil {
+		t.Fatalf("CheckModelHealth(first) error = %v", err)
+	}
+	refreshed, err := cache.CheckModelHealth(context.Background(), reg, "best", ModelHealthCheckOptions{Now: time.Unix(12, 0).UTC()})
+	if err != nil {
+		t.Fatalf("CheckModelHealth(refreshed) error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("health probe calls = %d, want refresh", calls)
+	}
+	if refreshed.Status != ModelHealthUnhealthy || refreshed.LastErrorClass != ModelHealthErrorHTTP {
+		t.Fatalf("refreshed result = %#v, want unhealthy http_error", refreshed)
+	}
+}
+
+func TestModelHealthCacheSnapshotIncludesUnknownAndCachedStatuses(t *testing.T) {
+	cfg := healthTestConfig("")
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	cache := NewModelHealthCache(time.Minute, 8)
+	cache.Store(ModelHealthResult{
+		ModelRef:          "cloud_reasoning",
+		ProviderRef:       "openrouter",
+		Status:            ModelHealthHealthy,
+		LastCheckedAt:     "2026-05-01T12:00:00Z",
+		FallbackAvailable: true,
+	}, time.Unix(10, 0).UTC())
+
+	snapshot := cache.Snapshot(reg, time.Unix(20, 0).UTC())
+	if len(snapshot) != 2 {
+		t.Fatalf("Snapshot len = %d, want 2: %#v", len(snapshot), snapshot)
+	}
+	if snapshot[0].ModelRef != "cloud_reasoning" || snapshot[0].Status != ModelHealthHealthy {
+		t.Fatalf("Snapshot[0] = %#v, want cached healthy cloud_reasoning", snapshot[0])
+	}
+	if snapshot[1].ModelRef != "fallback_model" || snapshot[1].Status != ModelHealthUnknown {
+		t.Fatalf("Snapshot[1] = %#v, want unknown fallback_model", snapshot[1])
+	}
+	if snapshot[1].LastCheckedAt != "1970-01-01T00:00:20Z" {
+		t.Fatalf("unknown LastCheckedAt = %q, want snapshot time", snapshot[1].LastCheckedAt)
+	}
+}
+
+func TestModelHealthCacheDisabledProvider(t *testing.T) {
+	cfg := healthTestConfig("")
+	cfg.Providers.Named["openrouter"] = config.ProviderConfig{Type: config.ProviderTypeOpenAICompatible}
+	reg, err := config.BuildModelRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildModelRegistry() error = %v", err)
+	}
+	cache := NewModelHealthCache(time.Minute, 8)
+	result, err := cache.CheckModelHealth(context.Background(), reg, "best", ModelHealthCheckOptions{Now: time.Unix(0, 0).UTC()})
+	if err != nil {
+		t.Fatalf("CheckModelHealth() error = %v", err)
+	}
+	if result.Status != ModelHealthDisabled {
+		t.Fatalf("Status = %q, want disabled", result.Status)
+	}
+}
+
 func checkModelHealthForTest(t *testing.T, apiBase string, timeout time.Duration) ModelHealthResult {
 	t.Helper()
 	cfg := healthTestConfig(apiBase)
