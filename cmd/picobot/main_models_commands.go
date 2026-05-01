@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/local/picobot/internal/config"
-	"github.com/local/picobot/internal/modelsetup"
 	"github.com/local/picobot/internal/providers"
 )
 
@@ -160,47 +159,7 @@ func newModelsCmd() *cobra.Command {
 		},
 	}
 
-	setupCmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Plan local model setup without unsafe defaults",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			presetName, _ := cmd.Flags().GetString("preset")
-			configPath, _ := cmd.Flags().GetString("config")
-			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
-			approve, _ := cmd.Flags().GetBool("approve")
-			force, _ := cmd.Flags().GetBool("force")
-			if !dryRun {
-				return fmt.Errorf("models setup execution is not implemented until later V6 slices; use --dry-run")
-			}
-			if configPath == "" {
-				configPath = config.DefaultConfigPath()
-			}
-			env := modelsetup.MinimalUnknownEnvSnapshot(configPath)
-			plan, err := modelsetup.BuildPlan(env, modelsetup.OperatorChoices{
-				PresetName:     presetName,
-				ConfigPath:     configPath,
-				NonInteractive: nonInteractive,
-				Approve:        approve,
-				DryRun:         dryRun,
-				Force:          force,
-			})
-			if err != nil {
-				return err
-			}
-			modelsetup.PrintPlan(cmd.OutOrStdout(), plan)
-			return nil
-		},
-	}
-	setupCmd.Flags().Bool("dry-run", false, "Print the setup plan without side effects")
-	setupCmd.Flags().Bool("non-interactive", false, "Fail unless every choice is explicit or safely defaulted")
-	setupCmd.Flags().String("preset", "", "Setup preset to plan")
-	setupCmd.Flags().Bool("approve", false, "Execute a fully resolved approved plan in later V6 slices")
-	setupCmd.Flags().String("config", "", "Config file path to plan against")
-	setupCmd.Flags().Bool("force", false, "Allow approved overwrites after backup in later V6 slices")
-
-	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd, healthCmd, setupCmd)
+	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd, healthCmd, newModelsSetupCmd(), newModelsPresetsCmd())
 	return modelsCmd
 }
 

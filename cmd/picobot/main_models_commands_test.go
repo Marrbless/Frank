@@ -232,25 +232,114 @@ func TestModelsSetupDryRunUsesMinimalSnapshotWithoutSideEffects(t *testing.T) {
 	}
 }
 
-func TestModelsSetupWithoutDryRunFailsBeforeSideEffects(t *testing.T) {
+func TestModelsSetupWithoutDryRunCanAbortBeforeSideEffects(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	cfgPath := filepath.Join(home, ".picobot", "config.json")
 
 	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"models", "setup", "--preset", "phone-ollama-tiny", "--config", cfgPath})
+	cmd.SetIn(strings.NewReader("n\n"))
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models setup abort error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "setup_aborted: true") {
+		t.Fatalf("models setup output = %q, want abort", stdout.String())
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("config path stat error = %v, want not exist after blocked setup", err)
+	}
+}
+
+func TestModelsSetupInteractiveAbortHasNoSideEffects(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "setup", "--config", cfgPath})
+	cmd.SetIn(strings.NewReader("1\nn\n"))
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models setup interactive abort error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"Available model setup presets:", "Proceed? [y/N]", "setup_aborted: true"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("models setup output = %q, want %q", out, want)
+		}
+	}
+	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
+		t.Fatalf("config path stat error = %v, want not exist after interactive abort", err)
+	}
+}
+
+func TestModelsSetupNonInteractiveRequiresPreset(t *testing.T) {
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "setup", "--non-interactive"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("models setup error = nil, want missing preset")
+	}
+	if !strings.Contains(err.Error(), "preset is required") {
+		t.Fatalf("error = %v, want preset required", err)
+	}
+}
+
+func TestModelsSetupApproveRejectsUnsafePlanBeforeExecutor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "setup", "--preset", "lan-llamacpp-local", "--approve", "--config", cfgPath})
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
 
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("models setup error = nil, want execution blocked until later slices")
+		t.Fatal("models setup approve error = nil, want blocked unsafe plan")
 	}
-	if !strings.Contains(err.Error(), "use --dry-run") {
-		t.Fatalf("models setup error = %v, want dry-run guidance", err)
+	if !strings.Contains(err.Error(), "plan status is blocked") {
+		t.Fatalf("error = %v, want blocked plan", err)
 	}
 	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
-		t.Fatalf("config path stat error = %v, want not exist after blocked setup", err)
+		t.Fatalf("config path stat error = %v, want not exist after rejected approve", err)
+	}
+}
+
+func TestModelsPresetsCommandsExposeCatalog(t *testing.T) {
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"models", "presets", "list"})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models presets list error = %v", err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"phone-ollama-tiny", "lan-llamacpp-local", "DEFAULT_SAFE"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("presets list output = %q, want %q", out, want)
+		}
+	}
+
+	cmd = NewRootCmd()
+	cmd.SetArgs([]string{"models", "presets", "inspect", "lan-llamacpp-local"})
+	stdout.Reset()
+	cmd.SetOut(&stdout)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("models presets inspect error = %v", err)
+	}
+	out = stdout.String()
+	for _, want := range []string{"explicitly_gated: true", "bind_address: 127.0.0.1", "authority_tier: low"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("presets inspect output = %q, want %q", out, want)
+		}
 	}
 }
 
