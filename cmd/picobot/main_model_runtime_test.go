@@ -117,6 +117,60 @@ func TestAgentCommandUsesV5ProviderModelAtRuntime(t *testing.T) {
 	}
 }
 
+func TestAgentCommandSuppressesToolsForNoToolModel(t *testing.T) {
+	var toolsPresent bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		_, toolsPresent = body["tools"]
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"local ok"}}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := v5RuntimeTestConfig(server.URL + "/v1")
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Providers.Named["llamacpp_phone"] = config.ProviderConfig{
+		Type:    config.ProviderTypeOpenAICompatible,
+		APIKey:  "not-needed",
+		APIBase: server.URL + "/v1",
+	}
+	cfg.Models["local_fast"] = config.ModelProfileConfig{
+		Provider:      "llamacpp_phone",
+		ProviderModel: "qwen3-test-local",
+		Capabilities: config.ModelCapabilities{
+			Local:         true,
+			Offline:       true,
+			AuthorityTier: config.ModelAuthorityLow,
+			CostTier:      config.ModelCostFree,
+			LatencyTier:   config.ModelLatencySlow,
+		},
+	}
+	cfg.ModelAliases["phone"] = "local_fast"
+	if err := config.SaveConfig(cfg, filepath.Join(home, ".picobot", "config.json")); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"agent", "-m", "hello", "-M", "phone"})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agent command error = %v", err)
+	}
+	if toolsPresent {
+		t.Fatal("provider request included tools for supportsTools=false model")
+	}
+	if !strings.Contains(stdout.String(), "local ok") {
+		t.Fatalf("stdout = %q, want provider response", stdout.String())
+	}
+}
+
 func v5RuntimeTestConfig(apiBase string) config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Model = "cloud_reasoning"

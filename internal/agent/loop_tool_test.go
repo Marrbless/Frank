@@ -41,6 +41,19 @@ func (f *FakeProvider) Chat(ctx context.Context, messages []providers.Message, t
 }
 func (f *FakeProvider) GetDefaultModel() string { return "fake" }
 
+type capturingFinalProvider struct {
+	firstToolNames []string
+}
+
+func (p *capturingFinalProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string) (providers.LLMResponse, error) {
+	if p.firstToolNames == nil {
+		p.firstToolNames = toolDefinitionNames(tools)
+	}
+	return providers.LLMResponse{Content: "done"}, nil
+}
+
+func (p *capturingFinalProvider) GetDefaultModel() string { return "fake" }
+
 type failingMCPTool struct{}
 
 func (t *failingMCPTool) Name() string { return "mcp_demo_lookup" }
@@ -229,6 +242,45 @@ func TestAgentLoopMissionRequiredWithoutContextProviderSeesNoTools(t *testing.T)
 		case <-deadline:
 			t.Fatalf("timeout waiting for final outbound message")
 		}
+	}
+}
+
+func TestAgentLoopModelToolSuppressionProviderSeesNoTools(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	p := &capturingFinalProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelToolDefinitionsAllowed(false)
+
+	out, err := ag.ProcessDirect("trigger", time.Second)
+	if err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if out != "done" {
+		t.Fatalf("ProcessDirect() = %q, want done", out)
+	}
+	if len(p.firstToolNames) != 0 {
+		t.Fatalf("provider tools = %#v, want empty list", p.firstToolNames)
+	}
+}
+
+func TestAgentLoopModelToolAllowancePreservesMissionAllowedTools(t *testing.T) {
+	t.Parallel()
+
+	b := chat.NewHub(10)
+	p := &capturingFinalProvider{}
+	ag := NewAgentLoop(b, p, p.GetDefaultModel(), 3, "", nil)
+	ag.SetModelToolDefinitionsAllowed(true)
+	if err := ag.ActivateMissionStep(testMissionJob([]string{"filesystem", "message"}, []string{"filesystem"}), "build"); err != nil {
+		t.Fatalf("ActivateMissionStep() error = %v", err)
+	}
+
+	if _, err := ag.ProcessDirect("trigger", time.Second); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	if !reflect.DeepEqual(p.firstToolNames, []string{"filesystem"}) {
+		t.Fatalf("provider tools = %#v, want filesystem only", p.firstToolNames)
 	}
 }
 

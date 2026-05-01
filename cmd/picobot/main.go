@@ -483,6 +483,7 @@ func NewRootCmd() *cobra.Command {
 			}
 			ag := agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, nil, cfg.MCPServers)
 			defer ag.Close()
+			ag.SetModelToolDefinitionsAllowed(selection.Route.ToolDefinitionsAllowed)
 			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
 				ag.SetToolActivityIndicator(false)
 			}
@@ -556,6 +557,7 @@ func NewRootCmd() *cobra.Command {
 			}
 			ag = agent.NewAgentLoop(hub, provider, model, maxIter, cfg.Agents.Defaults.Workspace, scheduler, cfg.MCPServers)
 			defer ag.Close()
+			ag.SetModelToolDefinitionsAllowed(selection.Route.ToolDefinitionsAllowed)
 			if cfg.Agents.Defaults.EnableToolActivityIndicator != nil && !*cfg.Agents.Defaults.EnableToolActivityIndicator {
 				ag.SetToolActivityIndicator(false)
 			}

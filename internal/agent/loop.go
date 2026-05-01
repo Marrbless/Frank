@@ -350,6 +350,7 @@ type AgentLoop struct {
 	context                 *ContextBuilder
 	memory                  *memory.MemoryStore
 	model                   string
+	toolDefinitionsAllowed  bool
 	maxIterations           int
 	running                 bool
 	suppressTerminalNotices int32
@@ -444,18 +445,36 @@ func NewAgentLoop(b *chat.Hub, provider providers.LLMProvider, model string, max
 	}
 
 	return &AgentLoop{
-		hub:                b,
-		provider:           provider,
-		tools:              reg,
-		sessions:           sm,
-		context:            ctx,
-		memory:             mem,
-		model:              model,
-		maxIterations:      maxIterations,
-		taskState:          taskState,
-		mcpClients:         mcpClients,
-		enableToolActivity: true,
+		hub:                    b,
+		provider:               provider,
+		tools:                  reg,
+		sessions:               sm,
+		context:                ctx,
+		memory:                 mem,
+		model:                  model,
+		toolDefinitionsAllowed: true,
+		maxIterations:          maxIterations,
+		taskState:              taskState,
+		mcpClients:             mcpClients,
+		enableToolActivity:     true,
 	}
+}
+
+// SetModelToolDefinitionsAllowed controls whether this loop may expose tool
+// schemas to the selected model. Mission allowed_tools and approvals still
+// apply when schemas are allowed.
+func (a *AgentLoop) SetModelToolDefinitionsAllowed(allowed bool) {
+	if a == nil {
+		return
+	}
+	a.toolDefinitionsAllowed = allowed
+}
+
+func (a *AgentLoop) activeToolDefinitions() []providers.ToolDefinition {
+	if a == nil || !a.toolDefinitionsAllowed {
+		return nil
+	}
+	return activeToolDefinitions(a.tools, a.taskState)
 }
 
 func (a *AgentLoop) ActivateMissionStep(job missioncontrol.Job, stepID string) error {
@@ -699,7 +718,7 @@ func (a *AgentLoop) Run(ctx context.Context) {
 
 			memCtx, _ := a.memory.GetMemoryContext()
 			memories := a.memory.Recent(5)
-			toolDefs := activeToolDefinitions(a.tools, a.taskState)
+			toolDefs := a.activeToolDefinitions()
 			var activeStep *missioncontrol.ExecutionContext
 			if a.taskState != nil {
 				if ec, ok := a.taskState.ExecutionContext(); ok {
@@ -883,7 +902,7 @@ func (a *AgentLoop) ProcessDirect(content string, timeout time.Duration) (string
 
 	memCtx, _ := a.memory.GetMemoryContext()
 	memories := a.memory.Recent(5)
-	toolDefs := activeToolDefinitions(a.tools, a.taskState)
+	toolDefs := a.activeToolDefinitions()
 	var activeStep *missioncontrol.ExecutionContext
 	if a.taskState != nil {
 		if ec, ok := a.taskState.ExecutionContext(); ok {
