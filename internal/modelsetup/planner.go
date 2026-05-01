@@ -380,6 +380,7 @@ func normalizedEnvSnapshot(env EnvSnapshot) EnvSnapshot {
 	env.ExistingModels = sortedStrings(env.ExistingModels)
 	env.ExistingAliases = sortedStrings(env.ExistingAliases)
 	env.ExistingLocalRuntimes = sortedStrings(env.ExistingLocalRuntimes)
+	env.ExistingBootScripts = sortedStrings(env.ExistingBootScripts)
 	env.UnsafeStates = sortedStrings(env.UnsafeStates)
 	return env
 }

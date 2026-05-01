@@ -14,6 +14,11 @@ func PrintPlan(w io.Writer, plan Plan) {
 	fmt.Fprintf(w, "os: %s\n", emptyAsUnknown(plan.Environment.OS))
 	fmt.Fprintf(w, "arch: %s\n", emptyAsUnknown(plan.Environment.Arch))
 	fmt.Fprintf(w, "config_path: %s\n", emptyAsUnknown(plan.Environment.ConfigPath))
+	fmt.Fprintf(w, "termux: %s\n", emptyStateAsUnknown(plan.Environment.Termux))
+	fmt.Fprintf(w, "termux_boot: %s\n", emptyStateAsUnknown(plan.Environment.TermuxBoot))
+	fmt.Fprintf(w, "tmux: %s\n", emptyStateAsUnknown(plan.Environment.Tmux))
+	fmt.Fprintf(w, "ollama: %s\n", emptyStateAsUnknown(plan.Environment.Ollama))
+	fmt.Fprintf(w, "llamacpp: %s\n", emptyStateAsUnknown(plan.Environment.LlamaCPP))
 	fmt.Fprintf(w, "runtime_kind: %s\n", plan.RuntimeKind)
 	fmt.Fprintf(w, "provider_ref: %s\n", plan.ProviderRef)
 	fmt.Fprintf(w, "model_ref: %s\n", plan.ModelRef)
@@ -128,6 +133,13 @@ func emptyAsUnknown(value string) string {
 		return "unknown"
 	}
 	return strings.TrimSpace(value)
+}
+
+func emptyStateAsUnknown(value State) string {
+	if value == "" {
+		return string(StateUnknown)
+	}
+	return string(value)
 }
 
 func shellJoin(args []string) string {

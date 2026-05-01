@@ -213,7 +213,7 @@ func TestModelsSetupDryRunUsesMinimalSnapshotWithoutSideEffects(t *testing.T) {
 	for _, want := range []string{
 		"preset: phone-ollama-tiny",
 		"status: manual_required",
-		"platform: unknown",
+		"platform:",
 		"provider_ref: ollama_phone",
 		"model_ref: local_fast",
 		"bind_address: 127.0.0.1",

@@ -90,6 +90,7 @@ type EnvSnapshot struct {
 	ExistingModels        []string
 	ExistingAliases       []string
 	ExistingLocalRuntimes []string
+	ExistingBootScripts   []string
 	UnsafeStates          []string
 }
 

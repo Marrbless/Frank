@@ -159,7 +159,7 @@ func newModelsCmd() *cobra.Command {
 		},
 	}
 
-	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd, healthCmd, newModelsSetupCmd(), newModelsPresetsCmd())
+	modelsCmd.AddCommand(listCmd, inspectCmd, routeCmd, healthCmd, newModelsSetupCmd(), newModelsPresetsCmd(), newModelsLocalCmd())
 	return modelsCmd
 }
 

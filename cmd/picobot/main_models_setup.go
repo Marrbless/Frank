@@ -99,6 +99,30 @@ func newModelsPresetsCmd() *cobra.Command {
 	return presetsCmd
 }
 
+func newModelsLocalCmd() *cobra.Command {
+	localCmd := &cobra.Command{
+		Use:   "local",
+		Short: "Inspect local model setup environment",
+	}
+	detectCmd := &cobra.Command{
+		Use:   "detect",
+		Short: "Detect local model setup environment without side effects",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			configPath, _ := cmd.Flags().GetString("config")
+			if configPath == "" {
+				configPath = config.DefaultConfigPath()
+			}
+			env := modelsetup.DetectEnvironment(configPath, modelsetup.DefaultDetector())
+			printSetupEnvSnapshot(cmd.OutOrStdout(), env)
+			return nil
+		},
+	}
+	detectCmd.Flags().String("config", "", "Config file path to inspect")
+	localCmd.AddCommand(detectCmd)
+	return localCmd
+}
+
 func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 	reader := bufio.NewReader(cmd.InOrStdin())
 	if opts.ConfigPath == "" {
@@ -114,7 +138,7 @@ func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 		}
 		opts.Preset = preset
 	}
-	env := modelsetup.MinimalUnknownEnvSnapshot(opts.ConfigPath)
+	env := modelsetup.DetectEnvironment(opts.ConfigPath, modelsetup.DefaultDetector())
 	plan, err := modelsetup.BuildPlan(env, modelsetup.OperatorChoices{
 		PresetName:     opts.Preset,
 		ConfigPath:     opts.ConfigPath,
@@ -150,6 +174,34 @@ func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "setup_approved: true")
 	return fmt.Errorf("models setup executor is not implemented until later V6 slices")
+}
+
+func printSetupEnvSnapshot(w io.Writer, env modelsetup.EnvSnapshot) {
+	fmt.Fprintf(w, "platform: %s\n", env.Platform)
+	fmt.Fprintf(w, "os: %s\n", env.OS)
+	fmt.Fprintf(w, "arch: %s\n", env.Arch)
+	fmt.Fprintf(w, "config_path: %s\n", env.ConfigPath)
+	fmt.Fprintf(w, "termux: %s\n", env.Termux)
+	fmt.Fprintf(w, "termux_boot: %s\n", env.TermuxBoot)
+	fmt.Fprintf(w, "tmux: %s\n", env.Tmux)
+	fmt.Fprintf(w, "ollama: %s\n", env.Ollama)
+	fmt.Fprintf(w, "llamacpp: %s\n", env.LlamaCPP)
+	printSetupList(w, "existing_providers", env.ExistingProviders)
+	printSetupList(w, "existing_models", env.ExistingModels)
+	printSetupList(w, "existing_aliases", env.ExistingAliases)
+	printSetupList(w, "existing_local_runtimes", env.ExistingLocalRuntimes)
+	printSetupList(w, "existing_boot_scripts", env.ExistingBootScripts)
+	printSetupList(w, "unsafe_states", env.UnsafeStates)
+}
+
+func printSetupList(w io.Writer, label string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%s:\n", label)
+	for _, value := range values {
+		fmt.Fprintf(w, "- %s\n", value)
+	}
 }
 
 func promptForSetupPreset(r io.Reader, w io.Writer) (string, error) {
