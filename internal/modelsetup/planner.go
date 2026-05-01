@@ -52,6 +52,7 @@ func BuildPlan(env EnvSnapshot, choices OperatorChoices) (Plan, error) {
 	plan := Plan{
 		PresetName:          preset.Name,
 		Status:              PlanStatusPlanned,
+		ReadinessStatus:     string(ReadinessUnknown),
 		Environment:         normalizedEnvSnapshot(env),
 		ProviderRef:         normalizedProvider,
 		ModelRef:            normalizedModel,
@@ -105,9 +106,13 @@ func BuildPlan(env EnvSnapshot, choices OperatorChoices) (Plan, error) {
 	if len(plan.BlockedReasons) > 0 {
 		plan.Status = PlanStatusBlocked
 		markPendingStepsBlocked(&plan)
+	} else if hasStepStatus(plan, PlanStatusBlocked) {
+		plan.Status = PlanStatusBlocked
 	} else if hasStepStatus(plan, PlanStatusManualRequired) {
 		plan.Status = PlanStatusManualRequired
 	}
+	plan.Approved = plan.Status == PlanStatusPlanned
+	plan.Ready = false
 	return plan, nil
 }
 
@@ -151,7 +156,7 @@ func buildConfigPatch(preset Preset, plan Plan, choices OperatorChoices) *Config
 		}
 		extraModels["cloud_reasoning"] = config.ModelProfileConfig{
 			Provider:      "openrouter",
-			ProviderModel: "REPLACE_WITH_PROVIDER_MODEL",
+			ProviderModel: "openai/gpt-5.4-mini",
 			DisplayName:   "Cloud reasoning stub",
 			Capabilities: config.ModelCapabilities{
 				Local:           false,
@@ -176,6 +181,8 @@ func buildConfigPatch(preset Preset, plan Plan, choices OperatorChoices) *Config
 			if reg, err := BuildLlamaCPPRegistration(choices.LlamaCPPServerPath, choices.GGUFModelPath, plan.BindAddress, plan.Port); err == nil {
 				startCommand = reg.Command
 			}
+		} else if preset.Name == PresetPhoneLlamaCPPTiny {
+			startCommand = BuildLlamaCPPManifestStartCommand(LlamaCPPRuntimeInstallDir, Qwen25TinyGGUFPath, plan.BindAddress, plan.Port)
 		}
 		runtimeRef = plan.ProviderRef
 		runtime = config.LocalRuntimeConfig{
@@ -377,6 +384,10 @@ func addRuntimeSetupSteps(steps *[]PlanStep, preset Preset, plan Plan, choices O
 			DiagnosticsPriority:    15,
 			PreserveWhenTruncating: status == PlanStatusManualRequired,
 		})
+		if choices.RegisterExistingBehavior != "provided" && preset.Name == PresetPhoneLlamaCPPTiny {
+			*steps = (*steps)[:len(*steps)-1]
+			addManifestBackedLlamaCPPSteps(steps, preset, plan)
+		}
 	}
 	if preset.BootSupported && choices.BootScripts {
 		*steps = append(*steps, PlanStep{
@@ -397,6 +408,165 @@ func addRuntimeSetupSteps(steps *[]PlanStep, preset Preset, plan Plan, choices O
 			PreserveWhenTruncating: true,
 		})
 	}
+}
+
+func addManifestBackedLlamaCPPSteps(steps *[]PlanStep, preset Preset, plan Plan) {
+	if status, reason := phoneLlamaCPPAutoInstallGate(plan.Environment); status != PlanStatusPlanned {
+		*steps = append(*steps, PlanStep{
+			ID:                     "phone-llamacpp-auto-install-gate",
+			Summary:                "Confirm Android/Termux arm64 before automatic phone llama.cpp install",
+			SideEffect:             SideEffectNone,
+			ApprovalRequired:       false,
+			IdempotencyKey:         "gate:phone-llamacpp-tiny:" + string(status),
+			AlreadyPresentRule:     "detector confirms Android/Termux arm64 for approved phone artifact",
+			RollbackCleanup:        "none",
+			RedactionPolicy:        plan.RedactionPolicy,
+			Status:                 status,
+			ManualInstructions:     manualInstructionsIf(status == PlanStatusManualRequired, reason),
+			DiagnosticsPriority:    14,
+			PreserveWhenTruncating: true,
+		})
+		return
+	}
+
+	registry := BuiltinManifests()
+	runtimeManifest, _ := registry.Lookup(preset.ManifestID)
+
+	prepareCommand := []string{"sh", "-c", strings.Join([]string{
+		`mkdir -p "$HOME/.local/frank/artifacts" "$HOME/.local/frank/llama.cpp/b8994" "$HOME/.local/frank/models"`,
+	}, " && ")}
+	*steps = append(*steps, PlanStep{
+		ID:                     "prepare-llamacpp-install-dirs",
+		Summary:                "Create Frank local artifact, llama.cpp, and model directories",
+		SideEffect:             SideEffectRunCommand,
+		Command:                prepareCommand,
+		FilesToWrite:           []string{"$HOME/.local/frank/artifacts", "$HOME/.local/frank/llama.cpp/b8994", "$HOME/.local/frank/models"},
+		ApprovalRequired:       true,
+		ApprovalReason:         "filesystem setup for approved local runtime install",
+		IdempotencyKey:         "dirs:frank-local-llamacpp",
+		AlreadyPresentRule:     "all planned directories already exist",
+		RollbackCleanup:        "leave existing directories in place; remove partial downloaded artifacts if later verification fails",
+		RedactionPolicy:        plan.RedactionPolicy,
+		Status:                 PlanStatusPlanned,
+		DiagnosticsPriority:    14,
+		PreserveWhenTruncating: false,
+	})
+
+	runtimeStep := PlanManifestDownloadStep(preset.ManifestID, registry, LlamaCPPRuntimeArchivePath)
+	runtimeStep.ID = "download-llamacpp-runtime"
+	runtimeStep.Summary = "Download pinned llama.cpp Android ARM64 release artifact and verify SHA256"
+	runtimeStep.Dependencies = []string{"prepare-llamacpp-install-dirs"}
+	runtimeStep.DiagnosticsPriority = 15
+	runtimeStep.PreserveWhenTruncating = runtimeStep.Status != PlanStatusPlanned
+	runtimeStep.RedactionPolicy = plan.RedactionPolicy
+	*steps = append(*steps, runtimeStep)
+
+	extractStatus := PlanStatusPlanned
+	extractManual := []string(nil)
+	extractCommand := []string(nil)
+	if err := ValidateManifest(runtimeManifest); err != nil {
+		extractStatus = PlanStatusBlocked
+		extractManual = []string{err.Error()}
+	} else if len(runtimeManifest.InstallCommand) < 4 {
+		extractStatus = PlanStatusBlocked
+		extractManual = []string{"llama.cpp runtime manifest missing extract command"}
+	}
+	if extractStatus == PlanStatusPlanned {
+		extractCommand = []string{"sh", "-c", runtimeManifest.InstallCommand[3]}
+	}
+	*steps = append(*steps, PlanStep{
+		ID:                     "extract-llamacpp-runtime",
+		Summary:                "Extract llama.cpp artifact after checksum verification",
+		SideEffect:             SideEffectRunCommand,
+		Command:                extractCommand,
+		FilesToRead:            []string{LlamaCPPRuntimeArchivePath},
+		FilesToWrite:           []string{LlamaCPPRuntimeInstallDir},
+		ApprovalRequired:       true,
+		ApprovalReason:         "unpacks approved local runtime artifact",
+		IdempotencyKey:         "extract:" + runtimeManifest.ID + ":" + runtimeManifest.ChecksumSHA256,
+		AlreadyPresentRule:     "llama-server or llama-cli can be located under the install directory",
+		RollbackCleanup:        "leave previous valid files in place; failed extraction blocks config write",
+		RedactionPolicy:        plan.RedactionPolicy,
+		Dependencies:           []string{"download-llamacpp-runtime"},
+		Status:                 extractStatus,
+		ManualInstructions:     extractManual,
+		DiagnosticsPriority:    16,
+		RequiresManifest:       true,
+		ManifestID:             runtimeManifest.ID,
+		ChecksumSHA256:         runtimeManifest.ChecksumSHA256,
+		PreserveWhenTruncating: extractStatus != PlanStatusPlanned,
+	})
+
+	modelStep := PlanManifestDownloadStep(preset.ModelManifestID, registry, Qwen25TinyGGUFPath)
+	modelStep.ID = "download-gguf-model"
+	modelStep.Summary = "Download pinned Qwen2.5 0.5B GGUF model and verify SHA256"
+	modelStep.Dependencies = []string{"prepare-llamacpp-install-dirs"}
+	modelStep.DiagnosticsPriority = 17
+	modelStep.PreserveWhenTruncating = modelStep.Status != PlanStatusPlanned
+	modelStep.RedactionPolicy = plan.RedactionPolicy
+	*steps = append(*steps, modelStep)
+
+	locateCommand := BuildLlamaCPPLocateCommand(LlamaCPPRuntimeInstallDir)
+	*steps = append(*steps, PlanStep{
+		ID:                  "locate-llamacpp-executable",
+		Summary:             "Locate llama-server or llama-cli after unpack instead of assuming archive layout",
+		SideEffect:          SideEffectRunCommand,
+		Command:             []string{"sh", "-c", locateCommand},
+		FilesToRead:         []string{LlamaCPPRuntimeInstallDir},
+		ApprovalRequired:    true,
+		ApprovalReason:      "verifies approved runtime artifact contains an executable",
+		IdempotencyKey:      "locate:" + runtimeManifest.ID,
+		AlreadyPresentRule:  "llama-server or llama-cli is found under the install directory",
+		RollbackCleanup:     "none",
+		RedactionPolicy:     plan.RedactionPolicy,
+		Dependencies:        []string{"extract-llamacpp-runtime"},
+		Status:              PlanStatusPlanned,
+		DiagnosticsPriority: 18,
+		RequiresManifest:    true,
+		ManifestID:          runtimeManifest.ID,
+		ChecksumSHA256:      runtimeManifest.ChecksumSHA256,
+	})
+
+	startCommand := BuildLlamaCPPManifestStartCommand(LlamaCPPRuntimeInstallDir, Qwen25TinyGGUFPath, plan.BindAddress, plan.Port)
+	*steps = append(*steps, PlanStep{
+		ID:                     "start-llamacpp-runtime",
+		Summary:                "Start llama.cpp server on the planned localhost endpoint",
+		SideEffect:             SideEffectStartRuntime,
+		Command:                []string{"sh", "-c", startCommand},
+		FilesToRead:            []string{LlamaCPPRuntimeInstallDir, Qwen25TinyGGUFPath},
+		RuntimePort:            plan.Port,
+		RuntimeBindAddress:     plan.BindAddress,
+		ApprovalRequired:       true,
+		ApprovalReason:         "starting runtimes changes local process state",
+		IdempotencyKey:         "llamacpp-start:" + plan.BindAddress + ":" + fmt.Sprintf("%d", plan.Port),
+		AlreadyPresentRule:     "llama.cpp server already serves the planned localhost endpoint",
+		RollbackCleanup:        "stop setup-started runtime session if later required step fails",
+		RedactionPolicy:        plan.RedactionPolicy,
+		Dependencies:           []string{"locate-llamacpp-executable", "download-gguf-model"},
+		Status:                 PlanStatusPlanned,
+		DiagnosticsPriority:    19,
+		RequiresManifest:       true,
+		ManifestID:             runtimeManifest.ID,
+		ChecksumSHA256:         runtimeManifest.ChecksumSHA256,
+		PreserveWhenTruncating: true,
+	})
+}
+
+func phoneLlamaCPPAutoInstallGate(env EnvSnapshot) (PlanStatus, string) {
+	arch := strings.TrimSpace(strings.ToLower(env.Arch))
+	if env.Termux == StateUnsupported {
+		return PlanStatusBlocked, "approved phone llama.cpp auto-install requires Android/Termux"
+	}
+	if env.Termux != StatePresent {
+		return PlanStatusManualRequired, "detector must confirm Android/Termux before automatic phone llama.cpp install"
+	}
+	if arch == "" || arch == "unknown" {
+		return PlanStatusManualRequired, "detector must confirm arm64 architecture before automatic phone llama.cpp install"
+	}
+	if arch != "arm64" && arch != "aarch64" {
+		return PlanStatusBlocked, fmt.Sprintf("approved phone llama.cpp artifact requires arm64, got %q", env.Arch)
+	}
+	return PlanStatusPlanned, ""
 }
 
 func markPendingStepsBlocked(plan *Plan) {

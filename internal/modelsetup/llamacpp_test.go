@@ -82,3 +82,23 @@ func TestPlannerLlamaCPPRegisterExistingProducesStartCommand(t *testing.T) {
 		t.Fatalf("FilesToRead = %#v, want server and model paths", registerStep.FilesToRead)
 	}
 }
+
+func TestLlamaCPPManifestCommandsLocateAfterUnpackAndStayLocal(t *testing.T) {
+	locate := BuildLlamaCPPLocateCommand(LlamaCPPRuntimeInstallDir)
+	for _, want := range []string{"find", "llama-server", "llama-cli", LlamaCPPRuntimeInstallDir} {
+		if !strings.Contains(locate, want) {
+			t.Fatalf("locate command = %q, want %q", locate, want)
+		}
+	}
+	start := BuildLlamaCPPManifestStartCommand(LlamaCPPRuntimeInstallDir, Qwen25TinyGGUFPath, "127.0.0.1", 8080)
+	for _, want := range []string{"find", "llama-server", Qwen25TinyGGUFPath, "--host \"127.0.0.1\"", "--port 8080", "nohup"} {
+		if !strings.Contains(start, want) {
+			t.Fatalf("start command = %q, want %q", start, want)
+		}
+	}
+	for _, forbidden := range []string{"--mission-resume-approved", "0.0.0.0"} {
+		if strings.Contains(start, forbidden) || strings.Contains(locate, forbidden) {
+			t.Fatalf("commands contain forbidden %q\nlocate=%s\nstart=%s", forbidden, locate, start)
+		}
+	}
+}

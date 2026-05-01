@@ -2,10 +2,13 @@ package modelsetup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -94,6 +97,100 @@ func TestExecutePlanRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestExecutePlanPhoneLlamaCPPManifestPathWithFakeArtifacts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+	plan, err := BuildPlan(supportedPhoneTermuxEnv(cfgPath), OperatorChoices{
+		PresetName: PresetPhoneLlamaCPPTiny,
+		ConfigPath: cfgPath,
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if plan.Status != PlanStatusPlanned {
+		t.Fatalf("plan status = %q, want planned", plan.Status)
+	}
+	data := []byte("fake approved artifact")
+	registry := fakeApprovedPhoneLlamaCPPRegistry(data)
+	runner := &fakeCommandRunner{}
+	result, err := ExecutePlan(context.Background(), plan, runner, ExecutorOptions{
+		Approved:         true,
+		Downloader:       &fakeDownloader{data: data},
+		ManifestRegistry: registry,
+	})
+	if err != nil {
+		t.Fatalf("ExecutePlan() error = %v", err)
+	}
+	if result.Status != PlanStatusChanged {
+		t.Fatalf("result status = %q, want changed", result.Status)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("runner calls = %#v, want prepare/extract/locate/start", runner.calls)
+	}
+	cfg := loadAcceptanceConfig(t, cfgPath)
+	model := cfg.Models["local_fast"]
+	if model.ProviderModel != "qwen2.5-0.5b-instruct-q4_k_m" {
+		t.Fatalf("provider model = %q", model.ProviderModel)
+	}
+	if model.Capabilities.SupportsTools {
+		t.Fatal("supports tools = true, want false")
+	}
+	if model.Capabilities.AuthorityTier != "low" {
+		t.Fatalf("authority tier = %q, want low", model.Capabilities.AuthorityTier)
+	}
+	if cfg.ModelRouting.AllowCloudFallbackFromLocal {
+		t.Fatal("cloud fallback from local = true, want false")
+	}
+	start := cfg.LocalRuntimes["llamacpp_phone"].StartCommand
+	for _, want := range []string{"find", "llama-server", "--host \"127.0.0.1\"", "--port 8080"} {
+		if !strings.Contains(start, want) {
+			t.Fatalf("start command = %q, want %q", start, want)
+		}
+	}
+	if strings.Contains(start, "--mission-resume-approved") {
+		t.Fatalf("start command contains mission resume flag: %q", start)
+	}
+}
+
+func TestExecutePlanFailedManifestChecksumLeavesPresetNotReadyAndConfigUnchanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgPath := filepath.Join(home, ".picobot", "config.json")
+	plan, err := BuildPlan(supportedPhoneTermuxEnv(cfgPath), OperatorChoices{
+		PresetName: PresetPhoneLlamaCPPTiny,
+		ConfigPath: cfgPath,
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	data := []byte("fake approved artifact")
+	registry := fakeApprovedPhoneLlamaCPPRegistry(data)
+	runtime := registry[ManifestLlamaCPPAndroidARM64B8994]
+	runtime.ChecksumSHA256 = strings.Repeat("0", 64)
+	registry[ManifestLlamaCPPAndroidARM64B8994] = runtime
+	result, err := ExecutePlan(context.Background(), plan, &fakeCommandRunner{}, ExecutorOptions{
+		Approved:         true,
+		Downloader:       &fakeDownloader{data: data},
+		ManifestRegistry: registry,
+	})
+	if err == nil {
+		t.Fatal("ExecutePlan() error = nil, want checksum failure")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("error = %v, want checksum mismatch", err)
+	}
+	if result.Status != PlanStatusFailed {
+		t.Fatalf("result status = %q, want failed", result.Status)
+	}
+	if plan.Ready {
+		t.Fatal("plan Ready = true, want false")
+	}
+	if fileExists(cfgPath) {
+		t.Fatal("config exists after failed checksum")
+	}
+}
+
 func fakeOllamaExecutionPlan(t *testing.T, cfgPath string) Plan {
 	t.Helper()
 	plan, err := BuildPlan(MinimalUnknownEnvSnapshot(cfgPath), OperatorChoices{
@@ -135,6 +232,21 @@ func fakeOllamaExecutionPlan(t *testing.T, cfgPath string) Plan {
 		},
 	}
 	return plan
+}
+
+func fakeApprovedPhoneLlamaCPPRegistry(data []byte) ManifestRegistry {
+	sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sum[:])
+	registry := BuiltinManifests()
+	runtime := registry[ManifestLlamaCPPAndroidARM64B8994]
+	runtime.ChecksumSHA256 = checksum
+	runtime.SizeBytes = int64(len(data))
+	registry[ManifestLlamaCPPAndroidARM64B8994] = runtime
+	model := registry[ManifestQwen25TinyGGUF]
+	model.ChecksumSHA256 = checksum
+	model.SizeBytes = int64(len(data))
+	registry[ManifestQwen25TinyGGUF] = model
+	return registry
 }
 
 func fileExists(path string) bool {

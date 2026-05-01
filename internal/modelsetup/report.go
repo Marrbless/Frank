@@ -10,6 +10,11 @@ import (
 func PrintPlan(w io.Writer, plan Plan) {
 	fmt.Fprintf(w, "preset: %s\n", plan.PresetName)
 	fmt.Fprintf(w, "status: %s\n", plan.Status)
+	fmt.Fprintf(w, "approved: %t\n", plan.Approved)
+	fmt.Fprintf(w, "ready: %t\n", plan.Ready)
+	if plan.ReadinessStatus != "" {
+		fmt.Fprintf(w, "readiness_status: %s\n", plan.ReadinessStatus)
+	}
 	fmt.Fprintf(w, "platform: %s\n", emptyAsUnknown(plan.Environment.Platform))
 	fmt.Fprintf(w, "os: %s\n", emptyAsUnknown(plan.Environment.OS))
 	fmt.Fprintf(w, "arch: %s\n", emptyAsUnknown(plan.Environment.Arch))
@@ -53,6 +58,12 @@ func PrintPlan(w io.Writer, plan Plan) {
 		}
 		if step.NetworkURL != "" {
 			fmt.Fprintf(w, "  network_url: %s\n", step.NetworkURL)
+		}
+		if step.ChecksumSHA256 != "" {
+			fmt.Fprintf(w, "  checksum_sha256: %s\n", step.ChecksumSHA256)
+		}
+		if step.ExpectedDownloadSize != "" {
+			fmt.Fprintf(w, "  expected_download_size: %s\n", step.ExpectedDownloadSize)
 		}
 		if step.ExpectedDiskImpact != "" {
 			fmt.Fprintf(w, "  expected_disk_impact: %s\n", step.ExpectedDiskImpact)

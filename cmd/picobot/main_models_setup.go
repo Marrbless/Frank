@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"strconv"
@@ -171,7 +172,7 @@ func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 		if plan.Status != modelsetup.PlanStatusPlanned {
 			return fmt.Errorf("--approve requires a fully resolved planned setup; plan status is %s", plan.Status)
 		}
-		return fmt.Errorf("models setup executor is not implemented until later V6 slices")
+		return executeModelsSetupPlan(cmd.OutOrStdout(), plan, opts)
 	}
 	approved, err := promptForSetupApproval(reader, cmd.OutOrStdout())
 	if err != nil {
@@ -186,7 +187,26 @@ func runModelsSetupCommand(cmd *cobra.Command, opts modelsSetupOptions) error {
 		return fmt.Errorf("approved setup cannot continue because plan status is %s", plan.Status)
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "setup_approved: true")
-	return fmt.Errorf("models setup executor is not implemented until later V6 slices")
+	return executeModelsSetupPlan(cmd.OutOrStdout(), plan, opts)
+}
+
+func executeModelsSetupPlan(w io.Writer, plan modelsetup.Plan, opts modelsSetupOptions) error {
+	result, err := modelsetup.ExecutePlan(context.Background(), plan, modelsetup.ShellCommandRunner{}, modelsetup.ExecutorOptions{
+		Approved: true,
+		Force:    opts.Force,
+		ConfigWriteOptions: modelsetup.ConfigWriteOptions{
+			Force: opts.Force,
+		},
+		Downloader: modelsetup.HTTPDownloader{},
+	})
+	fmt.Fprintf(w, "execution_status: %s\n", result.Status)
+	for _, step := range result.Steps {
+		fmt.Fprintf(w, "execution_step: %s %s\n", step.ID, step.Status)
+	}
+	if result.Config.ConfigPath != "" {
+		fmt.Fprintf(w, "config_status: %s\n", result.Config.Status)
+	}
+	return err
 }
 
 func printSetupEnvSnapshot(w io.Writer, env modelsetup.EnvSnapshot) {

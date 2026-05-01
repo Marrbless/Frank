@@ -102,7 +102,7 @@ func TestPlannerDoesNotTouchFilesystem(t *testing.T) {
 }
 
 func TestPlannerLocalDefaultsDenyToolsCloudFallbackAndLAN(t *testing.T) {
-	plan, err := BuildPlan(MinimalUnknownEnvSnapshot("/tmp/config.json"), OperatorChoices{PresetName: PresetPhoneOllamaTiny, ConfigPath: "/tmp/config.json", DryRun: true})
+	plan, err := BuildPlan(MinimalUnknownEnvSnapshot("/tmp/config.json"), OperatorChoices{PresetName: PresetPhoneLlamaCPPTiny, ConfigPath: "/tmp/config.json", DryRun: true})
 	if err != nil {
 		t.Fatalf("BuildPlan() error = %v", err)
 	}
@@ -126,6 +126,73 @@ func TestPlannerLocalDefaultsDenyToolsCloudFallbackAndLAN(t *testing.T) {
 	}
 	if plan.ConfigPatch.RoutingConfig.AllowCloudFallbackFromLocal {
 		t.Fatal("generated routing allows cloud fallback, want false")
+	}
+	if plan.ConfigPatch.ModelConfig.Capabilities.ContextTokens != 2048 {
+		t.Fatalf("context tokens = %d, want 2048", plan.ConfigPatch.ModelConfig.Capabilities.ContextTokens)
+	}
+	if plan.ConfigPatch.ModelConfig.Capabilities.MaxOutputTokens != 512 {
+		t.Fatalf("max output tokens = %d, want 512", plan.ConfigPatch.ModelConfig.Capabilities.MaxOutputTokens)
+	}
+}
+
+func TestPhoneLlamaCPPTinyManifestPlanIsDeterministicApprovedAndNotReady(t *testing.T) {
+	env := supportedPhoneTermuxEnv("/tmp/config.json")
+	choices := OperatorChoices{PresetName: PresetPhoneLlamaCPPTiny, ConfigPath: "/tmp/config.json", DryRun: true}
+	first, err := BuildPlan(env, choices)
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	second, err := BuildPlan(env, choices)
+	if err != nil {
+		t.Fatalf("BuildPlan() second error = %v", err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("phone llama.cpp plan not deterministic\nfirst=%#v\nsecond=%#v", first, second)
+	}
+	if first.Status != PlanStatusPlanned || !first.Approved {
+		t.Fatalf("status/approved = %s/%t, want planned/true", first.Status, first.Approved)
+	}
+	if first.Ready {
+		t.Fatal("Ready = true before install/readiness, want false")
+	}
+	var report bytes.Buffer
+	PrintPlan(&report, first)
+	out := report.String()
+	for _, want := range []string{
+		"approved: true",
+		"ready: false",
+		"network_url: https://github.com/ggml-org/llama.cpp/releases/download/b8994/llama-b8994-bin-android-arm64.tar.gz",
+		"network_url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/df5bf01389a39c743ab467d734bf501681e041c5/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+		"checksum_sha256: bf0445968910d36ef85cc273501601189db3ed052a57c0393ba56bd346ab7d54",
+		"checksum_sha256: 74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+		"bind_address: 127.0.0.1",
+		"supports_tools: false",
+		"authority_tier: low",
+		"cloud_fallback: false",
+		"locate-llamacpp-executable",
+		"start-llamacpp-runtime",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("plan output = %q, want %q", out, want)
+		}
+	}
+	for _, forbidden := range []string{"write-termux-boot-script", "frank-gateway", "--mission-resume-approved", "0.0.0.0"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("plan output contains forbidden %q:\n%s", forbidden, out)
+		}
+	}
+}
+
+func TestPhoneLlamaCPPTinyIncompleteSnapshotIsManualRequiredNotReady(t *testing.T) {
+	plan, err := BuildPlan(MinimalUnknownEnvSnapshot("/tmp/config.json"), OperatorChoices{PresetName: PresetPhoneLlamaCPPTiny, ConfigPath: "/tmp/config.json", DryRun: true})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if plan.Status != PlanStatusManualRequired {
+		t.Fatalf("status = %q, want manual_required for unconfirmed phone platform", plan.Status)
+	}
+	if plan.Approved || plan.Ready {
+		t.Fatalf("approved/ready = %t/%t, want false/false", plan.Approved, plan.Ready)
 	}
 }
 
@@ -216,4 +283,14 @@ func hasStatus(steps []PlanStep, status PlanStatus) bool {
 		}
 	}
 	return false
+}
+
+func supportedPhoneTermuxEnv(configPath string) EnvSnapshot {
+	env := MinimalUnknownEnvSnapshot(configPath)
+	env.Platform = "android_termux_arm64"
+	env.OS = "android"
+	env.Arch = "arm64"
+	env.Termux = StatePresent
+	env.TermuxBoot = StateMissing
+	return env
 }

@@ -43,6 +43,33 @@ func BuildLlamaCPPRegistration(serverPath, modelPath, bindAddress string, port i
 	}, nil
 }
 
+func BuildLlamaCPPLocateCommand(installDir string) string {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = LlamaCPPRuntimeInstallDir
+	}
+	return fmt.Sprintf(`test -d %q && find %q -type f \( -name llama-server -o -name llama-cli \) | sort | head -n 1 | grep -q .`, installDir, installDir)
+}
+
+func BuildLlamaCPPManifestStartCommand(installDir, modelPath, bindAddress string, port int) string {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = LlamaCPPRuntimeInstallDir
+	}
+	modelPath = strings.TrimSpace(modelPath)
+	if modelPath == "" {
+		modelPath = Qwen25TinyGGUFPath
+	}
+	bindAddress = strings.TrimSpace(bindAddress)
+	if bindAddress == "" {
+		bindAddress = "127.0.0.1"
+	}
+	if port <= 0 {
+		port = 8080
+	}
+	return fmt.Sprintf(`server="$(find %q -type f -name llama-server | sort | head -n 1)"; test -n "$server"; chmod +x "$server"; nohup "$server" -m %q --host %q --port %d >/tmp/frank-llamacpp-local_fast.log 2>&1 &`, installDir, modelPath, bindAddress, port)
+}
+
 func ValidateLlamaCPPRegistration(reg LlamaCPPRegistration) error {
 	if reg.ServerPath == "" || reg.ModelPath == "" {
 		return fmt.Errorf("llama.cpp registration paths are required")

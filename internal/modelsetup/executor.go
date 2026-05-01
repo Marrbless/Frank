@@ -3,6 +3,9 @@ package modelsetup
 import (
 	"context"
 	"fmt"
+	"io"
+	"os/exec"
+	"strings"
 )
 
 type CommandRunner interface {
@@ -14,6 +17,8 @@ type ExecutorOptions struct {
 	ApproveReplacements bool
 	Force               bool
 	ConfigWriteOptions  ConfigWriteOptions
+	Downloader          Downloader
+	ManifestRegistry    ManifestRegistry
 }
 
 type ExecutionResult struct {
@@ -76,8 +81,17 @@ func ExecutePlan(ctx context.Context, plan Plan, runner CommandRunner, opts Exec
 			}
 			step.Status = PlanStatusChanged
 		case SideEffectDownload:
-			step.Status = PlanStatusManualRequired
-			result.Status = PlanStatusManualRequired
+			changed, err := executeDownloadStep(ctx, step, opts)
+			if err != nil {
+				step.Status = PlanStatusFailed
+				result.Status = PlanStatusFailed
+				return result, fmt.Errorf("step %s failed: %w", step.ID, err)
+			}
+			if changed {
+				step.Status = PlanStatusChanged
+			} else {
+				step.Status = PlanStatusAlreadyPresent
+			}
 		case SideEffectWriteBootScript:
 			step.Status = PlanStatusManualRequired
 			result.Status = PlanStatusManualRequired
@@ -91,6 +105,49 @@ func ExecutePlan(ctx context.Context, plan Plan, runner CommandRunner, opts Exec
 		result.Status = aggregateExecutionStatus(result.Steps)
 	}
 	return result, nil
+}
+
+type ShellCommandRunner struct{}
+
+func (ShellCommandRunner) Run(ctx context.Context, command []string) error {
+	if len(command) == 0 {
+		return fmt.Errorf("command is required")
+	}
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
+func executeDownloadStep(ctx context.Context, step *PlanStep, opts ExecutorOptions) (bool, error) {
+	if strings.TrimSpace(step.ManifestID) == "" {
+		return false, fmt.Errorf("download step requires manifest id")
+	}
+	registry := opts.ManifestRegistry
+	if registry == nil {
+		registry = BuiltinManifests()
+	}
+	manifest, ok := registry.Lookup(step.ManifestID)
+	if !ok {
+		return false, fmt.Errorf("manifest %q is not available", step.ManifestID)
+	}
+	if len(step.FilesToWrite) == 0 {
+		return false, fmt.Errorf("download step requires destination")
+	}
+	destination, err := ExpandHomePath(step.FilesToWrite[0])
+	if err != nil {
+		return false, err
+	}
+	if ready, err := ManifestDestinationReady(manifest, destination); err != nil {
+		return false, err
+	} else if ready {
+		return false, nil
+	}
+	downloader := opts.Downloader
+	if downloader == nil {
+		downloader = HTTPDownloader{}
+	}
+	return true, DownloadAndVerifyManifest(ctx, manifest, downloader, destination)
 }
 
 func aggregateExecutionStatus(steps []PlanStep) PlanStatus {

@@ -60,6 +60,7 @@ type Preset struct {
 	ProviderModel         string
 	ModelSource           string
 	ManifestID            string
+	ModelManifestID       string
 	ExpectedDiskImpact    string
 	ExpectedRAMRange      string
 	Capabilities          config.ModelCapabilities
@@ -119,6 +120,9 @@ type OperatorChoices struct {
 type Plan struct {
 	PresetName          string
 	Status              PlanStatus
+	Approved            bool
+	Ready               bool
+	ReadinessStatus     string
 	Environment         EnvSnapshot
 	Assumptions         []string
 	Warnings            []string
@@ -179,5 +183,7 @@ type PlanStep struct {
 	SafeToOmitWhenTruncating   bool
 	PreserveWhenTruncating     bool
 	RequiresManifest           bool
+	ManifestID                 string
+	ChecksumSHA256             string
 	RequiresExplicitLANApprove bool
 }
