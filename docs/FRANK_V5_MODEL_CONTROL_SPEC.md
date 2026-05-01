@@ -13,6 +13,8 @@ Target deployment:
 - Cloud, OpenRouter, and OpenAI models for high-reasoning or high-stakes work.
 - Mission-control policy decides which models can be used for which steps and tools.
 
+For operator migration steps and troubleshooting, see [FRANK_V5_MIGRATION_GUIDE.md](FRANK_V5_MIGRATION_GUIDE.md).
+
 ## Non-Goals
 
 - Do not implement model downloading in the first slice.

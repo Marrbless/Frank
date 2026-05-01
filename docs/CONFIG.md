@@ -191,6 +191,8 @@ picobot models health local_fast
 
 V5 does not download models, start Ollama, or start llama.cpp. Local runtimes remain external processes, usually managed in a separate Termux or tmux session. Runtime routing uses named providers and named model profiles; fallback is preflight-only and does not retry an agent turn after a provider request has started. See [FRANK_V5_MODEL_CONTROL_SPEC.md](FRANK_V5_MODEL_CONTROL_SPEC.md).
 
+For a step-by-step migration from legacy `providers.openai` to V5 profiles, see [FRANK_V5_MIGRATION_GUIDE.md](FRANK_V5_MIGRATION_GUIDE.md).
+
 ### Example V5 model registry
 
 ```json

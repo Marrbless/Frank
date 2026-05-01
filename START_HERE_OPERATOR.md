@@ -11,6 +11,7 @@ This is the current entry point for operating, validating, or changing this repo
   - [docs/CANONICAL_RUNTIME_TRUTH.md](docs/CANONICAL_RUNTIME_TRUTH.md)
   - [docs/HOW_TO_START.md](docs/HOW_TO_START.md)
   - [docs/CONFIG.md](docs/CONFIG.md)
+  - [docs/FRANK_V5_MIGRATION_GUIDE.md](docs/FRANK_V5_MIGRATION_GUIDE.md)
   - [docs/HOT_UPDATE_OPERATOR_RUNBOOK.md](docs/HOT_UPDATE_OPERATOR_RUNBOOK.md)
   - [docs/ANDROID_PHONE_DEPLOYMENT.md](docs/ANDROID_PHONE_DEPLOYMENT.md)
 
